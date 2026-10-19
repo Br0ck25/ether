@@ -25,6 +25,9 @@ import (
 
 // handleStartDASH is /video/:/transcode/universal/start.mpd.
 func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
+	if s.handleLiveTVPlayback(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	if s.d.Transcoder == nil || s.d.Playback == nil {

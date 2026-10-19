@@ -83,6 +83,7 @@ func (s *Server) liveTVProvider() *model.MediaProvider {
 		{Type: "grid", Key: liveProviderPath + "/grid"}, {Type: "metadata", Key: liveProviderPath + "/metadata"}, {Type: "livetv", Key: "/livetv/dvrs"},
 	}}
 }
+
 func (s *Server) registerLiveTVRoutes(r chi.Router) {
 	guard := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +144,17 @@ func (s *Server) registerLiveTVRoutes(r chi.Router) {
 		}
 		s.writeEmpty(w, r)
 	}))
+	get("/livetv/sessions/{session}/{consumer}/dash/{rep}/{part}", func(w http.ResponseWriter, r *http.Request) {
+		rep, err := strconv.Atoi(chi.URLParam(r, "rep"))
+		part := chi.URLParam(r, "part")
+		init := part == "header"
+		n, e := strconv.Atoi(strings.TrimSuffix(part, ".m4s"))
+		if err != nil || rep < 0 || (!init && (e != nil || n < 0 || !strings.HasSuffix(part, ".m4s"))) {
+			writeHTTPError(w, 404)
+			return
+		}
+		s.d.LiveTV.ServeDASHPart(w, r, chi.URLParam(r, "session"), FromContext(r.Context()).User, rep, n, init)
+	})
 	get("/livetv/sessions/{session}/{consumer}/index.m3u8", func(w http.ResponseWriter, r *http.Request) {
 		if chi.URLParam(r, "consumer") != "0" {
 			writeHTTPError(w, 404)
@@ -471,6 +483,10 @@ func (s *Server) handleLiveTVPlayback(w http.ResponseWriter, r *http.Request) bo
 	}
 	if strings.HasSuffix(r.URL.Path, "/decision") {
 		s.write(w, r, &model.MediaContainer{Size: 1, Identifier: livetv.Provider, Extra: []model.Attr{model.A("generalDecisionCode", 1001), model.A("generalDecisionText", "Live TV stream available."), model.A("transcodeDecisionCode", 1001), model.A("transcodeDecisionText", "Live TV HLS streaming.")}, Metadata: []model.Metadata{liveSessionMetadata(info)}})
+		return true
+	}
+	if strings.HasSuffix(r.URL.Path, "/start.mpd") {
+		s.d.LiveTV.ServeDASH(w, r, id, pr.User)
 		return true
 	}
 	q := url.Values{}

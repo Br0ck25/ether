@@ -141,3 +141,22 @@ func TestColdStartHome(t *testing.T) {
 		t.Fatalf("personal Home still cold: %v", kindsOf(p.Rows))
 	}
 }
+
+func TestHiddenGemsExcludeWidelyRatedClassics(t *testing.T) {
+	h := newHarness(t, nil)
+	sciFiFan(h, 1)
+	famous := h.cat.titles[movieKey(0, 11)]
+	famous.Title = "Widely known classic"
+	famous.Rating = 9
+	famous.VoteCount = 500000
+	famous.Popularity = 0.01
+	h.cat.add(famous)
+	m := h.rebuild(core.User{ID: 1})
+	for _, r := range rowsOfKind(m, KindHiddenGems) {
+		for _, it := range r.items {
+			if it.t.Key == famous.Key || float64(it.t.VoteCount) > 5*priorVotes(it.t.Type) {
+				t.Fatalf("famous title in hidden gems: %s (%d votes)", it.t.Title, it.t.VoteCount)
+			}
+		}
+	}
+}

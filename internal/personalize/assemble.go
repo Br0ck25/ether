@@ -433,7 +433,7 @@ func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float
 	if c.kind == KindContinue && len(items) == 0 {
 		return 0, 0
 	}
-	mult := ctxMult(c.kind, a.hc) * a.typeMix(items) * (0.7 + 0.6*strength)
+	mult := editorialBoost(c.kind) * ctxMult(c.kind, a.hc) * a.typeMix(items) * (0.7 + 0.6*strength)
 	if a.newViewer() {
 		mult *= coldBoost(c.kind)
 	}
@@ -696,4 +696,24 @@ func mmr(items []candItem, k int, lambda float64) []candItem {
 		}
 	}
 	return out
+}
+
+// A useful first screen balances current releases, broad discovery and taste.
+// These are priors: engagement and explicit owner placement still take priority.
+func editorialBoost(kind string) float64 {
+	switch kind {
+	case KindNewReleases:
+		return 1.8
+	case KindTrending:
+		return 1.65
+	case KindPopular:
+		return 1.45
+	case KindTop10Today, KindTop10:
+		return 1.25
+	case KindFranchise:
+		return .65
+	case KindComfort:
+		return .8
+	}
+	return 1
 }

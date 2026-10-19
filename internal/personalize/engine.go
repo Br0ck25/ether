@@ -93,11 +93,11 @@ type Options struct {
 	Workers         int           // concurrent model builds (default 2)
 	ColdWait        time.Duration // how long a request may wait for the first-ever model (default 1.5s)
 	OwnerRowsWait   time.Duration // how long a request may wait for owner rows it has never fetched (default 150ms)
-	SourceTimeout   time.Duration // Trakt and owner collection calls (default 10s)
+	SourceTimeout   time.Duration // Trakt and owner collection calls (default 16s)
 	LLMTimeout      time.Duration // LLM themed rows during a build (default 60s)
 	BuildTimeout    time.Duration // one model build (default 3m)
-	MaxHomeRows     int           // default 14 across the complete composed page
-	MaxSectionRows  int           // default 10
+	MaxHomeRows     int           // default 20 across the complete composed page
+	MaxSectionRows  int           // default 16
 	// Exploration scales Thompson sampling (0 = pure exploitation, 1 =
 	// full sampling; default 0.5; negative = 0).
 	Exploration      float64
@@ -147,10 +147,10 @@ func (o *Options) defaults() {
 		o.Workers = 2
 	}
 	if o.MaxHomeRows <= 0 {
-		o.MaxHomeRows = 14
+		o.MaxHomeRows = 20
 	}
 	if o.MaxSectionRows <= 0 {
-		o.MaxSectionRows = 10
+		o.MaxSectionRows = 16
 	}
 	switch {
 	case o.Exploration == 0:

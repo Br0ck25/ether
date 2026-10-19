@@ -105,7 +105,11 @@ func (s *Session) ServeManifest(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	wait := time.NewTimer(s.m.opts.manifestWait)
+	delay := s.m.opts.manifestWait
+	if s.info.Duration <= 0 {
+		delay = s.m.opts.segmentTimeout
+	}
+	wait := time.NewTimer(delay)
 	defer wait.Stop()
 	timedOut, restarted := false, false
 	for {
@@ -130,9 +134,25 @@ func (s *Session) ServeManifest(w http.ResponseWriter, r *http.Request) {
 					idle = false
 				}
 			}
-			if complete || timedOut || idle {
+			if s.info.Duration <= 0 {
+				common := -1
+				if len(s.done) > 0 {
+					for n := range s.done[0] {
+						if n > common {
+							common = n
+						}
+					}
+				}
+				for _, track := range s.done[1:] {
+					for common >= 0 && !track[common] {
+						common--
+					}
+				}
+				complete = complete && common >= 0
+			}
+			if complete || timedOut || (idle && s.info.Duration > 0) {
 				body = s.renderMPDLocked()
-				if complete {
+				if complete && s.info.Duration > 0 {
 					s.dash.mpd = body
 				}
 			}
@@ -168,6 +188,22 @@ func (s *Session) renderMPDLocked() []byte {
 		if c := s.dash.codecs[i]; c != "" {
 			reps[i].Codecs = c
 		}
+	}
+	if s.info.Duration <= 0 {
+		last := -1
+		if len(s.done) > 0 {
+			for n := range s.done[0] {
+				if n > last {
+					last = n
+				}
+			}
+		}
+		for _, track := range s.done[1:] {
+			for last >= 0 && !track[last] {
+				last--
+			}
+		}
+		return renderLiveMPD(s.created, time.Now(), s.segDur, last, s.dash.initURL, s.dash.mediaURL, reps)
 	}
 	return renderMPD(s.info.Duration, s.segDur, s.dash.initURL, s.dash.mediaURL, reps)
 }
