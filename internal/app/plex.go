@@ -80,6 +80,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 			a.log.Warn("offline downloads unavailable", "err", err)
 		}
 	}
+	deps.Extras = a.extras
 	deps.AccessPolicy = a.safety
 	deps.Config = a.cfg.Get
 	deps.Logger = a.log.With("component", "plex")

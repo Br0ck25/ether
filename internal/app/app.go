@@ -28,6 +28,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/episodeorder"
+	"github.com/braedonsaunders/ether/internal/extras"
 	"github.com/braedonsaunders/ether/internal/invites"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/llm"
@@ -118,6 +119,7 @@ type App struct {
 	trackprefs        *trackprefs.Service
 	markers           *markers.Service
 	localmedia        *localmedia.Service
+	extras            *extras.Service
 	backups           *backup.Service
 	migration         *migrate.Service
 	invites           *invites.Service
@@ -384,6 +386,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.cleanHome = &cleanHomeStatus{app: a}
 	a.cfg.Subscribe(a.applyConfig)
 
+	a.buildExtras()
 	plexHandler, err := a.buildPlex(cfg)
 	if err != nil {
 		return fmt.Errorf("plex front end: %w", err)

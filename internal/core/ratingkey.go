@@ -20,6 +20,7 @@ import (
 //	KindCollection  payload = tmdb collection id (franchise)
 //	KindSmart       payload = local smart-collection / generated hub id
 //	KindPlaylist    payload = local playlist id
+//	KindExtra       payload = compact extra id from the extras registry
 //	KindLocal       payload = local file id (spike / test library)
 type RatingKey int64
 
@@ -33,6 +34,7 @@ const (
 	KindCollection KeyKind = 5
 	KindSmart      KeyKind = 6
 	KindPlaylist   KeyKind = 7
+	KindExtra      KeyKind = 8
 	KindLocal      KeyKind = 9
 )
 
@@ -43,6 +45,7 @@ func ShowKey(tmdb int64) RatingKey     { return RatingKey(int64(KindShow)*keyBas
 func CollectionKey(id int64) RatingKey { return RatingKey(int64(KindCollection)*keyBase + id) }
 func SmartKey(id int64) RatingKey      { return RatingKey(int64(KindSmart)*keyBase + id) }
 func PlaylistKey(id int64) RatingKey   { return RatingKey(int64(KindPlaylist)*keyBase + id) }
+func ExtraKey(id int64) RatingKey      { return RatingKey(int64(KindExtra)*keyBase + id) }
 func LocalKey(id int64) RatingKey      { return RatingKey(int64(KindLocal)*keyBase + id) }
 func SeasonKey(show int64, season int) RatingKey {
 	return RatingKey(int64(KindSeason)*keyBase + show*10_000 + int64(season))
@@ -97,11 +100,19 @@ func (k RatingKey) Parent() RatingKey {
 	return 0
 }
 
+// ExtraID returns the extras-registry id of an extra key.
+func (k RatingKey) ExtraID() int64 {
+	if k.Kind() == KindExtra {
+		return k.payload()
+	}
+	return 0
+}
+
 func (k RatingKey) String() string { return strconv.FormatInt(int64(k), 10) }
 
 func (k RatingKey) Valid() bool {
 	switch k.Kind() {
-	case KindMovie, KindShow, KindSeason, KindEpisode, KindCollection, KindSmart, KindPlaylist, KindLocal:
+	case KindMovie, KindShow, KindSeason, KindEpisode, KindCollection, KindSmart, KindPlaylist, KindExtra, KindLocal:
 		return k.payload() > 0 || k.Kind() == KindSeason
 	}
 	return false

@@ -17,6 +17,7 @@ func TestRatingKeyRoundTrip(t *testing.T) {
 		{EpisodeKey(1399, 8, 6), KindEpisode, 1399, 8, 6},
 		{EpisodeKey(99_999_999, 999, 9999), KindEpisode, 99_999_999, 999, 9999},
 		{CollectionKey(87359), KindCollection, 87359, 0, 0},
+		{ExtraKey(42), KindExtra, 42, 0, 0},
 	}
 	for _, c := range cases {
 		if c.k.Kind() != c.kind || c.k.TMDB() != c.tmdb || c.k.Season() != c.season || c.k.Episode() != c.episode {
@@ -32,5 +33,14 @@ func TestRatingKeyRoundTrip(t *testing.T) {
 	}
 	if EpisodeKey(1399, 8, 6).Parent() != SeasonKey(1399, 8) || SeasonKey(1399, 8).Parent() != ShowKey(1399) {
 		t.Error("parent")
+	}
+	if ExtraKey(123_456_789).ExtraID() != 123_456_789 || MovieKey(1).ExtraID() != 0 {
+		t.Error("extra id")
+	}
+	if ExtraKey(999_999_999_999_999) >= RatingKey(1<<53) {
+		t.Error("extra key exceeds 2^53")
+	}
+	if _, err := ParseRatingKey(ExtraKey(7).String()); err != nil {
+		t.Errorf("parse extra key: %v", err)
 	}
 }

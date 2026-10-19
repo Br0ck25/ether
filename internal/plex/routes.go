@@ -67,7 +67,7 @@ func (s *Server) routes() chi.Router {
 	get("/library/metadata/{key}/onDeck", s.handleItemOnDeck)
 	get("/library/metadata/{key}/parent", s.handleParent)
 	get("/library/metadata/{key}/grandparent", s.handleParent)
-	get("/library/metadata/{key}/extras", func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) })
+	get("/library/metadata/{key}/extras", s.handleExtras)
 	get("/library/metadata/{key}/{element}", s.handleImage)
 	get("/library/metadata/{key}/{element}/{ts}", s.handleImage)
 	get("/library/collections", s.handleCollections)

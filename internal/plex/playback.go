@@ -259,6 +259,9 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	if s.handleLiveTVPlayback(w, r) {
 		return
 	}
+	if s.handleExtraPlayback(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	if chi.URLParam(r, "ttype") != "" && chi.URLParam(r, "ttype") != "video" {
@@ -554,6 +557,9 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	if s.handleLiveTVPlayback(w, r) {
 		return
 	}
+	if s.handleExtraPlayback(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	if s.d.Transcoder == nil || s.d.Playback == nil {
@@ -790,6 +796,9 @@ func transcodeSessionModel(te *transcodeEntry) model.TranscodeSess {
 // handlePart serves /library/parts/{part}/{changestamp}/{file} with Range
 // support through Playback.ServeRange.
 func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
+	if s.handleExtraPart(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	id, err := strconv.ParseInt(chi.URLParam(r, "part"), 10, 64)

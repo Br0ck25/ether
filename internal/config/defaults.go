@@ -19,6 +19,7 @@ func randomID(n int) string {
 func Defaults(dataDir string) Config {
 	return Config{
 		Markers: Markers{TheIntroDB: true, DetectCached: true},
+		Extras:  Extras{LocalTrailers: true, PrewarmBytes: 48 << 20, ResolverTimeout: Duration(20 * time.Second)},
 		Server: Server{
 			Port:               32400,
 			BindAddress:        "0.0.0.0",

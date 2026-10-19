@@ -89,6 +89,7 @@ type Deps struct {
 	TrackPreferences TrackPreferences
 	Markers          MarkerProvider
 	Subtitles        SubtitleSource
+	Extras           ExtrasProvider
 
 	// Config returns the current settings snapshot.
 	Config func() config.Config
@@ -130,6 +131,7 @@ type Server struct {
 	queues     *playQueueStore
 	sessions   *sessionTracker
 	transcodes *transcodeTable
+	extraPlay  *extraPlayStore
 	selections *selectionStore
 	notifier   *notifier
 	facets     *facetCache
@@ -180,6 +182,7 @@ func NewServer(d Deps) *Server {
 		queues:     newPlayQueueStore(),
 		sessions:   newSessionTracker(),
 		transcodes: newTranscodeTable(),
+		extraPlay:  newExtraPlayStore(),
 		selections: newSelectionStore(),
 		notifier:   newNotifier(),
 		facets:     newFacetCache(),
@@ -342,6 +345,7 @@ func (s *Server) janitor() {
 			s.expireDownloads(now)
 			s.queues.expire(now, 6*time.Hour)
 			s.transcodes.expire(now, 2*time.Hour)
+			s.extraPlay.expire(now, 2*time.Hour)
 			for _, e := range s.sessions.expire(now, 2*time.Minute) {
 				s.notifyPlaying(e, "stopped")
 			}
