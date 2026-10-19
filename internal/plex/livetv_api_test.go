@@ -253,6 +253,9 @@ func TestModernAppleTVTuneReturnsPlayableQueue(t *testing.T) {
 		t.Fatalf("modern player cannot load tune as a playable queue: %s", tune.Body.String())
 	}
 	id := analysis["Media"].([]any)[0].(map[string]any)["uuid"].(string)
+	if analysis["guid"] != "plex://livetv/session/"+id || mc["playQueueSelectedMetadataItemID"] != nil {
+		t.Fatalf("live session lacks its native GUID or uses a UUID in the integer library-metadata selector: %s", tune.Body.String())
+	}
 	if mc["MediaSubscription"] != nil || analysis["genuineMediaAnalysis"] != true {
 		t.Fatalf("native tune contains asynchronous Web subscription data: %s", tune.Body.String())
 	}

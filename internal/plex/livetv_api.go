@@ -397,7 +397,7 @@ func (s *Server) handleLiveHubs(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, mc)
 }
 func (s *Server) liveSessionMetadata(info livetv.SessionInfo) model.Metadata {
-	md := model.Metadata{RatingKey: info.ID, Key: "/livetv/sessions/" + info.ID, Type: "clip", Title: info.Channel.Name, Summary: "", Extra: []model.Attr{model.A("live", true), model.A("genuineMediaAnalysis", false)}}
+	md := model.Metadata{RatingKey: info.ID, Key: "/livetv/sessions/" + info.ID, GUID: "plex://livetv/session/" + info.ID, Type: "clip", Title: info.Channel.Name, Summary: "", Extra: []model.Attr{model.A("live", true), model.A("genuineMediaAnalysis", false)}}
 	if info.Programme != nil {
 		md.Title = info.Programme.Item.Title
 		md.Summary = info.Programme.Item.Summary

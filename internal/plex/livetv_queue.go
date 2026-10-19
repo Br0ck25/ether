@@ -33,7 +33,6 @@ func (s *Server) livePlayQueue(pq playQueue, info livetv.SessionInfo) *model.Med
 			model.A("playQueueID", pq.id),
 			model.A("playQueueSelectedItemID", pq.items[0].id),
 			model.A("playQueueSelectedItemOffset", 0),
-			model.A("playQueueSelectedMetadataItemID", md.RatingKey),
 			model.A("playQueueShuffled", false),
 			model.A("playQueueSourceURI", pq.sourceURI),
 			model.A("playQueueTotalCount", 1),
