@@ -353,6 +353,9 @@ func (s *Server) handleExtraPlayback(w http.ResponseWriter, r *http.Request) boo
 // prepareExtra resolves, probes (when possible) and decides an extra,
 // recording the session for the start endpoints and transcode stop.
 func (s *Server) prepareExtra(ctx context.Context, pr *Request, p *playRequest, e extras.Extra) (*extraSession, error) {
+	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
+		return nil, core.ErrUnauthorized
+	}
 	resolved, err := s.d.Extras.Resolve(ctx, e)
 	if err != nil {
 		return nil, err
@@ -464,6 +467,10 @@ func (s *Server) extraStart(w http.ResponseWriter, r *http.Request, pr *Request,
 		writeHTTPError(w, http.StatusServiceUnavailable)
 		return
 	}
+	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
+		writeHTTPError(w, http.StatusForbidden)
+		return
+	}
 	sess, err := s.extraSessionFor(ctx, pr, &p, e)
 	if err != nil {
 		s.log.Info("extra start failed", "key", e.Key, "err", err)
@@ -481,7 +488,7 @@ func (s *Server) extraStart(w http.ResponseWriter, r *http.Request, pr *Request,
 		if sess.started && sess.offset == p.offset {
 			if dash {
 				if ds, isDASH := existing.(core.DASHSession); isDASH {
-					ds.ServeManifest(w, r)
+					s.serveStreamManifest(w, r, p.sessionID, ds.ServeManifest)
 					return
 				}
 			} else {
@@ -520,7 +527,7 @@ func (s *Server) extraStart(w http.ResponseWriter, r *http.Request, pr *Request,
 			writeHTTPError(w, http.StatusInternalServerError)
 			return
 		}
-		ds.ServeManifest(w, r)
+		s.serveStreamManifest(w, r, p.sessionID, ds.ServeManifest)
 		return
 	}
 	s.writeMasterPlaylist(w, r, p.sessionID, sess.info, dec)
