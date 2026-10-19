@@ -17,12 +17,32 @@ type fakeTrickplay struct {
 	bif       []byte
 	frame     []byte
 	available bool
+	ensured   int
+	source    core.TrickplaySource
 }
 
-func (f *fakeTrickplay) EnsureTrickplay(context.Context, core.TrickplaySource) {}
-func (f *fakeTrickplay) TrickplayAvailable(string) bool                        { return f.available }
+func (f *fakeTrickplay) EnsureTrickplay(_ context.Context, src core.TrickplaySource) {
+	f.ensured++
+	f.source = src
+}
+func (f *fakeTrickplay) TrickplayAvailable(string) bool { return f.available }
 func (f *fakeTrickplay) TrickplayBIF(string) ([]byte, bool) {
 	return append([]byte(nil), f.bif...), len(f.bif) > 0
+}
+
+func TestTimelineStartsTrickplayForConsumedPlayback(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	provider := &fakeTrickplay{}
+	f.srv.d.Trickplay = provider
+	addIndexSession(f, fightClub.Key)
+	rec := f.get(t, "/:/timeline?ratingKey="+fightClub.Key.String()+"&time=30000&duration=8340000&state=playing")
+	if rec.Code != http.StatusOK || provider.ensured != 1 {
+		t.Fatalf("timeline: status=%d Ensure calls=%d", rec.Code, provider.ensured)
+	}
+	if provider.source.ReleaseID != "release-1" || provider.source.AvailableUntil != 30*time.Second || provider.source.InputURL == "" {
+		t.Fatalf("trickplay source=%+v", provider.source)
+	}
 }
 func (f *fakeTrickplay) TrickplayFrame(string, time.Duration) ([]byte, bool) {
 	return append([]byte(nil), f.frame...), len(f.frame) > 0
