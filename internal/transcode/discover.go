@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	slashpath "path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -68,7 +69,8 @@ func (f finder) candidates(name string) []string {
 		}
 	}
 	if f.goos == "linux" {
-		out = append(out, filepath.Join("/usr/lib/ether", bin), filepath.Join("/usr/lib/ether/bin", bin))
+		// Linux package locations: always slash paths, whatever the host OS.
+		out = append(out, slashpath.Join("/usr/lib/ether", bin), slashpath.Join("/usr/lib/ether/bin", bin))
 	}
 	return out
 }

@@ -94,6 +94,10 @@ type release struct {
 	bytes    int64
 	lastUsed int64
 	metaOK   bool // directory and release.json exist on disk
+	// metaMu serializes writing release.json: concurrent Puts for a new
+	// release would otherwise race their atomic renames onto the same
+	// file, which Windows refuses ("Access is denied").
+	metaMu sync.Mutex
 }
 
 // ReleaseUsage describes one release in the cache, for the admin UI.
@@ -255,14 +259,14 @@ func (c *Cache) Put(releaseID string, segment int, data []byte) error {
 	c.mu.Unlock()
 
 	if !metaOK {
-		if err := c.ensureReleaseDir(r); err != nil {
+		if err := c.ensureReleaseDir(r, false); err != nil {
 			return fmt.Errorf("segcache: put %q segment %d: %w", releaseID, segment, err)
 		}
 	}
 	tmp, err := writeSegmentTemp(r.dir, segment, data)
 	if errors.Is(err, fs.ErrNotExist) {
 		// The release directory was removed behind our back; recreate it once.
-		if err = c.ensureReleaseDir(r); err == nil {
+		if err = c.ensureReleaseDir(r, true); err == nil {
 			tmp, err = writeSegmentTemp(r.dir, segment, data)
 		}
 	}
@@ -477,7 +481,17 @@ func (c *Cache) releaseLocked(releaseID string) *release {
 	return r
 }
 
-func (c *Cache) ensureReleaseDir(r *release) error {
+func (c *Cache) ensureReleaseDir(r *release, force bool) error {
+	r.metaMu.Lock()
+	defer r.metaMu.Unlock()
+	if !force {
+		c.mu.Lock()
+		done := r.metaOK
+		c.mu.Unlock()
+		if done { // another Put wrote it while we waited
+			return nil
+		}
+	}
 	if err := writeReleaseMeta(r.dir, r.id); err != nil {
 		return fmt.Errorf("create release dir: %w", err)
 	}
