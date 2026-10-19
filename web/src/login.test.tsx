@@ -31,7 +31,8 @@ describe("login screen", () => {
     vi.spyOn(api, "dashboard").mockResolvedValue({} as never);
     renderApp();
     fireEvent.click(await screen.findByRole("button", { name: "Sign in with Plex" }));
-    expect(await screen.findByText("ABCD")).toBeTruthy(); // popup blocked: show the code
+    // Popup blocked: offer the sign-in page as a link.
+    expect((await screen.findByRole("link", { name: "Open the Plex sign-in page" })).getAttribute("href")).toContain("app.plex.tv/auth");
     await vi.advanceTimersByTimeAsync(4500);
     // Approved: the login screen gives way to the app.
     await waitFor(() => expect(screen.queryByRole("button", { name: /Sign in with Plex|Waiting for Plex/ })).toBeNull());

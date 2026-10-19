@@ -63,7 +63,7 @@ function LoginGate({ boot, onReady }: { boot: Bootstrap; onReady: () => void }) 
         ) : null}
         {pending ? (
           <p className="muted small">
-            Finish signing in in the Plex window. No window? <a href={pending.authUrl} target="_blank" rel="noreferrer">Open plex.tv</a> and enter code <strong className="pin-code">{pending.code}</strong>.
+            Finish signing in in the Plex window. No window? <a href={pending.authUrl} target="_blank" rel="noreferrer">Open the Plex sign-in page</a>.
           </p>
         ) : null}
         <TokenFallback onReady={onReady} />
