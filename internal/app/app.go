@@ -181,6 +181,13 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		a.log.Info("database: using PostgreSQL", "url", dbCfg.Redacted().URL)
 	}
 	a.closers = append(a.closers, func() { a.db.Close() })
+	// A restored PostgreSQL-style bundle leaves a logical dump to import.
+	if imported, err := backup.ImportPending(ctx, a.db, opts.DataDir); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("database: %w", err)
+	} else if imported {
+		a.log.Info("database: imported restored backup")
+	}
 	if err := a.build(ctx, cfg); err != nil {
 		a.Close()
 		return nil, err

@@ -1,4 +1,10 @@
 // Package backup creates integrity-checked, portable snapshots without copying live WAL files.
+//
+// On SQLite a snapshot holds a VACUUM INTO copy (ether.db). On PostgreSQL,
+// where file copies do not apply, it holds a logical dump of every table
+// (database.jsonl, see store.ExportLogical) and the manifest records
+// dialect "postgres"; a restored dump is imported into an empty database
+// on the next start (ImportPending).
 package backup
 
 import (
@@ -30,6 +36,10 @@ func init() {
 
 const maxBundleFile int64 = 8 << 30
 
+// LogicalDumpFile is the PostgreSQL bundle's database entry. Left in a data
+// directory by a restore, it is imported into the (empty) database at start.
+const LogicalDumpFile = "database.jsonl"
+
 type Service struct {
 	db              *sql.DB
 	configPath, dir string
@@ -58,6 +68,44 @@ type Manifest struct {
 	Version int               `json:"version"`
 	Created time.Time         `json:"created"`
 	SHA256  map[string]string `json:"sha256"`
+	// Dialect is "postgres" for a logical dump; empty means SQLite.
+	Dialect string `json:"dialect,omitempty"`
+}
+
+// dbEntry is the bundle entry holding the database for a dialect.
+func dbEntry(dialect string) string {
+	if dialect == string(store.Postgres) {
+		return LogicalDumpFile
+	}
+	return "ether.db"
+}
+
+func validateLogical(path string) error {
+	f, e := os.Open(path)
+	if e != nil {
+		return e
+	}
+	defer f.Close()
+	_, e = store.ValidateLogical(f)
+	return e
+}
+
+func exportLogical(ctx context.Context, db *sql.DB, path string) error {
+	f, e := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if e != nil {
+		return e
+	}
+	e = store.ExportLogical(ctx, db, f)
+	if se := f.Sync(); e == nil {
+		e = se
+	}
+	if ce := f.Close(); e == nil {
+		e = ce
+	}
+	if e != nil {
+		return e
+	}
+	return validateLogical(path)
 }
 
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
@@ -157,14 +205,24 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 	if e = os.WriteFile(filepath.Join(stage, "config.json"), conf, 0600); e != nil {
 		return out, e
 	}
-	dbPath := filepath.Join(stage, "ether.db")
-	if _, e = s.db.ExecContext(ctx, `VACUUM INTO '`+strings.ReplaceAll(dbPath, "'", "''")+`'`); e != nil {
-		return out, e
+	dialect := ""
+	if store.DialectOf(s.db) == store.Postgres {
+		dialect = string(store.Postgres)
 	}
-	if e = validateDB(ctx, dbPath); e != nil {
-		return out, e
+	dbPath := filepath.Join(stage, dbEntry(dialect))
+	if dialect != "" {
+		if e = exportLogical(ctx, s.db, dbPath); e != nil {
+			return out, e
+		}
+	} else {
+		if _, e = s.db.ExecContext(ctx, `VACUUM INTO '`+strings.ReplaceAll(dbPath, "'", "''")+`'`); e != nil {
+			return out, e
+		}
+		if e = validateDB(ctx, dbPath); e != nil {
+			return out, e
+		}
 	}
-	names := []string{"config.json", "ether.db"}
+	names := []string{"config.json", dbEntry(dialect)}
 	if key, keyErr := os.ReadFile(filepath.Join(filepath.Dir(s.configPath), config.CredentialKeyFile)); keyErr == nil {
 		if len(key) != 32 {
 			return out, errors.New("invalid credential key")
@@ -178,7 +236,7 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 	} else if strings.Contains(string(conf), "ether-sealed:v1:") {
 		return out, errors.New("encrypted config has no credential key")
 	}
-	manifest := Manifest{Version: 1, Created: time.Now().UTC(), SHA256: map[string]string{}}
+	manifest := Manifest{Version: 1, Created: time.Now().UTC(), SHA256: map[string]string{}, Dialect: dialect}
 	if len(names) == 3 {
 		manifest.Version = 2
 	}
@@ -294,10 +352,11 @@ func RestoreBundle(ctx context.Context, r io.Reader, destination string) error {
 		if e != nil {
 			return e
 		}
-		if h.Typeflag != tar.TypeReg || (h.Name != "manifest.json" && h.Name != "config.json" && h.Name != "ether.db" && h.Name != config.CredentialKeyFile) || seen[h.Name] || h.Size < 0 || h.Size > maxBundleFile {
+		isDB := h.Name == "ether.db" || h.Name == LogicalDumpFile
+		if h.Typeflag != tar.TypeReg || (h.Name != "manifest.json" && h.Name != "config.json" && !isDB && h.Name != config.CredentialKeyFile) || seen[h.Name] || h.Size < 0 || h.Size > maxBundleFile {
 			return errors.New("invalid or unsafe bundle entry")
 		}
-		if h.Name != "ether.db" && h.Size > 16<<20 {
+		if !isDB && h.Size > 16<<20 {
 			return errors.New("bundle metadata too large")
 		}
 		seen[h.Name] = true
@@ -332,7 +391,10 @@ func RestoreBundle(ctx context.Context, r io.Reader, destination string) error {
 	if e = json.Unmarshal(raw, &m); e != nil {
 		return e
 	}
-	names := []string{"config.json", "ether.db"}
+	if m.Dialect != "" && m.Dialect != string(store.Postgres) {
+		return errors.New("unsupported backup manifest")
+	}
+	names := []string{"config.json", dbEntry(m.Dialect)}
 	if m.Version == 2 {
 		names = append(names, config.CredentialKeyFile)
 	}
@@ -360,7 +422,12 @@ func RestoreBundle(ctx context.Context, r io.Reader, destination string) error {
 			return e
 		}
 	}
-	if e = validateDB(ctx, filepath.Join(stage, "ether.db")); e != nil {
+	if m.Dialect != "" {
+		e = validateLogical(filepath.Join(stage, LogicalDumpFile))
+	} else {
+		e = validateDB(ctx, filepath.Join(stage, "ether.db"))
+	}
+	if e != nil {
 		return e
 	}
 	if e = ctx.Err(); e != nil {
@@ -478,7 +545,37 @@ func (s *Service) Handler() http.Handler {
 	m.HandleFunc("POST /restore", func(w http.ResponseWriter, r *http.Request) {
 		dest := filepath.Join(filepath.Dir(s.configPath), "restored-"+time.Now().UTC().Format("20060102T150405.000000000"))
 		e := RestoreBundle(r.Context(), http.MaxBytesReader(w, r.Body, maxBundleFile+32<<20), dest)
-		reply(w, map[string]string{"path": dest, "message": "Validated restore staged. Stop Ether and start it with ETHER_DATA_DIR pointing to this directory."}, e)
+		msg := "Validated restore staged. Stop Ether and start it with ETHER_DATA_DIR pointing to this directory."
+		if _, se := os.Stat(filepath.Join(dest, LogicalDumpFile)); se == nil {
+			msg = "Validated restore staged. Stop Ether and start it with ETHER_DATA_DIR pointing to this directory and ETHER_DATABASE_URL pointing to an empty PostgreSQL database (or none, for a standalone server); the data is imported on first start."
+		}
+		reply(w, map[string]string{"path": dest, "message": msg}, e)
 	})
 	return m
+}
+
+// ImportPending imports a restored logical dump (LogicalDumpFile in
+// dataDir) into db, which must be freshly migrated and empty, then renames
+// the dump so it is imported only once. It reports whether it imported.
+func ImportPending(ctx context.Context, db *sql.DB, dataDir string) (bool, error) {
+	path := filepath.Join(dataDir, LogicalDumpFile)
+	f, e := os.Open(path)
+	if os.IsNotExist(e) {
+		return false, nil
+	}
+	if e != nil {
+		return false, e
+	}
+	e = store.ImportLogical(ctx, db, f)
+	f.Close()
+	if e != nil {
+		if errors.Is(e, store.ErrNotEmpty) {
+			return false, fmt.Errorf("restored %s cannot be imported: %w; point the server at an empty database or remove the file", LogicalDumpFile, e)
+		}
+		return false, fmt.Errorf("import %s: %w", LogicalDumpFile, e)
+	}
+	if e = os.Rename(path, path+".imported"); e != nil {
+		return true, e
+	}
+	return true, nil
 }
