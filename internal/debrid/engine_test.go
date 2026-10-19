@@ -29,7 +29,7 @@ func newEngineRig(t testing.TB, size int, hedge time.Duration) *engineRig {
 	h := newHarness(t, size, "realdebrid")
 	h.cacheEverywhere(testHash)
 	r := &engineRig{harness: h, cache: newMemCache(), inner: &fakeInner{}, rel: torrentRelease("rel-e")}
-	r.eng = NewEngine(h.svc, EngineOptions{Inner: r.inner, Cache: r.cache, HedgeDelay: hedge, BlockSize: testBlock})
+	r.eng = NewEngine(h.svc, EngineOptions{Inner: r.inner, Cache: r.cache, HedgeDelay: hedge, BlockSize: testBlock, Logger: h.svc.log})
 	t.Cleanup(func() { r.eng.Close() })
 	var err error
 	if r.pl, err = h.svc.Acquire(context.Background(), r.rel); err != nil {

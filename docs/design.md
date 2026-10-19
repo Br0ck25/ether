@@ -153,6 +153,11 @@ produce a timestamp discontinuity.
 
 ## Sources, history and live television
 
+Torrent releases from Torznab indexers stream through owner-configured debrid
+services; only torrents a service already holds are used, nothing is downloaded
+in full, and "not cached" skips a release without marking it bad
+(see docs/debrid.md).
+
 Local media can supplement the catalogue and takes precedence when selected.
 Owners may supply M3U playlists and XMLTV guides or assemble virtual channels.
 Source URLs, channel access, availability and account entitlements remain the
