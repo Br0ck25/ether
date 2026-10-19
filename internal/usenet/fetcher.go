@@ -50,7 +50,11 @@ type Options struct {
 	DialTimeout time.Duration
 	// CommandTimeout bounds one command, including reading an article body.
 	CommandTimeout time.Duration
-	// MinIdle keeps this many primary connections warm after use; negative disables.
+	// MinIdle keeps this many primary (non-backfill) connections per
+	// provider warm at all times: established in the background, held
+	// past IdleTimeout and DATE-pinged so Play never pays a cold dial.
+	// 0 = DefaultMinIdle; negative disables. A provider's own
+	// config.UsenetProvider.MinIdle overrides it.
 	MinIdle int
 	// IdleTimeout closes excess connections unused for this long.
 	IdleTimeout time.Duration
@@ -153,13 +157,18 @@ type Fetcher struct {
 	closed bool
 	gen    atomic.Uint64
 	rr     atomic.Uint64
+	// minIdle is the fetcher-wide warm floor (already defaulted);
+	// UpdateConfig changes it live.
+	minIdle atomic.Int32
 
 	misses *missCache
 }
 
 var _ core.ArticleFetcher = (*Fetcher)(nil)
 
-// New builds a fetcher for providers. Connections are dialled lazily.
+// New builds a fetcher for providers. Connections are dialled lazily,
+// except each primary provider's MinIdle warm floor, which the pool
+// janitors establish (and keep) in the background.
 func New(providers []config.UsenetProvider, opts Options) *Fetcher {
 	opts.withDefaults()
 	f := &Fetcher{
@@ -167,8 +176,31 @@ func New(providers []config.UsenetProvider, opts Options) *Fetcher {
 		log:    opts.Logger,
 		misses: newMissCache(opts.MissTTL, opts.MissCacheSize),
 	}
+	f.minIdle.Store(int32(opts.MinIdle))
 	f.Update(providers)
 	return f
+}
+
+// UpdateConfig applies an edited Usenet config: the provider list (see
+// Update) and the MinIdle warm floor, live and without a restart.
+// MinIdle 0 takes the default; negative disables the floor.
+func (f *Fetcher) UpdateConfig(u config.Usenet) {
+	n := u.MinIdle
+	if n == 0 {
+		n = DefaultMinIdle
+	}
+	f.minIdle.Store(int32(n))
+	f.Update(u.Providers)
+	// Reused pools pick up the new floor here; newly created ones read
+	// f.minIdle in Update. Either way, nudge the janitor so a raised
+	// floor is established now rather than at the next sweep.
+	f.mu.RLock()
+	pools := append([]*pool(nil), f.pools...)
+	f.mu.RUnlock()
+	for _, p := range pools {
+		p.setGlobalMinIdle(n)
+		p.maintainFloor()
+	}
 }
 
 // Update swaps in a new provider list. Providers whose settings are
@@ -199,7 +231,7 @@ func (f *Fetcher) Update(providers []config.UsenetProvider) {
 		}
 		if p == nil {
 			key := cmp.Or(cfg.ID, cfg.Host) + "#" + strconv.FormatUint(f.gen.Add(1), 10)
-			p = newPool(key, cfg, &f.o, f.log)
+			p = newPool(key, cfg, &f.o, f.log, int(f.minIdle.Load()))
 		}
 		reused[p] = true
 		next = append(next, p)

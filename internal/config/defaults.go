@@ -18,6 +18,7 @@ func randomID(n int) string {
 // Defaults returns a fresh config for a new install.
 func Defaults(dataDir string) Config {
 	return Config{
+		Usenet:  Usenet{MinIdle: 2},
 		Markers: Markers{TheIntroDB: true, DetectCached: true},
 		Server: Server{
 			Port:               32400,
