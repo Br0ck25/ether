@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -172,36 +173,88 @@ func (f *fakeSvc) Status() (service.Status, error) {
 
 type fakeUpdates struct {
 	upd     *updater.Update
-	applied int
+	applied []updater.ApplyOptions
 }
 
 func (f *fakeUpdates) Check(context.Context) (*updater.Update, error) { return f.upd, nil }
-func (f *fakeUpdates) Apply(context.Context, *updater.Update, updater.ApplyOptions) (string, error) {
-	f.applied++
-	return "/tmp/ether-new", nil
+func (f *fakeUpdates) Apply(_ context.Context, _ *updater.Update, opts updater.ApplyOptions) (string, error) {
+	f.applied = append(f.applied, opts)
+	return "/tmp/Ether.dmg", nil
 }
 
-func TestCheckUpdatesPromptVsAuto(t *testing.T) {
-	upd := &updater.Update{
+func trayUpdate(kind string) *updater.Update {
+	return &updater.Update{
 		Manifest: &updater.Manifest{Version: "2.0.0"},
-		Artifact: &updater.Artifact{Kind: updater.KindBinary},
+		Artifact: &updater.Artifact{Kind: kind},
 	}
-	// Prompt mode: no apply.
-	fu := &fakeUpdates{upd: upd}
-	a := &app{updates: fu, cfg: config.Updates{AutoUpdate: false}, svc: &fakeSvc{}, dataDir: t.TempDir()}
-	got, applied, err := a.checkUpdates(context.Background(), false)
-	if err != nil || got != upd || applied != "" || fu.applied != 0 {
-		t.Fatalf("prompt: upd=%v applied=%q applies=%d err=%v", got, applied, fu.applied, err)
-	}
-	// Auto mode: applies and restarts.
+}
+
+// The tray must never replace a binary or restart the service for an
+// update, even with auto-update on: that used to overwrite the tray with
+// the server binary and cut off active streams.
+func TestCheckUpdatesNeverApplies(t *testing.T) {
+	fu := &fakeUpdates{upd: trayUpdate(updater.KindBinary)}
 	svc := &fakeSvc{}
-	a = &app{updates: fu, cfg: config.Updates{AutoUpdate: true}, svc: svc, dataDir: t.TempDir()}
-	_, applied, err = a.checkUpdates(context.Background(), false)
-	if err != nil || applied == "" || fu.applied != 1 {
-		t.Fatalf("auto: applied=%q applies=%d err=%v", applied, fu.applied, err)
+	a := &app{updates: fu, installer: fu, cfg: config.Updates{AutoUpdate: true}, svc: svc, dataDir: t.TempDir()}
+	got, err := a.checkUpdates(context.Background())
+	if err != nil || got != fu.upd {
+		t.Fatalf("upd=%v err=%v", got, err)
 	}
-	if len(svc.actions) != 1 || svc.actions[0] != "restart" {
-		t.Errorf("expected restart after auto-apply, got %v", svc.actions)
+	if len(fu.applied) != 0 || len(svc.actions) != 0 {
+		t.Fatalf("tray applied %v / service actions %v", fu.applied, svc.actions)
+	}
+	if _, err := (&app{}).checkUpdates(context.Background()); err == nil {
+		t.Fatal("dev build without a checker should report unavailable")
+	}
+}
+
+func TestOpenUpdate(t *testing.T) {
+	cases := []struct {
+		goos, kind   string
+		wantLaunched bool
+	}{
+		{"darwin", updater.KindInstaller, true},
+		{"darwin", updater.KindBinary, false},
+		{"windows", updater.KindBinary, false},
+		{"windows", updater.KindInstaller, false},
+		{"linux", updater.KindInstaller, false},
+	}
+	for _, c := range cases {
+		fu := &fakeUpdates{}
+		var opened []string
+		a := &app{
+			baseURL: "http://127.0.0.1:32400", installer: fu, goos: c.goos, log: slog.Default(),
+			openURL: func(u string) error { opened = append(opened, u); return nil },
+		}
+		launched, err := a.openUpdate(context.Background(), trayUpdate(c.kind))
+		if err != nil || launched != c.wantLaunched {
+			t.Errorf("%s/%s: launched=%v err=%v", c.goos, c.kind, launched, err)
+			continue
+		}
+		if c.wantLaunched {
+			if len(fu.applied) != 1 || len(opened) != 0 {
+				t.Errorf("%s/%s: applied=%v opened=%v", c.goos, c.kind, fu.applied, opened)
+			}
+			continue
+		}
+		if len(fu.applied) != 0 || len(opened) != 1 || opened[0] != "http://127.0.0.1:32400/ether/settings/updates" {
+			t.Errorf("%s/%s: applied=%v opened=%v", c.goos, c.kind, fu.applied, opened)
+		}
+	}
+}
+
+func TestUpdateOptionsDefaults(t *testing.T) {
+	o := updateOptions(config.Updates{}, "windows", nil)
+	if o.Channel != updater.ChannelStable || len(o.PreferKinds) != 0 {
+		t.Errorf("unreadable config: %+v", o)
+	}
+	o = updateOptions(config.Updates{Channel: "nightly"}, "linux", nil)
+	if o.Channel != updater.ChannelStable {
+		t.Errorf("unknown channel: %q", o.Channel)
+	}
+	o = updateOptions(config.Updates{Channel: "beta", FeedURL: "https://example.test/feed"}, "darwin", nil)
+	if o.Channel != updater.ChannelBeta || o.FeedURL != "https://example.test/feed" || len(o.PreferKinds) == 0 || o.PreferKinds[0] != updater.KindInstaller {
+		t.Errorf("darwin beta: %+v", o)
 	}
 }
 
