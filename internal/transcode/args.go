@@ -506,9 +506,18 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 
 	// Encoder.
 	videoKbps := videoBitrate(s.Info, d)
+	if s.Rate.TargetKbps > 0 {
+		videoKbps = s.Rate.TargetKbps
+	}
 	b := fmt.Sprintf("%dk", videoKbps)
 	maxr := fmt.Sprintf("%dk", videoKbps*3/2)
 	buf := fmt.Sprintf("%dk", videoKbps*2)
+	if s.Rate.MaxrateKbps > 0 {
+		maxr = fmt.Sprintf("%dk", s.Rate.MaxrateKbps)
+	}
+	if s.Rate.BufsizeKbps > 0 {
+		buf = fmt.Sprintf("%dk", s.Rate.BufsizeKbps)
+	}
 	e := []string{"-c:v", enc}
 	xPreset := "veryfast"
 	if s.FastStart {
@@ -516,7 +525,12 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	switch enc {
 	case "libx264":
-		e = append(e, "-preset", xPreset, "-crf", "21", "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		crf := "21"
+		if s.Rate.Quality {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		} else {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		}
 		if s.FastStart {
 			e = append(e, "-tune", "zerolatency")
 		}
@@ -525,7 +539,11 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		if keepHDR {
 			params += hdrX265Params(v)
 		}
-		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", b, "-bufsize", buf, "-x265-params", params)
+		peak := b
+		if s.Rate.Quality {
+			peak = maxr
+		}
+		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", peak, "-bufsize", buf, "-x265-params", params)
 	case "h264_videotoolbox", "hevc_videotoolbox":
 		e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
 		if s.FastStart {
@@ -541,7 +559,11 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		if s.FastStart {
 			preset = "p1"
 		}
-		e = append(e, "-preset", preset, "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		if s.Rate.Quality {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-cq", "21", "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		} else {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		}
 		if enc == "h264_nvenc" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
