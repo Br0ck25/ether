@@ -525,7 +525,7 @@ func TestPrepareProbeFailureUsesEstimate(t *testing.T) {
 // Failover
 
 func TestFailoverMidResponseEndsMKV(t *testing.T) {
-	const sizeA, sizeB = 200_000, 400_000
+	const sizeA, sizeB = 200_000, 200_000
 	a := mkv("A", sizeA, 100*time.Second)
 	a.FailFrom, a.FailTo = 120_000, 130_000
 	h := newHarness(t, []*fakeRelease{a, mkv("B", sizeB, 100*time.Second)}, []string{"A", "B"})
@@ -551,7 +551,7 @@ func TestFailoverMidResponseEndsMKV(t *testing.T) {
 	}
 
 	// The client re-requests from where it stopped; virtual coordinates
-	// (A's size) are mapped by timestamp into B.
+	// (A's size) remain valid for the same-size repost B.
 	resp, body, err = get(t, srv.URL, map[string]string{"Range": fmt.Sprintf("bytes=%d-%d", a.FailFrom, a.FailFrom+999)})
 	if err != nil || resp.StatusCode != 206 {
 		t.Fatalf("re-request: %d %v", resp.StatusCode, err)
@@ -562,6 +562,25 @@ func TestFailoverMidResponseEndsMKV(t *testing.T) {
 	mapped := a.FailFrom * sizeB / sizeA // same duration: linear
 	if !bytes.Equal(body, expected("B", mapped, 1000)) {
 		t.Fatal("re-request not served from B at the mapped offset")
+	}
+}
+
+func TestDirectPlayRejectsDifferentSizeReplacement(t *testing.T) {
+	a := mkv("A", 200000, 100*time.Second)
+	a.FailFrom, a.FailTo = 120000, 130000
+	h := newHarness(t, []*fakeRelease{a, mkv("B", 400000, 100*time.Second)}, []string{"A", "B"})
+	ps := h.prepare(owner, movieKey, "c1")
+	srv := directPlayServer(t, h.m, ps.ID)
+	_, body, err := get(t, srv.URL, nil)
+	if err == nil || len(body) != int(a.FailFrom) {
+		t.Fatalf("expected source to stop safely: bytes=%d err=%v", len(body), err)
+	}
+	st, _ := h.m.Session(ps.ID)
+	if st.Resolution.Release.ID != "A" || st.Failovers != 0 {
+		t.Fatalf("incompatible headers were replaced: %+v", st)
+	}
+	if h.cache.pinned("B", PinReasonLive) {
+		t.Fatal("rejected candidate was pinned")
 	}
 }
 

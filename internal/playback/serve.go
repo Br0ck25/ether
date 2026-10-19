@@ -148,7 +148,15 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			if rem < want {
 				want = rem
 			}
-			n, err := g.src.ReadAt((*bp)[:want], pos)
+			var n int
+			var err error
+			if cr, ok := g.src.(interface {
+				ReadAtContext(context.Context, []byte, int64) (int, error)
+			}); ok {
+				n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
+			} else {
+				n, err = g.src.ReadAt((*bp)[:want], pos)
+			}
 			if int64(n) == want && errors.Is(err, io.EOF) {
 				err = nil
 			}

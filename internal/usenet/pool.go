@@ -194,8 +194,9 @@ func (p *pool) conn(ctx context.Context) (*Conn, error) {
 			c := p.idle[n-1]
 			p.idle[n-1] = nil
 			p.idle = p.idle[:n-1]
+			expire := time.Since(c.idleSince) > p.o.IdleTimeout && p.live > p.idleFloor()
 			p.mu.Unlock()
-			if time.Since(c.idleSince) > p.o.IdleTimeout {
+			if expire {
 				p.discard(c)
 				continue
 			}
@@ -329,7 +330,7 @@ func (p *pool) sweep() {
 	p.mu.Lock()
 	keep := p.idle[:0]
 	for _, c := range p.idle {
-		if now.Sub(c.idleSince) > p.o.IdleTimeout {
+		if now.Sub(c.idleSince) > p.o.IdleTimeout && p.live-len(expired) > p.idleFloor() {
 			expired = append(expired, c)
 		} else {
 			keep = append(keep, c)
@@ -362,13 +363,20 @@ func (p *pool) keepAliveOne(now time.Time) bool {
 	}
 	defer p.sem.Release(core.PriorityReadahead)
 	p.mu.Lock()
-	// idle is a LIFO stack, so the longest-idle connection is at index 0.
-	if p.closed || len(p.idle) == 0 || now.Sub(p.idle[0].used) <= p.o.KeepAlive {
+	// Request recency and ping recency differ. Find the oldest wire activity
+	// rather than repeatedly pinging the bottom of the request LIFO stack.
+	oldest := -1
+	for i, c := range p.idle {
+		if now.Sub(c.used) > p.o.KeepAlive && (oldest < 0 || c.used.Before(p.idle[oldest].used)) {
+			oldest = i
+		}
+	}
+	if p.closed || oldest < 0 {
 		p.mu.Unlock()
 		return false
 	}
-	c := p.idle[0]
-	p.idle = slices.Delete(p.idle, 0, 1)
+	c := p.idle[oldest]
+	p.idle = slices.Delete(p.idle, oldest, oldest+1)
 	p.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), p.o.CommandTimeout)
@@ -663,4 +671,11 @@ func (p *pool) stats() ProviderStats {
 	st.AvgFetchTime = time.Duration(p.fetching.v)
 	p.latMu.Unlock()
 	return st
+}
+
+func (p *pool) idleFloor() int {
+	if p.cfg.Backfill || p.o.MinIdle < 0 || p.o.KeepAlive <= 0 {
+		return 0
+	}
+	return min(p.size, p.o.MinIdle)
 }

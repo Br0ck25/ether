@@ -81,6 +81,20 @@ func (s *source) Close() error {
 // missing on every provider surfaces as an error wrapping
 // core.ErrArticleMissing.
 func (s *source) ReadAt(p []byte, off int64) (int, error) {
+	return s.readAt(s.ctx, p, off, true)
+}
+
+// ReadAtContext lets HTTP readers cancel an in-flight segment read.
+func (s *source) ReadAtContext(ctx context.Context, p []byte, off int64) (int, error) {
+	return s.readAt(ctx, p, off, true)
+}
+
+// ReadMetadataAtContext avoids speculative read-ahead for bounded index reads.
+func (s *source) ReadMetadataAtContext(ctx context.Context, p []byte, off int64) (int, error) {
+	return s.readAt(ctx, p, off, false)
+}
+
+func (s *source) readAt(parent context.Context, p []byte, off int64, ahead bool) (int, error) {
 	if off < 0 {
 		return 0, fmt.Errorf("stream: negative offset %d", off)
 	}
@@ -95,9 +109,13 @@ func (s *source) ReadAt(p []byte, off int64) (int, error) {
 	if rem := size - off; int64(len(want)) > rem {
 		want = want[:rem]
 	}
-	s.readAhead(off, int64(len(want)))
+	if ahead {
+		s.readAhead(off, int64(len(want)))
+	}
 
-	ctx, cancel := context.WithTimeout(s.ctx, s.e.opts.ReadTimeout)
+	ctx, cancel := context.WithTimeout(parent, s.e.opts.ReadTimeout)
+	stop := context.AfterFunc(s.ctx, cancel)
+	defer stop()
 	defer cancel()
 	n, err := s.read(ctx, want, off, core.PriorityLive)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/nzb"
@@ -55,8 +56,8 @@ func TestCheckHealthy(t *testing.T) {
 	f.mu.Lock()
 	stats := f.statCalls
 	f.mu.Unlock()
-	if stats != 12 {
-		t.Fatalf("STATs = %d, want 12", stats)
+	if stats != 10 {
+		t.Fatalf("STATs = %d, want 10 plus two BODY samples", stats)
 	}
 	// Open after Check reuses the index: no further header fetch.
 	f.resetCounts()
@@ -98,5 +99,34 @@ func TestCheckRejections(t *testing.T) {
 	)
 	if ok, err := e.Check(context.Background(), missingRAR); ok || !errors.Is(err, ErrIncomplete) {
 		t.Fatalf("missing volume: %v %v", ok, err)
+	}
+}
+
+type bodyUnavailableFetcher struct{ *fakeFetcher }
+
+func (f bodyUnavailableFetcher) Stat(ctx context.Context, _ string) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+func (f bodyUnavailableFetcher) CheckBody(context.Context, string, []string, core.Priority) error {
+	return core.ErrArticleMissing
+}
+func (f bodyUnavailableFetcher) BodyPart(ctx context.Context, _ string, _ []string, _ core.Priority) ([]byte, core.ArticlePart, error) {
+	<-ctx.Done()
+	return nil, core.ArticlePart{}, ctx.Err()
+}
+func TestBodyTakedownCancelsSlowHeaderAndStatProbes(t *testing.T) {
+	f := newFakeFetcher()
+	doc := post(t, f, 10000, postFile{name: "taken.mkv", data: mkvBytes(1, 1000000)})
+	e := newTestEngine(t, bodyUnavailableFetcher{f}, nil, Options{HealthSamples: 12, HealthParallel: 12})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	ok, err := e.Check(ctx, doc)
+	if ok || !errors.Is(err, core.ErrArticleMissing) {
+		t.Fatalf("BODY takedown: %v %v", ok, err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("waited for slow header/STAT instead of cancelling")
 	}
 }

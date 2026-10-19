@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"slices"
@@ -26,6 +27,7 @@ import (
 // Defaults for Options.
 const (
 	DefaultConnections      = 8
+	DefaultMinIdle          = 2
 	DefaultPrefetchFraction = 0.25
 	DefaultIdleTimeout      = 90 * time.Second
 	DefaultKeepAlive        = 30 * time.Second
@@ -48,7 +50,9 @@ type Options struct {
 	DialTimeout time.Duration
 	// CommandTimeout bounds one command, including reading an article body.
 	CommandTimeout time.Duration
-	// IdleTimeout closes connections unused for this long.
+	// MinIdle keeps this many primary connections warm after use; negative disables.
+	MinIdle int
+	// IdleTimeout closes excess connections unused for this long.
 	IdleTimeout time.Duration
 	// KeepAlive pings (DATE) connections idle for this long so servers do not
 	// drop them; negative disables pings.
@@ -83,6 +87,9 @@ type Options struct {
 }
 
 func (o *Options) withDefaults() {
+	if o.MinIdle == 0 {
+		o.MinIdle = DefaultMinIdle
+	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
@@ -575,4 +582,54 @@ func (f *Fetcher) Close() error {
 		p.close()
 	}
 	return nil
+}
+
+// CheckBody verifies actual BODY availability without downloading a full article.
+// A partial response retires its connection so unread bytes cannot poison reuse.
+func (f *Fetcher) CheckBody(ctx context.Context, messageID string, groups []string, prio core.Priority) error {
+	id, err := normalizeMessageID(messageID)
+	if err != nil {
+		return err
+	}
+	return f.each(ctx, id, "body", func(p *pool) error {
+		c, err := p.get(ctx, prio)
+		if err != nil {
+			return err
+		}
+		reused := c.uses > 0
+		c.uses++
+		if p.o.UseGroup && len(groups) > 0 && !slices.Contains(groups, c.CurrentGroup()) {
+			if err = c.Group(ctx, groups[0]); err != nil && !errors.Is(err, ErrNoSuchGroup) {
+				p.put(c, prio)
+				return p.failed(err, reused, ctx)
+			}
+		}
+		reader, err := c.Body(ctx, id)
+		if err == nil {
+			// A single buffered byte proves the BODY is readable. Bypass the
+			// line reader so a malicious unterminated line cannot consume an article.
+			n, e := io.CopyN(io.Discard, c.r, 1)
+			if e != nil && !errors.Is(e, io.EOF) {
+				err = e
+			} else if n == 0 {
+				err = ErrCorrupt
+			}
+			if !reader.done {
+				_ = c.Close()
+				reader.finish(nil)
+			}
+		}
+		p.put(c, prio)
+		if err != nil {
+			if errors.Is(err, ErrNoSuchArticle) {
+				p.bodyMisses.Add(1)
+				var pe *ProtocolError
+				if errors.As(err, &pe) && pe.Code == 451 {
+					p.bodyTakedowns.Add(1)
+				}
+			}
+			return p.failed(err, reused, ctx)
+		}
+		return nil
+	})
 }

@@ -21,7 +21,11 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 	if g, err := m.openLocal(ctx, s, profile); g != nil || err != nil {
 		return g, err
 	}
-	res := m.takeWarmResolution(ctx, s.ident, s.caps)
+	var res *core.Resolution
+	var cached *probeCache
+	if warm := m.takeWarmResolution(ctx, s.ident, profile.Name); warm != nil {
+		res, cached = warm.res, warm.probe
+	}
 	if res == nil {
 		res = m.resumeResolution(ctx, s.ident.userID, s.ident.key, profile.Name)
 	}
@@ -46,7 +50,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 				return nil, err
 			}
 		}
-		g, err := m.openGeneration(ctx, s, res, fallback)
+		g, err := m.openGeneration(ctx, s, res, fallback, cached)
 		if err == nil {
 			s.mu.Lock()
 			s.tried = append(s.tried, tried...)
@@ -115,7 +119,7 @@ func (m *Manager) nextResolution(ctx context.Context, s *session, tried []string
 // loopback server and probes it. A release whose articles are missing is
 // marked bad. When the probe fails for another reason, fallback supplies the
 // media info.
-func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Resolution, fallback func(size int64) core.MediaInfo) (*generation, error) {
+func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Resolution, fallback func(size int64) core.MediaInfo, cached ...*probeCache) (*generation, error) {
 	src, err := m.deps.Engine.Open(ctx, res.Release.ID, res.NZB)
 	if err != nil {
 		if errors.Is(err, core.ErrArticleMissing) {
@@ -127,17 +131,26 @@ func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Reso
 		src.Close()
 		return nil, fmt.Errorf("open %s: empty media file", res.Release.Name)
 	}
-	return m.probeGeneration(ctx, s, res, src, fallback)
+	return m.probeGeneration(ctx, s, res, src, fallback, cached...)
 }
 
-func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Resolution, src core.MediaSource, fallback func(int64) core.MediaInfo) (*generation, error) {
+func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Resolution, src core.MediaSource, fallback func(int64) core.MediaInfo, cached ...*probeCache) (*generation, error) {
 	g := &generation{sess: s, n: s.nextGen(), token: randomID(16), src: src, res: res}
 	m.mu.Lock()
 	m.tokens[s.id+"/"+g.token] = g
 	m.mu.Unlock()
 
 	pctx, cancel := context.WithTimeout(ctx, m.opts.ProbeTimeout)
-	info, perr := m.deps.Transcoder.Probe(pctx, m.urlFor(g))
+	var info *core.MediaInfo
+	var perr error
+	var facts *probeCache
+	if len(cached) > 0 && cached[0] != nil && cached[0].releaseID == res.Release.ID && cached[0].info.Size == src.Size() {
+		facts = cached[0]
+		copy := facts.info
+		info = &copy
+	} else {
+		info, perr = m.deps.Transcoder.Probe(pctx, m.urlFor(g))
+	}
 	cancel()
 	var mi core.MediaInfo
 	switch {
@@ -164,10 +177,18 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	if m.deps.AugmentMedia != nil {
 		m.deps.AugmentMedia(ctx, s.title, &s.user, res, src, &mi)
 	}
+	var points []IndexPoint
+	if facts != nil {
+		points = facts.points
+	} else if !mi.Estimated && mi.Duration > 0 {
+		indexCtx, cancelIndex := context.WithTimeout(ctx, 2*time.Second)
+		points = containerIndex(indexCtx, src, src.Size())
+		cancelIndex()
+	}
 	// The loopback server may already hold g; publish under its lock.
 	g.mu.Lock()
 	g.info = mi
-	g.tmap = TimeMap{Size: src.Size(), Duration: mi.Duration}
+	g.tmap = TimeMap{Size: src.Size(), Duration: mi.Duration, Points: points}
 	g.mu.Unlock()
 	return g, nil
 }
@@ -214,6 +235,7 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 
 	s.mu.Lock()
 	cur, closed, failovers := s.cur, s.closed, s.failovers
+	direct := s.decision == core.DecisionDirectPlay && !spliceable(s.container, s.name)
 	s.mu.Unlock()
 	if closed {
 		return nil, fmt.Errorf("playback: session %s ended: %w", s.id, core.ErrNotFound)
@@ -252,6 +274,13 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 			break
 		}
 		g, err = m.openGeneration(ctx, s, res, fallback)
+		// Byte-range clients retain the original container headers and offsets.
+		// Only an exact-size repost may replace a non-spliceable direct source.
+		if err == nil && direct && g.src.Size() != cur.src.Size() {
+			m.dropGeneration(g)
+			g = nil
+			err = fmt.Errorf("incompatible direct-play replacement size: %w", core.ErrNotAvailable)
+		}
 		if err == nil {
 			break
 		}
