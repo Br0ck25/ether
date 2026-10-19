@@ -467,3 +467,20 @@ func TestPreviewSpeedOnWarmIndex(t *testing.T) {
 		t.Fatalf("preview: %+v", p)
 	}
 }
+
+// The Studio previews drafts before they're named; saving still requires
+// a name.
+func TestPreviewAcceptsUnnamedDraft(t *testing.T) {
+	e := newEnv(t)
+	sp := spec("", "mixed", catalogSource(), rl("rating", "gte", 7))
+	p, err := e.svc.Preview(e.ctx, sp, 60)
+	if err != nil {
+		t.Fatalf("preview of an unnamed draft: %v", err)
+	}
+	if p.Total == 0 {
+		t.Fatal("empty preview")
+	}
+	if err := collections.Validate(&sp); err == nil {
+		t.Fatal("saving an unnamed collection must still be rejected")
+	}
+}

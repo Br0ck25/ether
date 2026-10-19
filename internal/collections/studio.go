@@ -136,10 +136,16 @@ func (s *Service) Preview(ctx context.Context, sp core.CollectionSpec, n int) (*
 		n = 60
 	}
 	Normalize(&sp)
-	if err := Validate(&sp); err != nil {
+	// A preview is of an unsaved draft: everything must be valid except
+	// that it may not have a name yet.
+	named := sp
+	if named.Name == "" {
+		named.Name = "Untitled"
+	}
+	if err := Validate(&named); err != nil {
 		return nil, err
 	}
-	res, err := s.evaluate(ctx, sp, evalOptions{seed: firstNonEmpty(sp.ID, sp.Name)})
+	res, err := s.evaluate(ctx, named, evalOptions{seed: firstNonEmpty(sp.ID, sp.Name)})
 	if err != nil {
 		return nil, err
 	}
