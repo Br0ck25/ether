@@ -245,8 +245,8 @@ func (c *Client) MovieList(ctx context.Context, list string, page int) (*Paged[M
 		return nil, fmt.Errorf("tmdb: unknown movie list %q", list)
 	}
 	q := pageQ(nil, page)
-	if c.region != "" {
-		q.Set("region", c.region)
+	if region := c.Region(); region != "" {
+		q.Set("region", region)
 	}
 	var out Paged[Movie]
 	err := c.getJSON(ctx, "/movie/"+list, q, &out)

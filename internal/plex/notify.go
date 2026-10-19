@@ -109,6 +109,8 @@ func (t *sessionTracker) expire(now time.Time, ttl time.Duration) []playEntry {
 // Notification fan-out
 
 type subscriber struct {
+	userID  int64
+	owner   bool
 	ch      chan notification
 	filters map[string]bool // empty = all
 }
@@ -129,8 +131,8 @@ func newNotifier() *notifier {
 	return &notifier{subs: map[*subscriber]struct{}{}, done: make(chan struct{})}
 }
 
-func (n *notifier) subscribe(filters []string) (*subscriber, bool) {
-	sub := &subscriber{ch: make(chan notification, 64), filters: map[string]bool{}}
+func (n *notifier) subscribe(filters []string, user *core.User) (*subscriber, bool) {
+	sub := &subscriber{userID: user.ID, owner: user.IsOwner, ch: make(chan notification, 64), filters: map[string]bool{}}
 	for _, f := range filters {
 		if f = strings.TrimSpace(f); f != "" {
 			sub.filters[f] = true
@@ -152,7 +154,7 @@ func (n *notifier) unsubscribe(sub *subscriber) {
 }
 
 // publish delivers to every interested subscriber, dropping for slow ones.
-func (n *notifier) publish(nc model.NotificationContainer) {
+func (n *notifier) publish(nc model.NotificationContainer, userID int64) {
 	data, err := model.Marshal(nc, model.JSON)
 	if err != nil {
 		return
@@ -162,6 +164,9 @@ func (n *notifier) publish(nc model.NotificationContainer) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for sub := range n.subs {
+		if userID != 0 && sub.userID != userID && !sub.owner {
+			continue
+		}
 		if len(sub.filters) > 0 && !sub.filters[nc.Type] {
 			continue
 		}
@@ -204,7 +209,7 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.CloseNow()
-	sub, ok := s.notifier.subscribe(notificationFilters(r))
+	sub, ok := s.notifier.subscribe(notificationFilters(r), FromContext(r.Context()).User)
 	if !ok {
 		c.Close(websocket.StatusGoingAway, "server shutting down")
 		return
@@ -222,6 +227,9 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 			c.Close(websocket.StatusGoingAway, "server shutting down")
 			return
 		case <-ping.C:
+			if s.activeViewer(r.Context(), sub.userID) == nil {
+				return
+			}
 			pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := c.Ping(pctx)
 			cancel()
@@ -229,6 +237,9 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case msg := <-sub.ch:
+			if s.activeViewer(r.Context(), sub.userID) == nil {
+				return
+			}
 			wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := c.Write(wctx, websocket.MessageText, msg.data)
 			cancel()
@@ -246,7 +257,7 @@ func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusInternalServerError)
 		return
 	}
-	sub, ok := s.notifier.subscribe(notificationFilters(r))
+	sub, ok := s.notifier.subscribe(notificationFilters(r), FromContext(r.Context()).User)
 	if !ok {
 		writeHTTPError(w, http.StatusServiceUnavailable)
 		return
@@ -268,11 +279,17 @@ func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 		case <-s.notifier.done:
 			return
 		case <-ping.C:
+			if s.activeViewer(r.Context(), sub.userID) == nil {
+				return
+			}
 			if _, err := fmt.Fprint(w, "event: ping\ndata: {}\n\n"); err != nil {
 				return
 			}
 			fl.Flush()
 		case msg := <-sub.ch:
+			if s.activeViewer(r.Context(), sub.userID) == nil {
+				return
+			}
 			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.typ, msg.data); err != nil {
 				return
 			}
@@ -301,11 +318,11 @@ func (s *Server) notifyPlaying(e playEntry, state string) {
 			State:            state,
 			TranscodeSession: e.transcodeID,
 		}},
-	})
+	}, e.user.ID)
 }
 
 // notifyTimeline publishes a library timeline entry (watched-state change).
-func (s *Server) notifyTimeline(key core.RatingKey, t core.MediaType, title string) {
+func (s *Server) notifyTimeline(key core.RatingKey, t core.MediaType, title string, userID int64) {
 	sec, _ := s.sectionFor(t)
 	typeNum := map[core.MediaType]int{core.TypeMovie: 1, core.TypeShow: 2, core.TypeSeason: 3, core.TypeEpisode: 4}[t]
 	s.notifier.publish(model.NotificationContainer{
@@ -320,5 +337,5 @@ func (s *Server) notifyTimeline(key core.RatingKey, t core.MediaType, title stri
 			State:      5,
 			UpdatedAt:  s.now().Unix(),
 		}},
-	})
+	}, userID)
 }

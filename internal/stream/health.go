@@ -22,7 +22,12 @@ import (
 //
 // The index built here is kept, so an Open of the same NZB right after a
 // successful Check does not repeat the header fetches.
-func (e *Engine) Check(ctx context.Context, nzbData []byte) (bool, error) {
+func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err error) {
+	defer func() {
+		if err != nil && IsRejection(err) {
+			err = fmt.Errorf("%w: %w", core.ErrReleaseRejected, err)
+		}
+	}()
 	trace := HealthTrace{}
 	defer func() { e.healthMu.Lock(); e.healthTrace = trace; e.healthMu.Unlock() }()
 	if err := e.ctx.Err(); err != nil {

@@ -91,9 +91,10 @@ type Client struct {
 
 	lim *rateLimiter
 
-	mu      sync.Mutex
-	cache   map[string]cacheEntry
-	flights map[string]*flight
+	mu         sync.Mutex
+	cache      map[string]cacheEntry
+	flights    map[string]*flight
+	generation uint64
 
 	cfgMu sync.RWMutex
 	img   *Configuration
@@ -143,10 +144,44 @@ func newClient(key, lang, region string, log *slog.Logger, opts ...Option) *Clie
 }
 
 // HasKey reports whether a key is available.
-func (c *Client) HasKey() bool { return c.key != "" }
+func (c *Client) HasKey() bool { return c.settings().key != "" }
 
 // Language returns the configured TMDB language.
-func (c *Client) Language() string { return c.language }
+func (c *Client) Language() string { return c.settings().language }
 
 // Region returns the configured region.
-func (c *Client) Region() string { return c.region }
+func (c *Client) Region() string { return c.settings().region }
+
+// clientSettings is one immutable request snapshot, including its cache generation.
+type clientSettings struct {
+	key, language, region string
+	bearer                bool
+	generation            uint64
+}
+
+func (c *Client) settings() clientSettings {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return clientSettings{c.key, c.language, c.region, c.bearer, c.generation}
+}
+
+// UpdateConfig changes credentials and locale without replacing the client held
+// by catalogue workers. Existing requests finish with their original snapshot;
+// they cannot populate the new configuration's cache.
+func (c *Client) UpdateConfig(cfg config.Catalog) {
+	key, lang, region := ResolveKey(cfg), cfg.Language, cfg.Region
+	if lang == "" {
+		lang = "en-US"
+	}
+	if region == "" {
+		region = "US"
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.key == key && c.language == lang && c.region == region {
+		return
+	}
+	c.key, c.bearer, c.language, c.region = key, IsBearerKey(key), lang, region
+	c.generation++
+	c.cache = map[string]cacheEntry{}
+}

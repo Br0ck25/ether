@@ -33,6 +33,7 @@ type generation struct {
 
 	// articleMissing records that a read hit core.ErrArticleMissing.
 	articleMissing atomic.Bool
+	readFailure    error // protected by mu; distinguishes transient failover from bad data
 
 	mu      sync.Mutex
 	refs    int
@@ -328,4 +329,17 @@ func (r *rateMeter) rate(now time.Time) int64 {
 		}
 	}
 	return sum / rateWindow
+}
+
+func (g *generation) noteReadFailure(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.readFailure == nil {
+		g.readFailure = err
+	}
+}
+func (g *generation) sourceFailure() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.readFailure
 }

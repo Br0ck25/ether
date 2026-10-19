@@ -53,6 +53,7 @@ type fakeRelease struct {
 	// Reads touching [FailFrom, FailTo) fail with ErrArticleMissing.
 	FailFrom, FailTo int64
 	OpenErr          error
+	ReadErr          error
 }
 
 type fakeSource struct {
@@ -82,12 +83,16 @@ func (s *fakeSource) ReadAt(p []byte, off int64) (int, error) {
 		n = s.rel.Size - off
 	}
 	var err error
+	failure := s.rel.ReadErr
+	if failure == nil {
+		failure = core.ErrArticleMissing
+	}
 	if s.rel.FailTo > s.rel.FailFrom && off < s.rel.FailTo && off+n > s.rel.FailFrom {
 		if off >= s.rel.FailFrom {
-			return 0, fmt.Errorf("segment at %d: %w", off, core.ErrArticleMissing)
+			return 0, fmt.Errorf("segment at %d: %w", off, failure)
 		}
 		n = s.rel.FailFrom - off
-		err = fmt.Errorf("segment at %d: %w", s.rel.FailFrom, core.ErrArticleMissing)
+		err = fmt.Errorf("segment at %d: %w", s.rel.FailFrom, failure)
 	}
 	for i := int64(0); i < n; i++ {
 		p[i] = contentAt(s.rel.ID, off+i)

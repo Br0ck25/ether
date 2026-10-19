@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -38,9 +39,10 @@ type Service struct {
 	max     int
 	now     func() time.Time
 
-	mu      sync.Mutex
-	cache   map[string]*cacheEntry
-	flights map[string]chan struct{}
+	mu         sync.Mutex
+	cache      map[string]*cacheEntry
+	flights    map[string]chan struct{}
+	generation uint64
 }
 
 type cacheEntry struct {
@@ -281,6 +283,7 @@ func (s *Service) refreshLocked(key, sig string, compute func(context.Context) (
 	}
 	ch := make(chan struct{})
 	s.flights[key] = ch
+	generation := s.generation
 	go func() {
 		defer close(ch)
 		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
@@ -289,6 +292,9 @@ func (s *Service) refreshLocked(key, sig string, compute func(context.Context) (
 		now := s.now()
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if generation != s.generation {
+			return
+		}
 		delete(s.flights, key)
 		e := s.cache[key]
 		if e == nil {
@@ -547,4 +553,24 @@ func slug(s string) string {
 		out = strings.TrimRight(out[:40], "-")
 	}
 	return out
+}
+
+// UpdateConfig applies new endpoint/model credentials and invalidates results
+// computed with previous settings. An old in-flight call cannot refill them.
+func (s *Service) UpdateConfig(cfg config.LLM) {
+	if s == nil || s.client == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.client.mu.RLock()
+	same := s.client.cfg == cfg
+	s.client.mu.RUnlock()
+	if same {
+		return
+	}
+	s.client.UpdateConfig(cfg)
+	s.generation++
+	s.cache = map[string]*cacheEntry{}
+	s.flights = map[string]chan struct{}{}
 }

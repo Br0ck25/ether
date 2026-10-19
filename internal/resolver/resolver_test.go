@@ -200,8 +200,8 @@ func TestResolveFetchFailureDoesNotReportHealthCheck(t *testing.T) {
 	svc := New(idx, fakeHealth{checks: &checks}, nil, testCfg(), Options{})
 	t.Cleanup(func() { _ = svc.Close() })
 	_, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
-	if !errors.Is(err, core.ErrNotAvailable) {
-		t.Fatalf("error = %v; want unavailable", err)
+	if err == nil || errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("error = %v; want transient fetch failure", err)
 	}
 	if checks.Load() != 0 {
 		t.Fatal("health checker ran after an NZB fetch failure")
