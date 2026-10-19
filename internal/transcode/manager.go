@@ -362,11 +362,16 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 			offset = 0
 		}
 	}
+	m.mu.Lock()
+	adapt := adaptiveFromConfig(m.cfg)
+	m.mu.Unlock()
+
 	// HLS playlists start at the offset; a DASH MPD always spans the whole
 	// title and the first run starts at the offset's segment.
 	base, startSeg, total := offset, 0, 0
 	tracks := 1
 	var reps []dashRep
+	var plan *Timeline
 	if proto == core.ProtocolDASH {
 		base = 0
 		startSeg = int(offset / segDur)
@@ -379,8 +384,26 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 			return nil, errors.New("transcode: StartHLS: no video or audio stream for DASH")
 		}
 		tracks = len(reps)
-	} else if req.Info.Duration > 0 {
-		total = segmentCount(req.Info.Duration-base, segDur)
+	} else {
+		// One segment plan for the whole session (all rungs share it).
+		span := time.Duration(0)
+		if req.Info.Duration > 0 {
+			span = req.Info.Duration - base
+		}
+		steadyMode := ModeTranscode
+		if d.VideoCopy {
+			steadyMode = ModeCopy
+		}
+		plan = buildTimeline(span, segDur, timelineOptions{
+			steadyMode: steadyMode,
+			fastStart:  adapt.FastStart && v != nil,
+			rampSegs:   adapt.RampSegs,
+			rampDur:    adapt.RampDur,
+			keyframes:  req.Info.Keyframes,
+			base:       base,
+			snap:       d.VideoCopy && len(req.Info.Keyframes) > 0,
+		})
+		total = plan.Total()
 	}
 	id := req.SessionID
 	if id == "" {
@@ -420,24 +443,29 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
 	}
 	s := &Session{
-		id:        id,
-		m:         m,
-		dir:       dir,
-		segDur:    segDur,
-		base:      base,
-		total:     total,
-		container: d.Container,
-		proto:     proto,
-		log:       m.log.With("session", id),
-		created:   time.Now(),
-		input:     req.InputURL,
-		info:      req.Info,
-		decision:  d,
-		done:      make([]map[int]bool, tracks),
-		lastReq:   startSeg,
-		endSeg:    -1,
-		resumeAt:  -1,
-		changed:   make(chan struct{}),
+		id:          id,
+		m:           m,
+		dir:         dir,
+		segDur:      segDur,
+		base:        base,
+		total:       total,
+		container:   d.Container,
+		proto:       proto,
+		log:         m.log.With("session", id),
+		created:     time.Now(),
+		input:       req.InputURL,
+		info:        req.Info,
+		decision:    d,
+		done:        make([]map[int]bool, tracks),
+		lastReq:     startSeg,
+		endSeg:      -1,
+		resumeAt:    -1,
+		changed:     make(chan struct{}),
+		plan:        plan,
+		adapt:       adapt,
+		seekRampSeg: -1,
+		segSizes:    map[int]int64{},
+		governorOn:  adapt.Governor && proto == core.ProtocolHLS && d.VideoCopy && v != nil,
 	}
 	for t := range s.done {
 		s.done[t] = map[int]bool{}

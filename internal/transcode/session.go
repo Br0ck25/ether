@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -65,6 +66,18 @@ type Session struct {
 	changed  chan struct{}
 	playlist []byte
 	dash     *dashState // DASH sessions only
+
+	// Adaptive HLS engine: the shared segment plan (HLS only), the config
+	// snapshot, the ABR ladder and measured delivery goodput.
+	plan        *Timeline
+	adapt       adaptiveSettings
+	wantTrack   int // track the encoder should be producing (rung/rep)
+	goodput     goodputEstimator
+	segSizes    map[int]int64 // primary-track segment sizes (spike governor)
+	governorOn  bool          // plan may change ahead of the player
+	lastGovSeg  int           // last segment the governor evaluated from
+	govCooldown time.Time     // no new clamp planning before this
+	seekRampSeg int           // segment a seek restarted at (preset ramp); -1 none
 }
 
 // run is one ffmpeg process producing segments from startSeg on.
@@ -82,6 +95,9 @@ type run struct {
 	err      error
 	stderr   *tailBuffer
 	started  time.Time
+	mode     SegMode // plan mode this run produces
+	planEnd  int     // first segment NOT produced by this run (mode change); -1 none
+	track    int     // session track (HLS rung / DASH video rep) encoded
 
 	progressMu sync.Mutex
 	progress   Progress
@@ -156,6 +172,9 @@ func (s *Session) segName(n int) string { return s.m.opts.segmentURI(n, s.contai
 // segPath is the file of segment n of the first track.
 func (s *Session) segPath(n int) string { return s.trackSegPath(0, n) }
 
+// runDirLocked is where the wanted track's ffmpeg run writes segments.
+func (s *Session) runDirLocked() string { return s.dir }
+
 func (s *Session) trackSegPath(t, n int) string {
 	if s.isDASH() {
 		return filepath.Join(s.dir, fmt.Sprintf("seg-%d-%05d.m4s", t, n))
@@ -163,7 +182,12 @@ func (s *Session) trackSegPath(t, n int) string {
 	return filepath.Join(s.dir, segmentFile(n, segmentExt(s.container)))
 }
 
-func (s *Session) segStart(n int) time.Duration { return s.base + time.Duration(n)*s.segDur }
+func (s *Session) segStart(n int) time.Duration {
+	if s.plan != nil && !s.isDASH() {
+		return s.base + s.plan.Start(n)
+	}
+	return s.base + time.Duration(n)*s.segDur
+}
 
 func (s *Session) broadcastLocked() {
 	close(s.changed)
@@ -184,20 +208,7 @@ func (s *Session) ServePlaylist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session closed", http.StatusGone)
 		return
 	}
-	var body []byte
-	if s.total > 0 {
-		if s.playlist == nil {
-			s.playlist = mediaPlaylist(s.span(), s.segDur, s.container, s.segName)
-		}
-		body = s.playlist
-	} else {
-		done := make([]int, 0, len(s.done[0]))
-		for n := range s.done[0] {
-			done = append(done, n)
-		}
-		sort.Ints(done)
-		body = eventPlaylist(done, s.segDur, s.container, s.endSeg >= 0, s.segName)
-	}
+	body := s.renderPlaylistLocked(0)
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -214,6 +225,133 @@ func (s *Session) span() time.Duration {
 	}
 	return d
 }
+
+// renderPlaylistLocked renders track t's media playlist from the plan.
+// The primary track's VOD playlist is cached until the plan changes ahead
+// of the player (spike governor) or SwapInput; governed sessions render
+// an EVENT playlist fresh each time so reloads see re-planned segments.
+func (s *Session) renderPlaylistLocked(t int) []byte {
+	if s.plan == nil {
+		if s.total > 0 {
+			return mediaPlaylist(s.span(), s.segDur, s.container, s.segName)
+		}
+		done := make([]int, 0, len(s.done[0]))
+		for n := range s.done[0] {
+			done = append(done, n)
+		}
+		sort.Ints(done)
+		return eventPlaylist(done, s.segDur, s.container, s.endSeg >= 0, s.segName)
+	}
+	discont := func(n int) bool { return s.discontBeforeLocked(t, n) }
+	if s.total > 0 {
+		if s.governorOn && t == 0 {
+			return planPlaylist(s.plan, s.container, s.segName, discont, true, s.endSeg >= 0, 0)
+		}
+		if t == 0 {
+			if s.playlist == nil {
+				s.playlist = planPlaylist(s.plan, s.container, s.segName, discont, false, true, 0)
+			}
+			return s.playlist
+		}
+		return planPlaylist(s.plan, s.container, s.segName, discont, false, true, 0)
+	}
+	// Unknown duration: list the contiguous completed prefix.
+	done := s.done[0]
+	limit := 0
+	for done[limit] {
+		limit++
+	}
+	return planPlaylist(s.plan, s.container, s.segName, discont, true, s.endSeg >= 0, limit)
+}
+
+// rampTranscodesLocked reports whether the ramp replaces the first
+// segments of a copy stream with a quick transcode (only then does the
+// switch back to copy need a discontinuity). fMP4 copy sessions instead
+// keep copying (with shorter segments): their init segment would change
+// across the switch.
+func (s *Session) rampTranscodesLocked() bool {
+	return s.decision.VideoCopy && s.container == ContainerMPEGTS && s.info.Video() != nil
+}
+
+// discontBeforeLocked: a discontinuity is needed exactly where the encode
+// parameters the decoder sees change — ramp encode -> copy, and in/out of
+// governor-clamped segments. Same-codec/same-resolution preset changes
+// (transcode ramp) need none, matching ordinary seek restarts. Rung
+// tracks (t > 0) are steady transcodes of one shape, so only the primary
+// track can have discontinuities.
+func (s *Session) discontBeforeLocked(t, n int) bool {
+	if s.plan == nil || t != 0 || n <= 0 {
+		return false
+	}
+	prev, cur := s.plan.ModeAt(n-1), s.plan.ModeAt(n)
+	if prev == cur {
+		return false
+	}
+	if prev == ModeFastStart && cur == ModeCopy {
+		return s.rampTranscodesLocked()
+	}
+	return cur == ModeClamp || prev == ModeClamp
+}
+
+// runPlan is what one ffmpeg run starting at a segment must do.
+type runPlan struct {
+	decision  core.Decision
+	hlsDur    time.Duration // -hls_time for this run
+	fastStart bool
+	mode      SegMode
+	planEnd   int // exclusive; -1 = to the end (or unknown)
+	rate      rateControl
+}
+
+// runPlanLocked resolves the plan at seg into a run: decision (primary
+// decision, fast-start or clamp variant, or the wanted rung's), segment
+// length for ffmpeg's muxer and the segment where the mode changes.
+func (s *Session) runPlanLocked(seg int) runPlan {
+	rp := runPlan{decision: s.trackDecisionLocked(s.wantTrack), hlsDur: s.segDur, planEnd: -1, rate: s.vbvRateLocked(s.wantTrack)}
+	if s.isDASH() || s.plan == nil || s.wantTrack != 0 {
+		return rp
+	}
+	rp.mode = s.plan.ModeAt(seg)
+	rp.planEnd = s.plan.NextChange(seg)
+	switch rp.mode {
+	case ModeFastStart:
+		rp.fastStart = true
+		rp.hlsDur = s.plan.Dur(seg)
+		if s.rampTranscodesLocked() {
+			rp.decision = fastStartDecision(s.decision, s.info, s.adapt)
+			rp.rate = rateControl{}
+		}
+	case ModeClamp:
+		rp.decision = clampDecision(s.decision, s.info, s.plan.ClampKbps(seg))
+		rp.rate = rateControl{}
+	}
+	// An in-session seek restart of a transcode (the playlist, and so the
+	// segment lengths, are already fixed) still gets a fast start: the
+	// first segments of the new run use the low-latency preset, then the
+	// run chains into the steady preset. Copy sessions cannot do this
+	// mid-playlist (the switch would need a discontinuity the player does
+	// not have); they ramp when Plex restarts the session at the seek
+	// offset, which is the usual seek path.
+	if s.seekRampSeg == seg && s.adapt.FastStart && rp.mode == ModeTranscode && !rp.fastStart {
+		rp.fastStart = true
+		if end := seg + s.adapt.RampSegs; rp.planEnd < 0 || end < rp.planEnd {
+			rp.planEnd = end
+		}
+	}
+	return rp
+}
+
+// trackDecisionLocked is the steady decision of track t (rung t).
+func (s *Session) trackDecisionLocked(t int) core.Decision {
+	return s.decision
+}
+
+// vbvRateLocked is track t's VBV rate plan for a new run.
+func (s *Session) vbvRateLocked(t int) rateControl { return rateControl{} }
+
+// maybeGovernLocked re-plans upcoming copy segments as clamped transcodes
+// when their bitrate spikes over the measured goodput (governor.go).
+func (s *Session) maybeGovernLocked() {}
 
 // ServeSegment implements core.HLSSession. n == InitSegment serves the fMP4
 // init segment. For DASH sessions it serves the first representation.
@@ -287,6 +425,7 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 				return
 			}
 			restarts++
+			s.seekRampSeg = n
 			if err := s.startRunLocked(n, s.failures > 0); err != nil {
 				s.mu.Unlock()
 				s.log.Error("start ffmpeg", "segment", n, "err", err)
@@ -407,8 +546,21 @@ func (s *Session) serveFiles(w http.ResponseWriter, r *http.Request, paths []str
 		}
 	}
 	s.setSegmentHeaders(w)
-	http.ServeContent(w, r, filepath.Base(paths[0]), mod, bytes.NewReader(buf.Bytes()))
+	s.serveCounted(w, r, filepath.Base(paths[0]), mod, bytes.NewReader(buf.Bytes()), n)
 	return true
+}
+
+// serveCounted is http.ServeContent with delivery goodput measured over
+// the write phase only (the wait for ffmpeg already happened).
+func (s *Session) serveCounted(w http.ResponseWriter, r *http.Request, name string, mod time.Time, content io.ReadSeeker, n int) {
+	if r.Method == http.MethodHead || n == InitSegment {
+		http.ServeContent(w, r, name, mod, content)
+		return
+	}
+	cw := &countingWriter{ResponseWriter: w}
+	start := time.Now()
+	http.ServeContent(cw, r, name, mod, content)
+	s.goodput.add(cw.bytes, time.Since(start))
 }
 
 // initFileLocked is the current init segment file of track t ("" none).
@@ -447,7 +599,7 @@ func (s *Session) serveFile(w http.ResponseWriter, r *http.Request, path string,
 	if n == InitSegment {
 		name = InitSegmentName
 	}
-	http.ServeContent(w, r, name, st.ModTime(), f)
+	s.serveCounted(w, r, name, st.ModTime(), f, n)
 	return true
 }
 
@@ -552,20 +704,27 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	if s.forceCPU {
 		accel = core.HWAccel{Name: AccelNone}
 	}
+	rp := s.runPlanLocked(seg)
+	s.seekRampSeg = -1
 	spec := runSpec{
-		Input:    s.input,
-		Info:     s.info,
-		Decision: s.decision,
-		Start:    s.segStart(seg),
-		SegDur:   s.segDur,
-		StartSeg: seg,
-		Dir:      s.dir,
-		Playlist: fmt.Sprintf("run-%d.m3u8", s.runSeq),
-		InitName: fmt.Sprintf("init-%d.mp4", s.runSeq),
-		Accel:    accel,
-		Features: s.m.feat,
-		BigProbe: bigProbe,
-		Protocol: s.proto,
+		Input:     s.input,
+		Info:      s.info,
+		Decision:  rp.decision,
+		Start:     s.segStart(seg),
+		SegDur:    rp.hlsDur,
+		StartSeg:  seg,
+		Dir:       s.runDirLocked(),
+		Playlist:  fmt.Sprintf("run-%d.m3u8", s.runSeq),
+		InitName:  fmt.Sprintf("init-%d.mp4", s.runSeq),
+		Accel:     accel,
+		Features:  s.m.feat,
+		BigProbe:  bigProbe,
+		Protocol:  s.proto,
+		FastStart: rp.fastStart,
+		Rate:      rp.rate,
+	}
+	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
+		return fmt.Errorf("transcode: run dir: %w", err)
 	}
 	var dr *dashRun
 	if s.isDASH() {
@@ -589,6 +748,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		stderr:   newTailBuffer(40),
 		started:  time.Now(),
 		dash:     dr,
+		mode:     rp.mode,
+		planEnd:  rp.planEnd,
+		track:    s.wantTrack,
 	}
 	args := buildArgs(spec)
 	runLog := s.log.With("run", r.seq)
@@ -650,7 +812,7 @@ func (s *Session) watch(r *run) {
 	defer s.watchers.Done()
 	t := time.NewTicker(s.m.opts.pollInterval)
 	defer t.Stop()
-	playlist := filepath.Join(s.dir, r.spec.Playlist)
+	playlist := filepath.Join(r.spec.Dir, r.spec.Playlist)
 	collect := func(exited bool) {
 		if r.dash != nil {
 			s.collectDASH(r, exited)
@@ -688,6 +850,10 @@ func (s *Session) poll(r *run, playlist string) {
 		return // superseded; its segments may already be discarded
 	}
 	changed := false
+	t := r.track
+	if t < 0 || t >= len(s.done) {
+		t = 0
+	}
 	for _, n := range p.segments {
 		if n < r.startSeg || (n <= r.maxDone && r.produced > 0) {
 			continue
@@ -695,20 +861,45 @@ func (s *Session) poll(r *run, playlist string) {
 		if s.total > 0 && n >= s.total+2 {
 			continue // past any plausible trailing sliver
 		}
-		if s.container == ContainerFMP4 && s.initFile != r.spec.InitName {
+		if r.planEnd > 0 && n >= r.planEnd {
+			// Produced past this run's mode boundary before we could stop
+			// it: drop the segment, the next run redoes it in its mode.
+			_ = os.Remove(s.trackSegPath(t, n))
+			continue
+		}
+		if s.container == ContainerFMP4 && s.initFile != r.spec.InitName && t == 0 {
 			if _, err := os.Stat(filepath.Join(s.dir, r.spec.InitName)); err == nil {
 				s.initFile = r.spec.InitName
 			}
 		}
 		r.produced++
 		r.maxDone = n
-		s.done[0][n] = true
+		s.done[t][n] = true
+		if t == 0 {
+			if s.segSizes == nil {
+				s.segSizes = map[int]int64{}
+			}
+			if st, err := os.Stat(s.trackSegPath(t, n)); err == nil {
+				s.segSizes[n] = st.Size()
+			}
+		}
 		changed = true
 	}
 	if changed {
 		if r.produced > 0 && s.cur == r {
 			s.failures = 0
 			s.failErr = nil
+		}
+		s.maybeGovernLocked()
+		// A run that reached its plan's mode boundary (fast-start ramp ->
+		// steady, copy -> clamp, ...) stops there and the next mode's run
+		// starts immediately, so the switch segment has no startup gap.
+		if s.cur == r && r.planEnd > 0 && r.maxDone >= r.planEnd-1 && (s.total == 0 || r.planEnd < s.total) && s.endSeg < 0 {
+			next := r.planEnd
+			s.log.Debug("plan mode boundary; chaining run", "segment", next, "fromMode", r.mode)
+			if err := s.startRunLocked(next, false); err != nil {
+				s.log.Warn("chain run at mode boundary", "segment", next, "err", err)
+			}
 		}
 		s.throttleLocked()
 		s.broadcastLocked()
@@ -732,6 +923,18 @@ func (s *Session) finish(r *run) {
 	}
 	log := s.log.With("run", r.seq)
 	if err == nil {
+		// A run bounded by a plan mode boundary that produced up to it
+		// has not hit the end of the input: chain the next mode's run
+		// when the player is in (or near) this run's range.
+		if r.planEnd > 0 && r.produced > 0 && r.maxDone >= r.planEnd-1 && (s.total == 0 || r.planEnd < s.total) && s.cur == r {
+			if s.lastReq >= r.startSeg {
+				log.Debug("ffmpeg finished at plan boundary; chaining", "segment", r.planEnd)
+				if err := s.startRunLocked(r.planEnd, false); err != nil {
+					s.failErr = err
+				}
+				return
+			}
+		}
 		// ffmpeg reached the end of the input.
 		if r.produced > 0 {
 			s.endSeg = r.maxDone
@@ -809,7 +1012,11 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	}
 	seg := 0
 	if at > s.base {
-		seg = int((at - s.base) / s.segDur)
+		if s.plan != nil && !s.isDASH() {
+			seg = s.plan.IndexAt(at - s.base)
+		} else {
+			seg = int((at - s.base) / s.segDur)
+		}
 	}
 	if s.total > 0 && seg >= s.total {
 		seg = s.total - 1
@@ -837,6 +1044,7 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	s.failures = 0
 	s.failErr = nil
 	s.lastReq = seg
+	s.seekRampSeg = seg
 	s.log.Info("input swapped", "at", at, "segment", seg)
 	return s.startRunLocked(seg, false)
 }
