@@ -31,7 +31,10 @@ type hubSpec struct {
 	// included stamps includedAt on the items, as PMS's
 	// /hubs/continueWatching does.
 	included bool
-	state    map[core.RatingKey]core.WatchStatus
+	// plain keeps episodes in list form (the Home hero row); other rows
+	// carry episodes in full, as PMS does.
+	plain bool
+	state map[core.RatingKey]core.WatchStatus
 }
 
 func hubItemsKey(h core.Hub, hc hubCtx) string {
@@ -54,7 +57,7 @@ func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubC
 	// Related hubs (detail pages, postplay) omit the items' library section
 	// and the hub's promoted flag, like PMS.
 	related := hc.related != 0
-	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detailEpisodes: true})
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detailEpisodes: !hs.plain})
 	if hs.included {
 		stampIncluded(md)
 	}
@@ -142,7 +145,7 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 	hs := hubSpec{Hub: core.Hub{Title: "Continue Watching", Style: "hero", Promoted: true}, state: state}
 	switch v {
 	case cwHome:
-		hs.ID, hs.Context, hs.key = "home.continue", "hub.home.continue", "/hubs/home/continueWatching"
+		hs.ID, hs.Context, hs.key, hs.plain = "home.continue", "hub.home.continue", "/hubs/home/continueWatching", true
 	case cwGlobal:
 		hs.ID, hs.Context, hs.key, hs.noPromoted = "continueWatching", "hub.continueWatching", "/hubs/continueWatching/items", true
 		hs.included = true
@@ -292,7 +295,7 @@ func (s *Server) handleContinueWatchingItems(w http.ResponseWriter, r *http.Requ
 	}
 	hs := s.continueHub(ctx, pr, v, sec, count)
 	mc := hubContainer()
-	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state, detailEpisodes: true})
+	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state, detailEpisodes: !hs.plain})
 	if hs.included {
 		stampIncluded(mc.Metadata)
 	}
