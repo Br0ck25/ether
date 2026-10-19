@@ -1,0 +1,31 @@
+# Ether via Docker. Recommended: host networking, because Plex apps
+# discover servers on the LAN via GDM (UDP 32410-32414) and remote access
+# configures the router with UPnP — both need the host network namespace.
+# Bridge mode works for Plex Web / claimed remote access if you remove
+# `network_mode: host` and uncomment the ports mapping.
+services:
+  ether:
+    image: ghcr.io/ether-media/ether:latest
+    container_name: ether
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TZ: Etc/UTC
+      # ETHER_DATA_DIR: /config   # default in the image
+    volumes:
+      - ./config:/config          # config.json, database, identity
+      - ./cache:/cache            # segment cache (size it via the web UI)
+    # Intel/AMD VAAPI or QuickSync transcoding (optional):
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # NVIDIA NVENC (optional, needs nvidia-container-toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    # ports:                      # bridge-mode only; drop network_mode above
+    #   - "32400:32400/tcp"
+    #   - "32410-32414:32410-32414/udp"

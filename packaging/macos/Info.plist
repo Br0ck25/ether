@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Ether</string>
+	<key>CFBundleExecutable</key>
+	<string>ether-tray</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.ether-media.ether</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Ether</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- __VERSION__ and __BUILD__ are substituted by packaging/macos/build-app.sh -->
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>CFBundleIconFile</key>
+	<string>Ether</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- Menu-bar app: no Dock icon, no windows. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Ether contributors. GPLv3.</string>
+	<!-- The tray talks only to 127.0.0.1; declare it for Local Network privacy prompts. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Ether connects to the Ether server running on this Mac.</string>
+</dict>
+</plist>
