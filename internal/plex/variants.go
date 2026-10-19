@@ -262,6 +262,9 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *core.Titl
 	out := make([]model.Media, 0, len(vs))
 	for _, v := range vs {
 		m := buildMediaVariant(t, v, stamp, s.variantIDs)
+		if s.d.Trickplay != nil && s.d.Trickplay.TrickplayAvailable(v.Release.ID) {
+			m.Part[0].Indexes = "sd"
+		}
 		if v.Auto {
 			// Only the default version carries the stream list on a
 			// detail page (audio/subtitle pickers operate on it); the

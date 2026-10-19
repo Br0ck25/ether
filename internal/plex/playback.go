@@ -449,6 +449,9 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 	}
 	info := ps.Info
 	m := buildMedia(t, info, stamp)
+	if ps.Resolution != nil && s.d.Trickplay != nil && s.d.Trickplay.TrickplayAvailable(ps.Resolution.Release.ID) {
+		m.Part[0].Indexes = "sd"
+	}
 	m.Selected = model.Ptr(true)
 	m.SetAlphabetical()
 	part := &m.Part[0]

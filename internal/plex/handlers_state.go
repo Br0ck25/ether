@@ -53,6 +53,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	if s.d.Playback != nil {
 		if p, ok := s.d.Playback.SessionFor(user.ID, pr.ClientID, key); ok {
 			ps = p
+			if state != "stopped" {
+				s.ensureTrickplay(ctx, p, offset)
+			}
 			if t, ok := s.d.Playback.(SessionToucher); ok && state != "stopped" {
 				t.Touch(p.ID)
 			}
@@ -80,6 +83,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		}
 		if ps != nil {
 			s.d.Playback.Stop(ps.ID)
+			s.cancelTrickplayIfIdle(ps)
 		}
 		for _, id := range tids {
 			if s.d.Transcoder != nil {

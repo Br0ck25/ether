@@ -12,6 +12,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/plexguid"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/spike"
+	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
 // buildPlex assembles the PMS-compatible front end. In spike mode the
@@ -88,6 +89,11 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		}
 	}
 	deps.Extras = a.extras
+	if a.transcoder != nil {
+		deps.Trickplay = transcode.NewThumbnails(transcode.ThumbOptions{
+			FFmpeg: a.transcoder.FFmpegPath(), Logger: a.log,
+		})
+	}
 	deps.AccessPolicy = a.safety
 	deps.Config = a.cfg.Get
 	deps.Logger = a.log.With("component", "plex")
