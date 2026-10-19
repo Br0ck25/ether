@@ -20,6 +20,7 @@ import (
 type thumbFake struct {
 	mu      sync.Mutex
 	seeks   []float64
+	inputs  []string
 	endAt   float64
 	fail    bool
 	active  atomic.Int32
@@ -49,6 +50,7 @@ func (f *thumbFake) run(ctx context.Context, cmd Command) error {
 	ss, _ := strconv.ParseFloat(argValue(cmd.Args, "-ss"), 64)
 	f.mu.Lock()
 	f.seeks = append(f.seeks, ss)
+	f.inputs = append(f.inputs, argValue(cmd.Args, "-i"))
 	fail, endAt := f.fail, f.endAt
 	f.mu.Unlock()
 	if fail {
@@ -59,6 +61,12 @@ func (f *thumbFake) run(ctx context.Context, cmd Command) error {
 	}
 	_, err := cmd.Stdout.Write(fakeJPEG(byte(int(ss)%250+1), 64))
 	return err
+}
+
+func (f *thumbFake) inputList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.inputs...)
 }
 
 func (f *thumbFake) seekList() []float64 {
@@ -198,6 +206,11 @@ func TestThumbnailsGenerateAndServe(t *testing.T) {
 	for i, s := range seeks {
 		if s != float64(40+i*10) {
 			t.Errorf("seek %d = %v", i, s)
+		}
+	}
+	for _, input := range tf.inputList() {
+		if input != "http://127.0.0.1:9/src?background=1" {
+			t.Fatalf("thumbnail input %q does not select background read priority", input)
 		}
 	}
 	// BIF snapshot parses and carries the frames.

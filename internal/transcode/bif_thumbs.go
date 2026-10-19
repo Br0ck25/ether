@@ -490,7 +490,7 @@ func (t *Thumbnails) generate(ctx context.Context, src core.TrickplaySource) {
 			if ctx.Err() != nil {
 				return
 			}
-			jpeg, err := t.extractFrame(ctx, src.InputURL, slot)
+			jpeg, err := t.extractFrame(ctx, backgroundReadURL(src.InputURL), slot)
 			switch {
 			case err != nil:
 				if ctx.Err() != nil {
@@ -527,6 +527,16 @@ func (t *Thumbnails) generate(ctx context.Context, src core.TrickplaySource) {
 		case <-time.After(t.batchPause):
 		}
 	}
+}
+
+// backgroundReadURL selects the loopback handler's prefetch-priority path;
+// thumbnail misses must never compete with live playback article reads.
+func backgroundReadURL(input string) string {
+	sep := "?"
+	if strings.Contains(input, "?") {
+		sep = "&"
+	}
+	return input + sep + "background=1"
 }
 
 // finish marks a release complete, or failed (with a retry backoff; a
