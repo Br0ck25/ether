@@ -362,6 +362,9 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 	}
 
 	if o.media && isPlayable(t.Type) {
+		if s.downloadsAllowed(pr.User) {
+			m.AllowSync = model.Ptr(true)
+		}
 		m.Media = s.mediaFor(ctx, pr, t, detail)
 		if detail {
 			s.addStreamFeatures(ctx, pr, t, &m)

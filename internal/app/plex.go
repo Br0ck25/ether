@@ -73,6 +73,13 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 	deps.Subtitles = a.subtitles
 	deps.TrackPreferences = a.trackprefs
 	deps.Markers = a.markers
+	if a.transcoder != nil && !cfg.Spike.Enabled {
+		if dl, err := a.transcoder.NewDownloadRemuxer(cfg.Downloads); err == nil {
+			deps.Downloads = dl
+		} else {
+			a.log.Warn("offline downloads unavailable", "err", err)
+		}
+	}
 	deps.AccessPolicy = a.safety
 	deps.Config = a.cfg.Get
 	deps.Logger = a.log.With("component", "plex")
