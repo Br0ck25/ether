@@ -143,6 +143,8 @@ func (s *Server) routes() chi.Router {
 	any("/video/:/transcode/universal/stop", s.handleTranscodeStop)
 	get("/video/:/transcode/universal/subtitles", empty)
 	get("/transcode/sessions", s.handleTranscodeSessions)
+	get("/library/parts/{part}/indexes/{index}/{offset}", s.handleIndexFrame)
+	get("/library/parts/{part}/indexes/{index}", s.handleIndexBIF)
 	get("/library/parts/{part}/{changestamp}/{file}", s.handlePart)
 	get("/library/parts/{part}/{file}", s.handlePart)
 	r.Put("/library/parts/{part}", s.handlePartSelect)

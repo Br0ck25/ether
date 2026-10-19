@@ -90,6 +90,7 @@ type Deps struct {
 	Markers          MarkerProvider
 	Subtitles        SubtitleSource
 	Extras           ExtrasProvider
+	Trickplay        core.TrickplayProvider
 
 	// Config returns the current settings snapshot.
 	Config func() config.Config
@@ -210,6 +211,9 @@ func (s *Server) Close() error {
 	s.once.Do(func() {
 		s.releaseAllDownloads()
 		s.cancel()
+		if closer, ok := s.d.Trickplay.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
 		s.notifier.close()
 		s.wg.Wait()
 	})

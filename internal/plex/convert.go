@@ -490,6 +490,9 @@ func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withS
 		stamp = 1
 	}
 	m := buildMedia(t, info, stamp)
+	if ps != nil && ps.Resolution != nil && s.d.Trickplay != nil && s.d.Trickplay.TrickplayAvailable(ps.Resolution.Release.ID) {
+		m.Part[0].Indexes = "sd"
+	}
 	if withStreams {
 		var userID int64
 		if pr.User != nil {

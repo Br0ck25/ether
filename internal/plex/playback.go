@@ -217,6 +217,7 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if err != nil {
 		return t, nil, core.Decision{}, err
 	}
+	s.ensureTrickplay(ctx, ps, p.offset)
 	s.applyStreamPreferences(ctx, pr, p, t, ps.Info)
 	applySelections(p, ps.Info, s.audioLanguages(pr.User))
 	dec := core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container, AudioStream: p.opts.AudioStream, SubtitleStream: p.opts.SubtitleStream}
@@ -408,6 +409,9 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 	}
 	info := ps.Info
 	m := buildMedia(t, info, stamp)
+	if ps.Resolution != nil && s.d.Trickplay != nil && s.d.Trickplay.TrickplayAvailable(ps.Resolution.Release.ID) {
+		m.Part[0].Indexes = "sd"
+	}
 	m.Selected = model.Ptr(true)
 	m.SetAlphabetical()
 	part := &m.Part[0]
