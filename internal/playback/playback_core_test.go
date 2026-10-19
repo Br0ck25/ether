@@ -171,6 +171,33 @@ func TestPrewarmTrailerDuringPlayback(t *testing.T) {
 	}
 }
 
+func TestSpeculativePrewarmsCannotConsumeDetailRateBudget(t *testing.T) {
+	h := newHarness(t, nil, nil)
+	caps := defaultCaps("c1")
+	for i := int64(100); i < 106; i++ {
+		key := core.RatingKey(i)
+		if !h.m.Prewarm(context.Background(), owner, key, caps, core.PrewarmOptions{Reason: core.PrewarmTrailer, DuringPlayback: true}) {
+			t.Fatalf("speculative request %d was unexpectedly rejected", i)
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			h.m.mu.Lock()
+			pending := h.m.warm[identity{owner.ID, caps.ClientID, key}] != nil
+			h.m.mu.Unlock()
+			if !pending {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("failed speculative warm did not drain")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if !h.m.Prewarm(context.Background(), owner, 200, caps, core.PrewarmOptions{Reason: core.PrewarmDetail}) {
+		t.Fatal("six trailer prewarms exhausted the detail-page rate budget")
+	}
+}
+
 // Shared contract: PrepareVariant resolves the picked release and
 // replaces a session on a different one.
 func TestPrepareVariantPicksAndReplaces(t *testing.T) {

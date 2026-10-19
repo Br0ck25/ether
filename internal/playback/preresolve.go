@@ -139,7 +139,12 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		m.mu.Unlock()
 		return false
 	}
-	requests := m.warmRequests[user.ID]
+	budgetReason := "speculative"
+	if reason == core.PrewarmDetail {
+		budgetReason = core.PrewarmDetail
+	}
+	bk := warmBudgetKey{userID: user.ID, reason: budgetReason}
+	requests := m.warmRequests[bk]
 	recent := requests[:0]
 	for _, at := range requests {
 		if now.Sub(at) < time.Minute {
@@ -150,7 +155,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		m.mu.Unlock()
 		return false
 	}
-	m.warmRequests[user.ID] = append(recent, now)
+	m.warmRequests[bk] = append(recent, now)
 	profileObj := m.deps.SelectProfile(caps, user)
 	e := &warmEntry{profile: profileObj.Name, profileObj: profileObj, caps: caps, done: make(chan struct{}), expires: now.Add(preResolveTTL)}
 	m.warm[id] = e
