@@ -93,9 +93,13 @@ func record(base, token, out, sel string) error {
 	defer cancel()
 	c := &http.Client{Timeout: 20 * time.Second}
 	for _, profile := range profiles(sel) {
+		ids := pmsconform.Discover(ctx, c, base, token, profile, nil)
+		if e := saveDiscovery(out, profile, ids); e != nil {
+			return e
+		}
 		for _, req := range pmsconform.Corpus() {
 			for _, jm := range []bool{false, true} {
-				r, e := pmsconform.Fetch(ctx, c, base, token, req, profile, nil, jm)
+				r, e := pmsconform.Fetch(ctx, c, base, token, req, profile, ids.Values, jm)
 				if e != nil {
 					return fmt.Errorf("%s %s: %w", profile, req.Path, e)
 				}
@@ -119,6 +123,17 @@ func compare(dir, base, token, sel string) (pmsconform.Report, error) {
 	c := &http.Client{Timeout: 20 * time.Second}
 	out := pmsconform.Report{}
 	for _, profile := range profiles(sel) {
+		refIDs, e := loadDiscovery(dir, profile)
+		if e != nil {
+			refIDs = pmsconform.DiscoveredIDs{Values: map[string]string{}, Warnings: []string{"reference discovery unavailable; fallback IDs may be used"}}
+		}
+		targetIDs := pmsconform.Discover(ctx, c, base, token, profile, &refIDs)
+		for _, w := range refIDs.Warnings {
+			out.Discovery = append(out.Discovery, profile+" reference: "+w)
+		}
+		for _, w := range targetIDs.Warnings {
+			out.Discovery = append(out.Discovery, profile+" target: "+w)
+		}
 		for _, req := range pmsconform.Corpus() {
 			for _, jm := range []bool{false, true} {
 				ext := "xml"
@@ -131,7 +146,7 @@ func compare(dir, base, token, sel string) (pmsconform.Report, error) {
 				if e != nil {
 					continue
 				}
-				b, e := pmsconform.Fetch(ctx, c, base, token, req, profile, nil, jm)
+				b, e := pmsconform.Fetch(ctx, c, base, token, req, profile, targetIDs.Values, jm)
 				if e != nil {
 					return out, fmt.Errorf("%s %s: %w", profile, req.Path, e)
 				}
@@ -143,6 +158,9 @@ func compare(dir, base, token, sel string) (pmsconform.Report, error) {
 	return out, nil
 }
 func printReport(r pmsconform.Report) {
+	for _, w := range r.Discovery {
+		fmt.Printf("DISCOVERY: %s\n", w)
+	}
 	if len(r.Differences) == 0 {
 		fmt.Println("No structural differences.")
 		return
@@ -150,4 +168,24 @@ func printReport(r pmsconform.Report) {
 	for _, d := range r.Differences {
 		fmt.Printf("BLOCK %s: %s (reference=%v target=%v)\n", d.Path, d.Kind, d.Reference, d.Target)
 	}
+}
+
+func saveDiscovery(dir, profile string, ids pmsconform.DiscoveredIDs) error {
+	if e := os.MkdirAll(filepath.Join(dir, profile), 0755); e != nil {
+		return e
+	}
+	b, e := json.MarshalIndent(ids, "", "  ")
+	if e != nil {
+		return e
+	}
+	return os.WriteFile(filepath.Join(dir, profile, "_discovery.json"), b, 0644)
+}
+func loadDiscovery(dir, profile string) (pmsconform.DiscoveredIDs, error) {
+	b, e := os.ReadFile(filepath.Join(dir, profile, "_discovery.json"))
+	if e != nil {
+		return pmsconform.DiscoveredIDs{}, e
+	}
+	var d pmsconform.DiscoveredIDs
+	e = json.Unmarshal(b, &d)
+	return d, e
 }
