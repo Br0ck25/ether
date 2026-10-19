@@ -43,6 +43,8 @@ func TestPMSDryRunAndIdempotentImport(t *testing.T) {
 		switch r.URL.Path {
 		case "/identity":
 			w.Write([]byte(`<MediaContainer machineIdentifier="fixture"/>`))
+		case "/accounts":
+			w.Write([]byte(`<MediaContainer><Account id="1" name="viewer"/></MediaContainer>`))
 		case "/library/sections":
 			w.Write([]byte(`<MediaContainer><Directory key="1" type="movie" title="Movies"/></MediaContainer>`))
 		case "/library/sections/1/all":
@@ -52,7 +54,9 @@ func TestPMSDryRunAndIdempotentImport(t *testing.T) {
 		case "/library/collections/5/children", "/playlists/6/items":
 			w.Write([]byte(`<MediaContainer><Video ratingKey="a" type="movie" title="Example"><Guid id="tmdb://11"/></Video></MediaContainer>`))
 		case "/status/sessions/history/all":
-			w.Write([]byte(`<MediaContainer><Video ratingKey="a" type="movie" title="Example" viewedAt="1700000000"/></MediaContainer>`))
+			w.Write([]byte(`<MediaContainer><Video ratingKey="a" type="movie" title="Example" accountID="1" viewedAt="1700000000"/></MediaContainer>`))
+		case "/library/metadata/bad":
+			w.WriteHeader(404)
 		case "/playlists":
 			w.Write([]byte(`<MediaContainer><Playlist ratingKey="6" title="My list"/></MediaContainer>`))
 		default:
@@ -151,5 +155,76 @@ func TestRatingAndWatchlistImportPreserveProgress(t *testing.T) {
 	}
 	if offset != 123000000000 || count != 3 || rating != 9 {
 		t.Fatalf("overwrote local state offset=%d count=%d rating=%f", offset, count, rating)
+	}
+}
+
+func TestHistoryOnlyScopesAccountPagesAndCachesShowIdentities(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`INSERT INTO auth_users(id,plex_id,username,created_at,updated_at)VALUES(1,99,'viewer',0,0)`); err != nil {
+		t.Fatal(err)
+	}
+	parentReads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			t.Errorf("source mutation: %s", r.Method)
+		}
+		switch r.URL.Path {
+		case "/identity":
+			w.Write([]byte(`<MediaContainer machineIdentifier="history-fixture"/>`))
+		case "/accounts":
+			w.Write([]byte(`<MediaContainer><Account id="19" name="Viewer"/><Account id="88" name="Friend"/></MediaContainer>`))
+		case "/library/sections":
+			w.Write([]byte(`<MediaContainer><Directory key="1" type="movie"/><Directory key="2" type="show"/></MediaContainer>`))
+		case "/library/sections/1/all", "/library/sections/2/all":
+			if r.Header.Get("X-Plex-Container-Size") != "500" || r.Header.Get("X-Plex-Container-Start") != "0" {
+				t.Error("missing PMS pagination headers")
+			}
+			if r.URL.Query().Get("unwatched") != "0" {
+				t.Error("history-only import must request watched records")
+			}
+			if strings.Contains(r.URL.Path, "/1/") {
+				w.Write([]byte(`<MediaContainer totalSize="2"><Video ratingKey="film" type="movie" title="Watched film" viewCount="1" lastViewedAt="1700000000"><Guid id="tmdb://11"/></Video><Video ratingKey="unwatched" type="movie" title="Unwatched"><Guid id="tmdb://12"/></Video></MediaContainer>`))
+			} else {
+				w.Write([]byte(`<MediaContainer totalSize="2"><Video ratingKey="ep1" type="episode" title="First" grandparentRatingKey="show" parentIndex="1" index="1" viewCount="1" lastViewedAt="1700000100"/><Video ratingKey="ep2" type="episode" title="Second" grandparentRatingKey="show" parentIndex="1" index="2" viewCount="1" lastViewedAt="1700000200"/></MediaContainer>`))
+			}
+		case "/library/metadata/show":
+			parentReads++
+			w.Write([]byte(`<MediaContainer><Directory ratingKey="show" type="show"><Guid id="tmdb://200"/></Directory></MediaContainer>`))
+		case "/status/sessions/history/all":
+			if r.URL.Query().Get("accountID") != "19" {
+				t.Error("history not scoped to source account")
+			}
+			w.Write([]byte(`<MediaContainer><Video ratingKey="film" type="movie" title="Watched film" accountID="19" viewedAt="1700000000"/><Video ratingKey="ep1" type="episode" title="First" accountID="19" viewedAt="1700000100"/><Video ratingKey="film" type="movie" title="Friend play" accountID="88" viewedAt="1700000300"/><Video ratingKey="film" type="movie" title="Unattributed play" viewedAt="1700000400"/></MediaContainer>`))
+		default:
+			t.Errorf("history-only preview fetched unrelated endpoint %s", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	service := New(db, catalogFake{})
+	plan, err := service.Preview(ctx, Request{URL: srv.URL, Token: "fixture-token", HistoryOnly: true, Viewers: []Viewer{{LocalUserID: 1, Name: "viewer", PlexID: 99}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Items) != 3 || len(plan.History) != 2 || len(plan.Lists) != 0 || parentReads != 1 {
+		t.Fatalf("items=%d history=%d lists=%d parentReads=%d", len(plan.Items), len(plan.History), len(plan.Lists), parentReads)
+	}
+	if plan.Viewers[0].SourceAccountID != 19 {
+		t.Fatal("used a destination or plex.tv ID as the source account")
+	}
+	if plan.Items[1].Key != core.EpisodeKey(200, 1, 1) || plan.Items[2].Key != core.EpisodeKey(200, 1, 2) {
+		t.Fatal("episode identity mapping changed")
+	}
+	if _, err = service.Import(ctx, plan.ID); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM state_history WHERE user_id=1`).Scan(&count); err != nil || count != 3 {
+		t.Fatalf("history count=%d err=%v", count, err)
 	}
 }

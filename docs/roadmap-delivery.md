@@ -89,3 +89,20 @@ Feature-specific behavior and limitations are documented in
 [playback-policy.md](playback-policy.md), [streams-features.md](streams-features.md),
 [security.md](security.md), [discovery.md](discovery.md), [metadata.md](metadata.md),
 [insights.md](insights.md), [livetv.md](livetv.md) and [personalization.md](personalization.md).
+
+### Real PMS import verification
+
+PMS owner tokens can read the server-wide detailed-history feed. Imports resolve
+its local source account ID separately from the plex.tv ID, request history with
+`accountID`, and reject events with another or missing account ID even if a
+source ignores the filter. Unknown source accounts fall back to token-scoped
+state summaries; a history-only request fails rather than guessing the account.
+
+The additive `historyOnly` request option skips playlists and collections,
+requests watched records and caches show identity mappings across episodes.
+PMS pagination is sent in headers as well as query parameters: the reference PMS
+ignores query-only container limits. Missing identities are reported and skipped.
+Offline fixtures cover source account isolation, pagination, excluded collections,
+canonical episode mapping, caching and idempotent imports. Importing history does
+not fabricate device, duration or abandonment telemetry; model confidence is
+not a measured recommendation-accuracy score.
