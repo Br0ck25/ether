@@ -45,7 +45,7 @@ func TestTemplatesAreCompleteAndPreviewNonEmpty(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"Franchises & universes", "Directors", "Actors", "Decades", "Critically acclaimed", "Moods",
-		"Streaming services", "Seasonal", "World cinema", "Family", "TV", "New & upcoming"} {
+		"Streaming services", "Seasonal", "World cinema", "Family", "TV", "New releases"} {
 		if cats[want] == 0 {
 			t.Errorf("no templates in category %q", want)
 		}
@@ -261,7 +261,7 @@ func TestWatchProviderSourceAndRule(t *testing.T) {
 	}
 }
 
-func TestUnreleasedOnlyWhenAskedFor(t *testing.T) {
+func TestUnreleasedExcludedEvenWhenAskedFor(t *testing.T) {
 	e := newEnv(t)
 	p, _ := e.svc.Preview(e.ctx, spec("pop", "movie", []core.CollectionSource{{Kind: "tmdbList", List: "popular"}, {Kind: "catalog"}}), 200)
 	if contains(titlesOf(p), "Future Blockbuster") {
@@ -272,7 +272,7 @@ func TestUnreleasedOnlyWhenAskedFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := titlesOf(p); len(got) != 1 || got[0] != "Future Blockbuster" {
+	if got := titlesOf(p); len(got) != 0 {
 		t.Fatalf("coming soon: %v %v", got, p.Warnings)
 	}
 }

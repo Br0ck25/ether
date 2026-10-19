@@ -42,7 +42,7 @@ const (
 	catWorld     = "World cinema"
 	catFamily    = "Family"
 	catTV        = "TV"
-	catNew       = "New & upcoming"
+	catNew       = "New releases"
 	catForYou    = "For each viewer"
 )
 
@@ -319,14 +319,11 @@ var templateDefs = []templateDef{
 	{"tv-docuseries", "Docuseries", "Gripping documentary series.", catTV,
 		tpl("Docuseries", MediaShow, catalogSrc(), mkRule("genre", "is", "Documentary"), mkRule("rating", "gte", 7.5), mkRule("votes", "gte", 50))},
 
-	// --- New & upcoming -------------------------------------------------------
+	// --- New releases -------------------------------------------------------
 	{"new-releases", "New Releases", "Films released in the last three months.", catNew,
 		with(tpl("New Releases", MediaMovie, catalogSrc(), mkRule("released", "within", "90d")), sortBy("released", true), refresh(RefreshHourly))},
 	{"new-series", "New Series", "Shows that premiered in the last two months.", catNew,
 		with(tpl("New Series", MediaShow, catalogSrc(), mkRule("released", "within", "60d")), sortBy("released", true), refresh(RefreshHourly))},
-	{"coming-soon", "Coming Soon", "Films arriving in the next few months.", catNew,
-		with(tpl("Coming Soon", MediaMovie, srcs(core.CollectionSource{Kind: "tmdbList", List: "upcoming", MediaType: MediaMovie}), mkRule("released", "gte", "now")),
-			sortBy("popularity", true), limit(40), refresh(RefreshDaily))},
 	{"recently-added", "Recently Added", "Titles that joined the library in the last two weeks.", catNew,
 		with(tpl("Recently Added", MediaMixed, catalogSrc(), mkRule("addedAt", "within", "14d")), sortBy("added", true), refresh(RefreshHourly))},
 

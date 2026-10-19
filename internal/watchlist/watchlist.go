@@ -245,7 +245,7 @@ func (s *Service) Items(ctx context.Context, u *core.User) ([]Item, error) {
 			return nil, err
 		}
 		var t core.Title
-		if json.Unmarshal([]byte(raw), &t) != nil || !s.allowed(u, &t) {
+		if json.Unmarshal([]byte(raw), &t) != nil || !t.IsReleased(s.o.Now()) || !s.allowed(u, &t) {
 			continue
 		}
 		if i, ok := byKey[t.Key]; ok {
@@ -378,7 +378,7 @@ func (s *Service) Hubs(ctx context.Context, u *core.User, limit int) ([]core.Hub
 	if limit <= 0 {
 		limit = 12
 	}
-	soon, ready := core.Hub{ID: "watchlist.coming", Title: "Coming Soon", Context: "hub.home.watchlist", Promoted: true}, core.Hub{ID: "watchlist.available", Title: "Now available", Context: "hub.home.watchlist.available", Promoted: true}
+	soon, ready := core.Hub{ID: "watchlist.coming", Title: "Waiting for a stream", Context: "hub.home.watchlist", Promoted: true}, core.Hub{ID: "watchlist.available", Title: "Now available", Context: "hub.home.watchlist.available", Promoted: true}
 	for _, it := range items {
 		if !it.AvailableAt.IsZero() {
 			if len(ready.Items) < limit {

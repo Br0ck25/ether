@@ -46,7 +46,7 @@ func Defaults(dataDir string) Config {
 			MinPopularity:   5,
 			MinVotes:        100,
 			RefreshInterval: Duration(24 * time.Hour),
-			ShowUnreleased:  true,
+			ShowUnreleased:  false,
 		},
 		Resolver: Resolver{
 			HealthSamples:      12,

@@ -82,7 +82,6 @@ export const CATALOG: FieldGroup[] = [
     title: "What's browsable", description: "Thresholds keep obscure titles out of Plex libraries; they remain searchable.", fields: [
       { key: "minPopularity", label: "Minimum popularity", kind: "number", min: 0, step: 1 },
       { key: "minVotes", label: "Minimum votes", kind: "number", min: 0, step: 10 },
-      { key: "showUnreleased", label: "Show unreleased titles", kind: "bool" },
       { key: "includeAdult", label: "Include adult titles", kind: "bool" },
     ],
   },

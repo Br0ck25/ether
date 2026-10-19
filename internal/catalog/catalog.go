@@ -204,13 +204,13 @@ func (c *Catalog) config() config.Catalog {
 }
 
 // MeetsThreshold reports whether a title qualifies for the browsable set under
-// cfg: popularity >= MinPopularity OR votes >= MinVotes, and released unless
-// ShowUnreleased. Episodes/seasons never qualify on their own.
+// cfg: popularity >= MinPopularity OR votes >= MinVotes, and released.
+// Legacy unreleased flags never bypass the release date.
 func MeetsThreshold(cfg config.Catalog, t core.Title, now time.Time) bool {
 	if t.Type != core.TypeMovie && t.Type != core.TypeShow {
 		return false
 	}
-	if !cfg.ShowUnreleased && !t.IsReleased(now) {
+	if !t.IsReleased(now) {
 		// A title with no date is treated as unreleased.
 		return false
 	}

@@ -284,7 +284,7 @@ ON CONFLICT(key) DO UPDATE SET
  tagline=CASE WHEN excluded.tagline<>'' THEN excluded.tagline ELSE catalog_titles.tagline END,
  summary=CASE WHEN excluded.summary<>'' THEN excluded.summary ELSE catalog_titles.summary END,
  year=CASE WHEN excluded.year<>0 THEN excluded.year ELSE catalog_titles.year END,
- released_ts=CASE WHEN excluded.released_ts<>0 THEN excluded.released_ts ELSE catalog_titles.released_ts END,
+ released_ts=CASE WHEN excluded.detail=1 OR (catalog_titles.detail=0 AND excluded.released_ts<>0) THEN excluded.released_ts ELSE catalog_titles.released_ts END,
  runtime_sec=CASE WHEN excluded.runtime_sec<>0 THEN excluded.runtime_sec ELSE catalog_titles.runtime_sec END,
  status=CASE WHEN excluded.status<>'' THEN excluded.status ELSE catalog_titles.status END,
  language=CASE WHEN excluded.language<>'' THEN excluded.language ELSE catalog_titles.language END,
@@ -395,7 +395,7 @@ func (c *Catalog) queryTitles(ctx context.Context, q string, args ...any) ([]cor
 		if err != nil {
 			return nil, err
 		}
-		if !st.t.Adult {
+		if !st.t.Adult && st.t.IsReleased(c.now()) {
 			out = append(out, st.t)
 		}
 	}

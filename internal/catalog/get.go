@@ -17,7 +17,7 @@ func (c *Catalog) fresh(st *storedTitle) bool {
 // Get returns a title from the mirror, fetching on demand when missing/stale.
 func (c *Catalog) Get(ctx context.Context, key core.RatingKey) (*core.Title, error) {
 	t, err := c.get(ctx, key)
-	if err == nil && t.Adult {
+	if err == nil && (t.Adult || !t.IsReleased(c.now())) {
 		return nil, core.ErrNotFound
 	}
 	return t, err
@@ -229,6 +229,9 @@ func (c *Catalog) episodesOfSeason(ctx context.Context, showID int64, season int
 
 // Children: seasons of a show, episodes of a season.
 func (c *Catalog) Children(ctx context.Context, key core.RatingKey) ([]core.Title, error) {
+	if _, err := c.Get(ctx, key); err != nil {
+		return nil, err
+	}
 	switch key.Kind() {
 	case core.KindShow:
 		if _, err := c.ensureShow(ctx, key.TMDB()); err != nil {
