@@ -11,14 +11,19 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"math/big"
+	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -62,38 +67,103 @@ var plexDirectRe = regexp.MustCompile(`(?i)\*\.([0-9a-z]+)\.plex\.direct`)
 // subject carries the plex.direct hash ("/CN=*.<hash>.plex.direct"); the
 // hash is assigned by plex.tv, not derived locally.
 func (c *Client) CertificateSubject(ctx context.Context, serverToken string) (cn, hash string, err error) {
+	s, err := c.certificateSubject(ctx, serverToken)
+	return s.cn, s.hash, err
+}
+
+// certSubject is the parsed GET …/certificate/subject response.
+type certSubject struct {
+	cn, hash string
+	// rawSubject is the DER X.509 Name carried base64-encoded in the
+	// response's "subject" attribute. PMS decodes it (EVP_DecodeBlock, then
+	// d2i_X509_NAME) and sets it verbatim as the CSR subject. nil when the
+	// attribute is absent or not a DER Name.
+	rawSubject []byte
+}
+
+func (c *Client) certificateSubject(ctx context.Context, serverToken string) (certSubject, error) {
 	resp, err := c.do(ctx, request{
 		method: http.MethodGet,
 		host:   c.serversHost(),
 		path:   "/api/v2/devices/" + url.PathEscape(c.id.ClientIdentifier) + "/certificate/subject",
 		token:  serverToken,
-		// The endpoint returns an XML <certificate> document. Requesting JSON
+		// The endpoint returns an XML <subject> document. Requesting JSON
 		// gets Plex's 406 code 1006 response (verified against the reference).
 		accept: "application/xml",
 	})
 	if err != nil {
 		var ae *APIError
 		if errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusForbidden) {
-			return "", "", fmt.Errorf("%w: %v", ErrCertUnavailable, err)
+			return certSubject{}, fmt.Errorf("%w: %v", ErrCertUnavailable, err)
 		}
-		return "", "", err
+		return certSubject{}, err
 	}
-	m := plexDirectRe.FindSubmatch(resp.body)
+	return parseCertificateSubject(resp.body)
+}
+
+// parseCertificateSubject reads
+// <subject commonName="*.<hash>.plex.direct" subject="<base64 DER Name>"/>.
+func parseCertificateSubject(b []byte) (certSubject, error) {
+	var doc struct {
+		CommonName string `xml:"commonName,attr"`
+		Subject    string `xml:"subject,attr"`
+	}
+	_ = xml.Unmarshal(b, &doc) // any root element; the text scan below is the fallback
+	m := plexDirectRe.FindStringSubmatch(doc.CommonName)
 	if m == nil {
-		return "", "", fmt.Errorf("%w: subject response has no plex.direct name", ErrCertUnavailable)
+		m = plexDirectRe.FindStringSubmatch(string(b))
 	}
-	hash = strings.ToLower(string(m[1]))
-	return "*." + hash + ".plex.direct", hash, nil
+	if m == nil {
+		return certSubject{}, fmt.Errorf("%w: subject response has no plex.direct name", ErrCertUnavailable)
+	}
+	s := certSubject{hash: strings.ToLower(m[1])}
+	s.cn = "*." + s.hash + ".plex.direct"
+	if der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(doc.Subject)); err == nil && len(der) > 0 {
+		var rdn pkix.RDNSequence
+		if rest, err := asn1.Unmarshal(der, &rdn); err == nil && len(rest) == 0 && len(rdn) > 0 {
+			s.rawSubject = der
+		}
+	}
+	return s, nil
+}
+
+// csrUploadBody encodes the CSR as PMS's libcurl form does. PMS adds a
+// MultipartFieldData{name "file", data <PEM>, type application/x-pem-file,
+// filename ""}; its HTTP layer turns a field with an empty filename into
+// curl_formadd(NAMELENGTH, PTRNAME "file", CONTENTLEN, PTRCONTENTS,
+// CONTENTTYPE): one multipart/form-data part named "file", without a
+// filename parameter, Content-Type application/x-pem-file, body the PEM CSR.
+func csrUploadBody(csrPEM []byte) (body []byte, contentType string, err error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", `form-data; name="file"`)
+	h.Set("Content-Type", "application/x-pem-file")
+	pw, err := mw.CreatePart(h)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := pw.Write(csrPEM); err != nil {
+		return nil, "", err
+	}
+	if err := mw.Close(); err != nil {
+		return nil, "", err
+	}
+	return buf.Bytes(), mw.FormDataContentType(), nil
 }
 
 // RequestPlexDirectCertificate runs PMS's certificate flow end to end:
 //
 //  1. GET  /api/v2/devices/{id}/certificate/subject   -> "*.<hash>.plex.direct"
-//  2. PUT  /api/v2/devices/{id}/certificate/csr?reason=…&invalidIn=…  (PEM CSR; 204)
-//  3. GET  /api/v2/devices/{id}/certificate/download  (202 while pending, 200 with the certificate)
+//  2. PUT  /api/v2/devices/{id}/certificate/csr?reason=…&invalidIn=…
+//     multipart/form-data, one part "file" (no filename,
+//     Content-Type application/x-pem-file) holding the PEM CSR; 2xx
+//  3. GET  /api/v2/devices/{id}/certificate/download  (202 while pending,
+//     200 with a PEM chain: leaf first, then the intermediate)
 //
-// The endpoints and status codes are those PMS logs show; the CSR body and
-// download formats are accepted liberally (PEM, DER or JSON-wrapped PEM).
+// The request formats follow the PMS 1.43.4 executable (see
+// docs/plextv-notes.md §6); downloads are still parsed liberally (PEM, DER
+// or JSON-wrapped PEM).
 // plex.tv rate-limits step 2 (HTTP 429, code 1003) per device, so callers
 // must not retry quickly: see CertManager.
 //
@@ -108,36 +178,51 @@ func (c *Client) RequestPlexDirectCertificate(ctx context.Context, serverToken s
 	if req.Timeout <= 0 {
 		req.Timeout = 90 * time.Second
 	}
-	cn, hash, err := c.CertificateSubject(ctx, serverToken)
+	subj, err := c.certificateSubject(ctx, serverToken)
 	if err != nil {
 		return nil, err
 	}
+	cn, hash := subj.cn, subj.hash
 	key := req.Key
 	if key == nil {
+		// PMS: EVP_PKEY_CTX_new_id(EVP_PKEY_RSA) + set_rsa_keygen_bits(2048);
+		// P-256 only with its "strong ciphers" preference.
 		k, err := rsa.GenerateKey(rand.Reader, 2048)
 		if err != nil {
 			return nil, err
 		}
 		key = k
 	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject:  pkix.Name{CommonName: cn},
-		DNSNames: []string{cn},
-	}, key)
+	// PMS sets the subject plex.tv returned (DER, verbatim) and adds no
+	// extensions: no SANs. The CA puts the wildcard SAN in the certificate.
+	tmpl := &x509.CertificateRequest{}
+	if subj.rawSubject != nil {
+		tmpl.RawSubject = subj.rawSubject
+	} else {
+		tmpl.Subject = pkix.Name{CommonName: cn}
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key) // SHA-256 signature, as PMS
 	if err != nil {
 		return nil, fmt.Errorf("plextv: create csr: %w", err)
 	}
-	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	// PEM_write_bio_X509_REQ_NEW writes the "NEW CERTIFICATE REQUEST" label.
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "NEW CERTIFICATE REQUEST", Bytes: csrDER})
+	body, contentType, err := csrUploadBody(csrPEM)
+	if err != nil {
+		return nil, fmt.Errorf("plextv: encode csr upload: %w", err)
+	}
 
 	devPath := "/api/v2/devices/" + url.PathEscape(c.id.ClientIdentifier) + "/certificate"
-	if _, err := c.do(ctx, request{
+	// Exactly one upload per attempt (no transport retries): plex.tv rate
+	// limits this endpoint per device.
+	if _, err := c.once(ctx, request{
 		method:      http.MethodPut,
 		host:        c.serversHost(),
 		path:        devPath + "/csr",
 		query:       url.Values{"reason": {req.Reason}, "invalidIn": {strconv.Itoa(req.InvalidIn)}},
 		token:       serverToken,
-		body:        csrPEM,
-		contentType: "application/x-pem-file",
+		body:        body,
+		contentType: contentType,
 	}); err != nil {
 		return nil, fmt.Errorf("plextv: upload csr: %w", err)
 	}
