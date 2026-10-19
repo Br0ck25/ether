@@ -51,6 +51,7 @@ func main() {
 	indexer := flag.String("indexer", "api.nzbgeek.info", "only this indexer host")
 	data := flag.String("data", "", "persistent benchmark data directory (keeps search/NZB caches)")
 	trace := flag.Bool("trace", false, "print coarse phase timing breakdown")
+	retry := flag.Bool("retry", false, "bypass a persisted unavailable result while reusing cached indexer results")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	var r ref
@@ -75,7 +76,7 @@ func main() {
 		if filepath.Base(x.URL) != *indexer && x.Name != *indexer {
 			continue
 		}
-		cfg.Indexers = append(cfg.Indexers, config.Indexer{ID: fmt.Sprint(i), Name: x.Name, URL: x.URL, APIKey: x.APIKey, DailyLimit: 20, DailyGrabs: 10, Enabled: true})
+		cfg.Indexers = append(cfg.Indexers, config.Indexer{ID: fmt.Sprint(i), Name: x.Name, URL: x.URL, APIKey: x.APIKey, DailyLimit: 20, DailyGrabs: 20, Enabled: true})
 	}
 	db, err := store.Open(ctx, dir)
 	must(err)
@@ -86,6 +87,11 @@ func main() {
 	eng := stream.New(fetcher, cache, stream.OptionsFromConfig(cfg), log)
 	idx := newznab.NewManager(db, cfg.Indexers, newznab.Options{Logger: log, NZBDir: filepath.Join(dir, "nzb")})
 	res := resolver.New(idx, eng, db, cfg, resolver.Options{Logger: log})
+	warmStart := time.Now()
+	if err := fetcher.Warm(ctx, 4); err != nil {
+		fmt.Printf("startup warm warning: %v\n", err)
+	}
+	warmDuration := time.Since(warmStart)
 
 	t := &core.Title{Key: core.MovieKey(*tmdbID), Type: core.TypeMovie, IDs: core.IDs{TMDB: *tmdbID, IMDB: *imdb}, Title: *title, Year: *year, Released: time.Date(*year, 1, 1, 0, 0, 0, 0, time.UTC), Runtime: *runtime}
 	caps := core.ClientCaps{Product: *product, Platform: "Chrome", MaxHeight: 1080, VideoCodecs: []string{"h264"}, AudioCodecs: []string{"aac", "ac3", "eac3"}, Containers: []string{"mp4", "mkv"}}
@@ -93,10 +99,18 @@ func main() {
 		caps = core.ClientCaps{Product: *product, Platform: "tvOS", MaxHeight: 2160, HDR10: true, DolbyVision: true, VideoCodecs: []string{"h264", "hevc"}, AudioCodecs: []string{"aac", "ac3", "eac3", "truehd"}, Containers: []string{"mp4", "mkv", "mpegts"}}
 	}
 	start := time.Now()
-	sol, err := res.Resolve(ctx, core.ResolveRequest{Title: t, Client: caps, User: &core.User{ID: 1, IsOwner: true}})
+	req := core.ResolveRequest{Title: t, Client: caps, User: &core.User{ID: 1, IsOwner: true}}
+	if *retry {
+		req.Exclude = []string{"livebench-retry-sentinel"}
+	}
+	sol, err := res.Resolve(ctx, req)
 	tResolve := time.Since(start)
 	if *trace {
-		fmt.Printf("trace resolve_total=%s (resolver search/fetch/health instrumentation available below)\n", tResolve.Round(time.Millisecond))
+		ht := eng.HealthTimings()
+		fmt.Printf("trace startup_warm=%s resolve_total=%s health_warm=%s nzb_parse=%s archive_plan_and_headers=%s stat=%s samples=%d\n", warmDuration.Round(time.Millisecond), tResolve.Round(time.Millisecond), ht.Warm.Round(time.Millisecond), ht.Parse.Round(time.Millisecond), ht.Plan.Round(time.Millisecond), ht.STAT.Round(time.Millisecond), ht.Samples)
+		for _, st := range idx.SearchTimings() {
+			fmt.Printf("  indexer=%s search=%s err=%s\n", st.Indexer, st.Duration.Round(time.Millisecond), st.Err)
+		}
 	}
 	for _, tr := range res.Traces() {
 		if *trace {
@@ -110,10 +124,15 @@ func main() {
 				} else {
 					fmt.Printf("  cand score=%.1f rej=%v hc=%v healthy=%v %s %s\n", c.Score, c.Rejected, c.HealthChecked, c.Healthy, c.Name, c.Reason)
 				}
-				if n++; n > 6 {
+				if n++; n > 30 {
 					break
 				}
 			}
+		}
+	}
+	if *trace && err != nil {
+		for _, s := range fetcher.Stats() {
+			fmt.Printf("provider=%s dials=%d tcp=%s tls=%s greeting=%s auth=%s stat_batches=%d stat_batch_time=%s misses=%d avg_rtt=%s\n", s.Name, s.Dials, s.TCPDialTime.Round(time.Millisecond), s.TLSHandshakeTime.Round(time.Millisecond), s.GreetingTime.Round(time.Millisecond), s.AuthTime.Round(time.Millisecond), s.STATBatches, s.STATBatchTime.Round(time.Millisecond), s.Misses, s.AvgLatency.Round(time.Millisecond))
 		}
 	}
 	must(err)
@@ -148,7 +167,11 @@ func main() {
 	fmt.Printf("decision for %s: %s (%s)\n", caps.Product, d.Kind, d.Reason)
 	fmt.Printf("TIME TO PLAYABLE (resolve+open+first read+probe): %s\n", (tResolve + tOpen + tFirst + time.Since(t3)).Round(time.Millisecond))
 	for _, s := range fetcher.Stats() {
-		fmt.Printf("provider %+v\n", s)
+		if *trace {
+			fmt.Printf("provider=%s dials=%d tcp=%s tls=%s greeting=%s auth=%s stat_batches=%d stat_batch_time=%s articles=%d misses=%d avg_rtt=%s\n", s.Name, s.Dials, s.TCPDialTime.Round(time.Millisecond), s.TLSHandshakeTime.Round(time.Millisecond), s.GreetingTime.Round(time.Millisecond), s.AuthTime.Round(time.Millisecond), s.STATBatches, s.STATBatchTime.Round(time.Millisecond), s.Articles, s.Misses, s.AvgLatency.Round(time.Millisecond))
+		} else {
+			fmt.Printf("provider %+v\n", s)
+		}
 	}
 }
 

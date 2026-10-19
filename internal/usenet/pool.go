@@ -39,11 +39,17 @@ type pool struct {
 	stop chan struct{}
 	wg   sync.WaitGroup
 
-	bytes    atomic.Int64
-	articles atomic.Int64
-	misses   atomic.Int64
-	errs     atomic.Int64
-	dials    atomic.Int64
+	bytes         atomic.Int64
+	articles      atomic.Int64
+	misses        atomic.Int64
+	errs          atomic.Int64
+	dials         atomic.Int64
+	tcpTime       atomic.Int64
+	tlsTime       atomic.Int64
+	greetingTime  atomic.Int64
+	authTime      atomic.Int64
+	statBatches   atomic.Int64
+	statBatchTime atomic.Int64
 
 	latMu    sync.Mutex
 	latency  ewma // command round trip
@@ -107,6 +113,18 @@ func (p *pool) dialOptions() DialOptions {
 		CommandTimeout: p.o.CommandTimeout,
 		DialContext:    p.o.DialContext,
 		BytesRead:      &p.bytes,
+		OnPhase: func(phase string, d time.Duration) {
+			switch phase {
+			case "tcp":
+				p.tcpTime.Add(int64(d))
+			case "tls":
+				p.tlsTime.Add(int64(d))
+			case "greeting":
+				p.greetingTime.Add(int64(d))
+			case "auth":
+				p.authTime.Add(int64(d))
+			}
+		},
 	}
 }
 
@@ -436,6 +454,47 @@ func (p *pool) stat(ctx context.Context, id string) (bool, error) {
 	return ok, nil
 }
 
+func (p *pool) statMany(ctx context.Context, ids []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	c, err := p.get(ctx, core.PriorityLive)
+	if err != nil {
+		return nil, err
+	}
+	reused := c.uses > 0
+	c.uses++
+	started := time.Now()
+	result, err = c.StatMany(ctx, ids)
+	p.statBatches.Add(1)
+	p.statBatchTime.Add(int64(time.Since(started)))
+	rtt := c.lastRTT
+	p.put(c, core.PriorityLive)
+	if err != nil {
+		return nil, p.failed(err, reused, ctx)
+	}
+	for _, ok := range result {
+		if !ok {
+			p.misses.Add(1)
+		}
+	}
+	p.latMu.Lock()
+	p.latency.add(rtt)
+	p.latMu.Unlock()
+	return result, nil
+}
+
+// warm opens and authenticates one connection and returns it to the idle pool.
+func (p *pool) warm(ctx context.Context) error {
+	c, err := p.get(ctx, core.PriorityLive)
+	if err != nil {
+		return err
+	}
+	p.put(c, core.PriorityLive)
+	return nil
+}
+
 // failed classifies and records an error from a request on this pool.
 func (p *pool) failed(err error, reused bool, ctx context.Context) error {
 	switch {
@@ -490,8 +549,14 @@ type ProviderStats struct {
 	Errors   int64 `json:"errors"`
 	Dials    int64 `json:"dials"`
 
-	AvgLatency   time.Duration `json:"avgLatency"`   // command round trip (EWMA)
-	AvgFetchTime time.Duration `json:"avgFetchTime"` // whole article (EWMA)
+	AvgLatency       time.Duration `json:"avgLatency"`   // command round trip (EWMA)
+	AvgFetchTime     time.Duration `json:"avgFetchTime"` // whole article (EWMA)
+	TCPDialTime      time.Duration `json:"tcpDialTime"`
+	TLSHandshakeTime time.Duration `json:"tlsHandshakeTime"`
+	GreetingTime     time.Duration `json:"greetingTime"`
+	AuthTime         time.Duration `json:"authTime"`
+	STATBatches      int64         `json:"statBatches"`
+	STATBatchTime    time.Duration `json:"statBatchTime"`
 }
 
 func (p *pool) stats() ProviderStats {
@@ -527,6 +592,12 @@ func (p *pool) stats() ProviderStats {
 	st.Misses = p.misses.Load()
 	st.Errors = p.errs.Load()
 	st.Dials = p.dials.Load()
+	st.TCPDialTime = time.Duration(p.tcpTime.Load())
+	st.TLSHandshakeTime = time.Duration(p.tlsTime.Load())
+	st.GreetingTime = time.Duration(p.greetingTime.Load())
+	st.AuthTime = time.Duration(p.authTime.Load())
+	st.STATBatches = p.statBatches.Load()
+	st.STATBatchTime = time.Duration(p.statBatchTime.Load())
 	p.latMu.Lock()
 	st.AvgLatency = time.Duration(p.latency.v)
 	st.AvgFetchTime = time.Duration(p.fetching.v)

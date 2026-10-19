@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ether-media/ether/internal/core"
 )
@@ -23,24 +24,40 @@ import (
 // The index built here is kept, so an Open of the same NZB right after a
 // successful Check does not repeat the header fetches.
 func (e *Engine) Check(ctx context.Context, nzbData []byte) (bool, error) {
+	trace := HealthTrace{}
+	defer func() { e.healthMu.Lock(); e.healthTrace = trace; e.healthMu.Unlock() }()
 	if err := e.ctx.Err(); err != nil {
 		return false, ErrClosed
 	}
+	parseStart := time.Now()
 	rel, err := e.acquire(nzbData)
+	trace.Parse = time.Since(parseStart)
 	if err != nil {
 		return false, err
 	}
 	defer e.release(rel)
+	if warmer, ok := e.fetcher.(interface {
+		Warm(context.Context, int) error
+	}); ok {
+		start := time.Now()
+		err := warmer.Warm(ctx, 4)
+		trace.Warm = time.Since(start)
+		if err != nil {
+			e.log.Debug("stream health warm failed; continuing with demand dials", "err", err)
+		}
+	}
 
 	b := &builder{e: e, rel: rel, prio: core.PriorityLive}
 	cands := b.candidates(rel.files)
 
 	// STAT the likely main candidate while its headers are inspected.
 	type statResult struct {
-		files   []*postedFile
-		missing int
-		total   int
-		err     error
+		files    []*postedFile
+		missing  int
+		total    int
+		err      error
+		duration time.Duration
+		samples  int
 	}
 	statCh := make(chan statResult, 1)
 	sctx, cancelStats := context.WithCancel(ctx)
@@ -49,22 +66,28 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (bool, error) {
 	if len(cands) > 0 && !b.shouldProbe(cands) {
 		guessed = cands[0].files
 		go func() {
+			started := time.Now()
 			m, t, err := e.statSample(sctx, guessed)
-			statCh <- statResult{guessed, m, t, err}
+			statCh <- statResult{files: guessed, missing: m, total: t, err: err, duration: time.Since(started), samples: t}
 		}()
 	} else {
 		statCh <- statResult{}
 	}
 
+	planStart := time.Now()
 	p, err := rel.ensurePlan(ctx, core.PriorityLive, "")
+	trace.Plan = time.Since(planStart)
 	if err != nil {
 		return false, err
 	}
 	res := <-statCh
 	if !sameFiles(res.files, p.vols) {
+		started := time.Now()
 		m, t, err := e.statSample(ctx, p.vols)
-		res = statResult{p.vols, m, t, err}
+		res = statResult{files: p.vols, missing: m, total: t, err: err, duration: time.Since(started), samples: t}
 	}
+	trace.STAT = res.duration
+	trace.Samples = res.samples
 	if res.err != nil {
 		return false, res.err
 	}
@@ -137,6 +160,29 @@ type slotRef struct {
 // statSample STATs the health sample of files in parallel.
 func (e *Engine) statSample(ctx context.Context, files []*postedFile) (missing, total int, err error) {
 	refs := healthSample(files, e.opts.HealthSamples)
+	if many, ok := e.fetcher.(interface {
+		StatMany(context.Context, []string) (map[string]bool, error)
+	}); ok {
+		ids := make([]string, 0, len(refs))
+		for _, r := range refs {
+			id := r.pf.msgID(r.slot)
+			if id == "" {
+				missing++
+			} else {
+				ids = append(ids, id)
+			}
+		}
+		got, err := many.StatMany(ctx, ids)
+		if err != nil {
+			return missing, len(refs), err
+		}
+		for _, id := range ids {
+			if !got[id] {
+				missing++
+			}
+		}
+		return missing, len(refs), nil
+	}
 	var miss atomic.Int64
 	var mu sync.Mutex
 	var first error

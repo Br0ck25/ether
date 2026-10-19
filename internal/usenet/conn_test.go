@@ -106,6 +106,31 @@ func TestConnBodyStatGroupDate(t *testing.T) {
 	}
 }
 
+func TestConnStatManyMixedPresenceAndDroppedPipeline(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{})
+	s.AddArticle("yes@test", []byte("ok"))
+	c := dialServer(t, s)
+	got, err := c.StatMany(context.Background(), []string{"yes@test", "no@test", "yes@test"})
+	if err != nil || !got["yes@test"] || got["no@test"] {
+		t.Fatalf("result=%v err=%v", got, err)
+	}
+
+	dropped := nntptest.Start(t, nntptest.Options{})
+	dropped.SetFault(func(cmd, arg string) nntptest.Fault {
+		if cmd == "STAT" && arg == "second@test" {
+			return nntptest.Fault{Drop: true}
+		}
+		return nntptest.Fault{}
+	})
+	dc := dialServer(t, dropped)
+	if _, err := dc.StatMany(context.Background(), []string{"first@test", "second@test", "third@test"}); err == nil {
+		t.Fatal("expected dropped pipeline error")
+	}
+	if !dc.Broken() {
+		t.Fatal("dropped pipeline connection must be discarded")
+	}
+}
+
 func TestConnInvalidMessageID(t *testing.T) {
 	s := nntptest.Start(t, nntptest.Options{})
 	c := dialServer(t, s)

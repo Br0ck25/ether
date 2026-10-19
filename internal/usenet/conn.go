@@ -42,6 +42,8 @@ type DialOptions struct {
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 	// BytesRead, when set, is incremented with every byte read off the wire.
 	BytesRead *atomic.Int64
+	// OnPhase receives durations for tcp, tls, greeting, and auth setup phases.
+	OnPhase func(string, time.Duration)
 }
 
 // Conn is one NNTP client connection. It is not safe for concurrent use;
@@ -51,6 +53,7 @@ type Conn struct {
 	r              *bufio.Reader
 	w              *bufio.Writer
 	commandTimeout time.Duration
+	onPhase        func(string, time.Duration)
 
 	// PostingAllowed reports a 200 (vs 201) greeting.
 	PostingAllowed bool
@@ -99,7 +102,11 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 		d := &net.Dialer{KeepAlive: 30 * time.Second}
 		dial = d.DialContext
 	}
+	phaseStart := time.Now()
 	raw, err := dial(dctx, "tcp", addr)
+	if o.OnPhase != nil {
+		o.OnPhase("tcp", time.Since(phaseStart))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("nntp: dial %s: %w", addr, err)
 	}
@@ -119,7 +126,12 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 			cfg.ServerName = o.Host
 		}
 		tc := tls.Client(nc, cfg)
-		if err := tc.HandshakeContext(dctx); err != nil {
+		phaseStart = time.Now()
+		err := tc.HandshakeContext(dctx)
+		if o.OnPhase != nil {
+			o.OnPhase("tls", time.Since(phaseStart))
+		}
+		if err != nil {
 			raw.Close()
 			return nil, fmt.Errorf("nntp: tls handshake with %s: %w", addr, err)
 		}
@@ -132,6 +144,7 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 		r:              bufio.NewReaderSize(nc, readBufferSize),
 		w:              bufio.NewWriterSize(nc, 4096),
 		commandTimeout: o.CommandTimeout,
+		onPhase:        o.OnPhase,
 		created:        now,
 		used:           now,
 	}
@@ -143,6 +156,7 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 }
 
 func (c *Conn) handshake(ctx context.Context, user, pass string) error {
+	phaseStart := time.Now()
 	end, err := c.begin(ctx, c.commandTimeout)
 	if err != nil {
 		return err
@@ -160,10 +174,18 @@ func (c *Conn) handshake(ctx context.Context, user, pass string) error {
 		return &ProtocolError{Cmd: "greeting", Code: code, Msg: msg}
 	}
 	c.Greeting = msg
+	if c.onPhase != nil {
+		c.onPhase("greeting", time.Since(phaseStart))
+	}
 	if user == "" {
 		return nil
 	}
-	return c.auth(ctx, user, pass)
+	phaseStart = time.Now()
+	err = c.auth(ctx, user, pass)
+	if c.onPhase != nil {
+		c.onPhase("auth", time.Since(phaseStart))
+	}
+	return err
 }
 
 func (c *Conn) auth(ctx context.Context, user, pass string) error {
@@ -328,6 +350,65 @@ func (c *Conn) Stat(ctx context.Context, messageID string) (bool, error) {
 		return false, nil
 	}
 	return false, &ProtocolError{Cmd: "STAT", Code: code, Msg: msg}
+}
+
+// StatMany pipelines STAT commands on this connection: all commands are
+// flushed before any response is read. The connection is discarded by the
+// pool if a pipeline is interrupted or its replies become desynchronised.
+func (c *Conn) StatMany(ctx context.Context, messageIDs []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return out, nil
+	}
+	if c.inBody {
+		return nil, errors.New("nntp: STAT while a body is being read")
+	}
+	ids := make([]string, len(messageIDs))
+	for i, id := range messageIDs {
+		normalized, err := normalizeMessageID(id)
+		if err != nil {
+			return nil, err
+		}
+		ids[i] = normalized
+	}
+	end, err := c.begin(ctx, c.commandTimeout)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	for _, id := range ids {
+		if _, err = c.w.WriteString("STAT " + id + "\r\n"); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = c.w.Flush()
+	}
+	if err != nil {
+		c.broken = true
+		return nil, fmt.Errorf("nntp: STAT pipeline write: %w", end(err))
+	}
+	for i := range ids {
+		code, msg, readErr := c.readStatus()
+		if readErr != nil {
+			c.broken = true
+			return nil, fmt.Errorf("nntp: STAT pipeline reply %d/%d: %w", i+1, len(ids), end(readErr))
+		}
+		switch code {
+		case 223:
+			out[messageIDs[i]] = true
+		case 430, 423:
+			out[messageIDs[i]] = false
+		default:
+			c.broken = true
+			return nil, fmt.Errorf("nntp: STAT pipeline: %w", end(&ProtocolError{Cmd: "STAT", Code: code, Msg: msg}))
+		}
+	}
+	c.lastRTT = time.Since(start)
+	if err := end(nil); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // Group selects a newsgroup.

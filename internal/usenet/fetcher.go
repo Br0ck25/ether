@@ -319,6 +319,128 @@ func (f *Fetcher) Stat(ctx context.Context, messageID string) (bool, error) {
 	return false, err
 }
 
+// StatMany checks a set of articles while pipelining commands over several
+// connections to the first available provider. Missing articles are retried
+// through the normal provider chain, preserving block-account backfill.
+func (f *Fetcher) StatMany(ctx context.Context, messageIDs []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(messageIDs))
+	if len(messageIDs) == 0 {
+		return result, nil
+	}
+	ids := make([]string, 0, len(messageIDs))
+	for _, id := range messageIDs {
+		normalized, err := normalizeMessageID(id)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, normalized)
+	}
+	pools := f.order()
+	if len(pools) == 0 {
+		return nil, ErrNoProviders
+	}
+	unresolved := append([]string(nil), ids...)
+	var firstErr error
+	for _, p := range pools {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if len(unresolved) == 0 {
+			break
+		}
+		workers := min(4, p.size, len(unresolved))
+		if workers < 1 {
+			workers = 1
+		}
+		chunks := make([][]string, workers)
+		for i, id := range unresolved {
+			chunks[i%workers] = append(chunks[i%workers], id)
+		}
+		type answer struct {
+			values map[string]bool
+			err    error
+		}
+		answers := make([]answer, len(chunks))
+		var wg sync.WaitGroup
+		for i, chunk := range chunks {
+			if len(chunk) == 0 {
+				continue
+			}
+			wg.Add(1)
+			go func(i int, chunk []string) {
+				defer wg.Done()
+				answers[i].values, answers[i].err = p.statMany(ctx, chunk)
+			}(i, chunk)
+		}
+		wg.Wait()
+		for _, a := range answers {
+			if a.err != nil {
+				if firstErr == nil {
+					firstErr = a.err
+				}
+				continue
+			}
+			for id, ok := range a.values {
+				if ok {
+					result[id] = true
+				} else {
+					f.misses.add(id, p.key)
+				}
+			}
+		}
+		next := unresolved[:0]
+		for _, id := range unresolved {
+			if !result[id] {
+				next = append(next, id)
+			}
+		}
+		unresolved = next
+		// A provider error means a negative from another provider cannot prove
+		// global absence. Preserve uncertainty after all provider attempts.
+	}
+	if len(unresolved) > 0 && firstErr != nil {
+		return result, firstErr
+	}
+	for _, id := range ids {
+		if _, ok := result[id]; !ok {
+			result[id] = false
+		}
+	}
+	return result, nil
+}
+
+// Warm dials, negotiates TLS, and authenticates idle connections before a
+// playback request needs them. perProvider is clamped to each provider pool.
+func (f *Fetcher) Warm(ctx context.Context, perProvider int) error {
+	if perProvider < 1 {
+		return nil
+	}
+	f.mu.RLock()
+	pools := append([]*pool(nil), f.pools...)
+	f.mu.RUnlock()
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var first error
+	for _, p := range pools {
+		n := min(perProvider, p.size)
+		for i := 0; i < n; i++ {
+			wg.Add(1)
+			go func(p *pool) {
+				defer wg.Done()
+				if err := p.warm(ctx); err != nil {
+					mu.Lock()
+					if first == nil {
+						first = fmt.Errorf("usenet: warm %s: %w", providerLabel(p.cfg), err)
+					}
+					mu.Unlock()
+				}
+			}(p)
+		}
+	}
+	wg.Wait()
+	return first
+}
+
 // each runs op against providers in order until one succeeds, and turns the
 // collected failures into the right error.
 func (f *Fetcher) each(ctx context.Context, id string, op func(*pool) error) error {

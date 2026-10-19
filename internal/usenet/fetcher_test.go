@@ -563,6 +563,33 @@ func TestStat(t *testing.T) {
 	}
 }
 
+func TestStatManyPipelinesAndFallsBackToBlockProvider(t *testing.T) {
+	s1 := nntptest.Start(t, nntptest.Options{Username: "u", Password: "p"})
+	s2 := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, s1, "primary@x", []byte("p"))
+	addSeg(t, s2, "block@x", []byte("b"))
+	p2 := s2.Provider("block", 2)
+	p2.Backfill = true
+	f := newFetcher(t, []config.UsenetProvider{s1.Provider("primary", 4), p2}, Options{})
+	if err := f.Warm(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := s1.Stats().Accepted; got < 2 {
+		t.Fatalf("warm opened %d connections, want at least 2", got)
+	}
+	got, err := f.StatMany(context.Background(), []string{"primary@x", "block@x", "gone@x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["<primary@x>"] || !got["<block@x>"] || got["<gone@x>"] {
+		t.Fatalf("results %v", got)
+	}
+	stats := f.Stats()
+	if stats[0].STATBatches == 0 {
+		t.Fatalf("primary did not pipeline STATs: %+v", stats[0])
+	}
+}
+
 func TestHotReload(t *testing.T) {
 	s1 := nntptest.Start(t, nntptest.Options{})
 	s2 := nntptest.Start(t, nntptest.Options{})
