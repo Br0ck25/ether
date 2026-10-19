@@ -67,6 +67,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 			DB:          a.db, // plex_ultrablur
 		}
 	}
+	deps.Variants = a.resolver // "Play Version" release picker (cache-only)
 	deps.PlexGUID = plexguid.New(a.db, plexguid.Options{Token: func() string { return a.cfg.Get().Plex.Token }})
 	deps.EpisodeOrder = a.episodeorder
 	deps.Discovery = a.plexDiscovery
