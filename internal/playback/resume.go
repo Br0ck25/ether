@@ -33,7 +33,15 @@ CREATE TABLE playback_resume (
 CREATE INDEX playback_resume_release ON playback_resume(release_id);
 CREATE INDEX playback_resume_hash ON playback_resume(nzb_hash);
 `)
+	// Keep the existing playback migration immutable; indexes have their own
+	// component history.
+	store.Register("playback_index", 1, `CREATE TABLE playback_index (
+	user_id INTEGER NOT NULL, rating_key INTEGER NOT NULL, release_id TEXT NOT NULL,
+	points_json TEXT NOT NULL, PRIMARY KEY (user_id, rating_key, release_id)
+);`)
 }
+
+const maxResumeKeyframes = 8192
 
 // ResumePoint is the release that last served a user's title, so a resume
 // (or a prefetched next episode) opens the same release and hits cached
@@ -46,6 +54,7 @@ type ResumePoint struct {
 	Profile   string        // quality profile it was resolved for
 	Size      int64         // media file size, 0 if never opened
 	Duration  time.Duration // probed duration, 0 if unknown
+	Keyframes []core.KeyframePoint
 	UpdatedAt time.Time
 }
 
@@ -134,6 +143,9 @@ func (s *resumeStore) save(ctx context.Context, rec resumeRecord, nzb []byte) er
 	}
 	rel, err := json.Marshal(rec.release)
 	if err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_index WHERE user_id=? AND rating_key=? AND release_id<>?`, rec.userID, int64(rec.key), rec.release.ID); err != nil {
 		return err
 	}
 	var oldHash string
@@ -251,4 +263,39 @@ func (rec *resumeRecord) point(nzb []byte) *ResumePoint {
 		Duration:  rec.duration,
 		UpdatedAt: rec.updatedAt,
 	}
+}
+
+func (s *resumeStore) saveIndex(ctx context.Context, userID int64, key core.RatingKey, releaseID string, points []core.KeyframePoint) error {
+	if len(points) == 0 || releaseID == "" {
+		return nil
+	}
+	if len(points) > maxResumeKeyframes {
+		points = points[:maxResumeKeyframes]
+	}
+	b, err := json.Marshal(points)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO playback_index(user_id,rating_key,release_id,points_json) VALUES(?,?,?,?)
+ON CONFLICT(user_id,rating_key,release_id) DO UPDATE SET points_json=excluded.points_json`, userID, int64(key), releaseID, string(b))
+	return err
+}
+
+func (s *resumeStore) loadIndex(ctx context.Context, userID int64, key core.RatingKey, releaseID string) ([]core.KeyframePoint, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT points_json FROM playback_index WHERE user_id=? AND rating_key=? AND release_id=?`, userID, int64(key), releaseID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var points []core.KeyframePoint
+	if err := json.Unmarshal([]byte(raw), &points); err != nil {
+		return nil, err
+	}
+	if len(points) > maxResumeKeyframes {
+		points = points[:maxResumeKeyframes]
+	}
+	return points, nil
 }

@@ -3,6 +3,7 @@ package playback
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -204,6 +205,34 @@ func TestPrepareVariantPicksAndReplaces(t *testing.T) {
 	}
 	if _, ok := h.m.Session(ps.ID); ok {
 		t.Fatal("replaced session still live")
+	}
+}
+
+func TestConcurrentPrepareVariantsDoNotLeaveDuplicateSessions(t *testing.T) {
+	h := newHarness(t, []*fakeRelease{mkv("A", 10000, time.Minute), mkv("B", 20000, time.Minute)}, []string{"A", "B"})
+	h.resolver.delay = 100 * time.Millisecond // let the distinct preference flights overlap
+	caps := defaultCaps("c1")
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			id := "A"
+			if i%2 == 1 {
+				id = "B"
+			}
+			_, _ = h.m.PrepareVariant(context.Background(), owner, movieKey, caps, id)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	h.m.mu.Lock()
+	n := len(h.m.sessions)
+	h.m.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("concurrent version picks left %d sessions, want one", n)
 	}
 }
 
@@ -518,6 +547,23 @@ func TestKeyframesPublishedInBackground(t *testing.T) {
 	s.mu.Unlock()
 	if len(pts) != len(want) {
 		t.Fatalf("virtual points = %v", pts)
+	}
+	rp, err := h.m.ResumePoint(context.Background(), owner.ID, movieKey)
+	if err != nil || rp == nil || len(rp.Keyframes) != len(want) {
+		t.Fatalf("resume keyframe index = %+v, %v", rp, err)
+	}
+	for i, p := range want {
+		if rp.Keyframes[i].Offset != p.Offset || rp.Keyframes[i].Time != p.Time {
+			t.Fatalf("resume keyframe %d = %+v, want %+v", i, rp.Keyframes[i], p)
+		}
+	}
+	// Callers receive snapshots; mutating one must not corrupt the published
+	// index used by later timeline mapping or snapshots.
+	st, _ := h.m.Session(ps.ID)
+	st.Info.Keyframes[0].Offset = -1
+	st2, _ := h.m.Session(ps.ID)
+	if st2.Info.Keyframes[0].Offset != want[0].Offset {
+		t.Fatalf("snapshot mutation changed published index: %+v", st2.Info.Keyframes)
 	}
 }
 

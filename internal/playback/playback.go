@@ -577,6 +577,14 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		m.dropGeneration(g)
 		return nil, errors.New("playback: shutting down")
 	}
+	// Distinct picked-release flights can race to register the same
+	// user/client/title. Keep the first completed session and discard the
+	// losing source instead of overwriting byIdent and leaking a live stream.
+	if existing := m.byIdent[id]; existing != nil {
+		m.mu.Unlock()
+		m.dropGeneration(g)
+		return existing, nil
+	}
 	var replaced []string
 	for _, o := range m.sessions {
 		if o.ident.userID == id.userID && o.ident.clientID == id.clientID && o.ident.key != id.key {
