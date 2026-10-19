@@ -102,7 +102,13 @@ export interface EtherConfig {
   trakt: { enabled: boolean; clientId: string; clientSecret: string };
   openSubtitles: { enabled: boolean; apiKey: string; username: string; password: string };
   llm: { enabled: boolean; baseUrl: string; apiKey: string; model: string };
-  updates: { channel: string; autoUpdate: boolean; feedUrl: string };
+  updates: {
+    channel: string;
+    autoUpdate: boolean;
+    feedUrl: string;
+    maintenanceStart?: string;
+    maintenanceEnd?: string;
+  };
   spike: { enabled: boolean; localFiles: string[] | null };
   setupComplete: boolean;
 }
@@ -185,6 +191,44 @@ export interface EtherUser {
   subtitleLanguages: string[] | null;
   audioLanguages: string[] | null;
   allowedSections: number[] | null;
+}
+
+/** GET /api/updates/ — the server's self-update manager. */
+export interface UpdateStatus {
+  enabled: boolean;
+  disabledReason?: string;
+  current: string;
+  available?: {
+    version: string;
+    kind: string;
+    notesUrl?: string;
+    notes?: string;
+    publishedAt?: string;
+    staged: boolean;
+  };
+  capability: "self-apply" | "notify-only" | "disabled";
+  capabilityReason?: string;
+  state:
+    | "idle"
+    | "downloading"
+    | "staged"
+    | "waiting-for-window"
+    | "waiting-for-idle"
+    | "applying"
+    | "rolled-back";
+  autoUpdate: boolean;
+  requested: boolean;
+  force: boolean;
+  lastCheck?: string;
+  nextCheck?: string;
+  lastError?: string;
+  window: { start: string; end: string; open: boolean };
+  activeSessions: number;
+  quietPeriodSeconds: number;
+  confirming: boolean;
+  failedVersion?: string;
+  failedReason?: string;
+  note?: string;
 }
 
 export interface FieldError {
