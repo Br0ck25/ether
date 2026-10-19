@@ -19,8 +19,7 @@ func (s *Service) PreviewCSV(ctx context.Context, viewer int64, format, kind str
 	if viewer <= 0 {
 		return p, errors.New("viewer required")
 	}
-	var n int
-	if e := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_users WHERE id=?`, viewer).Scan(&n); e != nil || n == 0 {
+	if _, err := s.viewer(ctx, viewer); err != nil {
 		return p, errors.New("unknown viewer")
 	}
 	if format != "letterboxd" && format != "trakt" {
@@ -133,29 +132,37 @@ func (s *Service) ExportCSV(ctx context.Context, viewer int64, format, kind stri
 		at     int64
 	}
 	entries := []entry{}
-	query := `SELECT h.rating_key,COALESCE(w.user_rating,0),h.viewed_at FROM state_history h LEFT JOIN state_watch w ON w.user_id=h.user_id AND w.rating_key=h.rating_key WHERE h.user_id=? AND h.completed=1 ORDER BY h.viewed_at`
-	if kind == "ratings" {
-		query = `SELECT rating_key,user_rating,last_viewed_at FROM state_watch WHERE user_id=? AND user_rating>0`
-	}
+	var e error
 	if kind == "watchlist" {
-		query = `SELECT key,0,0 FROM migrate_watchlist WHERE viewer=?`
-	}
-	rows, e := s.db.QueryContext(ctx, query, viewer)
-	if e != nil {
-		return e
-	}
-	for rows.Next() {
-		var v entry
-		if e = rows.Scan(&v.k, &v.rating, &v.at); e != nil {
-			rows.Close()
+		rows, err := s.db.QueryContext(ctx, `SELECT key FROM migrate_watchlist WHERE viewer=?`, viewer)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var v entry
+			if err := rows.Scan(&v.k); err != nil {
+				rows.Close()
+				return err
+			}
+			entries = append(entries, v)
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
 			return e
 		}
-		entries = append(entries, v)
-	}
-	e = rows.Err()
-	rows.Close()
-	if e != nil {
-		return e
+	} else {
+		exported, err := s.state.ExportEntries(ctx, viewer, kind == "ratings")
+		if err != nil {
+			return err
+		}
+		for _, v := range exported {
+			at := int64(0)
+			if !v.At.IsZero() {
+				at = v.At.UnixNano()
+			}
+			entries = append(entries, entry{k: v.Key, rating: v.Rating, at: at})
+		}
 	}
 	wr := csv.NewWriter(w)
 	if format == "letterboxd" {

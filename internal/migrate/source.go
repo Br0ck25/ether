@@ -19,7 +19,9 @@ func (s *Service) sourceAccount(ctx context.Context, base, token string, v Viewe
 	}
 	name := v.Name
 	if name == "" {
-		_ = s.db.QueryRowContext(ctx, `SELECT username FROM auth_users WHERE id=?`, v.LocalUserID).Scan(&name)
+		if user, err := s.viewer(ctx, v.LocalUserID); err == nil {
+			name = user.Username
+		}
 	}
 	for _, account := range accounts.Accounts {
 		if account.ID <= 0 {

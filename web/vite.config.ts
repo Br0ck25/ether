@@ -9,7 +9,9 @@ import { theme } from "./src/theme";
 // default dark) theme class is on <html> before anything paints.
 const themeScript: Plugin = {
   name: "ether-theme-script",
-  transformIndexHtml: () => [{ tag: "script", children: getThemeScript(theme), injectTo: "head-prepend" }],
+  transformIndexHtml: () => [
+    { tag: "script", children: getThemeScript(theme), injectTo: "head-prepend" },
+  ],
 };
 
 // The production bundle is embedded into the Go binary from
@@ -32,7 +34,10 @@ export default defineConfig(({ mode }) => ({
   server: {
     port: 5173,
     // Mock mode serves the API in the browser; never touch a real server then.
-    proxy: mode === "mock" ? undefined : { "/ether/api": process.env.ETHER_API ?? "http://localhost:32400" },
+    proxy:
+      mode === "mock"
+        ? undefined
+        : { "/ether/api": process.env.ETHER_API ?? "http://localhost:32400" },
   },
   test: {
     environment: "jsdom",

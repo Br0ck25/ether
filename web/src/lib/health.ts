@@ -23,7 +23,8 @@ export function worstLevel(levels: HealthLevel[]): HealthLevel {
   return worst;
 }
 
-const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0);
+const num = (v: unknown): number =>
+  typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 function errorOf(v: unknown): string {
@@ -36,12 +37,16 @@ export function usenetHealth(v: unknown): HealthItem {
   if (err) return { ...base, level: "error", summary: err, details: [] };
   if (!Array.isArray(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const providers = v.filter(isPlainObject);
-  if (providers.length === 0) return { ...base, level: "error", summary: "No providers configured", details: [] };
+  if (providers.length === 0)
+    return { ...base, level: "error", summary: "No providers configured", details: [] };
   const primary = providers.filter((p) => !p.backfill);
   const bad = providers.filter((p) => str(p.state) && str(p.state) !== "ok");
   const primaryBad = primary.filter((p) => str(p.state) && str(p.state) !== "ok");
   const active = providers.reduce((n, p) => n + num(p.activeConnections), 0);
-  const configured = providers.reduce((n, p) => n + num(p.configuredConnections ?? p.maxConnections), 0);
+  const configured = providers.reduce(
+    (n, p) => n + num(p.configuredConnections ?? p.maxConnections),
+    0,
+  );
   const details = providers.map((p) => {
     const state = str(p.state) || "unknown";
     return `${str(p.name) || str(p.host) || str(p.id)}: ${state}${p.backfill ? " (backfill)" : ""} · ${num(p.activeConnections)}/${num(p.configuredConnections ?? p.maxConnections)} connections`;
@@ -49,10 +54,17 @@ export function usenetHealth(v: unknown): HealthItem {
   let level: HealthLevel = "ok";
   if (primary.length > 0 && primaryBad.length === primary.length) level = "error";
   else if (bad.length > 0) level = "warn";
-  const summary = level === "ok"
-    ? `${plural(providers.length, "provider")} healthy · ${active}/${configured} connections busy`
-    : `${bad.length} of ${plural(providers.length, "provider")} degraded`;
-  return { ...base, level, summary, details, fill: configured > 0 ? active / configured : undefined };
+  const summary =
+    level === "ok"
+      ? `${plural(providers.length, "provider")} healthy · ${active}/${configured} connections busy`
+      : `${bad.length} of ${plural(providers.length, "provider")} degraded`;
+  return {
+    ...base,
+    level,
+    summary,
+    details,
+    fill: configured > 0 ? active / configured : undefined,
+  };
 }
 
 export function indexersHealth(v: unknown): HealthItem {
@@ -61,7 +73,8 @@ export function indexersHealth(v: unknown): HealthItem {
   if (err) return { ...base, level: "error", summary: err, details: [] };
   if (!Array.isArray(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const rows = v.filter(isPlainObject);
-  if (rows.length === 0) return { ...base, level: "error", summary: "No indexers configured", details: [] };
+  if (rows.length === 0)
+    return { ...base, level: "error", summary: "No indexers configured", details: [] };
   let exhausted = 0;
   let remaining = 0;
   let limited = 0;
@@ -77,17 +90,19 @@ export function indexersHealth(v: unknown): HealthItem {
       limit += hl;
       if (hr <= 0) exhausted++;
     }
-    const grabs = num(r.grabsLimit) > 0 ? ` · ${num(r.grabsRemaining)}/${num(r.grabsLimit)} grabs left` : "";
+    const grabs =
+      num(r.grabsLimit) > 0 ? ` · ${num(r.grabsRemaining)}/${num(r.grabsLimit)} grabs left` : "";
     return `${str(r.indexer) || str(r.name)}: ${hl > 0 ? `${hr}/${hl} searches left` : "unlimited searches"}${grabs}`;
   });
   let level: HealthLevel = "ok";
   if (exhausted > 0 && exhausted === rows.length) level = "error";
   else if (exhausted > 0) level = "warn";
-  const summary = limited === 0
-    ? `${plural(rows.length, "indexer")} · no daily limits`
-    : exhausted > 0
-      ? `${exhausted} of ${plural(rows.length, "indexer")} out of searches today`
-      : `${plural(rows.length, "indexer")} · ${remaining} searches left today`;
+  const summary =
+    limited === 0
+      ? `${plural(rows.length, "indexer")} · no daily limits`
+      : exhausted > 0
+        ? `${exhausted} of ${plural(rows.length, "indexer")} out of searches today`
+        : `${plural(rows.length, "indexer")} · ${remaining} searches left today`;
   return { ...base, level, summary, details, fill: limit > 0 ? used / limit : undefined };
 }
 
@@ -99,7 +114,9 @@ export function cacheHealth(v: unknown): HealthItem {
   if (budget <= 0) return { ...base, level: "warn", summary: "No disk budget set", details: [] };
   const fill = Math.min(1, used / budget);
   return {
-    ...base, level: "ok", fill,
+    ...base,
+    level: "ok",
+    fill,
     summary: `${formatBytes(used)} of ${formatBytes(budget)}`,
     details: ["Older segments are evicted automatically when the budget is reached."],
   };
@@ -120,25 +137,43 @@ export function catalogHealth(v: unknown, now = new Date()): HealthItem {
   ];
   if (typeof sync.error === "string" && sync.error) details.push(`Last sync error: ${sync.error}`);
   if (sync.running === true) {
-    return { ...base, level: "ok", summary: `Syncing… ${num(sync.titlesSeen).toLocaleString()} titles seen`, details };
+    return {
+      ...base,
+      level: "ok",
+      summary: `Syncing… ${num(sync.titlesSeen).toLocaleString()} titles seen`,
+      details,
+    };
   }
   if (!last) return { ...base, level: "warn", summary: "Not synced yet", details };
   const ageDays = (now.getTime() - last.getTime()) / 86400000;
-  const level: HealthLevel = typeof sync.error === "string" && sync.error ? "warn" : ageDays > 3 ? "warn" : "ok";
-  return { ...base, level, summary: `${(movies + shows).toLocaleString()} titles · synced ${relativeTime(last, now)}`, details };
+  const level: HealthLevel =
+    typeof sync.error === "string" && sync.error ? "warn" : ageDays > 3 ? "warn" : "ok";
+  return {
+    ...base,
+    level,
+    summary: `${(movies + shows).toLocaleString()} titles · synced ${relativeTime(last, now)}`,
+    details,
+  };
 }
 
 export function remoteHealth(v: unknown): HealthItem {
   const base = { id: "remote" as const, label: "Remote access", settings: "plex" };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
-  if (v.claimed === false) return { ...base, level: "error", summary: "Server is not claimed", details: ["Finish the setup wizard to link Ether to your Plex account."] };
+  if (v.claimed === false)
+    return {
+      ...base,
+      level: "error",
+      summary: "Server is not claimed",
+      details: ["Finish the setup wizard to link Ether to your Plex account."],
+    };
   const presence = isPlainObject(v.presence) ? v.presence : {};
   const details: string[] = [];
   if (str(v.ownerUsername)) details.push(`Claimed by ${str(v.ownerUsername)}`);
   if (str(v.publicAddress)) details.push(`Public address ${str(v.publicAddress)}`);
   details.push(presence.connected ? "Connected to plex.tv" : "Not connected to plex.tv");
   if (v.listed === false) details.push("Not yet published to plex.tv");
-  if (presence.connected === false) return { ...base, level: "warn", summary: "plex.tv connection lost", details };
+  if (presence.connected === false)
+    return { ...base, level: "warn", summary: "plex.tv connection lost", details };
   if (v.remoteAccess === true) {
     const upnp = isPlainObject(v.upnp) ? v.upnp : {};
     if (upnp.active === true) details.push("Port mapped with UPnP");
@@ -152,7 +187,14 @@ export function plexDirectHealth(v: unknown, now = new Date()): HealthItem {
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const cert = isPlainObject(v.cert) ? v.cert : null;
   if (!cert || cert.present !== true) {
-    return { ...base, level: "warn", summary: "No certificate yet", details: ["Secure connections fall back to plain HTTP until a plex.direct certificate is issued."] };
+    return {
+      ...base,
+      level: "warn",
+      summary: "No certificate yet",
+      details: [
+        "Secure connections fall back to plain HTTP until a plex.direct certificate is issued.",
+      ],
+    };
   }
   const expires = parseTime(cert.notAfter);
   const details = [str(cert.subject)].filter(Boolean);
@@ -161,11 +203,20 @@ export function plexDirectHealth(v: unknown, now = new Date()): HealthItem {
   const days = (expires.getTime() - now.getTime()) / 86400000;
   details.push(`Expires ${formatDate(expires)}`);
   if (days < 0) return { ...base, level: "error", summary: "Certificate expired", details };
-  if (days < 14) return { ...base, level: "warn", summary: `Certificate renews ${relativeTime(expires, now)}`, details };
+  if (days < 14)
+    return {
+      ...base,
+      level: "warn",
+      summary: `Certificate renews ${relativeTime(expires, now)}`,
+      details,
+    };
   return { ...base, level: "ok", summary: `Valid until ${formatDate(expires)}`, details };
 }
 
-export function computeHealth(sections: Record<string, unknown> | undefined, now = new Date()): HealthItem[] {
+export function computeHealth(
+  sections: Record<string, unknown> | undefined,
+  now = new Date(),
+): HealthItem[] {
   const s = sections ?? {};
   return [
     usenetHealth(s.providers),
@@ -225,10 +276,13 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       key: String(pick(s, "Key", "key") ?? ""),
       title: str(pick(s, "TitleName", "titleName", "title")) || "Untitled",
       user: str(pick(s, "Username", "username")) || "Someone",
-      device: str(pick(client, "deviceName", "device")) || str(pick(client, "product")) || "Unknown device",
+      device:
+        str(pick(client, "deviceName", "device")) ||
+        str(pick(client, "product")) ||
+        "Unknown device",
       product: str(pick(client, "product")),
       decision: str(pick(s, "Decision", "decision")),
-      decisionReason:str(pick(s,"decisionReason","DecisionReason")),
+      decisionReason: str(pick(s, "decisionReason", "DecisionReason")),
       remote: pick(client, "remote") === true,
       bytesServed: num(pick(s, "BytesServed", "bytesServed")),
       size: num(pick(info, "size", "Size")),

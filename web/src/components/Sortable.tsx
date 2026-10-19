@@ -1,8 +1,18 @@
 import {
-  DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
 } from "@dnd-kit/core";
 import {
-  SortableContext, arrayMove, horizontalListSortingStrategy, sortableKeyboardCoordinates, useSortable,
+  SortableContext,
+  arrayMove,
+  horizontalListSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -20,7 +30,14 @@ export interface DragHandleProps {
  * Drag-to-reorder list (pointer, touch and keyboard: focus a handle, press
  * Space, move with the arrow keys, Space again to drop).
  */
-export function SortableList<T>({ items, getId, onReorder, renderItem, axis = "vertical", className }: {
+export function SortableList<T>({
+  items,
+  getId,
+  onReorder,
+  renderItem,
+  axis = "vertical",
+  className,
+}: {
   items: T[];
   getId: (item: T) => string;
   onReorder: (next: T[], moved: { from: number; to: number }) => void;
@@ -42,7 +59,10 @@ export function SortableList<T>({ items, getId, onReorder, renderItem, axis = "v
   };
   return (
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-      <SortableContext items={ids} strategy={axis === "vertical" ? verticalListSortingStrategy : horizontalListSortingStrategy}>
+      <SortableContext
+        items={ids}
+        strategy={axis === "vertical" ? verticalListSortingStrategy : horizontalListSortingStrategy}
+      >
         <div className={className}>
           {items.map((item, i) => (
             <SortableItem key={ids[i]} id={ids[i] as string}>
@@ -55,8 +75,16 @@ export function SortableList<T>({ items, getId, onReorder, renderItem, axis = "v
   );
 }
 
-function SortableItem({ id, children }: { id: string; children: (h: DragHandleProps) => ReactNode }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+function SortableItem({
+  id,
+  children,
+}: {
+  id: string;
+  children: (h: DragHandleProps) => ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+  });
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -65,12 +93,24 @@ function SortableItem({ id, children }: { id: string; children: (h: DragHandlePr
   };
   return (
     <div ref={setNodeRef} style={style} className={cn(isDragging && "opacity-80")}>
-      {children({ attributes: attributes as unknown as HTMLAttributes<HTMLElement>, listeners, isDragging })}
+      {children({
+        attributes: attributes as unknown as HTMLAttributes<HTMLElement>,
+        listeners,
+        isDragging,
+      })}
     </div>
   );
 }
 
-export function DragHandle({ handle, label, className }: { handle: DragHandleProps; label: string; className?: string }) {
+export function DragHandle({
+  handle,
+  label,
+  className,
+}: {
+  handle: DragHandleProps;
+  label: string;
+  className?: string;
+}) {
   return (
     <button
       type="button"

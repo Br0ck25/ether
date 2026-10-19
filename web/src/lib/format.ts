@@ -41,7 +41,10 @@ export function parseTime(s: unknown): Date | null {
   return d;
 }
 
-const RTF = typeof Intl.RelativeTimeFormat === "function" ? new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }) : null;
+const RTF =
+  typeof Intl.RelativeTimeFormat === "function"
+    ? new Intl.RelativeTimeFormat(undefined, { numeric: "auto" })
+    : null;
 
 /** "3 minutes ago", "in 2 days"; "never" for missing times. */
 export function relativeTime(s: unknown, now: Date = new Date()): string {
@@ -50,7 +53,12 @@ export function relativeTime(s: unknown, now: Date = new Date()): string {
   const diff = (d.getTime() - now.getTime()) / 1000;
   const abs = Math.abs(diff);
   const units: [Intl.RelativeTimeFormatUnit, number][] = [
-    ["year", 31536000], ["month", 2592000], ["week", 604800], ["day", 86400], ["hour", 3600], ["minute", 60],
+    ["year", 31536000],
+    ["month", 2592000],
+    ["week", 604800],
+    ["day", 86400],
+    ["hour", 3600],
+    ["minute", 60],
   ];
   for (const [unit, secs] of units) {
     if (abs >= secs) {
@@ -93,7 +101,15 @@ export function formatMinutes(min: number): string {
 }
 
 export const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
-export const WEEKDAYS_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+export const WEEKDAYS_LONG = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+] as const;
 
 export function formatHour(h: number): string {
   const hh = ((h % 24) + 24) % 24;
@@ -105,7 +121,9 @@ export function formatHour(h: number): string {
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
-  return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "")).toUpperCase();
+  return (
+    (parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? "") : "")
+  ).toUpperCase();
 }
 
 export function plural(n: number, one: string, many = `${one}s`): string {

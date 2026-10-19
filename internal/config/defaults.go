@@ -20,6 +20,7 @@ func Defaults(dataDir string) Config {
 	return Config{
 		Usenet:  Usenet{MinIdle: 2},
 		Markers: Markers{TheIntroDB: true, DetectCached: true},
+		Extras:  Extras{LocalTrailers: true, PrewarmBytes: 48 << 20, ResolverTimeout: Duration(20 * time.Second)},
 		Server: Server{
 			Port:               32400,
 			BindAddress:        "0.0.0.0",
@@ -61,6 +62,14 @@ func Defaults(dataDir string) Config {
 			TempDir:              filepath.Join(dataDir, "transcode"),
 			MaxTranscodes:        2,
 			RemoteMaxBitrateKbps: 8000,
+		},
+		Downloads: Downloads{
+			Enabled:              true,
+			MaxConcurrent:        2,
+			MaxConcurrentPerUser: 1,
+			DiskBudgetBytes:      20 << 30,
+			Expiry:               Duration(24 * time.Hour),
+			MaxHeight:            1080,
 		},
 		Updates: Updates{Channel: "stable", AutoUpdate: false},
 	}

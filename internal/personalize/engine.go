@@ -191,7 +191,6 @@ type Engine struct {
 	version       uint64
 	homeLayout    core.HomeLayout
 	extraHomeRows func(context.Context, *core.User, core.HubContext, string, int) []core.Hub
-	layout        []core.LayoutRule
 	layoutVer     uint64
 	owner         map[string]*ownerEntry
 
@@ -255,12 +254,8 @@ func New(opts Options) (*Engine, error) {
 		queue: make(chan int64, 1024), events: make(chan state.Event, 4096), evSync: make(chan chan struct{}),
 	}
 	e.rec = newRecorder(st, e.log, opts.ImpressionBuffer, opts.FlushEvery)
-	rules, err := st.layout(context.Background())
-	if err != nil {
-		return nil, fmt.Errorf("personalize: loading layout: %w", err)
-	}
-	e.layout = rules
-	e.homeLayout, err = st.homeLayout(context.Background(), rules)
+	var err error
+	e.homeLayout, err = st.homeLayout(context.Background(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -529,7 +524,7 @@ func (e *Engine) layoutRules() []core.LayoutRule {
 func (e *Engine) layoutState() ([]core.LayoutRule, uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.layout, e.layoutVer
+	return legacyLayoutView(e.homeLayout), e.layoutVer
 }
 
 // ---- core.PersonalScorer ---------------------------------------------------------
