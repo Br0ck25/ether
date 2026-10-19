@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -151,13 +152,28 @@ func (o Options) Config() (*ksvc.Config, error) {
 		EnvVars:          env,
 		Option: ksvc.KeyValue{
 			"UserService": o.UserService,
-			"KeepAlive":   true,
-			"RunAtLoad":   true,
-			"Restart":     "on-failure",
+			// launchd: relaunch whenever the process exits.
+			"KeepAlive": true,
+			"RunAtLoad": true,
+			// systemd: restart after any exit, including clean ones.
+			"Restart": "always",
+			// Windows SCM: start after boot settles, restart on failure.
+			// kardianos sets one action; Install then applies the full
+			// backoff list (windowsRecoveryDelays) and the failure flag.
+			"DelayedAutoStart":       true,
+			"OnFailure":              "restart",
+			"OnFailureDelayDuration": windowsRecoveryDelays[0].String(),
+			"OnFailureResetPeriod":   int(windowsRecoveryReset / time.Second),
 		},
 	}
 	return cfg, nil
 }
+
+// Windows SCM recovery policy: restart forever, backing off 5s, 15s, then
+// 60s for every later failure; the failure count resets after a day.
+var windowsRecoveryDelays = []time.Duration{5 * time.Second, 15 * time.Second, 60 * time.Second}
+
+const windowsRecoveryReset = 24 * time.Hour
 
 // ErrNoRunner is returned by Run on a control-only Service.
 var ErrNoRunner = errors.New("service: no RunFunc configured (control-only service)")
@@ -182,6 +198,8 @@ type Service struct {
 	prog *program
 	svc  backend
 	log  *slog.Logger
+	// postInstall finishes the OS registration (Windows recovery policy).
+	postInstall func(name string) error
 }
 
 // New builds a Service around run. run may be nil for control-only use.
@@ -199,7 +217,7 @@ func New(run RunFunc, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("service: %w", err)
 	}
-	return &Service{opts: opts2, cfg: cfg, prog: prog, svc: ks, log: opts2.Logger}, nil
+	return &Service{opts: opts2, cfg: cfg, prog: prog, svc: ks, log: opts2.Logger, postInstall: applyPlatformRecovery}, nil
 }
 
 // newWithBackend is the test seam.
@@ -232,6 +250,11 @@ func Interactive() bool { return ksvc.Interactive() }
 // Run blocks serving until the service manager stops us or, interactively,
 // until SIGINT/SIGTERM. The RunFunc's context is cancelled on stop and Run
 // returns its error (context cancellation is treated as a clean stop).
+//
+// Under a service manager, a RunFunc that returns or panics without a stop
+// request terminates the process (ExitCodeRestart for ErrRestartRequested,
+// non-zero otherwise) so the manager's restart policy applies; Run does not
+// return in that case. Interactively the error is returned to the caller.
 func (s *Service) Run() error {
 	if s.prog.run == nil {
 		return ErrNoRunner
@@ -257,7 +280,19 @@ func (s *Service) runInteractive() error {
 }
 
 // Install registers the service with the OS. May require elevation.
-func (s *Service) Install() error { return wrap("install", s.svc.Install()) }
+func (s *Service) Install() error {
+	if err := s.svc.Install(); err != nil {
+		return wrap("install", err)
+	}
+	if s.postInstall != nil {
+		if err := s.postInstall(s.cfg.Name); err != nil {
+			// The service is registered with kardianos' single restart
+			// action; warn rather than fail the install.
+			s.log.Warn("service installed but full restart policy not applied", "err", err)
+		}
+	}
+	return nil
+}
 
 // Uninstall removes the service registration. May require elevation.
 func (s *Service) Uninstall() error { return wrap("uninstall", s.svc.Uninstall()) }
@@ -306,16 +341,33 @@ func (s *Service) Status() (Status, error) {
 }
 
 // program adapts RunFunc to ksvc.Interface (+ Shutdowner).
+//
+// Under a service manager the process must not outlive its RunFunc: if the
+// server returns (or panics) without the manager having asked it to stop,
+// kardianos/service would otherwise keep the process "running" while it
+// serves nothing, and SCM/systemd/launchd would never restart it. So an
+// unrequested return terminates the process with a non-zero exit code
+// (ExitCodeRestart for ErrRestartRequested, 1 otherwise, 2 for a panic) and
+// the supervisor's restart policy takes over.
 type program struct {
 	run         RunFunc
 	log         *slog.Logger
 	stopTimeout time.Duration
+	// exit terminates the process; nil means os.Exit. Tests inject a fake.
+	exit func(code int)
 
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
-	err    error
+	mu       sync.Mutex
+	cancel   context.CancelFunc
+	done     chan struct{}
+	err      error
+	stopping bool
 }
+
+// Exit codes used when the RunFunc ends without a stop request.
+const (
+	exitCodeUnexpected = 1
+	exitCodePanic      = 2
+)
 
 func (p *program) Start(ksvc.Service) error {
 	if p.run == nil {
@@ -326,23 +378,72 @@ func (p *program) Start(ksvc.Service) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	p.done = make(chan struct{})
+	p.stopping = false
 	done := p.done
-	go func() {
-		err := p.run(ctx)
-		p.mu.Lock()
-		p.err = err
-		p.mu.Unlock()
-		close(done)
-		if err != nil && !errors.Is(err, context.Canceled) && p.log != nil {
-			p.log.Error("ether exited with error", "err", err)
+	go p.serve(ctx, sync.OnceFunc(func() { close(done) }))
+	return nil
+}
+
+// serve runs the RunFunc and decides what an unrequested return means.
+func (p *program) serve(ctx context.Context, closeDone func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger().Error("ether panicked; exiting so the service manager restarts it",
+				"panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			p.mu.Lock()
+			p.err = fmt.Errorf("service: panic: %v", r)
+			p.mu.Unlock()
+			closeDone()
+			p.terminate(exitCodePanic)
 		}
 	}()
-	return nil
+	err := p.run(ctx)
+	p.mu.Lock()
+	p.err = err
+	stopping := p.stopping
+	p.mu.Unlock()
+	closeDone()
+	if stopping {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			p.logger().Error("ether exited with error", "err", err)
+		}
+		return
+	}
+	switch {
+	case errors.Is(err, ErrRestartRequested):
+		p.logger().Info("ether requested a restart; exiting so the service manager starts a fresh process",
+			"exit_code", ExitCodeRestart)
+		p.terminate(ExitCodeRestart)
+	case err != nil:
+		p.logger().Error("ether stopped unexpectedly; exiting so the service manager restarts it",
+			"err", err, "exit_code", exitCodeUnexpected)
+		p.terminate(exitCodeUnexpected)
+	default:
+		p.logger().Error("ether returned without a stop request; exiting so the service manager restarts it",
+			"exit_code", exitCodeUnexpected)
+		p.terminate(exitCodeUnexpected)
+	}
+}
+
+func (p *program) logger() *slog.Logger {
+	if p.log != nil {
+		return p.log
+	}
+	return slog.Default()
+}
+
+func (p *program) terminate(code int) {
+	if p.exit != nil {
+		p.exit(code)
+		return
+	}
+	os.Exit(code)
 }
 
 func (p *program) stopLocked() {
 	p.mu.Lock()
 	cancel, done := p.cancel, p.done
+	p.stopping = true
 	p.mu.Unlock()
 	if cancel == nil {
 		return

@@ -2,9 +2,11 @@
 ;
 ; Builds EtherSetup-<version>.exe which:
 ;   * installs to %ProgramFiles%\Ether (server, tray, ffmpeg/ffprobe),
-;   * registers the Ether Windows service (auto-start, LocalSystem for the
-;     initial release; data dir %ProgramData%\Ether via ETHER_DATA_DIR
-;     service environment — set by `ether service install`… see below),
+;   * creates %ProgramData%\Ether (config.json, credential key, database,
+;     cache, logs) with an ACL of SYSTEM + Administrators only,
+;   * registers the Ether Windows service (delayed auto-start, LocalSystem,
+;     restart-forever recovery) via `ether service install --data-dir`,
+;     which bakes the data dir into the service as ETHER_DATA_DIR,
 ;   * puts the tray in the current user's Run key (launch at login),
 ;   * opens TCP 32400 in Windows Firewall (private + public profiles),
 ;   * registers an uninstaller that stops/removes the service and the rule.
@@ -34,6 +36,9 @@ RequestExecutionLevel admin
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
+
+; %ProgramData%\Ether, resolved at install time.
+Var DataDir
 
 Name "Ether"
 OutFile "${OUTFILE}"
@@ -79,20 +84,38 @@ Section "Ether" SecEther
   File "${STAGING}\LICENSE"
   File "${STAGING}\THIRD_PARTY_NOTICES.md"
 
-  ; Data directory shared by service + tray.
-  nsExec::ExecToLog 'cmd /c mkdir "%ProgramData%\Ether" 2>nul'
+  ; Service data directory. It holds config.json and the credential
+  ; encryption key, so replace the inherited ACL (which lets Users read
+  ; and create files under ProgramData) with full control for SYSTEM
+  ; (S-1-5-18) and Administrators (S-1-5-32-544) only. SIDs keep this
+  ; independent of the Windows display language. The tray runs as the
+  ; user and falls back to defaults when it cannot read the config.
+  ReadEnvStr $DataDir "PROGRAMDATA"
+  ${If} $DataDir == ""
+    StrCpy $DataDir "C:\ProgramData"
+  ${EndIf}
+  StrCpy $DataDir "$DataDir\Ether"
+  CreateDirectory "$DataDir"
+  nsExec::ExecToLog 'icacls "$DataDir" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F /grant:r *S-1-5-32-544:(OI)(CI)F'
 
   ; Register/update the service. `ether service install` renders the SCM
-  ; entry (name, env, restart policy) via internal/service; fall back to
-  ; a plain sc.exe registration if that ever fails.
+  ; entry (name, ETHER_DATA_DIR, restart policy) via internal/service;
+  ; fall back to a plain sc.exe registration if that ever fails (the
+  ; server then defaults to %ProgramData%\Ether by itself).
   nsExec::ExecToLog '"$INSTDIR\ether.exe" service uninstall'
-  nsExec::ExecToLog '"$INSTDIR\ether.exe" service install'
+  nsExec::ExecToLog '"$INSTDIR\ether.exe" service install --data-dir "$DataDir"'
   Pop $0
   ${If} $0 != 0
     nsExec::ExecToLog 'sc create ether binPath= "\"$INSTDIR\ether.exe\"" start= auto DisplayName= "Ether"'
     nsExec::ExecToLog 'sc description ether "Ether media server"'
   ${EndIf}
-  nsExec::ExecToLog 'sc failure ether reset= 86400 actions= restart/5000/restart/5000/none/0'
+  ; Restart forever with backoff (5s, 15s, then 60s for every later
+  ; failure; the count resets after a clean day), treat error exits as
+  ; failures too, and start once boot settles. `ether service install`
+  ; applies the same policy; repeating it here covers the sc.exe fallback.
+  nsExec::ExecToLog 'sc failure ether reset= 86400 actions= restart/5000/restart/15000/restart/60000'
+  nsExec::ExecToLog 'sc failureflag ether 1'
+  nsExec::ExecToLog 'sc config ether start= delayed-auto'
 
   ; Firewall: Plex port in, GDM discovery UDP in.
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether (32400)"'
@@ -148,6 +171,7 @@ Section "Uninstall"
   RMDir "$INSTDIR"
 
   ; Data under %ProgramData%\Ether is intentionally kept. Delete it
-  ; manually to purge configuration, database and cache.
-  MessageBox MB_OK "Ether was removed. Your settings and cache in %ProgramData%\Ether were kept — delete that folder to purge everything."
+  ; manually (as an administrator) to purge configuration, database,
+  ; cache and logs.
+  MessageBox MB_OK "Ether was removed. Your settings, cache and logs in %ProgramData%\Ether were kept — delete that folder (as an administrator) to purge everything."
 SectionEnd
