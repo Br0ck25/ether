@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -49,8 +48,6 @@ type fakeCatalog struct {
 	lists  map[string][]core.RatingKey
 	calls  map[string]int
 }
-
-func genreSlug(g string) string { return strings.ReplaceAll(strings.ToLower(g), " ", "-") }
 
 // movieKey / showKey address the synthetic titles: genre index gi, item j.
 func movieKey(gi, j int) core.RatingKey { return core.MovieKey(int64(1000*(gi+1) + j + 1)) }
@@ -105,6 +102,9 @@ func newFakeCatalog(now time.Time) *fakeCatalog {
 			if g == "Science Fiction" && j >= 4 && j < 8 {
 				t.CollectionID, t.CollectionName = sagaCollection, "Star Saga Collection"
 				c.colls[sagaCollection] = append(c.colls[sagaCollection], t.Key)
+			}
+			if j == 0 { // a talked-about new release
+				t.Popularity, t.VoteCount = 60+float64(gi), 150
 			}
 			c.add(t)
 		}

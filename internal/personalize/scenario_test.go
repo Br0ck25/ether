@@ -162,9 +162,12 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 		t.Fatalf("Short on Time should be near the top for carol (pos %v): %v", p, kindsOf(c))
 	}
 	if r := rowByKind(c, KindShortOnTime); r != nil {
-		for _, it := range r.Items {
-			if it.Runtime > 50*time.Minute {
+		for i, it := range r.Items {
+			if !isShort(&it) {
 				t.Fatalf("%s (%v) in carol's Short on Time", it.Title, it.Runtime)
+			}
+			if i < 3 && it.Type != core.TypeShow {
+				t.Fatalf("carol watches short episodes on her phone; %s leads Short on Time", it.Title)
 			}
 		}
 	}

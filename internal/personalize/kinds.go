@@ -14,6 +14,8 @@ const (
 	KindContinue      = "continue-watching"
 	KindUpNext        = "up-next"
 	KindTop10         = "top-10"
+	KindTop10Today    = "top-10-today"
+	KindShowcase      = "genre-showcase"
 	KindBecause       = "because-you-watched"
 	KindPerson        = "more-from-person"
 	KindTrendingTaste = "trending-in-your-taste"
@@ -64,6 +66,10 @@ var kinds = []kindInfo{
 		prior: 0.22, slug: "ondeck", context: "ondeck"},
 	{kind: KindTop10, title: "Top 10 for You", description: "The ten titles the taste model rates highest right now.",
 		prior: 0.11, slug: "top10", context: "toppicks"},
+	{kind: KindTop10Today, title: "Top 10 Today", description: "The server's Top 10 today: trending now, catalogue popularity and what viewers here watch, with trustworthy ratings. Leads new viewers' Homes.",
+		prior: 0.09, slug: "top10.today", context: "top10.today"},
+	{kind: KindShowcase, title: "Acclaimed <Genre>", description: "Acclaimed, popular titles of one broad genre. New viewers get three from different genre families, rotating daily, to learn their taste.",
+		prior: 0.07, slug: "showcase", context: "showcase", cap: 3, dynamic: true},
 	{kind: KindBecause, title: "Because You Watched…", description: "Titles similar to something the viewer recently finished. One row per recent favourite, rotating daily.",
 		prior: 0.09, slug: "because", context: "because", cap: 3, dynamic: true},
 	{kind: KindPerson, title: "More from…", description: "More work from a director, writer or actor the viewer keeps coming back to.",
