@@ -73,6 +73,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 	deps.Subtitles = a.subtitles
 	deps.TrackPreferences = a.trackprefs
 	deps.Markers = a.markers
+	deps.Extras = a.extras
 	deps.AccessPolicy = a.safety
 	deps.Config = a.cfg.Get
 	deps.Logger = a.log.With("component", "plex")
