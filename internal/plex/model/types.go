@@ -285,14 +285,15 @@ type Metadata struct {
 	Session          *Session       `plex:"Session,object"`
 	TranscodeSession *TranscodeSess `plex:"TranscodeSession,object"`
 
+	// Extras (includeExtras=1): always empty for Ether. PMS sends them
+	// before Related.
+	Extras *Extras `plex:"Extras,object"`
 	// Related hubs inside a detail response (includeRelated=1).
 	Related *Related `plex:"Related,object"`
 	// OnDeck episode inside a show detail (includeOnDeck=1).
 	OnDeck *OnDeck `plex:"OnDeck,object"`
 	// Children inside a detail response (includeChildren=1).
 	Children *Children `plex:"Children,object"`
-	// Extras (includeExtras=1): always empty for Ether.
-	Extras *Extras `plex:"Extras,object"`
 }
 
 // SetElement overrides the XML element name.
@@ -430,20 +431,23 @@ type Part struct {
 // Stream is a video (1), audio (2) or subtitle (3) track.
 type Stream struct {
 	alpha                bool
-	ID                   int64   `plex:"id"`
-	StreamType           int     `plex:"streamType"`
-	CanAutoSync          *bool   `plex:"canAutoSync"`          // subtitles
-	CanNormalizeLoudness *bool   `plex:"canNormalizeLoudness"` // audio
-	Selected             *bool   `plex:"selected"`
-	Default              *bool   `plex:"default"`
-	Forced               *bool   `plex:"forced"`
-	Codec                string  `plex:"codec,omitempty"`
-	Index                *int    `plex:"index"`
-	Key                  string  `plex:"key,omitempty"`
-	Bitrate              int     `plex:"bitrate,omitempty"`
-	Language             string  `plex:"language,omitempty"`
-	LanguageTag          string  `plex:"languageTag,omitempty"`
-	LanguageCode         string  `plex:"languageCode,omitempty"`
+	ID                   int64  `plex:"id"`
+	StreamType           int    `plex:"streamType"`
+	CanAutoSync          *bool  `plex:"canAutoSync"`          // subtitles
+	CanNormalizeLoudness *bool  `plex:"canNormalizeLoudness"` // audio
+	Selected             *bool  `plex:"selected"`
+	Default              *bool  `plex:"default"`
+	Forced               *bool  `plex:"forced"`
+	Codec                string `plex:"codec,omitempty"`
+	Index                *int   `plex:"index"`
+	Key                  string `plex:"key,omitempty"`
+	Channels             int    `plex:"channels,omitempty"`
+	Bitrate              int    `plex:"bitrate,omitempty"`
+	Language             string `plex:"language,omitempty"`
+	LanguageTag          string `plex:"languageTag,omitempty"`
+	LanguageCode         string `plex:"languageCode,omitempty"`
+	// From here PMS lists the technical attributes alphabetically.
+	AudioChannelLayout   string  `plex:"audioChannelLayout,omitempty"`
 	BitDepth             int     `plex:"bitDepth,omitempty"`
 	ChromaSubsampling    string  `plex:"chromaSubsampling,omitempty"`
 	ColorPrimaries       string  `plex:"colorPrimaries,omitempty"`
@@ -452,17 +456,15 @@ type Stream struct {
 	ColorTrc             string  `plex:"colorTrc,omitempty"`
 	DOVIPresent          *bool   `plex:"DOVIPresent"`
 	DOVIProfile          int     `plex:"DOVIProfile,omitempty"`
+	Format               string  `plex:"format,omitempty"`
 	FrameRate            float64 `plex:"frameRate,omitempty"`
 	Height               int     `plex:"height,omitempty"`
-	Width                int     `plex:"width,omitempty"`
 	Level                int     `plex:"level,omitempty"`
 	Profile              string  `plex:"profile,omitempty"`
 	RefFrames            int     `plex:"refFrames,omitempty"`
-	ScanType             string  `plex:"scanType,omitempty"`
-	Channels             int     `plex:"channels,omitempty"`
-	AudioChannelLayout   string  `plex:"audioChannelLayout,omitempty"`
 	SamplingRate         int     `plex:"samplingRate,omitempty"`
-	Format               string  `plex:"format,omitempty"`
+	ScanType             string  `plex:"scanType,omitempty"`
+	Width                int     `plex:"width,omitempty"`
 	Title                string  `plex:"title,omitempty"`
 	DisplayTitle         string  `plex:"displayTitle,omitempty"`
 	ExtendedDisplayTitle string  `plex:"extendedDisplayTitle,omitempty"`

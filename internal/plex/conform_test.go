@@ -153,6 +153,52 @@ func TestDecisionConformsToPMS(t *testing.T) {
 	}
 }
 
+// detailPMSOnlyRE adds what a PMS detail page has beyond the decision's
+// data gaps: chapters, extras (trailers), the scanner's stream details and
+// PMS's stream titles, audio profiles and BIF indexes.
+var detailPMSOnlyRE = regexp.MustCompile(`(@|/)(Chapter|Extras/Video|Extras/Metadata|canAutoSync|hasScalingMatrix|scanType|audioProfile|loudnessAnalysisVersion|skipCount|viewCount|lastViewedAt|viewOffset|hasThumbnail|has64bitOffsets|optimizedForStreaming|Guid|librarySectionKey|librarySectionID|librarySectionTitle)$`)
+
+// TestDetailConformsToPMS renders the detail page PMS recorded for the
+// same title (with a related hub) and requires PMS's structure and types.
+func TestDetailConformsToPMS(t *testing.T) {
+	template := "/library/metadata/{{movieKey}}?includeExtras=1&includeRelated=1&includeOnDeck=1&includeChapters=1&includeGuids=1"
+	for _, profile := range []string{"web", "ios", "appletv"} {
+		for _, jsonMode := range []bool{false, true} {
+			t.Run(profile+"/"+map[bool]string{false: "xml", true: "json"}[jsonMode], func(t *testing.T) {
+				ref, err := pmsconform.LoadFixture(filepath.Join("..", "..", "testdata", "pms", profile, pmsFixtureName(profile, template, jsonMode)))
+				if err != nil {
+					t.Fatalf("fixture: %v", err)
+				}
+				f := newFixture()
+				defer f.srv.Close()
+				f.catalog.titles[burbs.Key] = burbs
+				f.playback.info = burbsInfo
+				related := fightClub
+				related.CollectionID, related.CollectionName = 1, "Fincher"
+				f.srv.d.Recommender.(*fakeRecommender).related = []core.Hub{{ID: "movie.similar", Title: "More Like This", Type: core.TypeMovie, Context: "hub.movie.similar", Items: []core.Title{related}}}
+				hdr := []string{"Accept", "application/xml"}
+				if jsonMode {
+					hdr = jsonAccept
+				}
+				rec := f.getWarm(t, strings.ReplaceAll(template, "{{movieKey}}", burbs.Key.String()), hdr...)
+				ours := pmsconform.Response{Status: rec.Code, Headers: rec.Header(), Body: rec.Body.Bytes()}
+				for _, d := range pmsconform.Compare(ref, ours).Differences {
+					switch {
+					case d.Kind == pmsconform.KindMissing && (pmsOnlyRE.MatchString(d.Path) || detailPMSOnlyRE.MatchString(d.Path)):
+					case d.Kind == pmsconform.KindExtra && etherOnlyRE.MatchString(d.Path):
+					case d.Kind == pmsconform.KindValue && !strings.HasSuffix(d.Path, "#order"):
+					default:
+						t.Errorf("%s %s ref=%v ours=%v", d.Kind, d.Path, d.Reference, d.Target)
+					}
+				}
+				if !jsonMode {
+					checkAttrOrder(t, ref.Body, ours.Body)
+				}
+			})
+		}
+	}
+}
+
 // containerAttrs returns the root container's attributes as strings.
 func containerAttrs(t *testing.T, body []byte) map[string]string {
 	t.Helper()
