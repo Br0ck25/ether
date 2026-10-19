@@ -482,19 +482,24 @@ func (a *App) Run(ctx context.Context) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(dl) }()
+	// Hang watchdog: restart via the supervisor if we stop answering.
+	watchdogErr := make(chan error, 1)
+	go func() { watchdogErr <- newWatchdog(probeURL(ln.Addr()), a.log.With("component", "watchdog")).run(ctx) }()
+	var runErr error
 	select {
 	case <-ctx.Done():
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
+	case runErr = <-watchdogErr:
 	}
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	_ = srv.Shutdown(shutdown)
 	a.registrar.Stop()
 	a.gdm.Stop()
-	return nil
+	return runErr
 }
 
 func (a *App) housekeeping(ctx context.Context) {
