@@ -32,11 +32,7 @@ export function SubtitleTiming() {
       description="Create a corrected copy of a downloaded subtitle. Original files are kept."
     >
       {cached.error ? (
-        <ErrorPanel
-          error={cached.error}
-          feature="Subtitle timing"
-          onRetry={() => void cached.reload()}
-        />
+        <ErrorPanel error={cached.error} onRetry={() => void cached.reload()} />
       ) : !cached.data ? (
         <LoadingRows rows={2} />
       ) : (

@@ -1,6 +1,6 @@
 /**
- * Every owner destination in one place. The sidebar, ⌘K search and legacy
- * redirects all read this, so a section only ever has one home.
+ * Every owner destination in one place. The sidebar and ⌘K search read this,
+ * so a section only ever has one home.
  */
 
 export interface Destination {
@@ -116,16 +116,35 @@ export const PAGES: PageDef[] = [
     ],
   },
   {
-    href: "/settings",
-    title: "Settings",
-    sections: [
-      { key: "server", title: "General", keywords: "name port log level stream limit" },
-      { key: "plex", title: "Plex & remote access", keywords: "claim remote upnp certificate" },
-      { key: "services", title: "Connected services", keywords: "trakt llm openai opensubtitles" },
-      { key: "backups", title: "Backups & import", keywords: "restore migrate csv letterboxd" },
-      { key: "updates", title: "Updates", keywords: "channel beta" },
-      { key: "troubleshooting", title: "Troubleshooting", keywords: "local file test" },
-    ],
+    href: "/server",
+    title: "General",
+    sections: [],
+    keywords: "settings server name port log level stream limit",
+  },
+  {
+    href: "/remote-access",
+    title: "Plex & remote access",
+    sections: [],
+    keywords: "settings plex claim remote upnp certificate",
+  },
+  {
+    href: "/services",
+    title: "Connected services",
+    sections: [],
+    keywords: "settings integrations trakt llm language model opensubtitles",
+  },
+  {
+    href: "/backups",
+    title: "Backups & import",
+    sections: [],
+    keywords: "restore migrate csv letterboxd snapshot",
+  },
+  { href: "/updates", title: "Updates", sections: [], keywords: "version channel beta" },
+  {
+    href: "/troubleshooting",
+    title: "Troubleshooting",
+    sections: [],
+    keywords: "local file test playback",
   },
   { href: "/logs", title: "Logs", sections: [], keywords: "errors debug" },
 ];
@@ -140,47 +159,4 @@ export function destinations(): Destination[] {
       keywords: s.keywords,
     })),
   ]);
-}
-
-const PLAYBACK_POLICY_TAB: Record<string, string> = {
-  profiles: "/releases/quality",
-  defaults: "/releases/quality",
-  rules: "/releases/rules",
-  startup: "/releases/startup",
-  scoring: "/releases/scoring",
-  compatibility: "/playback/devices",
-};
-
-const LEGACY_SETTINGS: Record<string, string> = {
-  users: "/viewers",
-  usenet: "/sources/usenet",
-  indexers: "/sources/indexers",
-  cache: "/playback/cache",
-  resolver: "/releases/selection",
-  quality: "/releases/quality",
-  transcode: "/playback/transcoding",
-  catalog: "/metadata/catalogue",
-  llm: "/settings/services",
-  trakt: "/settings/services",
-  opensubtitles: "/settings/services",
-  markers: "/playback/markers",
-  spike: "/settings/troubleshooting",
-};
-
-/** Where a pre-rework URL lives now, or null when it is still current. */
-export function legacyRedirect(pathname: string, search: string): string | null {
-  const tab = new URLSearchParams(search).get("tab");
-  if (pathname === "/playback" && tab) return PLAYBACK_POLICY_TAB[tab] ?? "/releases/quality";
-  const settings = /^\/settings\/([^/]+)$/.exec(pathname);
-  if (settings) return LEGACY_SETTINGS[settings[1]!] ?? null;
-  const fixed: Record<string, string> = {
-    "/discovery": "/metadata/ratings",
-    "/insights": "/activity",
-    "/adoption": "/settings/backups",
-    "/streams": "/viewers/defaults",
-    "/safety": "/viewers",
-    "/traces": "/releases/traces",
-    "/designer": "/home-screens",
-  };
-  return fixed[pathname] ?? null;
 }

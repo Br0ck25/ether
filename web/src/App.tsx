@@ -14,6 +14,12 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import {
   Activity as ActivityIcon,
+  ArchiveRestore,
+  ArrowDownToLine,
+  Globe,
+  LifeBuoy,
+  Plug,
+  Server,
   Bell,
   Gauge,
   LayoutTemplate,
@@ -23,7 +29,6 @@ import {
   MonitorPlay,
   Network,
   ScrollText,
-  Settings as SettingsIcon,
   Sparkles,
   Tags,
   Tv,
@@ -44,17 +49,17 @@ import {
   Route,
   Routes,
   useLocation,
-  useParams,
+  useNavigate,
   useSearchParams,
 } from "react-router-dom";
 import { AppProvider, useApp } from "./app-context";
 import { Brand, BrandSplash, EtherMark } from "./components/brand";
 import { CommandSearch } from "./components/CommandSearch";
+import { Drawer } from "./components/Drawer";
 import { ErrorPanel } from "./components/feedback";
 import { SaveBarHost } from "./components/SaveBar";
 import { LEVEL_LABEL, LevelBadge, StatusDot } from "./components/status";
 import { api, getToken, setToken } from "./lib/api";
-import { legacyRedirect } from "./lib/sitemap";
 import type { Bootstrap } from "./lib/types";
 import { theme } from "./theme";
 import Home from "./pages/Home";
@@ -65,7 +70,14 @@ const CollectionEditor = lazy(() => import("./pages/collections/Editor"));
 const Designer = lazy(() => import("./pages/designer/Designer"));
 const ViewersList = lazy(() => import("./pages/viewers/ViewersList"));
 const ViewerProfile = lazy(() => import("./pages/viewers/ViewerProfile"));
-const Settings = lazy(() => import("./pages/settings/Settings"));
+const settingsPage = <K extends keyof typeof import("./pages/settings/pages")>(name: K) =>
+  lazy(() => import("./pages/settings/pages").then((m) => ({ default: m[name] })));
+const GeneralPage = settingsPage("GeneralPage");
+const RemoteAccessPage = settingsPage("RemoteAccessPage");
+const ServicesPage = settingsPage("ServicesPage");
+const BackupsPage = settingsPage("BackupsPage");
+const UpdatesPage = settingsPage("UpdatesPage");
+const TroubleshootingPage = settingsPage("TroubleshootingPage");
 const Setup = lazy(() => import("./pages/Setup"));
 const Logs = lazy(() => import("./pages/Logs"));
 const Activity = lazy(() => import("./pages/activity/Activity"));
@@ -136,8 +148,18 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
     {
       label: "Server",
       items: [
+        { href: "/server", label: "General", icon: <Server size={icon} /> },
+        { href: "/remote-access", label: "Plex & remote access", icon: <Globe size={icon} /> },
+        { href: "/services", label: "Connected services", icon: <Plug size={icon} /> },
         { href: "/notifications", label: "Notifications", icon: <Bell size={icon} /> },
-        { href: "/settings", label: "Settings", icon: <SettingsIcon size={icon} /> },
+      ],
+    },
+    {
+      label: "Maintenance",
+      items: [
+        { href: "/backups", label: "Backups & import", icon: <ArchiveRestore size={icon} /> },
+        { href: "/updates", label: "Updates", icon: <ArrowDownToLine size={icon} /> },
+        { href: "/troubleshooting", label: "Troubleshooting", icon: <LifeBuoy size={icon} /> },
         { href: "/logs", label: "Logs", icon: <ScrollText size={icon} /> },
       ],
     },
@@ -206,30 +228,26 @@ function versionLabel(v: string): string {
   return /^\d/.test(v) ? `v${v}` : v;
 }
 
-/** A fresh editor per new-collection draft (each navigation carries its own draft id). */
-function NewCollection() {
+/** Collection Studio opens over the gallery: a collection is a record, so it gets a drawer. */
+function CollectionDrawer({ fresh = false }: { fresh?: boolean }) {
+  const navigate = useNavigate();
   const [search] = useSearchParams();
-  return <CollectionEditor key={search.get("draft") ?? "new"} />;
-}
-
-/** Pre-rework URLs land on the section's new home. */
-function Legacy({ fallback }: { fallback: string }) {
-  const location = useLocation();
-  return <Navigate to={legacyRedirect(location.pathname, location.search) ?? fallback} replace />;
-}
-
-/** `/playback?tab=rules` was the old playback-policy page; the path now belongs to Playback. */
-function PlaybackRoute() {
-  const location = useLocation();
-  const to = legacyRedirect(location.pathname, location.search);
-  return to ? <Navigate to={to} replace /> : <Playback />;
-}
-
-/** `/settings/usenet` etc. moved to their domain pages; current sections render Settings. */
-function SettingsRoute() {
-  const { section } = useParams();
-  const to = legacyRedirect(`/settings/${section}`, "");
-  return to ? <Navigate to={to} replace /> : <Settings />;
+  return (
+    <>
+      <div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col">
+        <CollectionsGallery />
+      </div>
+      <Drawer
+        open
+        onClose={() => navigate("/collections")}
+        title={fresh ? "New collection" : "Edit collection"}
+        size="2xl"
+        bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0"
+      >
+        {fresh ? <CollectionEditor key={search.get("draft") ?? "new"} /> : <CollectionEditor />}
+      </Drawer>
+    </>
+  );
 }
 
 function PageFallback() {
@@ -307,29 +325,21 @@ function Shell() {
             <Route path="/viewers/:id/:tab?" element={<ViewerProfile />} />
             <Route path="/home-screens" element={<Designer />} />
             <Route path="/collections" element={<CollectionsGallery />} />
-            <Route path="/collections/new" element={<NewCollection />} />
-            <Route path="/collections/:id" element={<CollectionEditor />} />
+            <Route path="/collections/new" element={<CollectionDrawer fresh />} />
+            <Route path="/collections/:id" element={<CollectionDrawer />} />
             <Route path="/livetv/:tab?" element={<LiveTV />} />
             <Route path="/metadata/:tab?" element={<Metadata />} />
             <Route path="/sources/:tab?" element={<Sources />} />
             <Route path="/releases/:tab?" element={<Releases />} />
-            <Route path="/playback" element={<PlaybackRoute />} />
-            <Route path="/playback/:tab" element={<Playback />} />
+            <Route path="/playback/:tab?" element={<Playback />} />
             <Route path="/notifications/:tab?" element={<Notifications />} />
-            <Route path="/settings" element={<Navigate to="/settings/server" replace />} />
-            <Route path="/settings/:section" element={<SettingsRoute />} />
+            <Route path="/server" element={<GeneralPage />} />
+            <Route path="/remote-access" element={<RemoteAccessPage />} />
+            <Route path="/services" element={<ServicesPage />} />
+            <Route path="/backups" element={<BackupsPage />} />
+            <Route path="/updates" element={<UpdatesPage />} />
+            <Route path="/troubleshooting" element={<TroubleshootingPage />} />
             <Route path="/logs" element={<Logs />} />
-            {[
-              "/discovery",
-              "/insights",
-              "/adoption",
-              "/streams",
-              "/safety",
-              "/traces",
-              "/designer",
-            ].map((path) => (
-              <Route key={path} path={path} element={<Legacy fallback="/" />} />
-            ))}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

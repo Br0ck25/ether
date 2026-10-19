@@ -65,15 +65,6 @@ export class ApiError extends Error {
   }
 }
 
-/** True when the server has no such endpoint or the feature is switched off (404/501). */
-export function isUnavailable(err: unknown): boolean {
-  return (
-    err instanceof ApiError &&
-    (err.status === 501 ||
-      (err.status === 404 && (err.code === "not_found" || err.code === "http")))
-  );
-}
-
 export function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }

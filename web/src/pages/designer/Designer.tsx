@@ -1,7 +1,4 @@
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Badge,
   Button,
   EmptyState,
@@ -139,7 +136,7 @@ export default function Designer() {
         </div>
       ) : doc.error ? (
         <div className="p-6">
-          <ErrorPanel error={doc.error} feature="Home screens" onRetry={() => void doc.reload()} />
+          <ErrorPanel error={doc.error} onRetry={() => void doc.reload()} />
         </div>
       ) : !viewers || !doc.data ? (
         <div className="grid flex-1 place-items-center">
@@ -159,18 +156,6 @@ export default function Designer() {
             className="app-scroll space-y-5 border-b border-border bg-bg-subtle p-3 sm:p-5 lg:col-span-1 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r"
             aria-label="Designer controls"
           >
-            {saved.notes?.length ? (
-              <Alert>
-                <AlertTitle>Converted from the previous Home Designer</AlertTitle>
-                <AlertDescription>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs">
-                    {saved.notes.map((n) => (
-                      <li key={n}>{n}</li>
-                    ))}
-                  </ul>
-                </AlertDescription>
-              </Alert>
-            ) : null}
             <LayerSwitcher
               layer={layer}
               onChange={(l) => {

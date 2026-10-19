@@ -15,7 +15,7 @@ const ACTIONS = [
   { title: "Add a Usenet provider", href: "/sources/usenet", keywords: "nntp" },
   { title: "New collection", href: "/collections/new", keywords: "create" },
   { title: "New notification channel", href: "/notifications/channels", keywords: "alert" },
-  { title: "Back up now", href: "/settings/backups", keywords: "backup snapshot" },
+  { title: "Back up now", href: "/backups", keywords: "backup snapshot" },
 ];
 
 function matches(q: string, ...fields: (string | undefined)[]): boolean {

@@ -109,7 +109,7 @@ export function ViewerAccess({ viewer }: { viewer: Viewer }) {
               isOwner={user.isOwner}
               defaultStreamLimit={config.data?.server.defaultStreamLimit}
               streamLimitHint={
-                <Link to="/settings/server" className="font-medium text-primary hover:underline">
+                <Link to="/server" className="font-medium text-primary hover:underline">
                   Change the server default
                 </Link>
               }
@@ -152,11 +152,7 @@ export function ViewerAccess({ viewer }: { viewer: Viewer }) {
       )}
 
       {policy.error ? (
-        <ErrorPanel
-          error={policy.error}
-          feature="Parental controls"
-          onRetry={() => void policy.reload()}
-        />
+        <ErrorPanel error={policy.error} onRetry={() => void policy.reload()} />
       ) : !p ? (
         <LoadingRows rows={3} />
       ) : (

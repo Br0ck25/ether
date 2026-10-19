@@ -53,7 +53,7 @@ const SERVICES: Service[] = [
 ];
 
 /**
- * Settings › Connected services: the credentials Ether owns (Trakt, language
+ * Connected services: the credentials Ether owns (Trakt, language
  * model, OpenSubtitles) as one in-place form with one save bar, plus a directory
  * of the integrations configured on their own pages.
  */
@@ -276,8 +276,8 @@ function OtherIntegrations({ cfg }: { cfg: EtherConfig }) {
         ) : (
           <Badge variant="warning">Not signed in</Badge>
         ),
-      href: "/settings/plex",
-      where: "Settings › Plex",
+      href: "/remote-access",
+      where: "Plex & remote access",
     },
   ];
   return (

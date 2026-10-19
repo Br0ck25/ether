@@ -14,7 +14,7 @@ import {
 import { CheckCircle2, RefreshCw, Route, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
-import { api, isUnavailable } from "../../lib/api";
+import { api } from "../../lib/api";
 import { formatDateTime, formatNanos, isPlainObject, relativeTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import type { CandidateTrace, ResolverTrace } from "../../lib/types";
@@ -93,15 +93,7 @@ export function TracesTab() {
         </Button>
       </div>
       {state.error ? (
-        isUnavailable(state.error) ? (
-          <EmptyState
-            icon={<Route />}
-            title="No traces on this server"
-            description="Release decisions appear here once the server records them."
-          />
-        ) : (
-          <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
-        )
+        <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
       ) : !state.data ? (
         <LoadingRows rows={5} />
       ) : (

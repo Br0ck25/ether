@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { calls, renderApp } from "./harness";
 
@@ -6,7 +6,7 @@ const WAIT = { timeout: 4000 };
 
 describe("Settings", () => {
   it("round-trips redacted secrets and saves only the changed service", async () => {
-    const { fake } = renderApp("/settings/services", {}, (f) => {
+    const { fake } = renderApp("/services", {}, (f) => {
       f.state.config.openSubtitles = {
         enabled: true,
         apiKey: "••••",
@@ -36,23 +36,23 @@ describe("Settings", () => {
   });
 
   it("lists every other integration with a link to where it is configured", async () => {
-    renderApp("/settings/services");
-    expect(await screen.findByText("Other integrations", {}, WAIT)).toBeInTheDocument();
+    renderApp("/services");
+    const directory = (await screen.findByText("Other integrations", {}, WAIT)).closest("section")!;
     for (const [name, href] of [
       ["Metadata › Catalogue", "/metadata/catalogue"],
       ["Metadata › Ratings", "/metadata/ratings"],
       ["Playback › Markers", "/playback/markers"],
       ["Sources › Indexers", "/sources/indexers"],
-      ["Settings › Plex", "/settings/plex"],
+      ["Plex & remote access", "/remote-access"],
     ])
-      expect(screen.getByRole("link", { name })).toHaveAttribute("href", href);
+      expect(within(directory).getByRole("link", { name })).toHaveAttribute("href", href);
     expect(screen.getByRole("button", { name: "Test Trakt" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Test endpoint" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Test OpenSubtitles" })).toBeInTheDocument();
   });
 
   it("shows server validation errors next to the field", async () => {
-    const { fake } = renderApp("/settings/server");
+    const { fake } = renderApp("/server");
     const name = await screen.findByLabelText("Server name", {}, WAIT);
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
     const original = fake.fetch;
@@ -82,8 +82,8 @@ describe("Settings", () => {
     expect(screen.getAllByText("is required").length).toBeGreaterThan(0);
   });
 
-  it("offers config sections the UI has no dedicated form for, and saves them whole", async () => {
-    const { fake } = renderApp("/settings/x-personalize", {}, (f) => {
+  it("lists config sections the UI has no page for on General, and saves them whole", async () => {
+    const { fake } = renderApp("/server", {}, (f) => {
       f.state.config = { ...f.state.config, personalize: { enabled: true, explore: 0.2 } } as never;
     });
     expect(await screen.findByRole("heading", { name: "Personalize" }, WAIT)).toBeInTheDocument();
@@ -97,41 +97,29 @@ describe("Settings", () => {
     ).toEqual({ enabled: true, explore: 0.4 });
   });
 
-  it("no longer lists sections that moved to their own pages", async () => {
-    renderApp("/settings/server");
-    expect(
-      await screen.findByRole("button", { name: "Connected services" }, WAIT),
-    ).toBeInTheDocument();
+  it("puts every server page in the main sidebar, with no separate settings menu", async () => {
+    renderApp("/server");
+    await screen.findByRole("heading", { name: "General" }, WAIT);
+    const sidebar = (name: string) => screen.queryAllByRole("link", { name });
     for (const name of [
       "General",
       "Plex & remote access",
+      "Connected services",
+      "Notifications",
       "Backups & import",
       "Updates",
       "Troubleshooting",
+      "Logs",
     ])
-      expect(screen.getByRole("button", { name })).toBeInTheDocument();
-    for (const name of [
-      "Users",
-      "Usenet providers",
-      "Indexers",
-      "Cache & prefetch",
-      "Release selection",
-      "Quality profiles",
-      "Transcoding",
-      "Catalogue",
-      "Chapters & markers",
-      "LLM",
-      "Trakt",
-      "OpenSubtitles",
-      "Local files",
-    ])
-      expect(screen.queryByRole("button", { name })).toBeNull();
-    // Config keys owned by other pages never fall through to "More".
-    expect(screen.queryByText("More")).toBeNull();
+      expect(sidebar(name).length).toBeGreaterThan(0);
+    expect(sidebar("Settings")).toHaveLength(0);
+    // Config keys owned by other pages never show up as extra sections here.
+    for (const name of ["Usenet", "Indexers", "Cache", "Resolver", "Quality", "Catalog", "Markers"])
+      expect(screen.queryByRole("heading", { name })).toBeNull();
   });
 
   it("labels local file playback as a troubleshooting tool", async () => {
-    renderApp("/settings/troubleshooting");
+    renderApp("/troubleshooting");
     expect(
       await screen.findByRole("heading", { name: "Test playback with a local file" }, WAIT),
     ).toBeInTheDocument();

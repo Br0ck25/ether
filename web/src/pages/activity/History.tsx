@@ -92,8 +92,7 @@ export function PlayHistory({
   error: unknown;
   onRetry: () => void;
 }) {
-  if (error && !history)
-    return <ErrorPanel error={error} onRetry={onRetry} feature="Viewing history" />;
+  if (error && !history) return <ErrorPanel error={error} onRetry={onRetry} />;
   return (
     <Section
       title="Play history"

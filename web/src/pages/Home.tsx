@@ -38,7 +38,7 @@ import { Artwork } from "../components/Artwork";
 import { Meter, TimeBars } from "../components/charts";
 import { ErrorPanel, LoadingRows } from "../components/feedback";
 import { LevelBadge, StatusDot } from "../components/status";
-import { api, isUnavailable } from "../lib/api";
+import { api } from "../lib/api";
 import type { ActivityDay, RowInsight } from "../lib/contract";
 import {
   formatBytes,
@@ -111,7 +111,7 @@ export default function Home() {
 
         <KpiRow
           days={activity.data}
-          unavailable={isUnavailable(activity.error)}
+          unavailable={Boolean(activity.error)}
           nowPlaying={sessions.length}
           loading={activity.loading && !activity.data}
         />
@@ -451,11 +451,7 @@ function ActivityPanel({ state }: { state: ReturnType<typeof useAsync<ActivityDa
       }
     >
       {state.error ? (
-        <ErrorPanel
-          error={state.error}
-          feature="Activity insights"
-          onRetry={() => void state.reload()}
-        />
+        <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
       ) : state.loading && !state.data ? (
         <Skeleton className="h-40 w-full" />
       ) : days.length === 0 ? (
@@ -515,11 +511,7 @@ function RowsPanel({ state }: { state: ReturnType<typeof useAsync<RowInsight[]>>
       }
     >
       {state.error ? (
-        <ErrorPanel
-          error={state.error}
-          feature="Row insights"
-          onRetry={() => void state.reload()}
-        />
+        <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
       ) : state.loading && !state.data ? (
         <LoadingRows rows={4} />
       ) : rows.length === 0 ? (

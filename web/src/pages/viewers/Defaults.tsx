@@ -45,11 +45,7 @@ export function ViewerDefaults() {
   return (
     <div className="max-w-3xl space-y-6">
       {rules.error ? (
-        <ErrorPanel
-          error={rules.error}
-          feature="Audio and subtitle defaults"
-          onRetry={() => void rules.reload()}
-        />
+        <ErrorPanel error={rules.error} onRetry={() => void rules.reload()} />
       ) : !draft ? (
         <LoadingRows rows={4} />
       ) : (
@@ -69,7 +65,7 @@ export function ViewerDefaults() {
           title="Stream limit"
           description="The server-wide limit on simultaneous streams. Set a different one per viewer on their Access tab."
           control={
-            <Button variant="outline" size="sm" onClick={() => navigate("/settings/server")}>
+            <Button variant="outline" size="sm" onClick={() => navigate("/server")}>
               Settings › General <ArrowRight size={14} />
             </Button>
           }
