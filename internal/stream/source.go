@@ -101,11 +101,7 @@ func (s *source) ReadMetadataAtContext(ctx context.Context, p []byte, off int64)
 }
 
 func (s *source) readAt(parent context.Context, p []byte, off int64, ahead bool) (int, error) {
-	prio := core.PriorityLive
-	if !ahead {
-		prio = core.PriorityLive
-	}
-	return s.readAtWithPriority(parent, p, off, ahead, prio)
+	return s.readAtWithPriority(parent, p, off, ahead, core.PriorityLive)
 }
 
 func (s *source) readAtPriority(parent context.Context, p []byte, off int64, prio core.Priority) (int, error) {
