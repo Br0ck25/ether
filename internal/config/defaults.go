@@ -65,6 +65,15 @@ func Defaults(dataDir string) Config {
 			TempDir:              filepath.Join(dataDir, "transcode"),
 			MaxTranscodes:        2,
 			RemoteMaxBitrateKbps: 8000,
+			FastStart:            true,
+			FastStartSegments:    2,
+			FastStartSegment:     Duration(2 * time.Second),
+			FastStartMaxHeight:   720,
+			ABRLadder:            true,
+			VBVReservoir:         true,
+			VBVBufferSeconds:     8,
+			SpikeGovernor:        false, // rewrites upcoming playlist entries; opt-in until field-proven
+			SpikeMarginPercent:   125,
 		},
 		Downloads: Downloads{
 			Enabled:              true,

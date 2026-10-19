@@ -32,6 +32,12 @@ type runSpec struct {
 	Protocol string
 	// ChunkDur is the DASH muxer's chunk length (default 1s).
 	ChunkDur time.Duration
+	// FastStart selects the low-latency encode (fastest presets) used for
+	// the fast-start ramp segments.
+	FastStart bool
+	// Rate is the quality-targeted VBV rate control for this run; the zero
+	// value keeps the historic bitrate-target encoding.
+	Rate rateControl
 }
 
 // segmentExt is the segment file extension for a decision's container.
@@ -510,42 +516,90 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 
 	// Encoder.
 	videoKbps := videoBitrate(s.Info, d)
+	if s.Rate.TargetKbps > 0 {
+		videoKbps = s.Rate.TargetKbps
+	}
 	b := fmt.Sprintf("%dk", videoKbps)
 	maxr := fmt.Sprintf("%dk", videoKbps*3/2)
 	buf := fmt.Sprintf("%dk", videoKbps*2)
+	if s.Rate.MaxrateKbps > 0 {
+		maxr = fmt.Sprintf("%dk", s.Rate.MaxrateKbps)
+	}
+	if s.Rate.BufsizeKbps > 0 {
+		buf = fmt.Sprintf("%dk", s.Rate.BufsizeKbps)
+	}
 	e := []string{"-c:v", enc}
+	xPreset := "veryfast"
+	if s.FastStart {
+		xPreset = "ultrafast"
+	}
 	switch enc {
 	case "libx264":
-		e = append(e, "-preset", "veryfast", "-crf", "21", "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		crf := "21"
+		if s.Rate.Quality {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		} else {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		}
+		if s.FastStart {
+			e = append(e, "-tune", "zerolatency")
+		}
 	case "libx265":
 		params := "log-level=error"
 		if keepHDR {
 			params += hdrX265Params(v)
 		}
-		e = append(e, "-preset", "veryfast", "-crf", "23", "-maxrate", b, "-bufsize", buf, "-x265-params", params)
+		peak := b
+		if s.Rate.Quality {
+			peak = maxr
+		}
+		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", peak, "-bufsize", buf, "-x265-params", params)
 	case "h264_videotoolbox", "hevc_videotoolbox":
-		e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		if s.Rate.Quality {
+			e = append(e, "-q:v", "65", "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		} else {
+			e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		}
+		if s.FastStart {
+			e = append(e, "-realtime", "1")
+		}
 		if enc == "h264_videotoolbox" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_nvenc", "hevc_nvenc":
-		e = append(e, "-preset", "p4", "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		preset := "p4"
+		if s.FastStart {
+			preset = "p1"
+		}
+		if s.Rate.Quality {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-cq", "21", "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		} else {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		}
 		if enc == "h264_nvenc" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_qsv", "hevc_qsv":
-		e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
+		if s.Rate.Quality {
+			e = append(e, "-preset", "veryfast", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "1")
+		} else {
+			e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
+		}
 		if enc == "h264_qsv" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_vaapi", "hevc_vaapi":
-		e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
+		if s.Rate.Quality {
+			e = append(e, "-rc_mode", "QVBR", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf)
+		} else {
+			e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
+		}
 		if enc == "h264_vaapi" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {

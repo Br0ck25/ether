@@ -492,7 +492,7 @@ func (s *Server) extraStart(w http.ResponseWriter, r *http.Request, pr *Request,
 					return
 				}
 			} else {
-				s.writeMasterPlaylist(w, r, p.sessionID, sess.info, dec)
+				s.writeMasterPlaylist(w, r, p.sessionID, existing, sess.info, dec)
 				return
 			}
 		}
@@ -530,7 +530,7 @@ func (s *Server) extraStart(w http.ResponseWriter, r *http.Request, pr *Request,
 		s.serveStreamManifest(w, r, p.sessionID, ds.ServeManifest)
 		return
 	}
-	s.writeMasterPlaylist(w, r, p.sessionID, sess.info, dec)
+	s.writeMasterPlaylist(w, r, p.sessionID, hs, sess.info, dec)
 }
 
 // handleExtraPart serves direct-play part requests for extras by

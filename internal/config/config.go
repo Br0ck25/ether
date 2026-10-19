@@ -180,6 +180,18 @@ type Transcode struct {
 	TempDir              string `json:"tempDir"`
 	MaxTranscodes        int    `json:"maxTranscodes"`
 	RemoteMaxBitrateKbps int    `json:"remoteMaxBitrateKbps"`
+
+	// Adaptive HLS engine (additive). Numeric zero values select the
+	// transcode package defaults; see Defaults for the shipped values.
+	FastStart          bool     `json:"fastStart"`          // short, quick opening segments
+	FastStartSegments  int      `json:"fastStartSegments"`  // opening segments in the ramp (default 2)
+	FastStartSegment   Duration `json:"fastStartSegment"`   // ramp segment length (default 2s)
+	FastStartMaxHeight int      `json:"fastStartMaxHeight"` // ramp encode height cap (default 720)
+	ABRLadder          bool     `json:"abrLadder"`          // multi-rung master playlist / MPD
+	VBVReservoir       bool     `json:"vbvReservoir"`       // constant-quality + generous VBV for capped transcodes
+	VBVBufferSeconds   int      `json:"vbvBufferSeconds"`   // VBV buffer depth in seconds of maxrate (default 8)
+	SpikeGovernor      bool     `json:"spikeGovernor"`      // clamp VBR spikes in copy streams to measured goodput
+	SpikeMarginPercent int      `json:"spikeMarginPercent"` // spike threshold over goodput, percent (default 125)
 }
 
 // Downloads controls Plex offline downloads (allowSync + the Download
