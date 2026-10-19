@@ -31,6 +31,13 @@ describe("sign-in", () => {
     expect(screen.getByText("Use a Plex token instead")).toBeInTheDocument();
   });
 
+  it("shows only the logo, keeping the server name for screen readers", async () => {
+    vi.spyOn(api, "bootstrap").mockResolvedValue(remoteBoot);
+    renderApp();
+    expect(await screen.findByRole("img", { name: "Ether" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Ether" })).toHaveClass("sr-only");
+  });
+
   it("stores the owner token once plex.tv approves and opens the app", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const fake = createFakeServer();
