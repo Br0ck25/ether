@@ -440,6 +440,28 @@ func TestPrefetchWarmsDiskCache(t *testing.T) {
 	}
 }
 
+func TestBackgroundReadAtUsesPrefetchPriority(t *testing.T) {
+	f := newFakeFetcher()
+	data := mkvBytes(16, 2_000_000)
+	doc := post(t, f, 100_000, postFile{name: "background.mkv", data: data})
+	e := newTestEngine(t, f, nil, Options{})
+	src := openSource(t, e, "rel-background", doc)
+	f.resetCounts()
+	cr, ok := src.(interface {
+		ReadAtPrefetchContext(context.Context, []byte, int64) (int, error)
+	})
+	if !ok {
+		t.Fatal("source does not expose background read path")
+	}
+	buf := make([]byte, 64)
+	if n, err := cr.ReadAtPrefetchContext(context.Background(), buf, 1_000_000); n != len(buf) || err != nil {
+		t.Fatalf("background read = %d, %v", n, err)
+	}
+	if live, bg := f.prio(core.PriorityLive), f.prio(core.PriorityPrefetch); live != 0 || bg == 0 {
+		t.Fatalf("background read priorities: live %d, prefetch %d", live, bg)
+	}
+}
+
 func TestLiveReadsSpillToCache(t *testing.T) {
 	cache, err := segcache.Open(t.TempDir(), 1<<30, nil)
 	if err != nil {

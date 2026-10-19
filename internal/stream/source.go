@@ -89,12 +89,30 @@ func (s *source) ReadAtContext(ctx context.Context, p []byte, off int64) (int, e
 	return s.readAt(ctx, p, off, true)
 }
 
+// ReadAtPrefetchContext reads without speculative read-ahead and yields to
+// live playback by assigning every missing article background priority.
+func (s *source) ReadAtPrefetchContext(ctx context.Context, p []byte, off int64) (int, error) {
+	return s.readAtPriority(ctx, p, off, core.PriorityPrefetch)
+}
+
 // ReadMetadataAtContext avoids speculative read-ahead for bounded index reads.
 func (s *source) ReadMetadataAtContext(ctx context.Context, p []byte, off int64) (int, error) {
 	return s.readAt(ctx, p, off, false)
 }
 
 func (s *source) readAt(parent context.Context, p []byte, off int64, ahead bool) (int, error) {
+	prio := core.PriorityLive
+	if !ahead {
+		prio = core.PriorityLive
+	}
+	return s.readAtWithPriority(parent, p, off, ahead, prio)
+}
+
+func (s *source) readAtPriority(parent context.Context, p []byte, off int64, prio core.Priority) (int, error) {
+	return s.readAtWithPriority(parent, p, off, false, prio)
+}
+
+func (s *source) readAtWithPriority(parent context.Context, p []byte, off int64, ahead bool, prio core.Priority) (int, error) {
 	if off < 0 {
 		return 0, fmt.Errorf("stream: negative offset %d", off)
 	}
@@ -117,7 +135,7 @@ func (s *source) readAt(parent context.Context, p []byte, off int64, ahead bool)
 	stop := context.AfterFunc(s.ctx, cancel)
 	defer stop()
 	defer cancel()
-	n, err := s.read(ctx, want, off, core.PriorityLive)
+	n, err := s.read(ctx, want, off, prio)
 	if err != nil {
 		if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
 			err = ErrClosed

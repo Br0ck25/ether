@@ -57,7 +57,7 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 	srcpos := s.toSource(g, vpos)
 	count := func(n int) { s.addBytes(n, m.now()) }
 	for vpos < vend {
-		n, rerr, werr := m.copyFrom(ctx, w, g, srcpos, vend-vpos, count)
+		n, rerr, werr := m.copyFrom(ctx, w, g, srcpos, vend-vpos, count, false)
 		vpos += n
 		srcpos += n
 		if werr != nil {
@@ -128,7 +128,7 @@ type chunk struct {
 // written, the read error that stopped it (nil when length was copied) and
 // any write error. A read error is reported only after every byte before
 // the failure has been written.
-func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off, length int64, onWrite func(int)) (written int64, rerr, werr error) {
+func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off, length int64, onWrite func(int), background bool) (written int64, rerr, werr error) {
 	if length <= 0 {
 		return 0, nil, nil
 	}
@@ -154,14 +154,26 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			var n int
 			var err error
 			readAt := time.Now()
-			if cr, ok := g.src.(interface {
+			if background {
+				if cr, ok := g.src.(interface {
+					ReadAtPrefetchContext(context.Context, []byte, int64) (int, error)
+				}); ok {
+					n, err = cr.ReadAtPrefetchContext(ctx, (*bp)[:want], pos)
+				} else if cr, ok := g.src.(interface {
+					ReadAtContext(context.Context, []byte, int64) (int, error)
+				}); ok {
+					n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
+				} else {
+					n, err = g.src.ReadAt((*bp)[:want], pos)
+				}
+			} else if cr, ok := g.src.(interface {
 				ReadAtContext(context.Context, []byte, int64) (int, error)
 			}); ok {
 				n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
 			} else {
 				n, err = g.src.ReadAt((*bp)[:want], pos)
 			}
-			if n > 0 && g.sess.isRegistered() {
+			if n > 0 && g.sess.isRegistered() && !background {
 				now := m.now()
 				g.sess.noteFetch(n, time.Since(readAt), now)
 				g.sess.noteReadPos(pos, n, now, m.opts.SpeedGrace)
@@ -239,13 +251,14 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 		etag:        `"` + sum + "-" + g.token[:8] + `"`,
 		contentType: contentTypeFor("", g.src.Name()),
 	}
+	background := r.URL.Query().Get("background") == "1"
 	count := func(n int) {
-		if registered {
+		if registered && !background {
 			s.addBytes(n, m.now())
 		}
 	}
 	rep.body = func(w io.Writer, start, length int64) error {
-		n, rerr, werr := m.copyFrom(r.Context(), w, g, start, length, count)
+		n, rerr, werr := m.copyFrom(r.Context(), w, g, start, length, count, background)
 		if werr != nil {
 			return werr
 		}
