@@ -43,6 +43,10 @@ type Service struct {
 	cache      map[string]*cacheEntry
 	flights    map[string]chan struct{}
 	generation uint64
+
+	// Vibe refinement cache (vibe.go).
+	vibeMu    sync.Mutex
+	vibeCache map[string]vibeCacheEntry
 }
 
 type cacheEntry struct {
