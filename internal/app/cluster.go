@@ -1,0 +1,225 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/cluster"
+	"github.com/braedonsaunders/ether/internal/store"
+)
+
+// Cluster membership as seen by the plex.tv publisher.
+const (
+	// memberPoll is how often the leader re-reads membership for the
+	// published connection union (join/leave events also trigger a read).
+	memberPoll = 10 * time.Second
+	// memberGrace keeps a node's addresses published this long after its
+	// last heartbeat, so a brief stall does not churn plex.tv.
+	memberGrace = 60 * time.Second
+	// healthSampleInterval matches notify.Service.Run's health sampling.
+	healthSampleInterval = 30 * time.Second
+)
+
+// buildCluster loads this node's identity and selects the runtime for the
+// database: Solo for SQLite (always leader, nothing shared), Postgres for a
+// shared PostgreSQL database.
+func (a *App) buildCluster(dialect store.Dialect) error {
+	id, err := cluster.LoadIdentity(a.opts.DataDir)
+	if err != nil {
+		return err
+	}
+	local := cluster.Local{Identity: id, Version: a.opts.Version, Addrs: a.nodeAddrs, Caps: a.nodeCaps, Load: a.nodeLoad}
+	log := a.log.With("component", "cluster")
+	a.peers = &peerSet{}
+	if dialect != store.Postgres {
+		a.cluster = cluster.NewSolo(local, log)
+		return nil
+	}
+	pg, err := cluster.NewPostgres(cluster.Options{DB: a.db, Local: local, Logger: log})
+	if err != nil {
+		return err
+	}
+	a.cluster = pg
+	// Registered after the database closer, so it runs first: leave the
+	// cluster (drop the heartbeat row, release leadership) while the
+	// database is still open.
+	a.closers = append(a.closers, func() { _ = pg.Close() })
+	return nil
+}
+
+// clustered reports whether this node shares a PostgreSQL database with
+// other nodes.
+func (a *App) clustered() bool {
+	return a.cluster != nil && a.cluster.Mode() == cluster.ModePostgres
+}
+
+// clusterNodeID is the ID components tag node-owned shared rows with when
+// clustered; empty on a standalone server, which keeps their standalone
+// behaviour.
+func (a *App) clusterNodeID() string {
+	if !a.clustered() {
+		return ""
+	}
+	return a.cluster.Self().ID
+}
+
+// nodeAddrs is this node's own publishable connection URIs (heartbeated).
+func (a *App) nodeAddrs(ctx context.Context) []string {
+	if a.registrar == nil {
+		return nil
+	}
+	return a.registrar.NodeURIs(ctx)
+}
+
+func (a *App) nodeCaps() cluster.Caps {
+	if a.transcoder == nil {
+		return cluster.Caps{}
+	}
+	return cluster.Caps{Transcode: true, HWAccel: a.transcoder.HWAccel().Name}
+}
+
+func (a *App) nodeLoad() int {
+	if a.playback == nil {
+		return 0
+	}
+	return len(a.playback.Sessions())
+}
+
+// peerSet caches the other live nodes' URIs for the registrar, which reads
+// it on every publish without touching the database.
+type peerSet struct {
+	mu   sync.Mutex
+	uris []string
+}
+
+func (p *peerSet) get() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.uris)
+}
+
+// set stores uris and reports whether they changed.
+func (p *peerSet) set(uris []string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if slices.Equal(p.uris, uris) {
+		return false
+	}
+	p.uris = slices.Clone(uris)
+	return true
+}
+
+// refreshPeers re-reads membership; on a database error the last known
+// peers stay published.
+func (a *App) refreshPeers(ctx context.Context) bool {
+	nodes, err := a.cluster.AllNodes(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			a.log.Debug("cluster: read members", "err", err)
+		}
+		return false
+	}
+	return a.peers.set(cluster.PeerAddrs(nodes, a.cluster.Self().ID, time.Now(), memberGrace))
+}
+
+// runRegistrarAsLeader runs the plex.tv registrar (publication, presence,
+// friend sync, certificate renewal, port mapping, reachability) only on
+// the leader. GDM discovery and the HTTP listener stay on every node.
+func (a *App) runRegistrarAsLeader(ctx context.Context) {
+	a.cluster.RunAsLeader(ctx, "plex.tv registrar", func(ctx context.Context) {
+		a.refreshPeers(ctx)
+		if err := a.registrar.Start(ctx); err != nil {
+			a.log.Warn("plex.tv registrar", "err", err)
+			return
+		}
+		defer a.registrar.Stop()
+		// A new leader republishes at once: the union may have changed
+		// while another node was publishing.
+		a.registrar.RequestPublish()
+		a.watchMembers(ctx)
+	})
+}
+
+// watchMembers republishes when the peer URI union changes: on join/leave
+// events and on a slow poll that also catches crashed nodes expiring.
+func (a *App) watchMembers(ctx context.Context) {
+	poke := make(chan struct{}, 1)
+	defer a.cluster.Subscribe(cluster.TopicMembers, func([]byte) {
+		select {
+		case poke <- struct{}{}:
+		default:
+		}
+	})()
+	t := time.NewTicker(memberPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		case <-poke:
+		}
+		if a.refreshPeers(ctx) {
+			a.registrar.RequestPublish()
+		}
+	}
+}
+
+// sampleHealth raises this node's provider and cache alerts. Clustered
+// nodes need it because notification delivery (which samples too) runs
+// only on the leader; sampling is edge-triggered, so the leader sampling
+// twice is harmless.
+func (a *App) sampleHealth(ctx context.Context) {
+	t := time.NewTicker(healthSampleInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			_ = a.notifications.SampleHealth(ctx)
+		}
+	}
+}
+
+// clusterStatus is GET /ether/api/cluster/.
+type clusterStatus struct {
+	Mode   string          `json:"mode"`
+	Self   cluster.Node    `json:"self"`
+	Leader string          `json:"leader,omitempty"` // leader node ID, when known
+	Epoch  int64           `json:"epoch"`            // this node's leader epoch (0 unless leading)
+	Nodes  []cluster.Node  `json:"nodes"`            // every recorded node, with liveness
+	Health *cluster.Health `json:"health,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+func (a *App) clusterHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		st := clusterStatus{Mode: a.cluster.Mode(), Self: a.cluster.Self(), Epoch: a.cluster.Epoch()}
+		nodes, err := a.cluster.AllNodes(r.Context())
+		if err != nil {
+			st.Error = err.Error()
+		}
+		st.Nodes = nodes
+		if st.Nodes == nil {
+			st.Nodes = []cluster.Node{}
+		}
+		for _, n := range st.Nodes {
+			if n.Leader {
+				st.Leader = n.ID
+			}
+		}
+		if pg, ok := a.cluster.(*cluster.Postgres); ok {
+			h := pg.Health()
+			st.Health = &h
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(st)
+	})
+	return mux
+}

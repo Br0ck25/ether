@@ -24,6 +24,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/auth"
 	"github.com/braedonsaunders/ether/internal/backup"
 	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/cluster"
 	"github.com/braedonsaunders/ether/internal/collections"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -81,6 +82,11 @@ type App struct {
 	logs *admin.LogBuffer
 	cfg  *config.Store
 	db   *sql.DB
+
+	// cluster is Solo on SQLite and Postgres on a shared database; peers
+	// caches the other nodes' URIs for the plex.tv publisher.
+	cluster cluster.Cluster
+	peers   *peerSet
 
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
@@ -181,6 +187,10 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		a.log.Info("database: using PostgreSQL", "url", dbCfg.Redacted().URL)
 	}
 	a.closers = append(a.closers, func() { a.db.Close() })
+	if err := a.buildCluster(dialect); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("cluster: %w", err)
+	}
 	// A restored PostgreSQL-style bundle leaves a logical dump to import.
 	if imported, err := backup.ImportPending(ctx, a.db, opts.DataDir); err != nil {
 		a.Close()
@@ -216,7 +226,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 
 	// Watch state and recommendations.
 	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state")})
-	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, Logger: log.With("component", "trakt")})
+	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
 	a.trakt.SubscribeTo(a.state)
 	a.collections.SetState(a.state)
 	a.closers = append(a.closers, a.trakt.Close)
@@ -358,13 +368,17 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}); err != nil {
 		return fmt.Errorf("certificates: %w", err)
 	}
-	if a.registrar, err = plextv.NewRegistrar(plextv.RegistrarOptions{
+	ropts := plextv.RegistrarOptions{
 		Config: a.cfg,
 		Client: a.plextv,
 		Users:  a.users,
 		Certs:  a.certs,
 		Logger: log.With("component", "registrar"),
-	}); err != nil {
+	}
+	if a.clustered() {
+		ropts.PeerURIs = a.peers.get // publish the union of every live node
+	}
+	if a.registrar, err = plextv.NewRegistrar(ropts); err != nil {
 		return fmt.Errorf("registrar: %w", err)
 	}
 	if cfg.Plex.Token != "" {
@@ -462,26 +476,44 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 	cfg := a.cfg.Get()
 
-	go a.catalog.Run(ctx)
-	go a.collections.Run(ctx)
+	// Leave the cluster last, after background work has stopped.
+	defer a.cluster.Close()
+	if err := a.cluster.Start(ctx); err != nil {
+		a.log.Warn("cluster", "err", err)
+	}
+	var background backgroundGroup
+	defer background.Wait()
+	defer cancel()
+
+	// Singleton work runs only on the cluster leader (always, standalone).
+	// trakt.Start stays on every node: it delivers this node's own
+	// scrobbles, and its import queue is claimed per row.
+	go a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run)
+	go a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run)
 	go a.trakt.Start(ctx)
-	if err := a.registrar.Start(ctx); err != nil {
+	if a.clustered() {
+		background.start(func() { a.runRegistrarAsLeader(ctx) })
+	} else if err := a.registrar.Start(ctx); err != nil {
 		a.log.Warn("plex.tv registrar", "err", err)
 	}
 	if err := a.gdm.Start(ctx); err != nil {
 		a.log.Warn("GDM discovery responder", "err", err)
 	}
-	var background backgroundGroup
-	defer background.Wait()
-	defer cancel()
 	background.start(func() { a.housekeeping(ctx) })
-	background.start(func() { a.maintainDB(ctx) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "database maintenance", a.maintainDB) })
 	background.start(func() { a.stats.Run(ctx) })
-	background.start(func() { a.notifications.Run(ctx) })
-	background.start(func() { a.watchlist.Run(ctx) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "notification delivery", a.notifications.Run) })
+	if a.clustered() {
+		background.start(func() { a.sampleHealth(ctx) })
+	}
+	background.start(func() { a.cluster.RunAsLeader(ctx, "watchlist sync", a.watchlist.Run) })
 	background.start(func() { a.ratings.Run(ctx) })
 	background.start(func() { a.plexDiscovery.Run(ctx) })
-	background.start(func() { a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) }) })
+	background.start(func() {
+		a.cluster.RunAsLeader(ctx, "scheduled backups", func(ctx context.Context) {
+			a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) })
+		})
+	})
 	background.start(func() {
 		a.localmedia.Watch(ctx, time.Minute, func(err error) { a.log.Warn("local library scan", "err", err) })
 	})
@@ -530,8 +562,12 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) housekeeping(ctx context.Context) {
 	pins := time.NewTicker(5 * time.Minute)
 	defer pins.Stop()
-	a.cleanHome.run(ctx)
-	a.refreshCompatibility(ctx)
+	// Clean Home and the PMS release check are cluster-wide: leader only.
+	// Pins and seen-token flushes are this node's own.
+	if a.cluster.IsLeader() {
+		a.cleanHome.run(ctx)
+		a.refreshCompatibility(ctx)
+	}
 	_ = a.playback.ReconcilePins(ctx)
 	for {
 		select {
@@ -539,7 +575,7 @@ func (a *App) housekeeping(ctx context.Context) {
 			_ = a.users.FlushSeen(context.Background())
 			return
 		case <-pins.C:
-			if a.cleanHome.due() {
+			if a.cluster.IsLeader() && a.cleanHome.due() {
 				a.cleanHome.run(ctx)
 				a.refreshCompatibility(ctx)
 			}
