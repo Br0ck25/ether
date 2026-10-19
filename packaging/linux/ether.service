@@ -3,6 +3,8 @@ Description=Ether media server
 Documentation=https://github.com/braedonsaunders/ether
 After=network-online.target
 Wants=network-online.target
+# Never stop retrying: Ether must come back by itself after any failure.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -11,7 +13,7 @@ Group=ether
 ExecStart=/usr/lib/ether/ether
 WorkingDirectory=/var/lib/ether
 Environment=ETHER_DATA_DIR=/var/lib/ether
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 KillSignal=SIGTERM

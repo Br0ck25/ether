@@ -92,7 +92,13 @@ Section "Ether" SecEther
     nsExec::ExecToLog 'sc create ether binPath= "\"$INSTDIR\ether.exe\"" start= auto DisplayName= "Ether"'
     nsExec::ExecToLog 'sc description ether "Ether media server"'
   ${EndIf}
-  nsExec::ExecToLog 'sc failure ether reset= 86400 actions= restart/5000/restart/5000/none/0'
+  ; Restart forever with backoff (5s, 15s, then 60s for every later
+  ; failure; the count resets after a clean day), treat error exits as
+  ; failures too, and start once boot settles. `ether service install`
+  ; applies the same policy; repeating it here covers the sc.exe fallback.
+  nsExec::ExecToLog 'sc failure ether reset= 86400 actions= restart/5000/restart/15000/restart/60000'
+  nsExec::ExecToLog 'sc failureflag ether 1'
+  nsExec::ExecToLog 'sc config ether start= delayed-auto'
 
   ; Firewall: Plex port in, GDM discovery UDP in.
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether (32400)"'
