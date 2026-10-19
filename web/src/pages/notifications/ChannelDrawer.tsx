@@ -1,0 +1,209 @@
+import { Button, Input, Select, Switch } from "@braedonsaunders/appkit-ui";
+import { useEffect, useId, useState } from "react";
+import { Drawer } from "../../components/Drawer";
+import { Field, NumberInput, SecretInput } from "../../components/fields";
+import { MutationError } from "../../components/feedback";
+import { TRANSPORTS, eventLabel, transportLabel, type Channel } from "./types";
+
+const SMTP_FIELDS = [
+  { key: "username", label: "Username" },
+  { key: "password", label: "Password" },
+  { key: "from", label: "From address" },
+  { key: "to", label: "To address" },
+] as const;
+
+/** Create or edit one notification channel. */
+export function ChannelDrawer({
+  open,
+  channel: initial,
+  isNew,
+  events,
+  saving,
+  error,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  channel: Channel;
+  isNew: boolean;
+  /** Event kinds the server can publish. */
+  events: string[];
+  saving: boolean;
+  error: unknown;
+  onClose: () => void;
+  onSave: (channel: Channel) => void;
+}) {
+  const id = useId();
+  const [channel, setChannel] = useState(initial);
+  useEffect(() => setChannel(initial), [initial]);
+  const patch = (p: Partial<Channel>) => setChannel((v) => ({ ...v, ...p }));
+
+  return (
+    <Drawer
+      open={open}
+      onClose={onClose}
+      title={isNew ? "New notification channel" : "Edit notification channel"}
+      description="Saved endpoints and credentials show as [configured]; leave them as they are to keep them."
+      size="lg"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={() => onSave(channel)} disabled={saving}>
+            {saving ? "Saving…" : "Save channel"}
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-6">
+        {error ? <MutationError error={error} /> : null}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Name" htmlFor={`${id}-name`}>
+            <Input
+              id={`${id}-name`}
+              value={channel.name}
+              placeholder={transportLabel(channel.kind)}
+              onChange={(e) => patch({ name: e.target.value })}
+            />
+          </Field>
+          <Field label="Transport" htmlFor={`${id}-kind`}>
+            <Select
+              id={`${id}-kind`}
+              aria-label="Transport"
+              value={channel.kind}
+              onChange={(e) => patch({ kind: e.target.value })}
+            >
+              {TRANSPORTS.map((v) => (
+                <option key={v} value={v}>
+                  {transportLabel(v)}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {channel.kind !== "telegram" ? (
+            <Field
+              label={channel.kind === "smtp" ? "SMTP host:port" : "Endpoint URL"}
+              hint={channel.kind === "smtp" ? "The server must support TLS." : undefined}
+              htmlFor={`${id}-endpoint`}
+              className="sm:col-span-2"
+            >
+              <SecretInput
+                id={`${id}-endpoint`}
+                value={channel.endpoint}
+                onChange={(v) => patch({ endpoint: v })}
+              />
+            </Field>
+          ) : null}
+          {channel.kind !== "smtp" ? (
+            <Field
+              label={channel.kind === "telegram" ? "Bot token" : "Access token"}
+              hint={
+                channel.kind === "telegram"
+                  ? undefined
+                  : "Optional. A bearer token, or the app key for Gotify."
+              }
+              htmlFor={`${id}-token`}
+            >
+              <SecretInput
+                id={`${id}-token`}
+                value={channel.token}
+                onChange={(v) => patch({ token: v })}
+              />
+            </Field>
+          ) : null}
+          {channel.kind === "telegram" ? (
+            <Field label="Chat ID" htmlFor={`${id}-target`}>
+              <Input
+                id={`${id}-target`}
+                value={channel.target}
+                onChange={(e) => patch({ target: e.target.value })}
+              />
+            </Field>
+          ) : null}
+          {channel.kind === "smtp"
+            ? SMTP_FIELDS.map((f) => (
+                <Field key={f.key} label={f.label} htmlFor={`${id}-${f.key}`}>
+                  {f.key === "password" ? (
+                    <SecretInput
+                      id={`${id}-${f.key}`}
+                      value={channel.password}
+                      onChange={(v) => patch({ password: v })}
+                    />
+                  ) : (
+                    <Input
+                      id={`${id}-${f.key}`}
+                      value={channel[f.key]}
+                      onChange={(e) => patch({ [f.key]: e.target.value })}
+                    />
+                  )}
+                </Field>
+              ))
+            : null}
+          <Field label="Most deliveries per minute" htmlFor={`${id}-rate`}>
+            <NumberInput
+              id={`${id}-rate`}
+              min={1}
+              max={60}
+              value={channel.perMinute}
+              onChange={(n) => patch({ perMinute: n })}
+            />
+          </Field>
+          <Field
+            label="Digest delay (minutes)"
+            hint="Collect alerts and send them together. 0 sends each one right away."
+            htmlFor={`${id}-digest`}
+          >
+            <NumberInput
+              id={`${id}-digest`}
+              min={0}
+              max={10080}
+              value={channel.digestMinutes}
+              onChange={(n) => patch({ digestMinutes: n })}
+            />
+          </Field>
+        </div>
+
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-3">
+          <span>
+            <span className="block text-sm font-medium text-fg">Enabled</span>
+            <span className="block text-xs text-fg-muted">
+              Turn off to stop sending without deleting the channel.
+            </span>
+          </span>
+          <Switch
+            checked={channel.enabled}
+            onChange={(e) => patch({ enabled: e.target.checked })}
+          />
+        </label>
+
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium text-fg">Send these events</legend>
+          <p className="text-xs text-fg-muted">
+            Playback and indexer events are collected automatically. Other events are sent when the
+            part of Ether that produces them raises an alert.
+          </p>
+          <div className="grid gap-x-6 gap-y-2 pt-1 sm:grid-cols-2">
+            {events
+              .filter((k) => k !== "test")
+              .map((k) => (
+                <label key={k} className="flex items-center justify-between gap-3 py-1 text-sm">
+                  <span className="text-fg">{eventLabel(k)}</span>
+                  <Switch
+                    checked={channel.events.includes(k)}
+                    onChange={(e) =>
+                      patch({
+                        events: e.target.checked
+                          ? [...channel.events, k]
+                          : channel.events.filter((v) => v !== k),
+                      })
+                    }
+                  />
+                </label>
+              ))}
+          </div>
+        </fieldset>
+      </div>
+    </Drawer>
+  );
+}

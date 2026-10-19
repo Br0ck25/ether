@@ -1,4 +1,3 @@
-import { EditPanel } from "../../components/EditPanel";
 import { Badge, Button, SearchSelect } from "@braedonsaunders/appkit-ui";
 import { Anchor, Plus, X } from "lucide-react";
 import { useState } from "react";
@@ -79,114 +78,105 @@ export function AnchoredSlots({
     .filter((a) => !own.some((p) => p.row === a.hubId))
     .map((a) => ({ value: a.hubId, label: a.title, hint: a.description }));
   return (
-    <EditPanel
-      title="Page structure"
-      description="Changes update the Home draft. Save the layout to apply them."
-      action="Edit anchored slots"
-      size="lg"
-    >
-      <section className="space-y-2" aria-label="Anchored slots">
-        <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-            Page structure
-          </h2>
-          <p className="mt-0.5 text-xs text-fg-muted">
-            Anchored rows hold their slot{layer === "global" ? " for everyone" : " for this viewer"}
-            ; personalization fills the slots between them. Drag to swap.
-          </p>
-        </div>
-        {own.length === 0 && inherited.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-fg-muted">
-            No anchored slots: every position is personalized.
-          </p>
-        ) : null}
-        {own.length ? (
-          <SortableList
-            items={own}
-            getId={(p) => p.row}
-            onReorder={(next) =>
-              onChange(
-                reorderAnchors(
-                  draft,
-                  layer,
-                  section,
-                  next.map((p) => p.row),
-                ),
-              )
-            }
-            className="space-y-1"
-            renderItem={(p, handle) => (
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-surface py-1 pl-1 pr-1.5">
-                <DragHandle
-                  handle={handle}
-                  label={`Move anchored row ${rowTitle(available, p.row)}`}
-                />
-                <span
-                  className="grid size-6 shrink-0 place-items-center rounded-md bg-primary-subtle text-xs font-semibold tabular-nums text-primary"
-                  aria-label={`Slot ${p.slot}`}
-                >
-                  {p.slot}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-sm text-fg">
-                  {rowTitle(available, p.row)}
-                </span>
-                {layer !== "global" ? <Badge variant="info">Override</Badge> : null}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-7 text-fg-muted"
-                  aria-label={`Unanchor ${rowTitle(available, p.row)}`}
-                  onClick={() => unanchor(p)}
-                >
-                  <X size={14} />
-                </Button>
-              </div>
-            )}
-          />
-        ) : null}
-        {inherited.length ? (
-          <ul className="space-y-1" aria-label="Anchors from Global Home">
-            {inherited.map((p) => (
-              <li
-                key={p.row}
-                className="flex items-center gap-2 rounded-lg border border-dashed border-border px-2 py-1.5 text-fg-muted"
+    <section className="space-y-2" aria-label="Anchored slots">
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+          Page structure
+        </h2>
+        <p className="mt-0.5 text-xs text-fg-muted">
+          Anchored rows hold their slot{layer === "global" ? " for everyone" : " for this viewer"};
+          personalization fills the slots between them. Drag to swap.
+        </p>
+      </div>
+      {own.length === 0 && inherited.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-border px-3 py-2.5 text-xs text-fg-muted">
+          No anchored slots: every position is personalized.
+        </p>
+      ) : null}
+      {own.length ? (
+        <SortableList
+          items={own}
+          getId={(p) => p.row}
+          onReorder={(next) =>
+            onChange(
+              reorderAnchors(
+                draft,
+                layer,
+                section,
+                next.map((p) => p.row),
+              ),
+            )
+          }
+          className="space-y-1"
+          renderItem={(p, handle) => (
+            <div className="flex items-center gap-2 rounded-lg border border-border bg-surface py-1 pl-1 pr-1.5">
+              <DragHandle
+                handle={handle}
+                label={`Move anchored row ${rowTitle(available, p.row)}`}
+              />
+              <span
+                className="grid size-6 shrink-0 place-items-center rounded-md bg-primary-subtle text-xs font-semibold tabular-nums text-primary"
+                aria-label={`Slot ${p.slot}`}
               >
-                <span className="grid size-6 shrink-0 place-items-center rounded-md bg-bg-subtle text-xs font-semibold tabular-nums">
-                  {p.slot}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-sm">
-                  {rowTitle(available, p.row)}
-                </span>
-                <Badge variant="secondary">Global</Badge>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <div className="flex gap-2">
-          <div className="min-w-0 flex-1">
-            <SearchSelect
-              value={adding}
-              onChange={setAdding}
-              options={options}
-              ariaLabel="Row to anchor"
-              placeholder="Anchor a row…"
-            />
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-10"
-            disabled={!adding}
-            onClick={() => {
-              anchor(adding);
-              setAdding("");
-            }}
-          >
-            <Plus size={14} />
-            <Anchor size={13} /> Anchor
-          </Button>
+                {p.slot}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm text-fg">
+                {rowTitle(available, p.row)}
+              </span>
+              {layer !== "global" ? <Badge variant="info">Override</Badge> : null}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7 text-fg-muted"
+                aria-label={`Unanchor ${rowTitle(available, p.row)}`}
+                onClick={() => unanchor(p)}
+              >
+                <X size={14} />
+              </Button>
+            </div>
+          )}
+        />
+      ) : null}
+      {inherited.length ? (
+        <ul className="space-y-1" aria-label="Anchors from Global Home">
+          {inherited.map((p) => (
+            <li
+              key={p.row}
+              className="flex items-center gap-2 rounded-lg border border-dashed border-border px-2 py-1.5 text-fg-muted"
+            >
+              <span className="grid size-6 shrink-0 place-items-center rounded-md bg-bg-subtle text-xs font-semibold tabular-nums">
+                {p.slot}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm">{rowTitle(available, p.row)}</span>
+              <Badge variant="secondary">Global</Badge>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="flex gap-2">
+        <div className="min-w-0 flex-1">
+          <SearchSelect
+            value={adding}
+            onChange={setAdding}
+            options={options}
+            ariaLabel="Row to anchor"
+            placeholder="Anchor a row…"
+          />
         </div>
-      </section>
-    </EditPanel>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-10"
+          disabled={!adding}
+          onClick={() => {
+            anchor(adding);
+            setAdding("");
+          }}
+        >
+          <Plus size={14} />
+          <Anchor size={13} /> Anchor
+        </Button>
+      </div>
+    </section>
   );
 }

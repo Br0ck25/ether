@@ -1,5 +1,4 @@
 import { Drawer } from "../../components/Drawer";
-import { EditPanel } from "../../components/EditPanel";
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
 import {
   Avatar,
@@ -18,16 +17,15 @@ import {
   Clock3,
   Languages,
   Plus,
-  Save,
   Sparkles,
   Tags,
-  Undo2,
   UserRound,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Columns, DivergingBars, HourStrip, Meter } from "../../components/charts";
 import { Segmented } from "../../components/fields";
+import { SaveBar } from "../../components/SaveBar";
 import { FacetSelect, LookupPicker } from "../../components/pickers";
 import { api, errorMessage } from "../../lib/api";
 import type { OverrideKind, TasteOverride, TasteProfile } from "../../lib/contract";
@@ -363,99 +361,79 @@ export function TasteView({
       </div>
 
       {tab === "corrections" && (
-        <EditPanel
-          onOpen={() => setOverrides(taste.overrides ?? [])}
-          onDiscard={() => setOverrides(taste.overrides ?? [])}
-          title="Taste corrections"
-          description="Fine-tune recommendations without changing what the viewer has watched."
-          action="Edit taste corrections"
-          summary={`${overrides.length} owner corrections`}
-        >
-          <DashboardPanel
-            title="Your corrections"
-            icon={<Sparkles size={16} />}
-            actions={
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setOverrides(taste.overrides ?? [])}
-                  disabled={!dirty || saving}
-                >
-                  <Undo2 size={14} /> Discard
-                </Button>
-                <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}>
-                  <Save size={14} /> {saving ? "Saving…" : "Save corrections"}
-                </Button>
-              </div>
-            }
-          >
-            <p className="mb-4 text-sm text-fg-muted">
-              Corrections override what Ether learned, e.g. “not into horror”. −1 never recommends
-              it; +1 always favours it.
-            </p>
-            {overrides.length === 0 ? (
-              <EmptyState
-                title="No corrections"
-                description="Ether's learned profile is used as is. Add one below or click a genre above."
-                className="mb-4 py-6"
-              />
-            ) : (
-              <ul className="mb-4 space-y-2">
-                {overrides.map((o) => (
-                  <li
-                    key={`${o.kind}:${o.value}`}
-                    className="flex flex-wrap items-center gap-3 rounded-lg border border-border-subtle bg-bg-subtle px-3 py-2"
-                  >
-                    <Badge variant="secondary" className="capitalize">
-                      {o.kind}
-                    </Badge>
-                    <span className="min-w-28 text-sm font-medium text-fg">
-                      {o.kind === "person" ? personName(o.value) : o.value}
-                    </span>
-                    <Slider
-                      min={-1}
-                      max={1}
-                      step={0.05}
-                      value={o.weight}
-                      aria-label={`${o.value} weight`}
-                      className="min-w-32 flex-1"
-                      onChange={(e) => setOverride(o.kind, o.value, e.currentTarget.valueAsNumber)}
-                    />
-                    <span
-                      className={cn(
-                        "w-24 text-right text-xs tabular-nums",
-                        o.weight < 0 ? "text-danger" : "text-success",
-                      )}
-                    >
-                      {o.weight <= -0.95
-                        ? "Never"
-                        : o.weight >= 0.95
-                          ? "Always"
-                          : `${o.weight > 0 ? "+" : ""}${o.weight.toFixed(2)}`}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-7"
-                      onClick={() => setOverride(o.kind, o.value, null)}
-                      aria-label={`Remove correction for ${o.kind === "person" ? personName(o.value) : o.value}`}
-                    >
-                      <X size={14} />
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <AddOverride
-              onAdd={(kind, value, weight, name) => {
-                if (name) setNames((n) => ({ ...n, [value]: name }));
-                setOverride(kind, value, weight);
-              }}
+        <DashboardPanel title="Your corrections" icon={<Sparkles size={16} />}>
+          <p className="mb-4 text-sm text-fg-muted">
+            Corrections override what Ether learned, e.g. “not into horror”. −1 never recommends it;
+            +1 always favours it.
+          </p>
+          {overrides.length === 0 ? (
+            <EmptyState
+              title="No corrections"
+              description="Ether's learned profile is used as is. Add one below or click a genre above."
+              className="mb-4 py-6"
             />
-          </DashboardPanel>
-        </EditPanel>
+          ) : (
+            <ul className="mb-4 space-y-2">
+              {overrides.map((o) => (
+                <li
+                  key={`${o.kind}:${o.value}`}
+                  className="flex flex-wrap items-center gap-3 rounded-lg border border-border-subtle bg-bg-subtle px-3 py-2"
+                >
+                  <Badge variant="secondary" className="capitalize">
+                    {o.kind}
+                  </Badge>
+                  <span className="min-w-28 text-sm font-medium text-fg">
+                    {o.kind === "person" ? personName(o.value) : o.value}
+                  </span>
+                  <Slider
+                    min={-1}
+                    max={1}
+                    step={0.05}
+                    value={o.weight}
+                    aria-label={`${o.value} weight`}
+                    className="min-w-32 flex-1"
+                    onChange={(e) => setOverride(o.kind, o.value, e.currentTarget.valueAsNumber)}
+                  />
+                  <span
+                    className={cn(
+                      "w-24 text-right text-xs tabular-nums",
+                      o.weight < 0 ? "text-danger" : "text-success",
+                    )}
+                  >
+                    {o.weight <= -0.95
+                      ? "Never"
+                      : o.weight >= 0.95
+                        ? "Always"
+                        : `${o.weight > 0 ? "+" : ""}${o.weight.toFixed(2)}`}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7"
+                    onClick={() => setOverride(o.kind, o.value, null)}
+                    aria-label={`Remove correction for ${o.kind === "person" ? personName(o.value) : o.value}`}
+                  >
+                    <X size={14} />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <AddOverride
+            onAdd={(kind, value, weight, name) => {
+              if (name) setNames((n) => ({ ...n, [value]: name }));
+              setOverride(kind, value, weight);
+            }}
+          />
+        </DashboardPanel>
       )}
+      <SaveBar
+        dirty={dirty && !sel}
+        saving={saving}
+        onSave={save}
+        onDiscard={() => setOverrides(taste.overrides ?? [])}
+        message="You have unsaved taste corrections"
+      />
     </div>
   );
 }
