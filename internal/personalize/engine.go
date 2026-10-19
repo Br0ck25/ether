@@ -40,6 +40,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -177,16 +178,20 @@ type Engine struct {
 	rec     *recorder
 	loc     *time.Location
 
-	mu       sync.Mutex
-	closed   bool
-	models   map[int64]*userModel
-	users    map[int64]core.User
-	lastCtx  map[int64]core.HubContext
-	flights  map[int64]*flight
-	debounce map[int64]*time.Timer
-	version  uint64
-	layout   []core.LayoutRule
-	owner    map[string]*ownerEntry
+	mu        sync.Mutex
+	closed    bool
+	models    map[int64]*userModel
+	users     map[int64]core.User
+	lastCtx   map[int64]core.HubContext
+	flights   map[int64]*flight
+	debounce  map[int64]*time.Timer
+	version   uint64
+	layout    []core.LayoutRule
+	layoutVer uint64
+	owner     map[string]*ownerEntry
+
+	memoMu sync.Mutex
+	memo   map[memoKey]*memoEntry
 
 	hubMu    sync.RWMutex
 	hubKinds map[string]string
@@ -238,7 +243,7 @@ func New(opts Options) (*Engine, error) {
 		store: st, loc: opts.Location,
 		models: map[int64]*userModel{}, users: map[int64]core.User{}, lastCtx: map[int64]core.HubContext{},
 		flights: map[int64]*flight{}, debounce: map[int64]*time.Timer{}, owner: map[string]*ownerEntry{},
-		hubKinds: map[string]string{}, active: map[playKey]*activePlay{},
+		hubKinds: map[string]string{}, active: map[playKey]*activePlay{}, memo: map[memoKey]*memoEntry{},
 		queue: make(chan int64, 1024), events: make(chan state.Event, 4096), evSync: make(chan chan struct{}),
 	}
 	e.rec = newRecorder(st, e.log, opts.ImpressionBuffer, opts.FlushEvery)
@@ -376,25 +381,109 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 		return p
 	}
 	stats := e.statsFor(ctx)
+	var inprog []core.WatchStatus
+	if section == "" && !m.generic && e.state != nil {
+		var err error
+		if inprog, err = e.state.InProgress(ctx, u.ID, 50); err != nil {
+			e.log.Debug("personalize: in progress failed", "err", err)
+		}
+	}
+	owner, ownerVer := e.ownerRows(ctx, &u, hc, section)
+	rules, layoutVer := e.layoutState()
+	day := dayOf(hc.Now, e.loc)
+	key := memoKey{user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
+		layout: layoutVer, stats: stats.at.UnixNano(), owner: ownerVer, cw: progressSig(inprog),
+		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner)}
+	if rows, ok := e.memoGet(key); ok {
+		p.Rows = rows
+		return p
+	}
 	a := &assembly{
-		model: m, user: u, hc: hc, section: section, limit: limit, rules: e.layoutRules(),
-		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration,
-		day: dayOf(hc.Now, e.loc),
+		model: m, user: u, hc: hc, section: section, limit: limit, rules: rules, owner: owner,
+		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration, day: day,
 	}
 	if section == "" {
 		a.maxRows = e.opts.MaxHomeRows
-		if !m.generic {
-			a.cw = e.continueItems(ctx, &u, 50)
-		}
+		a.cw = e.continueFrom(ctx, inprog)
 	} else {
 		a.maxRows = e.opts.MaxSectionRows
 	}
-	a.owner = e.ownerRows(ctx, &u, hc, section)
 	p.Rows = a.run()
 	for _, r := range p.Rows {
 		e.registerHub(r.HubID, r.Kind)
 	}
+	e.memoPut(key, p.Rows)
 	return p
+}
+
+// ---- assembled-rows memo ------------------------------------------------------
+
+// memoKey identifies one assembly: everything its result depends on. A
+// new model, layout, statistics snapshot, owner rows or Continue Watching
+// change produces a new key, so entries never need invalidating.
+type memoKey struct {
+	user    int64
+	section core.MediaType
+	bucket  string
+	day     int
+	hour    int // layout schedules have hour windows
+	limit   int
+	model   uint64
+	layout  uint64
+	stats   int64
+	owner   int64
+	cw      string
+	limits  string
+}
+
+type memoEntry struct {
+	rows []core.HomeRow
+	at   time.Time
+}
+
+// memoTTL bounds how long an assembled screen is reused; clients poll
+// /hubs often and the rows only change when an input does.
+const memoTTL = 2 * time.Minute
+
+func (e *Engine) memoGet(k memoKey) ([]core.HomeRow, bool) {
+	e.memoMu.Lock()
+	defer e.memoMu.Unlock()
+	ent, ok := e.memo[k]
+	if !ok || e.now().Sub(ent.at) > memoTTL {
+		return nil, false
+	}
+	// Callers may append to or reorder the slice; the rows themselves are
+	// read-only.
+	return append([]core.HomeRow(nil), ent.rows...), true
+}
+
+func (e *Engine) memoPut(k memoKey, rows []core.HomeRow) {
+	e.memoMu.Lock()
+	defer e.memoMu.Unlock()
+	now := e.now()
+	if len(e.memo) >= 4096 {
+		for mk, ent := range e.memo {
+			if now.Sub(ent.at) > memoTTL {
+				delete(e.memo, mk)
+			}
+		}
+		if len(e.memo) >= 4096 {
+			e.memo = map[memoKey]*memoEntry{}
+		}
+	}
+	e.memo[k] = &memoEntry{rows: append([]core.HomeRow(nil), rows...), at: now}
+}
+
+// progressSig summarises Continue Watching for the memo key.
+func progressSig(sts []core.WatchStatus) string {
+	var b strings.Builder
+	for _, ws := range sts {
+		b.WriteString(ws.Key.String())
+		b.WriteByte(':')
+		b.WriteString(strconv.FormatInt(ws.LastViewedAt.Unix(), 36))
+		b.WriteByte(',')
+	}
+	return b.String()
 }
 
 // allowedFor returns the media types a viewer's allowed sections cover
@@ -413,9 +502,14 @@ func (e *Engine) allowedFor(u *core.User) func(core.MediaType) bool {
 }
 
 func (e *Engine) layoutRules() []core.LayoutRule {
+	rules, _ := e.layoutState()
+	return rules
+}
+
+func (e *Engine) layoutState() ([]core.LayoutRule, uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.layout
+	return e.layout, e.layoutVer
 }
 
 // ---- core.PersonalScorer ---------------------------------------------------------

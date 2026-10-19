@@ -565,9 +565,9 @@ const ownerRowsTTL = 5 * time.Minute
 // ownerRows returns owner collection rows for the viewer and context from a
 // per-context cache. Misses fetch in the background; the request waits at
 // most OwnerRowsWait for a context it has never fetched.
-func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType) []*candRow {
+func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType) ([]*candRow, int64) {
 	if e.opts.Collections == nil {
-		return nil
+		return nil, 0
 	}
 	key := strconv.FormatInt(user.ID, 10) + "|" + hc.Bucket()
 	e.mu.Lock()
@@ -596,7 +596,7 @@ func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubCont
 		t.Stop()
 	}
 	e.mu.Lock()
-	rows := ent.rows
+	rows, at := ent.rows, ent.at
 	e.mu.Unlock()
 	var out []*candRow
 	for _, cr := range rows {
@@ -604,7 +604,7 @@ func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubCont
 			out = append(out, c)
 		}
 	}
-	return out
+	return out, at.UnixNano()
 }
 
 func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext, ent *ownerEntry) {

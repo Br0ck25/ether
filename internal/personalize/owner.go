@@ -281,6 +281,7 @@ func (e *Engine) SetLayout(ctx context.Context, rules []core.LayoutRule) ([]core
 	}
 	e.mu.Lock()
 	e.layout = norm
+	e.layoutVer++
 	e.mu.Unlock()
 	return e.Layout(ctx)
 }

@@ -73,6 +73,11 @@ func (e *Engine) continueItems(ctx context.Context, user *core.User, limit int) 
 		e.log.Debug("personalize: in progress failed", "err", err)
 		return nil
 	}
+	return e.continueFrom(ctx, sts)
+}
+
+// continueFrom resolves in-progress statuses to Continue Watching items.
+func (e *Engine) continueFrom(ctx context.Context, sts []core.WatchStatus) []candItem {
 	var out []candItem
 	for i, ws := range sts {
 		t, err := e.catalog.Get(ctx, ws.Key)
