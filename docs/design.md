@@ -108,6 +108,21 @@ or write history. Health checks inspect archive headers, read the yEnc headers o
 mid-file article bodies as well as testing article existence, and stop as soon as
 one sampled article is confirmed missing on every provider.
 
+PAR2 is never used for repair while streaming: a recovery block combines every
+slice of the set, so rebuilding one article means reading the whole file. Only a
+release's PAR2 index file (at most 1 MiB, read in parallel with the first article
+fetches at the same priority and kept in the segment caches) is used. For
+obfuscated posts, the MD5 of each file's first 16 KiB, taken from its first
+article, finds the file description carrying its real name and exact length (a
+unique exact length is the fallback); real names classify files and order archive
+volumes, and when one obfuscated file dominates the post and is named a video, the
+other files are not probed at all. Health checks verify the first article of the
+main video, or of the first archive volume, against the recorded length,
+first-16 KiB MD5 and any slice checksums it covers; a mismatch marks the release
+unhealthy as wrong or damaged content, and Play rejects it too. A missing,
+oversize, unparseable or foreign PAR2 never fails or delays a release; the engine
+falls back to probing articles.
+
 The media decision chooses direct play, copy-only remux, or transcoding. HLS and
 DASH use output containers appropriate to the selected codecs. Apple HLS includes
 codec and dynamic-range declarations, Dolby Vision signaling where applicable,

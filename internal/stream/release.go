@@ -30,6 +30,8 @@ type release struct {
 	planMu  sync.Mutex
 	plan    *plan
 	planErr error // permanent rejection, cached
+
+	p2 par2State
 }
 
 func newRelease(e *Engine, digest string, doc *nzb.NZB) *release {
@@ -92,7 +94,7 @@ type candidate struct {
 func (b *builder) build(ctx context.Context) (*plan, error) {
 	cands := b.candidates(b.rel.files)
 	if b.shouldProbe(cands) {
-		if err := b.probeObfuscated(ctx); err != nil {
+		if err := b.identifyObfuscated(ctx); err != nil {
 			return nil, err
 		}
 		cands = b.candidates(b.rel.files)
@@ -105,6 +107,12 @@ func (b *builder) build(ctx context.Context) (*plan, error) {
 		p, err := b.planFor(ctx, c)
 		if err == nil {
 			b.e.log.Debug("stream plan", "kind", p.kind, "name", p.name, "size", p.size, "volumes", len(p.vols))
+			// A PAR2 index already loaded (obfuscated post, or a health
+			// check reading it alongside) checks the first volume now; the
+			// head is in memory. Open never waits for PAR2.
+			if err := b.rel.verifyPar2(ctx, p, b.prio, b.fo, false); err != nil {
+				return nil, err
+			}
 			return p, nil
 		}
 		if ctx.Err() != nil {
