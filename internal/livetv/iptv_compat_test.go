@@ -107,3 +107,53 @@ func mustLiveSession(t *testing.T, s *Service, id string, u *core.User) SessionI
 	}
 	return info
 }
+
+type startingLiveRelay struct {
+	core.HLSSession
+	ready bool
+	fail  bool
+	waits int
+}
+
+func (f *startingLiveRelay) ServePlaylist(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n")
+	if f.ready {
+		fmt.Fprint(w, "#EXTINF:4,\n00000.ts\n")
+	}
+}
+func (f *startingLiveRelay) ServeSegment(w http.ResponseWriter, r *http.Request, n int) {
+	f.waits++
+	if f.fail {
+		http.Error(w, "encoder failed", http.StatusBadGateway)
+		return
+	}
+	f.ready = true
+	fmt.Fprint(w, "segment bytes")
+}
+
+func TestRelayFirstPlaylistWaitsForMediaAndPropagatesFailure(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		h := &startingLiveRelay{fail: fail}
+		ss := &session{info: SessionInfo{ID: "live-fixture"}, relay: h}
+		s := &Service{}
+		rec := httptest.NewRecorder()
+		s.serveRelayPlaylist(rec, httptest.NewRequest("GET", "/", nil), ss)
+		if h.waits != 1 {
+			t.Fatalf("initial segment waits = %d", h.waits)
+		}
+		if fail {
+			if rec.Code != 502 {
+				t.Fatalf("encoder failure returned %d", rec.Code)
+			}
+			continue
+		}
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "/relay/0.ts") || strings.Contains(rec.Body.String(), "segment bytes") {
+			t.Fatalf("first playlist unusable: %d %s", rec.Code, rec.Body.String())
+		}
+		rec = httptest.NewRecorder()
+		s.serveRelayPlaylist(rec, httptest.NewRequest("GET", "/", nil), ss)
+		if h.waits != 1 {
+			t.Fatal("ready playlist reread a complete segment")
+		}
+	}
+}

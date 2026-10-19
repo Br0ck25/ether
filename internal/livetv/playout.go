@@ -613,6 +613,23 @@ func (s *Service) serveRelayPlaylist(w http.ResponseWriter, r *http.Request, ss 
 		http.Error(w, "IPTV playout unavailable", rec.Code)
 		return
 	}
+	// An unknown-duration transcoder initially has no completed segments.
+	// Native players can reject that empty EVENT playlist immediately. Use
+	// the session's bounded segment wait before returning the first playlist.
+	if !relayPlaylistHasMedia(rec.Body.String()) {
+		ready := &relayReadinessWriter{header: make(http.Header)}
+		ss.relay.ServeSegment(ready, r, 0)
+		if ready.status >= 400 {
+			http.Error(w, "IPTV playout unavailable", ready.status)
+			return
+		}
+		rec = httptest.NewRecorder()
+		ss.relay.ServePlaylist(rec, r)
+		if rec.Code != 200 || !relayPlaylistHasMedia(rec.Body.String()) {
+			http.Error(w, "IPTV playout unavailable", http.StatusBadGateway)
+			return
+		}
+	}
 	lines := strings.Split(rec.Body.String(), "\n")
 	for i, line := range lines {
 		if line != "" && !strings.HasPrefix(line, "#") {

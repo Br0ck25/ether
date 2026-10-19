@@ -1,6 +1,38 @@
 package livetv
 
-import "github.com/braedonsaunders/ether/internal/core"
+import (
+	"net/http"
+	"strings"
+
+	"github.com/braedonsaunders/ether/internal/core"
+)
+
+func relayPlaylistHasMedia(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			return true
+		}
+	}
+	return false
+}
+
+// Waiting for readiness must not retain a complete video segment in memory.
+type relayReadinessWriter struct {
+	header http.Header
+	status int
+}
+
+func (w *relayReadinessWriter) Header() http.Header { return w.header }
+func (w *relayReadinessWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+}
+func (w *relayReadinessWriter) Write(b []byte) (int, error) {
+	w.WriteHeader(http.StatusOK)
+	return len(b), nil
+}
 
 // The live relay exposes MPEG-TS segments. Constrain its decision to codecs
 // that transport supports, instead of putting HEVC/fMP4 or Matroska in .ts URLs.
