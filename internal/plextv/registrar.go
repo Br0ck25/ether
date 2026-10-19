@@ -96,7 +96,7 @@ type RegistrarOptions struct {
 
 	// Intervals (defaults in parentheses).
 	Tick                 time.Duration // loop granularity (15s)
-	AddressInterval      time.Duration // LAN/WAN re-check (5m)
+	AddressInterval      time.Duration // LAN/WAN re-check (30s)
 	PublishInterval      time.Duration // unconditional re-publish (1h)
 	FriendSyncInterval   time.Duration // access token sync (1m, observed)
 	MappingInterval      time.Duration // UPnP/NAT-PMP renew check (5m)
@@ -164,7 +164,7 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 		}
 	}
 	def(&o.Tick, 15*time.Second)
-	def(&o.AddressInterval, 5*time.Minute)
+	def(&o.AddressInterval, 30*time.Second)
 	def(&o.PublishInterval, time.Hour)
 	def(&o.FriendSyncInterval, time.Minute)
 	def(&o.MappingInterval, 5*time.Minute)

@@ -2,6 +2,7 @@ package plex
 
 import (
 	"context"
+	"crypto/rand"
 	"hash/fnv"
 	"strconv"
 	"sync"
@@ -103,18 +104,19 @@ func (s *selectionStore) update(userID, partID int64, fn func(*selection)) {
 // Transcode bindings: client transcode session id -> play session/decision
 
 type transcodeEntry struct {
-	id        string // client "session" param
-	playID    string // core.PlaySession.ID
-	userID    int64
-	clientID  string
-	key       core.RatingKey
-	decision  core.Decision
-	info      core.MediaInfo
-	caps      core.ClientCaps
-	opts      core.DecideOptions
-	offset    time.Duration
-	started   bool // StartHLS ran
-	updatedAt time.Time
+	id          string // client "session" param
+	streamToken string // independent random capability; never a client-chosen ID
+	playID      string // core.PlaySession.ID
+	userID      int64
+	clientID    string
+	key         core.RatingKey
+	decision    core.Decision
+	info        core.MediaInfo
+	caps        core.ClientCaps
+	opts        core.DecideOptions
+	offset      time.Duration
+	started     bool // StartHLS ran
+	updatedAt   time.Time
 }
 
 type transcodeTable struct {
@@ -127,7 +129,29 @@ func newTranscodeTable() *transcodeTable { return &transcodeTable{m: map[string]
 func (t *transcodeTable) put(e *transcodeEntry) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.m[e.id] = e
+	if old, ok := t.m[e.id]; ok {
+		if old.userID != e.userID || old.clientID != e.clientID {
+			return
+		}
+		e.streamToken = old.streamToken
+	}
+	if e.streamToken == "" {
+		e.streamToken = rand.Text()
+	}
+	cp := *e
+	t.m[e.id] = &cp
+}
+
+// claim reserves a client-chosen ID before any playback/transcoder work. A
+// different viewer or device cannot replace, reuse, stop, or probe that binding.
+func (t *transcodeTable) claim(id string, userID int64, clientID string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if e, ok := t.m[id]; ok {
+		return e.userID == userID && e.clientID == clientID
+	}
+	t.m[id] = &transcodeEntry{id: id, userID: userID, clientID: clientID, streamToken: rand.Text(), updatedAt: now}
+	return true
 }
 
 func (t *transcodeTable) get(id string) (*transcodeEntry, bool) {

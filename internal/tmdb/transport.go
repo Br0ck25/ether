@@ -73,15 +73,15 @@ func (c *Client) Close() {
 	}
 }
 
-func (c *Client) buildURL(path string, q url.Values) string {
+func (c *Client) buildURL(path string, q url.Values, cfg clientSettings) string {
 	if q == nil {
 		q = url.Values{}
 	}
-	if q.Get("language") == "" && c.language != "" {
-		q.Set("language", c.language)
+	if q.Get("language") == "" && cfg.language != "" {
+		q.Set("language", cfg.language)
 	}
-	if !c.bearer && c.key != "" {
-		q.Set("api_key", c.key)
+	if !cfg.bearer && cfg.key != "" {
+		q.Set("api_key", cfg.key)
 	}
 	u := c.opts.baseURL + path
 	if enc := q.Encode(); enc != "" {
@@ -106,18 +106,20 @@ func (c *Client) getJSON(ctx context.Context, path string, q url.Values, out any
 }
 
 func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, error) {
-	if c.key == "" {
+	cfg := c.settings()
+	if cfg.key == "" {
 		return nil, ErrNoKey
 	}
-	full := c.buildURL(path, q)
+	full := c.buildURL(path, q, cfg)
+	cacheKey := strconv.FormatUint(cfg.generation, 10) + ":" + full
 	// Cache hit (fresh).
 	c.mu.Lock()
-	if e, ok := c.cache[full]; ok && time.Now().Before(e.expires) {
+	if e, ok := c.cache[cacheKey]; ok && time.Now().Before(e.expires) {
 		body := append([]byte(nil), e.body...)
 		c.mu.Unlock()
 		return body, nil
 	}
-	if f, ok := c.flights[full]; ok {
+	if f, ok := c.flights[cacheKey]; ok {
 		c.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -130,26 +132,26 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 		}
 	}
 	f := &flight{done: make(chan struct{})}
-	c.flights[full] = f
+	c.flights[cacheKey] = f
 	var etag string
-	if e, ok := c.cache[full]; ok {
+	if e, ok := c.cache[cacheKey]; ok {
 		etag = e.etag
 	}
 	c.mu.Unlock()
 
-	body, newETag, notModified, err := c.doWithRetry(ctx, full, etag)
+	body, newETag, notModified, err := c.doWithRetry(ctx, full, etag, cfg)
 
 	c.mu.Lock()
-	delete(c.flights, full)
-	if err == nil {
+	delete(c.flights, cacheKey)
+	if err == nil && c.generation == cfg.generation {
 		if notModified {
-			if e, ok := c.cache[full]; ok {
+			if e, ok := c.cache[cacheKey]; ok {
 				body = e.body
 				e.expires = time.Now().Add(c.opts.cacheTTL)
-				c.cache[full] = e
+				c.cache[cacheKey] = e
 			}
 		} else {
-			c.cache[full] = cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}
+			c.cache[cacheKey] = cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}
 		}
 	}
 	f.body, f.err = body, err
@@ -161,7 +163,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 	return append([]byte(nil), body...), nil
 }
 
-func (c *Client) doWithRetry(ctx context.Context, full, etag string) (body []byte, newETag string, notModified bool, err error) {
+func (c *Client) doWithRetry(ctx context.Context, full, etag string, cfg clientSettings) (body []byte, newETag string, notModified bool, err error) {
 	var lastErr error
 	backoff := 500 * time.Millisecond
 	for attempt := 0; attempt <= c.opts.maxRetries; attempt++ {
@@ -174,8 +176,8 @@ func (c *Client) doWithRetry(ctx context.Context, full, etag string) (body []byt
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("User-Agent", c.opts.userAgent)
-		if c.bearer {
-			req.Header.Set("Authorization", "Bearer "+c.key)
+		if cfg.bearer {
+			req.Header.Set("Authorization", "Bearer "+cfg.key)
 		}
 		if etag != "" {
 			req.Header.Set("If-None-Match", etag)

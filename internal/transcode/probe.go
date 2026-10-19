@@ -3,6 +3,7 @@ package transcode
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,7 +49,7 @@ func httpInputArgs(input string, reconnect bool) []string {
 }
 
 func probeArgs(input string, a probeAttempt) []string {
-	args := []string{"-hide_banner", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters",
+	args := []string{"-hide_banner", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "-show_data",
 		"-probesize", strconv.FormatInt(a.probesize, 10),
 		"-analyzeduration", strconv.FormatInt(a.analyzeDuration.Microseconds(), 10),
 	}
@@ -134,6 +135,7 @@ type ffprobeOutput struct {
 }
 
 type ffprobeStream struct {
+	Extradata      string            `json:"extradata"`
 	Index          int               `json:"index"`
 	Level          int               `json:"level"`
 	CodecName      string            `json:"codec_name"`
@@ -240,6 +242,21 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 		si.BitDepth = bitDepth(s)
 		si.ColorTransfer = s.ColorTransfer
 		si.DolbyVision, si.DolbyVisionProfile = dolbyVision(s)
+		for _, sd := range s.SideDataList {
+			if level, ok := sd["dv_level"].(float64); ok {
+				si.DolbyVisionLevel = int(level)
+			}
+			if compat, ok := sd["dv_bl_signal_compatibility_id"].(float64); ok {
+				si.DolbyVisionCompatibilityID = int(compat)
+			}
+		}
+		extra := probeExtradata(s.Extradata)
+		if si.Codec == "h264" && len(extra) >= 4 && extra[0] == 1 {
+			si.CodecString = fmt.Sprintf("avc1.%02x%02x%02x", extra[1], extra[2], extra[3])
+		}
+		if si.Codec == "hevc" && len(extra) >= 13 && extra[0] == 1 {
+			si.CodecString = "hvc1." + hevcCodecs(extra)
+		}
 	case "audio":
 		si.Channels = s.Channels
 		si.ChannelLayout = s.ChannelLayout
@@ -439,4 +456,29 @@ func tail(s string, n int) string {
 		return "..." + s[len(s)-n:]
 	}
 	return s
+}
+
+// ffprobe prints extradata as offset-prefixed hex rows followed by ASCII.
+func probeExtradata(raw string) []byte {
+	if len(raw) > 256<<10 {
+		return nil
+	}
+	var out []byte
+	for _, line := range strings.Split(raw, "\n") {
+		_, data, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		data = strings.TrimSpace(data)
+		if hexPart, _, ok := strings.Cut(data, "  "); ok {
+			data = hexPart
+		}
+		data = strings.ReplaceAll(data, " ", "")
+		b, err := hex.DecodeString(data)
+		if err != nil {
+			return nil
+		}
+		out = append(out, b...)
+	}
+	return out
 }

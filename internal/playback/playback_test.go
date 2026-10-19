@@ -931,3 +931,30 @@ func TestConcurrentServeAndFailover(t *testing.T) {
 		t.Fatal("sessions")
 	}
 }
+
+func TestReadFailuresRecoverWithoutPoisoningReleases(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		bad  bool
+	}{
+		{"corrupt", core.ErrArticleCorrupt, true},
+		{"timeout", context.DeadlineExceeded, false},
+		{"truncated", io.ErrUnexpectedEOF, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := mkv("A", 100000, 100*time.Second), mkv("B", 100000, 100*time.Second)
+			h := newHarness(t, []*fakeRelease{a, b}, []string{"A", "B"})
+			ps := h.prepare(owner, movieKey, "reader")
+			a.FailFrom, a.FailTo, a.ReadErr = 5000, 10000, tc.err
+			srv := directPlayServer(t, h.m, ps.ID)
+			resp, body, err := get(t, srv.URL, map[string]string{"Range": "bytes=6000-6999"})
+			if err != nil || resp.StatusCode != 206 || !bytes.Equal(body, expected("B", 6000, 1000)) {
+				t.Fatalf("failed to recover read: %v %d", err, resp.StatusCode)
+			}
+			if bad := h.resolver.isBad("A"); bad != tc.bad {
+				t.Fatalf("release blacklisted=%v want %v", bad, tc.bad)
+			}
+		})
+	}
+}

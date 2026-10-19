@@ -40,6 +40,10 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.protocol = core.ProtocolDASH
+	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
+		writeHTTPError(w, http.StatusForbidden)
+		return
+	}
 	entry, ok := s.transcodes.get(p.sessionID)
 	var ps *core.PlaySession
 	if ok && entry.key == p.key && entry.userID == pr.User.ID {
@@ -63,7 +67,7 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 		// start for the same decision keeps the session (and its finished
 		// segments); a new decision request starts afresh.
 		if ds, isDASH := existing.(core.DASHSession); isDASH && entry.started {
-			ds.ServeManifest(w, r)
+			s.serveStreamManifest(w, r, p.sessionID, ds.ServeManifest)
 			return
 		}
 		s.d.Transcoder.Stop(p.sessionID)
@@ -90,7 +94,7 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 	}
 	entry.decision, entry.offset, entry.started, entry.updatedAt = dec, p.offset, true, s.now()
 	s.transcodes.put(entry)
-	ds.ServeManifest(w, r)
+	s.serveStreamManifest(w, r, p.sessionID, ds.ServeManifest)
 }
 
 // dashSession resolves the session and representation of a segment URL.
