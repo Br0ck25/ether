@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="1">
+<Server name="Ether Test" host="example.com" address="example.com" port="32400" machineIdentifier="0123456789abcdef0123456789abcdef01234567" version="1.43.4.10903-e5521bd8c" />
+</MediaContainer>

@@ -1,0 +1,15 @@
+{
+ "streams": [
+  {"index": 0, "codec_name": "hevc", "codec_type": "video", "profile": "Main 10", "width": 3840, "height": 2160,
+   "pix_fmt": "yuv420p10le", "color_transfer": "smpte2084", "avg_frame_rate": "24000/1001", "r_frame_rate": "24000/1001",
+   "disposition": {"default": 1, "forced": 0}, "tags": {"BPS": "45000000", "language": "eng"},
+   "side_data_list": [{"side_data_type": "DOVI configuration record"}]},
+  {"index": 1, "codec_name": "truehd", "codec_type": "audio", "sample_rate": "48000", "channels": 8, "channel_layout": "7.1",
+   "disposition": {"default": 1, "forced": 0}, "tags": {"language": "eng", "title": "TrueHD Atmos 7.1"}},
+  {"index": 2, "codec_name": "ac3", "codec_type": "audio", "sample_rate": "48000", "channels": 6, "channel_layout": "5.1(side)",
+   "bit_rate": "640000", "disposition": {"default": 0, "forced": 0}, "tags": {"language": "fre"}},
+  {"index": 3, "codec_name": "hdmv_pgs_subtitle", "codec_type": "subtitle", "disposition": {"default": 0, "forced": 1}, "tags": {"language": "eng"}},
+  {"index": 4, "codec_name": "mjpeg", "codec_type": "video", "width": 600, "height": 900, "disposition": {"default": 0, "attached_pic": 1}, "tags": {"mimetype": "image/jpeg", "filename": "cover.jpg"}}
+ ],
+ "format": {"filename": "Movie.2024.2160p.mkv", "format_name": "matroska,webm", "duration": "7200.500000", "size": "40000000000", "bit_rate": "44444444"}
+}

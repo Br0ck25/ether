@@ -1,0 +1,371 @@
+package plex
+
+import (
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/ether-media/ether/internal/core"
+	"github.com/ether-media/ether/internal/plex/model"
+)
+
+const (
+	transcoderVideoBitrates    = "64,96,208,320,720,1500,2000,3000,4000,8000,10000,12000,20000"
+	transcoderVideoQualities   = "0,1,2,3,4,5,6,7,8,9,10,11,12"
+	transcoderVideoResolutions = "128,128,160,240,320,480,768,720,720,1080,1080,1080,1080"
+)
+
+// APIVersion is the PMS API version Ether implements (X-Plex-Pms-Api-Version).
+const APIVersion = "1.2.3"
+
+// serverInfoAttrs are the ServerConfiguration attributes of / (full) and
+// /media/providers (providers=true, which omits a few, as PMS does).
+func (s *Server) serverInfoAttrs(providers bool) []model.Attr {
+	id := s.identity()
+	c := s.cfg()
+	signIn, mapping := "none", "unknown"
+	if c.Plex.Claimed || c.Plex.Token != "" {
+		signIn, mapping = "ok", "mapped"
+	}
+	active := 0
+	if s.d.Transcoder != nil && s.d.Playback != nil {
+		for _, ps := range s.d.Playback.Sessions() {
+			if len(s.transcodes.forClient(ps.UserID, ps.ClientID, ps.Key)) > 0 {
+				active++
+			}
+		}
+	}
+	canTranscode := s.d.Transcoder != nil
+	attrs := []model.Attr{
+		model.A("allowCameraUpload", false),
+		model.A("allowChannelAccess", false),
+		model.A("allowMediaDeletion", false),
+		model.A("allowSharing", true),
+		model.A("allowSync", false),
+		model.A("allowTuners", false),
+		model.A("apiVersion", APIVersion),
+		model.A("backgroundProcessing", false),
+		model.A("certificate", c.Plex.CertFile != ""),
+		model.A("companionProxy", true),
+		model.A("countryCode", "usa"),
+		model.A("diagnostics", ""),
+		model.A("eventStream", true),
+		model.A("friendlyName", id.FriendlyName),
+	}
+	if !providers {
+		attrs = append(attrs, model.A("hubSearch", true), model.A("itemClusters", false))
+	}
+	attrs = append(attrs,
+		model.A("livetv", 0),
+		model.A("machineIdentifier", id.MachineIdentifier),
+	)
+	if !providers {
+		attrs = append(attrs, model.A("mediaProviders", true), model.A("multiuser", true))
+	}
+	attrs = append(attrs,
+		model.A("musicAnalysis", 0),
+		model.A("myPlex", c.Plex.Claimed || c.Plex.Token != ""),
+		model.A("myPlexMappingState", mapping),
+		model.A("myPlexSigninState", signIn),
+		model.A("myPlexSubscription", id.MyPlexSubscription),
+		model.A("myPlexUsername", c.Plex.OwnerUsername),
+		model.A("offlineTranscode", 0),
+		model.A("ownerFeatures", strings.Join(id.OwnerFeatures, ",")),
+		model.A("platform", id.Platform),
+		model.A("platformVersion", id.PlatformVersion),
+		model.A("pluginHost", false),
+		model.A("pushNotifications", false),
+		model.A("readOnlyLibraries", false),
+		model.A("streamingBrainABRVersion", 3),
+		model.A("streamingBrainVersion", 2),
+		model.A("sync", false),
+		model.A("transcoderActiveVideoSessions", active),
+		model.A("transcoderAudio", canTranscode),
+		model.A("transcoderLyrics", false),
+	)
+	if !providers {
+		attrs = append(attrs, model.A("transcoderPhoto", true))
+	}
+	attrs = append(attrs,
+		model.A("transcoderSubtitles", canTranscode),
+		model.A("transcoderVideo", canTranscode),
+		model.A("transcoderVideoBitrates", transcoderVideoBitrates),
+		model.A("transcoderVideoQualities", transcoderVideoQualities),
+		model.A("transcoderVideoResolutions", transcoderVideoResolutions),
+		model.A("updatedAt", s.now().Unix()),
+		model.A("updater", false),
+		model.A("version", id.Version),
+		model.A("voiceSearch", false),
+	)
+	return attrs
+}
+
+var rootDirectories = []string{
+	"actions", "activities", "butler", "channels", "clients", "devices", "diagnostics", "hubs", "library",
+	"livetv", "media", "neighborhood", "playQueues", "playlists", "resources", "search", "server",
+	"servers", "statistics", "system", "transcode", "updater", "user",
+}
+
+func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	mc := &model.MediaContainer{Extra: s.serverInfoAttrs(false)}
+	for _, d := range rootDirectories {
+		mc.Directory = append(mc.Directory, model.Directory{Count: 1, Key: d, Title: d})
+	}
+	mc.Size = len(mc.Directory)
+	s.write(w, r, mc)
+}
+
+func (s *Server) handleIdentity(w http.ResponseWriter, r *http.Request) {
+	id := s.identity()
+	c := s.cfg()
+	s.write(w, r, &model.MediaContainer{Extra: []model.Attr{
+		model.A("apiVersion", APIVersion),
+		model.A("claimed", c.Plex.Claimed),
+		model.A("machineIdentifier", id.MachineIdentifier),
+		model.A("version", id.Version),
+	}})
+}
+
+// sectionPivots are the top-level navigation pivots of a section.
+func sectionPivots(sec Section) []model.Pivot {
+	id := strconv.Itoa(sec.ID)
+	typeNum := "1"
+	if sec.Type == core.TypeShow {
+		typeNum = "2"
+	}
+	return []model.Pivot{
+		{ID: "recommended", Key: "/hubs/sections/" + id, Type: "hub", Title: "Recommended", Context: "content.discover", Symbol: "star"},
+		{ID: "library", Key: "/library/sections/" + id + "/all?type=" + typeNum, Type: "list", Title: "Library", Context: "content.library", Symbol: "library"},
+		{ID: "collections", Key: "/library/sections/" + id + "/collections", Type: "list", Title: "Collections", Context: "content.collections", Symbol: "stack"},
+		{ID: "playlists", Key: "/playlists?type=15&sectionID=" + id + "&playlistType=video", Type: "list", Title: "Playlists", Context: "content.playlists", Symbol: "playlist"},
+		{ID: "categories", Key: "/library/sections/" + id + "/categories", Type: "list", Title: "Categories", Context: "content.categories", Symbol: "stack"},
+	}
+}
+
+func agentFor(t core.MediaType) (agent, scanner string) {
+	if t == core.TypeShow {
+		return "tv.plex.agents.series", "Plex TV Series"
+	}
+	return "tv.plex.agents.movie", "Plex Movie"
+}
+
+func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
+	u := FromContext(r.Context()).User
+	now := s.now().Unix()
+	dirs := []model.ProviderDirectory{{HubKey: "/hubs", Title: "Home"}} // discovery only: no browse key
+	for _, sec := range s.userSections(u) {
+		agent, scanner := agentFor(sec.Type)
+		id := strconv.Itoa(sec.ID)
+		dirs = append(dirs, model.ProviderDirectory{
+			Agent:      agent,
+			Language:   sec.Language,
+			Refreshing: model.Ptr(false),
+			Scanner:    scanner,
+			UUID:       sec.UUID,
+			ID:         id,
+			Key:        "/library/sections/" + id,
+			HubKey:     "/hubs/sections/" + id,
+			Type:       string(sec.Type),
+			Title:      sec.Title,
+			UpdatedAt:  now,
+			ScannedAt:  now,
+			Pivot:      sectionPivots(sec),
+		})
+	}
+	dirs = append(dirs, model.ProviderDirectory{
+		ID: "playlists", Key: "/playlists", Type: "playlist", Title: "Playlists",
+		Pivot: []model.Pivot{{ID: "playlists.video", Key: "/playlists?playlistType=video", Type: "list", Title: "Video", Context: "content.playlists.video", Symbol: "playlist"}},
+	})
+	provider := model.MediaProvider{
+		Identifier: model.LibraryIdentifier,
+		Title:      "Library",
+		Types:      "video",
+		Protocols:  "stream,download",
+		Feature: []model.Feature{
+			{Key: "/library/sections", Type: "content", Directory: dirs},
+			{Key: "/hubs/search", Type: "search"},
+			{Key: "/library/matches", Type: "match"},
+			{Key: "/library/metadata", Type: "metadata"},
+			{Key: "/:/rate", Type: "rate"},
+			{Key: "/photo/:/transcode", Type: "imagetranscoder"},
+			{Key: "/hubs/promoted", Type: "promoted"},
+			{Key: "/hubs/continueWatching", Type: "continuewatching"},
+			{Key: "/actions", Type: "actions", Action: []model.Action{{ID: "removeFromContinueWatching", Key: "/actions/removeFromContinueWatching"}}},
+			{Flavor: "universal", Key: "/playlists", Type: "playlist"},
+			{Flavor: "universal", Key: "/playQueues", Type: "playqueue"},
+			{Key: "/library/collections", Type: "collection"},
+			{ScrobbleKey: "/:/scrobble", UnscrobbleKey: "/:/unscrobble", Key: "/:/timeline", Type: "timeline"},
+			{Type: "queryParser"},
+			{Key: "/library/search", Type: "universalsearch"},
+		},
+	}
+	mc := &model.MediaContainer{Size: 1, Extra: s.serverInfoAttrs(true), MediaProvider: []model.MediaProvider{provider}}
+	s.write(w, r, mc)
+}
+
+func (s *Server) handleMyPlexAccount(w http.ResponseWriter, r *http.Request) {
+	c := s.cfg()
+	acct := model.MyPlex{
+		Username:          c.Plex.OwnerUsername,
+		MappingState:      "unknown",
+		SignInState:       "none",
+		SubscriptionState: "Unknown",
+	}
+	if c.Plex.Claimed || c.Plex.Token != "" {
+		acct.MappingState = "mapped"
+		acct.SignInState = "ok"
+	}
+	id := s.identity()
+	acct.SubscriptionActive = id.MyPlexSubscription
+	if id.MyPlexSubscription {
+		acct.SubscriptionState = "Active"
+		acct.SubscriptionFeatures = strings.Join(id.OwnerFeatures, ",")
+	}
+	if c.Plex.PublicHost != "" {
+		acct.PublicAddress = c.Plex.PublicHost
+		acct.PublicPort = c.Plex.PublicPort
+		if acct.PublicPort == 0 {
+			acct.PublicPort = c.Server.Port
+		}
+	}
+	acct.PrivatePort = c.Server.Port
+	if host, _, err := net.SplitHostPort(r.Host); err == nil {
+		acct.PrivateAddress = host
+	}
+	s.write(w, r, &acct)
+}
+
+func (s *Server) handleServers(w http.ResponseWriter, r *http.Request) {
+	id := s.identity()
+	host, portS, err := net.SplitHostPort(r.Host)
+	if err != nil {
+		host = r.Host
+	}
+	port, _ := strconv.Atoi(portS)
+	if port == 0 {
+		port = s.cfg().Server.Port
+	}
+	s.write(w, r, &model.MediaContainer{Size: 1, Server: []model.Server{{
+		Name: id.FriendlyName, Host: host, Address: host, Port: port,
+		MachineIdentifier: id.MachineIdentifier, Version: id.Version,
+	}}})
+}
+
+func (s *Server) handlePrefs(w http.ResponseWriter, r *http.Request) {
+	c := s.cfg()
+	id := s.identity()
+	secure := map[string]int{"required": 0, "preferred": 1, "disabled": 2}[c.Plex.SecureConnections]
+	if c.Plex.SecureConnections == "" {
+		secure = 1
+	}
+	port := c.Plex.PublicPort
+	if port == 0 {
+		port = c.Server.Port
+	}
+	// Values are typed (string, int, bool) as in PMS JSON; XML renders bools
+	// as 1/0.
+	settings := []model.Setting{
+		{ID: "FriendlyName", Label: "Friendly name", Summary: "This name will be used to identify this media server to other computers on your network.", Type: "text", Default: "", Value: id.FriendlyName, Group: "general"},
+		{ID: "MachineIdentifier", Label: "", Summary: "", Type: "text", Default: "", Value: id.MachineIdentifier, Hidden: true, Group: ""},
+		{ID: "PublishServerOnPlexOnlineKey", Label: "Publish server on Plex Online", Summary: "", Type: "bool", Default: false, Value: c.Plex.RemoteAccess, Group: "network"},
+		{ID: "ManualPortMappingMode", Label: "Manually specify public port", Summary: "", Type: "bool", Default: false, Value: c.Plex.PublicPort != 0, Group: "network"},
+		{ID: "ManualPortMappingPort", Label: "", Summary: "", Type: "int", Default: 32400, Value: port, Hidden: true, Group: ""},
+		{ID: "secureConnections", Label: "Secure connections", Summary: "", Type: "int", Default: 1, Value: secure, Advanced: true, Group: "network", EnumValues: "1:Preferred|0:Required"},
+		{ID: "customConnections", Label: "Custom server access URLs", Summary: "", Type: "text", Default: "", Value: strings.Join(c.Plex.CustomURLs, ","), Group: "network", Advanced: true},
+		{ID: "WanPerStreamMaxUploadRate", Label: "Limit remote stream bitrate", Summary: "", Type: "int", Default: 0, Value: c.Transcode.RemoteMaxBitrateKbps, Group: "network"},
+		{ID: "TranscoderTempDirectory", Label: "Transcoder temporary directory", Summary: "", Type: "text", Default: "", Value: c.Transcode.TempDir, Group: "transcoder", Advanced: true},
+		{ID: "HardwareAcceleratedCodecs", Label: "Use hardware acceleration when available", Summary: "", Type: "bool", Default: true, Value: c.Transcode.HWAccel != "none", Group: "transcoder"},
+		{ID: "TranscodeCountLimit", Label: "Maximum simultaneous video transcode", Summary: "", Type: "int", Default: 0, Value: c.Transcode.MaxTranscodes, Group: "transcoder", Advanced: true},
+		{ID: "sendCrashReports", Label: "Send crash reports to Plex", Summary: "", Type: "bool", Default: true, Value: false, Group: "general"},
+		{ID: "logDebug", Label: "Enable Plex Media Server debug logging", Summary: "", Type: "bool", Default: true, Value: c.Server.LogLevel == "debug", Group: "general", Advanced: true},
+	}
+	if id := r.URL.Query().Get("id"); id != "" {
+		var only []model.Setting
+		for _, st := range settings {
+			if st.ID == id {
+				only = append(only, st)
+			}
+		}
+		settings = only
+	}
+	s.write(w, r, &model.MediaContainer{Size: len(settings), Setting: settings})
+}
+
+// handlePrefsSet accepts and ignores PMS settings writes; Ether is
+// configured through its own admin UI.
+func (s *Server) handlePrefsSet(w http.ResponseWriter, r *http.Request) {
+	s.log.Info("ignoring PMS prefs write; use the Ether admin UI", "query", r.URL.RawQuery)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
+	agents := []model.Agent{
+		{Identifier: "tv.plex.agents.movie", Primary: true, Name: "Plex Movie", MediaType: []model.MediaType{{MediaType: 1, Name: "movie"}}},
+		{Identifier: "tv.plex.agents.series", Primary: true, Name: "Plex Series", MediaType: []model.MediaType{{MediaType: 2, Name: "show"}}},
+		{Identifier: "com.plexapp.agents.none", Name: "Personal Media", MediaType: []model.MediaType{{MediaType: 1, Name: "movie"}, {MediaType: 2, Name: "show"}}},
+	}
+	s.write(w, r, &model.MediaContainer{Size: len(agents), Agent: agents})
+}
+
+func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
+	var users []core.User
+	if s.d.Auth != nil {
+		if us, err := s.d.Auth.Users(r.Context()); err == nil {
+			users = us
+		} else {
+			s.log.Warn("list users", "err", err)
+		}
+	}
+	mc := &model.MediaContainer{Identifier: "com.plexapp.system.accounts"}
+	for _, u := range users {
+		a := model.Account{ID: u.ID, Key: "/accounts/" + strconv.FormatInt(u.ID, 10), Name: u.Username, AutoSelectAudio: true, Thumb: u.Thumb}
+		if len(u.AudioLanguages) > 0 {
+			a.DefaultAudioLanguage = u.AudioLanguages[0]
+		}
+		if len(u.SubtitleLanguages) > 0 {
+			a.DefaultSubtitleLang = u.SubtitleLanguages[0]
+		}
+		mc.Account = append(mc.Account, a)
+	}
+	mc.Size = len(mc.Account)
+	s.write(w, r, mc)
+}
+
+func (s *Server) handleSecurityToken(w http.ResponseWriter, r *http.Request) {
+	// Delegation tokens let a client hand access to another device (e.g.
+	// casting). The caller's own token carries exactly their access.
+	s.write(w, r, &model.MediaContainer{Extra: []model.Attr{model.A("token", FromContext(r.Context()).Token)}})
+}
+
+func (s *Server) handleUpdaterStatus(w http.ResponseWriter, r *http.Request) {
+	s.write(w, r, &model.MediaContainer{Extra: []model.Attr{
+		model.A("autoUpdateVersion", 1),
+		model.A("canInstall", false),
+		model.A("checkedAt", 0),
+		model.A("downloadURL", ""),
+		model.A("status", 0),
+	}})
+}
+
+// handleUnknown answers endpoints Ether doesn't implement the way PMS does
+// for unknown-but-harmless paths: an empty container.
+func (s *Server) handleUnknown(w http.ResponseWriter, r *http.Request) {
+	s.log.Debug("unhandled endpoint", "method", r.Method, "path", r.URL.Path, "query", redactQuery(r.URL.RawQuery))
+	s.writeEmpty(w, r)
+}
+
+func (s *Server) handleOK(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+// redactQuery strips tokens from a logged query string.
+func redactQuery(q string) string {
+	parts := strings.Split(q, "&")
+	for i, p := range parts {
+		if k, _, ok := strings.Cut(p, "="); ok && strings.EqualFold(k, "X-Plex-Token") {
+			parts[i] = k + "=REDACTED"
+		}
+	}
+	return strings.Join(parts, "&")
+}

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="13">
+<Setting id="FriendlyName" label="Friendly name" summary="This name will be used to identify this media server to other computers on your network." type="text" default="" value="Ether Test" hidden="0" advanced="0" group="general" />
+<Setting id="MachineIdentifier" label="" summary="" type="text" default="" value="0123456789abcdef0123456789abcdef01234567" hidden="1" advanced="0" group="" />
+<Setting id="PublishServerOnPlexOnlineKey" label="Publish server on Plex Online" summary="" type="bool" default="0" value="0" hidden="0" advanced="0" group="network" />
+<Setting id="ManualPortMappingMode" label="Manually specify public port" summary="" type="bool" default="0" value="0" hidden="0" advanced="0" group="network" />
+<Setting id="ManualPortMappingPort" label="" summary="" type="int" default="32400" value="32400" hidden="1" advanced="0" group="" />
+<Setting id="secureConnections" label="Secure connections" summary="" type="int" default="1" value="1" hidden="0" advanced="1" group="network" enumValues="1:Preferred|0:Required" />
+<Setting id="customConnections" label="Custom server access URLs" summary="" type="text" default="" value="" hidden="0" advanced="1" group="network" />
+<Setting id="WanPerStreamMaxUploadRate" label="Limit remote stream bitrate" summary="" type="int" default="0" value="8000" hidden="0" advanced="0" group="network" />
+<Setting id="TranscoderTempDirectory" label="Transcoder temporary directory" summary="" type="text" default="" value="" hidden="0" advanced="1" group="transcoder" />
+<Setting id="HardwareAcceleratedCodecs" label="Use hardware acceleration when available" summary="" type="bool" default="1" value="1" hidden="0" advanced="0" group="transcoder" />
+<Setting id="TranscodeCountLimit" label="Maximum simultaneous video transcode" summary="" type="int" default="0" value="0" hidden="0" advanced="1" group="transcoder" />
+<Setting id="sendCrashReports" label="Send crash reports to Plex" summary="" type="bool" default="1" value="0" hidden="0" advanced="0" group="general" />
+<Setting id="logDebug" label="Enable Plex Media Server debug logging" summary="" type="bool" default="1" value="0" hidden="0" advanced="1" group="general" />
+</MediaContainer>
