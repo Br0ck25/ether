@@ -15,11 +15,37 @@ type HLSRequest struct {
 	Info        MediaInfo
 	Decision    Decision
 	StartOffset time.Duration
-	// SegmentDuration defaults to 4s when zero.
+	// SegmentDuration defaults to 4s when zero (5s for DASH).
 	SegmentDuration time.Duration
+	// Protocol is ProtocolHLS (default when empty) or ProtocolDASH. A DASH
+	// session also implements DASHSession; Transcoder.Session returns it as
+	// an HLSSession, so type-assert to reach the DASH methods.
+	Protocol string
 }
 
-// HLSSession is one running ffmpeg remux or transcode producing HLS.
+// Streaming protocols of HLSRequest.Protocol.
+const (
+	ProtocolHLS  = "hls"
+	ProtocolDASH = "dash"
+)
+
+// DASHSession is a running ffmpeg remux or transcode producing MPEG-DASH:
+// a static, full-length MPD with separate video and audio representations
+// of fMP4 segments addressed by number ($Number$, from 0). Its HLSSession
+// methods map onto the first representation; ServePlaylist writes the MPD.
+type DASHSession interface {
+	HLSSession
+	// ServeManifest writes the MPD.
+	ServeManifest(w http.ResponseWriter, r *http.Request)
+	// ServeInit writes the initialization segment of a representation.
+	ServeInit(w http.ResponseWriter, r *http.Request, rep int)
+	// ServeMedia writes media segment n of a representation, waiting for
+	// ffmpeg and restarting it at the right offset when a seek jumps ahead.
+	ServeMedia(w http.ResponseWriter, r *http.Request, rep, n int)
+}
+
+// HLSSession is one running ffmpeg remux or transcode producing HLS (or
+// DASH; see DASHSession).
 type HLSSession interface {
 	ID() string
 	// ServePlaylist writes the media playlist (index.m3u8).
@@ -37,6 +63,8 @@ type HLSSession interface {
 type Transcoder interface {
 	Probe(ctx context.Context, inputURL string) (*MediaInfo, error)
 	Decide(info MediaInfo, caps ClientCaps, opts DecideOptions) Decision
+	// StartHLS starts an HLS session, or a DASH session (a DASHSession)
+	// when req.Protocol is ProtocolDASH.
 	StartHLS(ctx context.Context, req HLSRequest) (HLSSession, error)
 	Session(id string) (HLSSession, bool)
 	Stop(id string)

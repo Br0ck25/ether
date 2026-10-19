@@ -18,12 +18,18 @@ import (
 	"github.com/ether-media/ether/internal/core"
 )
 
-// Session is one HLS remux or transcode. It implements core.HLSSession.
+// Session is one HLS or DASH remux or transcode. It implements
+// core.HLSSession, and core.DASHSession for DASH sessions.
 //
 // Segment n always covers media time base+n*segDur (base is the request's
-// StartOffset). ffmpeg runs are started at a segment boundary with -ss and
+// StartOffset for HLS and 0 for DASH, whose MPD always spans the whole
+// title). ffmpeg runs are started at a segment boundary with -ss and
 // -copyts, so restarting at any segment (a seek far ahead or behind, a
 // failover to another release) keeps numbering and timestamps continuous.
+//
+// An HLS session has one track of muxed segments. A DASH session has one
+// track per representation (video, audio); ffmpeg's dash muxer writes short
+// chunks that the session regroups into numbered segments by timestamp.
 type Session struct {
 	id        string
 	m         *Manager
@@ -32,6 +38,7 @@ type Session struct {
 	base      time.Duration
 	total     int // segments in the playlist; 0 = unknown duration
 	container string
+	proto     string // core.ProtocolHLS or core.ProtocolDASH
 	log       *slog.Logger
 	created   time.Time
 
@@ -41,10 +48,10 @@ type Session struct {
 	input    string
 	info     core.MediaInfo
 	decision core.Decision
-	forceCPU bool // hardware encoder failed; stay on CPU
-	noPause  bool // platform cannot suspend ffmpeg
-	resumeAt int  // segment to restart at after a throttle stop; -1 none
-	done     map[int]bool
+	forceCPU bool           // hardware encoder failed; stay on CPU
+	noPause  bool           // platform cannot suspend ffmpeg
+	resumeAt int            // segment to restart at after a throttle stop; -1 none
+	done     []map[int]bool // finished segments per track
 	cur      *run
 	runSeq   int
 	lastReq  int
@@ -55,6 +62,7 @@ type Session struct {
 	closed   bool
 	changed  chan struct{}
 	playlist []byte
+	dash     *dashState // DASH sessions only
 }
 
 // run is one ffmpeg process producing segments from startSeg on.
@@ -64,8 +72,8 @@ type run struct {
 	spec     runSpec
 	proc     Process
 	hw       bool
-	maxDone  int
-	produced int
+	maxDone  int // last segment finished (DASH: on every track)
+	produced int // segments finished (DASH: on the slowest track)
 	finished bool
 	stopped  bool // stopped deliberately, not a failure
 	paused   bool
@@ -75,6 +83,8 @@ type run struct {
 
 	progressMu sync.Mutex
 	progress   Progress
+
+	dash *dashRun // DASH runs only; owned by the run's watch goroutine
 }
 
 func (r *run) next() int {
@@ -134,9 +144,20 @@ func (s *Session) SegmentDuration() time.Duration { return s.segDur }
 // Container is "mpegts" or "fmp4".
 func (s *Session) Container() string { return s.container }
 
+// Protocol is core.ProtocolHLS or core.ProtocolDASH.
+func (s *Session) Protocol() string { return s.proto }
+
+func (s *Session) isDASH() bool { return s.proto == core.ProtocolDASH }
+
 func (s *Session) segName(n int) string { return s.m.opts.segmentURI(n, s.container) }
 
-func (s *Session) segPath(n int) string {
+// segPath is the file of segment n of the first track.
+func (s *Session) segPath(n int) string { return s.trackSegPath(0, n) }
+
+func (s *Session) trackSegPath(t, n int) string {
+	if s.isDASH() {
+		return filepath.Join(s.dir, fmt.Sprintf("seg-%d-%05d.m4s", t, n))
+	}
 	return filepath.Join(s.dir, segmentFile(n, segmentExt(s.container)))
 }
 
@@ -147,8 +168,13 @@ func (s *Session) broadcastLocked() {
 	s.changed = make(chan struct{})
 }
 
-// ServePlaylist implements core.HLSSession: the full-length VOD playlist.
+// ServePlaylist implements core.HLSSession: the full-length VOD playlist
+// (the MPD for DASH sessions).
 func (s *Session) ServePlaylist(w http.ResponseWriter, r *http.Request) {
+	if s.isDASH() {
+		s.ServeManifest(w, r)
+		return
+	}
 	s.Touch()
 	s.mu.Lock()
 	if s.closed {
@@ -163,8 +189,8 @@ func (s *Session) ServePlaylist(w http.ResponseWriter, r *http.Request) {
 		}
 		body = s.playlist
 	} else {
-		done := make([]int, 0, len(s.done))
-		for n := range s.done {
+		done := make([]int, 0, len(s.done[0]))
+		for n := range s.done[0] {
 			done = append(done, n)
 		}
 		sort.Ints(done)
@@ -188,14 +214,20 @@ func (s *Session) span() time.Duration {
 }
 
 // ServeSegment implements core.HLSSession. n == InitSegment serves the fMP4
-// init segment.
+// init segment. For DASH sessions it serves the first representation.
 func (s *Session) ServeSegment(w http.ResponseWriter, r *http.Request, n int) {
-	s.Touch()
 	if n == InitSegment {
-		s.serveInit(w, r)
+		s.serveInit(w, r, 0)
 		return
 	}
-	if n < 0 || (s.total > 0 && n >= s.total) {
+	s.serveSegment(w, r, 0, n)
+}
+
+// serveSegment writes segment n of track t, waiting for ffmpeg and
+// restarting it when n is behind or far ahead of the encoder.
+func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int) {
+	s.Touch()
+	if t < 0 || t >= len(s.done) || n < 0 || (s.total > 0 && n >= s.total) {
 		http.NotFound(w, r)
 		return
 	}
@@ -211,19 +243,22 @@ func (s *Session) ServeSegment(w http.ResponseWriter, r *http.Request, n int) {
 		}
 		s.lastReq = n
 		s.throttleLocked()
-		last := s.total > 0 && n == s.total-1
+		done := s.done[t]
+		// HLS only: ffmpeg's segmenter may cut slivers past the playlist's
+		// last segment. DASH regroups chunks itself and never does.
+		last := !s.isDASH() && s.total > 0 && n == s.total-1
 		waitTail := false
-		if s.done[n] && last && !s.tailSettledLocked(n) {
+		if done[n] && last && !s.tailSettledLocked(n) {
 			// Wait for ffmpeg to finish the title so trailing slivers can be
 			// appended (below).
 			waitTail = true
-		} else if s.done[n] {
-			paths := []string{s.segPath(n)}
+		} else if done[n] {
+			paths := []string{s.trackSegPath(t, n)}
 			if last {
 				// ffmpeg may cut a short final segment past the playlist's
 				// last one; TS and fMP4 fragments concatenate cleanly.
-				for k := n + 1; s.done[k]; k++ {
-					paths = append(paths, s.segPath(k))
+				for k := n + 1; done[k]; k++ {
+					paths = append(paths, s.trackSegPath(t, k))
 				}
 			}
 			s.pruneLocked()
@@ -232,7 +267,7 @@ func (s *Session) ServeSegment(w http.ResponseWriter, r *http.Request, n int) {
 				return
 			}
 			s.mu.Lock()
-			delete(s.done, n) // vanished (pruned meanwhile): produce again
+			delete(s.done[t], n) // vanished (pruned meanwhile): produce again
 			s.mu.Unlock()
 			continue
 		}
@@ -290,8 +325,11 @@ func (s *Session) needsRestartLocked(n int) bool {
 	return n > r.next()+ahead
 }
 
-func (s *Session) serveInit(w http.ResponseWriter, r *http.Request) {
-	if s.container != ContainerFMP4 {
+// serveInit writes the init segment of track t, waiting for ffmpeg to
+// write it.
+func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
+	s.Touch()
+	if s.container != ContainerFMP4 || t < 0 || t >= len(s.done) {
 		http.NotFound(w, r)
 		return
 	}
@@ -305,8 +343,8 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "session closed", http.StatusGone)
 			return
 		}
-		if s.initFile != "" {
-			path := filepath.Join(s.dir, s.initFile)
+		if name := s.initFileLocked(t); name != "" {
+			path := filepath.Join(s.dir, name)
 			s.mu.Unlock()
 			if s.serveFile(w, r, path, InitSegment) {
 				return
@@ -314,7 +352,7 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "init segment missing", http.StatusInternalServerError)
 			return
 		}
-		if (s.cur == nil || s.cur.finished) && !restarted {
+		if (s.cur == nil || s.cur.finished || s.cur.stopped) && !restarted {
 			restarted = true
 			start := s.lastReq
 			if start < 0 {
@@ -371,9 +409,20 @@ func (s *Session) serveFiles(w http.ResponseWriter, r *http.Request, paths []str
 	return true
 }
 
+// initFileLocked is the current init segment file of track t ("" none).
+func (s *Session) initFileLocked(t int) string {
+	if s.isDASH() {
+		return s.dash.inits[t]
+	}
+	return s.initFile
+}
+
 func (s *Session) setSegmentHeaders(w http.ResponseWriter) {
 	ct := "video/mp2t"
-	if s.container == ContainerFMP4 {
+	switch {
+	case s.isDASH():
+		ct = "application/octet-stream" // as PMS serves DASH segments
+	case s.container == ContainerFMP4:
 		ct = "video/mp4"
 	}
 	w.Header().Set("Content-Type", ct)
@@ -472,10 +521,12 @@ func (s *Session) pruneLocked() {
 	if s.m.opts.maxAhead > 0 {
 		farAhead = 2*s.aheadLimit() + 8
 	}
-	for n := range s.done {
-		if n < s.lastReq-behind || (farAhead >= 0 && n > s.lastReq+farAhead) {
-			if err := os.Remove(s.segPath(n)); err == nil || errors.Is(err, os.ErrNotExist) {
-				delete(s.done, n)
+	for t, done := range s.done {
+		for n := range done {
+			if n < s.lastReq-behind || (farAhead >= 0 && n > s.lastReq+farAhead) {
+				if err := os.Remove(s.trackSegPath(t, n)); err == nil || errors.Is(err, os.ErrNotExist) {
+					delete(done, n)
+				}
 			}
 		}
 	}
@@ -512,6 +563,20 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		Accel:    accel,
 		Features: s.m.feat,
 		BigProbe: bigProbe,
+		Protocol: s.proto,
+	}
+	var dr *dashRun
+	if s.isDASH() {
+		spec.Dir = filepath.Join(s.dir, fmt.Sprintf("run-%d", s.runSeq))
+		spec.Playlist = "manifest.mpd"
+		spec.ChunkDur = dashChunkDuration
+		if spec.ChunkDur > s.segDur/2 {
+			spec.ChunkDur = s.segDur / 2
+		}
+		if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
+			return fmt.Errorf("transcode: run dir: %w", err)
+		}
+		dr = newDASHRun(spec.Dir, len(s.done), s.base, s.segDur, s.total, seg)
 	}
 	r := &run{
 		seq:      s.runSeq,
@@ -521,6 +586,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		maxDone:  -1,
 		stderr:   newTailBuffer(40),
 		started:  time.Now(),
+		dash:     dr,
 	}
 	args := buildArgs(spec)
 	runLog := s.log.With("run", r.seq)
@@ -547,6 +613,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}}
 	proc, err := s.m.runner.Start(Command{Path: s.m.ffmpeg, Args: args, Dir: s.dir, Stdout: stdout, Stderr: stderr})
 	if err != nil {
+		if dr != nil {
+			_ = os.RemoveAll(dr.dir)
+		}
 		return fmt.Errorf("transcode: start ffmpeg: %w", err)
 	}
 	r.proc = proc
@@ -573,19 +642,29 @@ func (s *Session) stopRunLocked() {
 	}
 }
 
-// watch polls a run's playlist for finished segments until ffmpeg exits.
+// watch polls a run's output for finished segments until ffmpeg exits.
 func (s *Session) watch(r *run) {
 	t := time.NewTicker(s.m.opts.pollInterval)
 	defer t.Stop()
 	playlist := filepath.Join(s.dir, r.spec.Playlist)
+	collect := func(exited bool) {
+		if r.dash != nil {
+			s.collectDASH(r, exited)
+			return
+		}
+		s.poll(r, playlist)
+	}
 	for {
 		select {
 		case <-r.proc.Done():
-			s.poll(r, playlist)
+			collect(true)
 			s.finish(r)
+			if r.dash != nil {
+				_ = os.RemoveAll(r.dash.dir)
+			}
 			return
 		case <-t.C:
-			s.poll(r, playlist)
+			collect(false)
 		}
 	}
 }
@@ -618,9 +697,7 @@ func (s *Session) poll(r *run, playlist string) {
 		}
 		r.produced++
 		r.maxDone = n
-		if !s.done[n] {
-			s.done[n] = true
-		}
+		s.done[0][n] = true
 		changed = true
 	}
 	if changed {
@@ -733,13 +810,18 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 		seg = s.total - 1
 	}
 	s.stopRunLocked()
-	for n := range s.done {
-		if n >= seg {
-			_ = os.Remove(s.segPath(n))
-			delete(s.done, n)
+	for t, done := range s.done {
+		for n := range done {
+			if n >= seg {
+				_ = os.Remove(s.trackSegPath(t, n))
+				delete(done, n)
+			}
 		}
 	}
 	next := adaptDecision(s.decision, s.info, info, s.container)
+	if s.isDASH() {
+		next = dashDecision(info, next)
+	}
 	if next.Kind != s.decision.Kind || next.VideoCopy != s.decision.VideoCopy || next.AudioCopy != s.decision.AudioCopy {
 		s.log.Info("failover changes decision", "from", s.decision.Kind, "to", next.Kind, "reason", next.Reason)
 	}

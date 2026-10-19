@@ -1,6 +1,6 @@
 // Package transcode wraps Ether's bundled ffmpeg: discovery, hardware
 // encoder detection, probing, the direct play / remux / transcode decision
-// and HLS sessions. Manager implements core.Transcoder.
+// and HLS and MPEG-DASH sessions. Manager implements core.Transcoder.
 package transcode
 
 import (
@@ -43,6 +43,8 @@ type options struct {
 	keepBehind     time.Duration
 	pollInterval   time.Duration
 	segmentURI     func(n int, container string) string
+	dashURLs       DASHURLs
+	manifestWait   time.Duration
 	onFailure      func(sessionID string, at time.Duration, err error)
 }
 
@@ -57,6 +59,8 @@ func defaultOptions() options {
 		keepBehind:     3 * time.Minute,
 		pollInterval:   150 * time.Millisecond,
 		segmentURI:     SegmentName,
+		dashURLs:       PlexDASHURLs,
+		manifestWait:   15 * time.Second,
 	}
 }
 
@@ -94,6 +98,21 @@ func WithSegmentURI(f func(n int, container string) string) Option {
 	}
 }
 
+// WithDASHURLs sets the segment URL templates written into DASH MPDs. The
+// default is PlexDASHURLs, the layout of real PMS.
+func WithDASHURLs(f DASHURLs) Option {
+	return func(o *options) {
+		if f != nil {
+			o.dashURLs = f
+		}
+	}
+}
+
+// WithManifestWait bounds how long a DASH session's first MPD request waits
+// for ffmpeg's init segments to learn the exact codecs (default 15s); after
+// that the MPD is served with codecs estimated from the probe.
+func WithManifestWait(d time.Duration) Option { return func(o *options) { o.manifestWait = d } }
+
 // WithFailureHandler is called (in its own goroutine) when ffmpeg fails
 // mid-session, e.g. because the source lost articles; at is the media time
 // playback had reached. Playback typically answers with SwapInput.
@@ -126,6 +145,7 @@ type Manager struct {
 
 var _ core.Transcoder = (*Manager)(nil)
 var _ core.HLSSession = (*Session)(nil)
+var _ core.DASHSession = (*Session)(nil)
 
 // New finds ffmpeg/ffprobe, detects hardware encoders and starts the idle
 // session reaper. It fails with ErrFFmpegNotFound when no ffmpeg exists.
@@ -271,14 +291,23 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// StartHLS implements core.Transcoder. A session with the same ID is
-// replaced (Plex reuses session IDs when it restarts a transcode).
+// StartHLS implements core.Transcoder: it starts an HLS session, or a DASH
+// session when req.Protocol is core.ProtocolDASH. A session with the same
+// ID is replaced (Plex reuses session IDs when it restarts a transcode).
 func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSession, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if req.InputURL == "" {
 		return nil, errors.New("transcode: StartHLS: empty input URL")
+	}
+	proto := req.Protocol
+	switch proto {
+	case "":
+		proto = core.ProtocolHLS
+	case core.ProtocolHLS, core.ProtocolDASH:
+	default:
+		return nil, fmt.Errorf("transcode: StartHLS: unknown protocol %q", req.Protocol)
 	}
 	d := req.Decision
 	switch d.Kind {
@@ -292,6 +321,9 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		return nil, errors.New("transcode: StartHLS: decision required")
 	default:
 		return nil, fmt.Errorf("transcode: StartHLS: unknown decision kind %q", d.Kind)
+	}
+	if proto == core.ProtocolDASH {
+		d = dashDecision(req.Info, d)
 	}
 	v := req.Info.Video()
 	if v == nil {
@@ -308,22 +340,50 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	if a := findStream(req.Info, d.AudioStream, "audio"); a != nil && d.AudioCopy && d.AudioCodec == "" {
 		d.AudioCodec = a.Codec
 	}
-	if d.Container != ContainerFMP4 && d.Container != ContainerMPEGTS {
+	if proto == core.ProtocolDASH {
+		d.Container = ContainerFMP4
+	} else if d.Container != ContainerFMP4 && d.Container != ContainerMPEGTS {
 		d.Container = segmentContainer(d.VideoCodec, d.AudioCodec)
 	}
 	segDur := req.SegmentDuration
 	if segDur <= 0 {
 		segDur = DefaultSegmentDuration
-	}
-	base := req.StartOffset
-	if base < 0 {
-		base = 0
-	}
-	if req.Info.Duration > 0 && base >= req.Info.Duration {
-		base = req.Info.Duration - segDur
-		if base < 0 {
-			base = 0
+		if proto == core.ProtocolDASH {
+			segDur = DefaultDASHSegmentDuration
 		}
+	}
+	offset := req.StartOffset
+	if offset < 0 {
+		offset = 0
+	}
+	if req.Info.Duration > 0 && offset >= req.Info.Duration {
+		offset = req.Info.Duration - segDur
+		if offset < 0 {
+			offset = 0
+		}
+	}
+	// HLS playlists start at the offset; a DASH MPD always spans the whole
+	// title and the first run starts at the offset's segment.
+	base, startSeg, total := offset, 0, 0
+	tracks := 1
+	var reps []dashRep
+	if proto == core.ProtocolDASH {
+		if req.Info.Duration <= 0 {
+			return nil, errors.New("transcode: StartHLS: DASH needs the media duration")
+		}
+		base = 0
+		startSeg = int(offset / segDur)
+		total = dashSegmentCount(req.Info.Duration, segDur)
+		if total > 0 && startSeg >= total {
+			startSeg = total - 1
+		}
+		reps = dashReps(req.Info, d)
+		if len(reps) == 0 {
+			return nil, errors.New("transcode: StartHLS: no video or audio stream for DASH")
+		}
+		tracks = len(reps)
+	} else if req.Info.Duration > 0 {
+		total = segmentCount(req.Info.Duration-base, segDur)
 	}
 	id := req.SessionID
 	if id == "" {
@@ -368,26 +428,32 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		dir:       dir,
 		segDur:    segDur,
 		base:      base,
+		total:     total,
 		container: d.Container,
+		proto:     proto,
 		log:       m.log.With("session", id),
 		created:   time.Now(),
 		input:     req.InputURL,
 		info:      req.Info,
 		decision:  d,
-		done:      map[int]bool{},
+		done:      make([]map[int]bool, tracks),
+		lastReq:   startSeg,
 		endSeg:    -1,
 		resumeAt:  -1,
 		changed:   make(chan struct{}),
 	}
-	if req.Info.Duration > 0 {
-		s.total = segmentCount(req.Info.Duration-base, segDur)
+	for t := range s.done {
+		s.done[t] = map[int]bool{}
+	}
+	if proto == core.ProtocolDASH {
+		s.dash = newDASHState(reps, m.opts.dashURLs, id)
 	}
 	s.Touch()
-	s.log.Info("HLS session starting", "kind", d.Kind, "container", d.Container, "offset", base,
-		"segments", s.total, "reason", d.Reason)
+	s.log.Info("transcode session starting", "protocol", proto, "kind", d.Kind, "container", d.Container,
+		"offset", offset, "segment", startSeg, "segments", s.total, "reason", d.Reason)
 
 	s.mu.Lock()
-	err := s.startRunLocked(0, false)
+	err := s.startRunLocked(startSeg, false)
 	s.mu.Unlock()
 	if err != nil {
 		_ = os.RemoveAll(dir)

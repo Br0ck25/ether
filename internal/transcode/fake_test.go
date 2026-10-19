@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -41,6 +42,9 @@ type fakeRunner struct {
 	runFunc    func(ctx context.Context, cmd Command) error
 	startError error
 	noPause    bool // processes cannot be suspended (Windows)
+
+	// DASH simulation: the input ends at this media time (0 = never).
+	dashEnd time.Duration
 }
 
 func newFakeRunner() *fakeRunner {
@@ -189,7 +193,11 @@ func (f *fakeRunner) Start(cmd Command) (Process, error) {
 	if f.failStart != nil {
 		stderr, fail = f.failStart(cmd.Args)
 	}
-	go p.simulate(cmd, f.segDelay, f.lastSeg, f.failAfter, fail, stderr)
+	if argValue(cmd.Args, "-f") == "dash" {
+		go p.simulateDASH(cmd, f.segDelay, f.dashEnd, f.failAfter, fail, stderr)
+	} else {
+		go p.simulate(cmd, f.segDelay, f.lastSeg, f.failAfter, fail, stderr)
+	}
 	f.procs = append(f.procs, p)
 	return p, nil
 }
@@ -338,6 +346,86 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 		_ = os.Rename(playlist+".tmp", playlist)
 		if cmd.Stdout != nil {
 			fmt.Fprintf(cmd.Stdout, "frame=%d\nout_time_us=%d\nspeed=4.0x\nprogress=continue\n", n*96, n*4000000)
+		}
+	}
+}
+
+// simulateDASH writes chunks like ffmpeg's dash muxer: init-<rep>.m4s
+// first, then chunk-<rep>-<n>.m4s (from 1, via .tmp and rename), each one
+// -seg_duration long with absolute decode times from -ss. Video uses a
+// 90 kHz timescale at 24 fps, audio 48 kHz in 20 ms frames.
+func (p *fakeProc) simulateDASH(cmd Command, delay, end time.Duration, failAfter int, failStart bool, stderr string) {
+	defer close(p.done)
+	args := cmd.Args
+	dir := filepath.Dir(args[len(args)-1])
+	if failStart {
+		if cmd.Stderr != nil {
+			_, _ = io.WriteString(cmd.Stderr, stderr+"\n")
+		}
+		p.err = errors.New("exit status 1")
+		return
+	}
+	ss, _ := strconv.ParseFloat(argValue(args, "-ss"), 64)
+	chunk, _ := strconv.ParseFloat(argValue(args, "-seg_duration"), 64)
+	if chunk <= 0 {
+		chunk = 1
+	}
+	var kinds []string
+	for _, set := range strings.Fields(argValue(args, "-adaptation_sets")) {
+		if strings.HasSuffix(set, "streams=a") {
+			kinds = append(kinds, "audio")
+		} else {
+			kinds = append(kinds, "video")
+		}
+	}
+	for rep, k := range kinds {
+		init := testVideoInit(1280, 720)
+		if k == "audio" {
+			init = testAudioInit(2, 48000)
+		}
+		_ = os.WriteFile(filepath.Join(dir, dashInitFile(rep)), init, 0o644)
+	}
+	for n := 1; ; n++ {
+		t := ss + float64(n-1)*chunk
+		if end > 0 && t >= end.Seconds()-1e-9 {
+			return // end of input
+		}
+		if failAfter > 0 && n > failAfter {
+			if cmd.Stderr != nil {
+				_, _ = io.WriteString(cmd.Stderr, "http: Stream ends prematurely\n")
+			}
+			p.err = errors.New("exit status 1")
+			return
+		}
+		p.mu.Lock()
+		resumed := p.resumed
+		p.mu.Unlock()
+		select {
+		case <-p.kill:
+			p.err = errors.New("signal: killed")
+			return
+		case <-resumed:
+		}
+		select {
+		case <-p.kill:
+			p.err = errors.New("signal: killed")
+			return
+		case <-time.After(delay):
+		}
+		for rep, k := range kinds {
+			payload := []byte(fmt.Sprintf("[rep=%d chunk=%d t=%.3f ss=%s input=%s]", rep, n, t, argValue(args, "-ss"), argValue(args, "-i")))
+			var b []byte
+			if k == "audio" {
+				b = testChunk(uint32(n), int64(math.Round(t*48000)), 960, int(math.Round(chunk*50)), payload)
+			} else {
+				b = testChunk(uint32(n), int64(math.Round(t*90000)), 3750, int(math.Round(chunk*24)), payload)
+			}
+			name := filepath.Join(dir, dashChunkFile(rep, n))
+			_ = os.WriteFile(name+".tmp", b, 0o644)
+			_ = os.Rename(name+".tmp", name)
+		}
+		if cmd.Stdout != nil {
+			fmt.Fprintf(cmd.Stdout, "frame=%d\nout_time_us=%d\nspeed=4.0x\nprogress=continue\n", n*24, int64(t*1e6))
 		}
 	}
 }

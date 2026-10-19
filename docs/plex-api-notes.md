@@ -167,10 +167,20 @@ id (falling back to `X-Plex-Session-Identifier`, then client id + key).
 ## Open questions for the spike
 
 1. **DASH.** Plex Web in Chrome/Firefox asks for `protocol=dash` and
-   `start.mpd` when it can't direct play. `core.HLSSession` produces HLS/MPEG-TS
-   only, so `start.mpd` returns 400 today. Check whether Plex Web falls back to
-   HLS, or whether `internal/transcode` needs an fMP4/DASH output. Direct play
-   of MKV with H.264/HEVC + AAC/Opus works in Chromium-based Plex Web.
+   `start.mpd` when it can't direct play. Implemented (`handlers_dash.go`,
+   `internal/transcode` DASH sessions) after the layout captured from a real
+   PMS (Oct 2026): a static MPD spanning the whole title, one AdaptationSet
+   per stream (`Representation id` 0 = video, 1 = audio), `SegmentTemplate
+   timescale="1" duration="5" startNumber="0"`, `initialization=
+   "session/{id}/$RepresentationID$/header"`, `media=
+   "session/{id}/$RepresentationID$/$Number$.m4s"`, no
+   `presentationTimeOffset`. Segments are `application/octet-stream`, each
+   one self-initializing (ftyp+moov, styp, sidx, moof, mdat) with absolute
+   `tfdt` times; a far segment number is served directly (PMS seeks the
+   transcoder), and `offset=` does not change the MPD. The decision reports
+   `container="mp4" protocol="dash"` with stream locations
+   `segments-video`/`segments-audio`. Still to confirm in a browser: Plex
+   Web's own player against Ether (only ffmpeg/ffprobe clients verified).
 2. **Error surfacing.** Confirm each app shows `generalDecisionText` (or
    which field it uses) for code 2000 instead of a generic "playback error",
    and that `terminationText` on `/:/timeline` is displayed.

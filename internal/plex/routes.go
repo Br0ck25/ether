@@ -135,6 +135,8 @@ func (s *Server) routes() chi.Router {
 	get("/{ttype}/:/transcode/universal/decision", s.handleDecision)
 	get("/video/:/transcode/universal/start.m3u8", s.handleStartHLS)
 	get("/video/:/transcode/universal/start.mpd", s.handleStartDASH)
+	get("/video/:/transcode/universal/session/{session}/{stream:[0-9]+}/header", s.handleDASHInit)
+	get("/video/:/transcode/universal/session/{session}/{stream:[0-9]+}/{segment}", s.handleDASHSegment)
 	get("/video/:/transcode/universal/session/{session}/*", s.handleTranscodeSession)
 	any("/video/:/transcode/universal/ping", s.handleTranscodePing)
 	any("/video/:/transcode/universal/stop", s.handleTranscodeStop)
