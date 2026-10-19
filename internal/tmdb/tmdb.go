@@ -66,6 +66,9 @@ type options struct {
 	cacheTTL   time.Duration
 	maxRetries int
 	userAgent  string
+	// Response cache bounds; zero means the package defaults.
+	cacheMaxEntries int
+	cacheMaxBytes   int64
 }
 
 // Option customises a Client.
@@ -92,7 +95,7 @@ type Client struct {
 	lim *rateLimiter
 
 	mu         sync.Mutex
-	cache      map[string]cacheEntry
+	cache      *respCache
 	flights    map[string]*flight
 	generation uint64
 
@@ -140,7 +143,7 @@ func newClient(key, lang, region string, log *slog.Logger, opts ...Option) *Clie
 	key = strings.TrimSpace(key)
 	return &Client{key: key, bearer: IsBearerKey(key), language: lang, region: region, log: log,
 		opts: o, lim: newRateLimiter(o.ratePerSec, o.burst),
-		cache: map[string]cacheEntry{}, flights: map[string]*flight{}}
+		cache: newRespCache(o.cacheMaxEntries, o.cacheMaxBytes), flights: map[string]*flight{}}
 }
 
 // HasKey reports whether a key is available.
@@ -183,5 +186,5 @@ func (c *Client) UpdateConfig(cfg config.Catalog) {
 	}
 	c.key, c.bearer, c.language, c.region = key, IsBearerKey(key), lang, region
 	c.generation++
-	c.cache = map[string]cacheEntry{}
+	c.cache = newRespCache(c.opts.cacheMaxEntries, c.opts.cacheMaxBytes)
 }

@@ -114,7 +114,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 	cacheKey := strconv.FormatUint(cfg.generation, 10) + ":" + full
 	// Cache hit (fresh).
 	c.mu.Lock()
-	if e, ok := c.cache[cacheKey]; ok && time.Now().Before(e.expires) {
+	if e, ok := c.cache.get(cacheKey); ok && time.Now().Before(e.expires) {
 		body := append([]byte(nil), e.body...)
 		c.mu.Unlock()
 		return body, nil
@@ -133,9 +133,13 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 	}
 	f := &flight{done: make(chan struct{})}
 	c.flights[cacheKey] = f
+	// Keep the stale body with its ETag: the entry may be evicted while the
+	// revalidation is in flight, and a 304 must still have a body to serve.
+	// Cached bodies are never mutated, so sharing the slice is safe.
 	var etag string
-	if e, ok := c.cache[cacheKey]; ok {
-		etag = e.etag
+	var staleBody []byte
+	if e, ok := c.cache.get(cacheKey); ok {
+		etag, staleBody = e.etag, e.body
 	}
 	c.mu.Unlock()
 
@@ -143,15 +147,14 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 
 	c.mu.Lock()
 	delete(c.flights, cacheKey)
+	if err == nil && notModified {
+		body = staleBody
+	}
 	if err == nil && c.generation == cfg.generation {
 		if notModified {
-			if e, ok := c.cache[cacheKey]; ok {
-				body = e.body
-				e.expires = time.Now().Add(c.opts.cacheTTL)
-				c.cache[cacheKey] = e
-			}
+			c.cache.put(cacheKey, cacheEntry{body: staleBody, etag: etag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
 		} else {
-			c.cache[cacheKey] = cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}
+			c.cache.put(cacheKey, cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
 		}
 	}
 	f.body, f.err = body, err
