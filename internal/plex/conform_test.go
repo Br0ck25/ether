@@ -58,8 +58,10 @@ var burbsInfo = core.MediaInfo{
 // that the virtual media can't know before a release is opened.
 var pmsOnlyRE = regexp.MustCompile(`(@|/)(chapterSource|contentRatingAge|primaryExtraKey|rating|ratingImage|CommonSenseMedia|Field|Label|Producer|Similar|deepAnalysisVersion|indexes|requiredBandwidths|bitrateMode|chromaLocation|codedHeight|codedWidth|colorPrimaries|colorRange|colorSpace|level|refFrames|titleSort)$`)
 
-// etherOnlyRE are paths Ether legitimately adds (TMDB has writer photos).
-var etherOnlyRE = regexp.MustCompile(`Writer(\[\])?/@?thumb$`)
+// etherOnlyRE are paths Ether legitimately adds: TMDB has writer photos,
+// and Ether lists the TMDB audience rating on episodes too (PMS does when
+// it has one, e.g. IMDb's).
+var etherOnlyRE = regexp.MustCompile(`(Writer(\[\])?/@?thumb|Video/Rating|Metadata\[\]/Rating)$`)
 
 func pmsFixtureName(profile, path string, jsonMode bool) string {
 	ext := "xml"
@@ -195,6 +197,90 @@ func TestDetailConformsToPMS(t *testing.T) {
 					checkAttrOrder(t, ref.Body, ours.Body)
 				}
 			})
+		}
+	}
+}
+
+// The TV fixtures are "9-1-1" season 1, episode 1.
+var (
+	nineShow = core.Title{
+		Key: core.ShowKey(75219), Type: core.TypeShow, IDs: core.IDs{TMDB: 75219, IMDB: "tt7235466", TVDB: 337349},
+		Title: "9-1-1", Summary: "Explores the high-pressure experiences of first responders.", Year: 2018,
+		Released: time.Date(2018, 1, 3, 0, 0, 0, 0, time.UTC), Runtime: 43 * time.Minute, ChildCount: 1, LeafCount: 1,
+		Genres: []string{"Drama", "Action & Adventure"}, Studios: []string{"Ryan Murphy Television"}, ContentRating: "TV-14", Rating: 7.6,
+		PosterPath: "/911.jpg", BackdropPath: "/911art.jpg", LogoPath: "/911logo.png",
+		Cast:      []core.Person{{TMDB: 1, Name: "Angela Bassett", Role: "Athena Grant", ThumbPath: "/ab.jpg"}},
+		UpdatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC),
+	}
+	nineS1 = core.Title{
+		Key: core.SeasonKey(75219, 1), Type: core.TypeSeason, ShowKey: nineShow.Key, ShowTitle: "9-1-1", Season: 1, Title: "Season 1",
+		ChildCount: 1, PosterPath: "/911s1.jpg", UpdatedAt: nineShow.UpdatedAt,
+	}
+	nineE1 = core.Title{
+		Key: core.EpisodeKey(75219, 1, 1), Type: core.TypeEpisode, ShowKey: nineShow.Key, ShowTitle: "9-1-1", Season: 1, Episode: 1,
+		Title: "Pilot", Summary: "It takes a team of people to help answer the famous question.", Runtime: 46 * time.Minute, Rating: 7.5,
+		Released: time.Date(2018, 1, 3, 0, 0, 0, 0, time.UTC), StillPath: "/pilot911.jpg",
+		IDs:       core.IDs{TMDB: 1428394, IMDB: "tt7235642", TVDB: 6407446},
+		Directors: []core.Person{{TMDB: 2, Name: "Bradley Buecker", ThumbPath: "/bb.jpg"}},
+		Writers:   []core.Person{{TMDB: 3, Name: "Brad Falchuk", ThumbPath: "/bf.jpg"}},
+		Cast:      []core.Person{{TMDB: 4, Name: "Alyvia Alyn Lind", Role: "Young Christina", ThumbPath: "/aal.jpg"}},
+		UpdatedAt: nineShow.UpdatedAt,
+	}
+	nineInfo = core.MediaInfo{
+		Container: "mkv", Duration: 2782989 * time.Millisecond, Size: 4052046285, BitrateKbps: 11648,
+		Streams: []core.StreamInfo{
+			{Index: 0, Type: "video", Codec: "h264", Profile: "high", Language: "en", Width: 1920, Height: 1080, FrameRate: 23.976, BitDepth: 8, BitrateKbps: 11008, ColorTransfer: "bt709"},
+			{Index: 1, Type: "audio", Codec: "eac3", Language: "en", Channels: 6, ChannelLayout: "5.1(side)", SampleRate: 48000, Default: true, BitrateKbps: 640},
+			{Index: 2, Type: "subtitle", Codec: "subrip", Language: "en"},
+			{Index: 3, Type: "subtitle", Codec: "subrip", Language: "en", Title: "SDH"},
+		},
+	}
+)
+
+// tvPMSOnlyRE: theme music, Common Sense Media ages, TVDB ratings images
+// and per-season UltraBlur PMS computes from season art.
+var tvPMSOnlyRE = regexp.MustCompile(`(@|/)(theme|parentTheme|grandparentTheme|indexes|audioProfile|chromaLocation|codedHeight|codedWidth|colorPrimaries|colorRange|colorSpace|hasScalingMatrix|level|refFrames|scanType|canAutoSync|UltraBlurColors|titleSort|bitrate)$`)
+
+// TestTVConformsToPMS checks show children, season children and episode
+// detail against the recorded PMS responses for the same episode.
+func TestTVConformsToPMS(t *testing.T) {
+	for _, template := range []string{"/library/metadata/{{showKey}}/children", "/library/metadata/{{seasonKey}}/children", "/library/metadata/{{episodeKey}}"} {
+		for _, profile := range []string{"web", "ios", "appletv"} {
+			for _, jsonMode := range []bool{false, true} {
+				t.Run(template+"/"+profile+"/"+map[bool]string{false: "xml", true: "json"}[jsonMode], func(t *testing.T) {
+					ref, err := pmsconform.LoadFixture(filepath.Join("..", "..", "testdata", "pms", profile, pmsFixtureName(profile, template, jsonMode)))
+					if err != nil {
+						t.Fatalf("fixture: %v", err)
+					}
+					f := newFixture()
+					defer f.srv.Close()
+					for _, ti := range []core.Title{nineShow, nineS1, nineE1} {
+						f.catalog.titles[ti.Key] = ti
+					}
+					f.catalog.children[nineShow.Key] = []core.RatingKey{nineS1.Key}
+					f.catalog.children[nineS1.Key] = []core.RatingKey{nineE1.Key}
+					f.playback.info = nineInfo
+					target := strings.NewReplacer("{{showKey}}", nineShow.Key.String(), "{{seasonKey}}", nineS1.Key.String(), "{{episodeKey}}", nineE1.Key.String()).Replace(template)
+					hdr := []string{"Accept", "application/xml"}
+					if jsonMode {
+						hdr = jsonAccept
+					}
+					rec := f.getWarm(t, target, hdr...)
+					ours := pmsconform.Response{Status: rec.Code, Headers: rec.Header(), Body: rec.Body.Bytes()}
+					for _, d := range pmsconform.Compare(ref, ours).Differences {
+						switch {
+						case d.Kind == pmsconform.KindMissing && (pmsOnlyRE.MatchString(d.Path) || tvPMSOnlyRE.MatchString(d.Path)):
+						case d.Kind == pmsconform.KindExtra && etherOnlyRE.MatchString(d.Path):
+						case d.Kind == pmsconform.KindValue && !strings.HasSuffix(d.Path, "#order"):
+						default:
+							t.Errorf("%s %s ref=%v ours=%v", d.Kind, d.Path, d.Reference, d.Target)
+						}
+					}
+					if !jsonMode {
+						checkAttrOrder(t, ref.Body, ours.Body)
+					}
+				})
+			}
 		}
 	}
 }
