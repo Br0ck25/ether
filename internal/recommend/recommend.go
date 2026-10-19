@@ -48,6 +48,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -98,6 +99,11 @@ type Options struct {
 	// SourceTimeout bounds each optional network source (Trakt, LLM) per
 	// request so a slow third party cannot stall Home (default 3s).
 	SourceTimeout time.Duration
+	// Scorer, when set, re-ranks detail-page "More Like This" rows for the
+	// viewer (internal/personalize.Engine). It may also be set after
+	// construction with SetScorer, since the engine is built on top of
+	// this recommender.
+	Scorer core.PersonalScorer
 }
 
 // Recommender implements core.Recommender.
@@ -111,6 +117,9 @@ type Recommender struct {
 	now         func() time.Time
 	ttl         time.Duration
 	srcTimeout  time.Duration
+
+	scorerMu sync.RWMutex
+	scorer   core.PersonalScorer
 
 	mu      sync.Mutex
 	cache   map[int64]*entry
@@ -154,7 +163,7 @@ func New(opts Options) *Recommender {
 		catalog: opts.Catalog, state: opts.State, collections: opts.Collections,
 		trakt: opts.Trakt, llm: opts.LLM, log: opts.Logger, now: opts.Now,
 		ttl: opts.CacheTTL, srcTimeout: opts.SourceTimeout, cache: map[int64]*entry{},
-		gen: map[int64]uint64{}, flights: map[int64]*buildFlight{},
+		gen: map[int64]uint64{}, flights: map[int64]*buildFlight{}, scorer: opts.Scorer,
 	}
 	if opts.Events != nil {
 		r.unsub = opts.Events.Subscribe(func(ev state.Event) {
@@ -175,6 +184,61 @@ func invalidates(ev state.Event) bool {
 		return ev.Completed || ev.State == "stopped"
 	}
 	return true
+}
+
+// SetScorer installs (or clears) the personal scorer used to re-rank
+// detail-page rows.
+func (r *Recommender) SetScorer(s core.PersonalScorer) {
+	r.scorerMu.Lock()
+	r.scorer = s
+	r.scorerMu.Unlock()
+}
+
+// personalOrder re-ranks similar titles for the viewer: TMDB's similarity
+// order stays the backbone (60%), the viewer's taste fit reorders within
+// it (40%). Ties keep the original order. Without a scorer, or when it
+// fails, the order is unchanged.
+func (r *Recommender) personalOrder(ctx context.Context, user *core.User, items []core.Title) []core.Title {
+	r.scorerMu.RLock()
+	sc := r.scorer
+	r.scorerMu.RUnlock()
+	if sc == nil || user == nil || len(items) < 2 {
+		return items
+	}
+	scores, err := sc.ScoreTitles(ctx, user, items)
+	if err != nil || len(scores) == 0 {
+		return items
+	}
+	lo, hi := math.Inf(1), math.Inf(-1)
+	for _, t := range items {
+		v := scores[t.Key]
+		lo, hi = math.Min(lo, v), math.Max(hi, v)
+	}
+	span := hi - lo
+	if span <= 0 {
+		return items
+	}
+	type ranked struct {
+		t core.Title
+		v float64
+		i int
+	}
+	rs := make([]ranked, len(items))
+	n := float64(len(items))
+	for i, t := range items {
+		rs[i] = ranked{t, 0.6*(1-float64(i)/n) + 0.4*(scores[t.Key]-lo)/span, i}
+	}
+	sort.SliceStable(rs, func(a, b int) bool {
+		if rs[a].v != rs[b].v {
+			return rs[a].v > rs[b].v
+		}
+		return rs[a].i < rs[b].i
+	})
+	out := make([]core.Title, len(rs))
+	for i, x := range rs {
+		out[i] = x.t
+	}
+	return out
 }
 
 // Close unsubscribes from state events.
@@ -801,7 +865,7 @@ func (r *Recommender) Related(ctx context.Context, user *core.User, key core.Rat
 		}
 		cancel()
 	}
-	add(prefix+".similar", "More Like This", "hub."+prefix+".similar", r.unwatchedOnly(ctx, user, similar), true)
+	add(prefix+".similar", "More Like This", "hub."+prefix+".similar", r.personalOrder(ctx, user, r.unwatchedOnly(ctx, user, similar)), true)
 
 	if title.CollectionID != 0 {
 		name, items, err := r.catalog.Collection(ctx, title.CollectionID)
