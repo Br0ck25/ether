@@ -866,3 +866,17 @@ func BenchmarkHasParallel(b *testing.B) {
 		}
 	})
 }
+
+func TestReleaseBytes(t *testing.T) {
+	const sz = 100
+	c := openT(t, t.TempDir(), 0)
+	for seg := range 3 {
+		mustPut(t, c, "r", seg, payload("r", seg, 0, sz))
+	}
+	if got := c.ReleaseBytes("r"); got != 3*sz {
+		t.Fatalf("ReleaseBytes = %d, want %d", got, 3*sz)
+	}
+	if got := c.ReleaseBytes("missing"); got != 0 {
+		t.Fatalf("ReleaseBytes(missing) = %d", got)
+	}
+}

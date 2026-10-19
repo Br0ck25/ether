@@ -114,6 +114,13 @@ type Cache struct {
 	PrefetchBytes       int64   `json:"prefetchBytes"` // opening bytes pulled ahead
 	KeepInProgressWarm  bool    `json:"keepInProgressWarm"`
 	NextEpisodeAt       float64 `json:"nextEpisodeAt"` // fraction of current episode, e.g. 0.8
+	// InProgressPinMaxAge: an in-progress title nobody has watched for this
+	// long stops pinning its release in the cache (0 = default 30 days).
+	InProgressPinMaxAge Duration `json:"inProgressPinMaxAge,omitempty"`
+	// InProgressPinPercent caps the share of BudgetBytes that in-progress
+	// pins may hold; the least recently watched titles lose their pin first
+	// (0 = default 50, max 100).
+	InProgressPinPercent int `json:"inProgressPinPercent,omitempty"`
 }
 
 type Catalog struct {
