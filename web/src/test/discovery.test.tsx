@@ -26,7 +26,7 @@ describe("Discovery owner controls", () => {
  });
  it("persists LLM feature toggles through the discovery settings API", async () => {
   const calls = backend(); render(<Discovery />); await screen.findByLabelText("Enable watchlist monitoring");
-  fireEvent.click(screen.getByRole("button", { name: "Search & recaps" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Search & recaps" }));
   const search = screen.getByLabelText(/Natural-language search in Plex/); expect(search).not.toBeChecked();
   fireEvent.click(search); fireEvent.click(screen.getByRole("button", { name: "Save search settings" }));
   await waitFor(() => expect(calls.some(call => call.init?.method === "PUT" && JSON.parse(String(call.init.body)).naturalSearch)).toBe(true));

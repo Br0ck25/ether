@@ -62,7 +62,7 @@ describe("Live TV owner programming", () => {
  });
  it("opens viewer policy using the selected account rather than a typed ID", async () => {
   const calls = backend(); render(<LiveTV />);
-  fireEvent.click(screen.getByRole("button", { name: "Viewer access" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Viewer access" }));
   await screen.findByRole("option", { name: "Sam" });
   fireEvent.change(screen.getByLabelText("Viewer"), { target: { value: "12" } });
   fireEvent.click(await screen.findByLabelText("Disable Live TV for this viewer"));

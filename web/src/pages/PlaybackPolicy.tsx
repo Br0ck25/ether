@@ -1,4 +1,4 @@
-import { Button, PageHeader } from "@braedonsaunders/appkit-ui";
+import { Button, PageContainer, PageHeader } from "@braedonsaunders/appkit-ui";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, apiFetch } from "../lib/api";
@@ -31,7 +31,7 @@ export default function PlaybackPolicy() {
       await cfg.reload(); setSaved(true);
     } catch (e) { setError(e); } finally { setBusy(false); }
   }
-  return <div className="space-y-6 p-6">
+  return <PageContainer className="space-y-6">
     <PageHeader title="Playback" description="Choose how quickly playback starts and inspect the rules that keep video in its original quality." />
     {cfg.error ? <ErrorPanel error={cfg.error} /> : !draft ? <LoadingRows /> : <section className="space-y-4 rounded-lg border border-border p-5">
       <label className="flex items-center gap-3"><input type="checkbox" checked={draft.optimisticStart ?? false} onChange={(e) => setDraft({ ...draft, optimisticStart: e.target.checked })} />Optimistic start</label>
@@ -43,5 +43,5 @@ export default function PlaybackPolicy() {
     </section>}
     <ProwlarrImport />
     <section className="space-y-3"><h2 className="text-lg font-medium">Client rules</h2><p className="text-sm text-fg-muted">Actual client profiles refine these defaults. Model, display and audio receiver support must be declared by the client. Text subtitles stay separate; supported image subtitles keep video copy.</p>{matrix.error ? <ErrorPanel error={matrix.error} /> : !matrix.data ? <LoadingRows /> : <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th className="p-3">Client</th><th className="p-3">DV profiles</th><th className="p-3">Subtitle rendering</th><th className="p-3">Decision notes</th></tr></thead><tbody>{matrix.data.policies.map((p) => <tr className="border-t border-border" key={p.family}><td className="p-3 font-medium">{p.family}</td><td className="p-3">{p.dolbyVisionProfiles?.join(", ") || "Client declaration"}</td><td className="p-3">{p.subtitleCodecs.join(", ")}</td><td className="p-3 text-fg-muted">{p.notes}</td></tr>)}</tbody></table></div>}</section>
-  </div>;
+  </PageContainer>;
 }

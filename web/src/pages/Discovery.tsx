@@ -1,4 +1,4 @@
-import { Button, Input, PageHeader, Spinner, toast } from "@braedonsaunders/appkit-ui";
+import { Button, Input, PageContainer, PageHeader, SubtabNav, Spinner, toast } from "@braedonsaunders/appkit-ui";
 import { useEffect, useState } from "react";
 import { Artwork } from "../components/Artwork";
 import { api, apiFetch, errorMessage } from "../lib/api";
@@ -47,9 +47,9 @@ export default function Discovery() {
  const saveDiscovery = async () => { setSettings(await apiFetch<Settings>("/discovery/settings", { method: "PUT", body: JSON.stringify(settings) })); toast.success("Discovery settings saved"); };
  const pickTitle = (value: TitleCard) => { setTitle(value); setVariants({ posters: [], backdrops: [] }); setBadges([]); };
  const choose = <K extends keyof Settings>(key: K, value: Settings[K]) => setSettings(s => s ? { ...s, [key]: value } : s);
- return <div className="space-y-6 p-6">
+ return <PageContainer className="space-y-6">
   <PageHeader title="Discovery" description="Watchlists, ratings and artwork in your viewers’ Plex apps." />
-  <nav aria-label="Discovery tools" className="flex flex-wrap gap-2">{[["watchlist", "Watchlists"], ["ratings", "Ratings"], ["artwork", "Artwork"], ["search", "Search & recaps"]].map(([id, label]) => <Button key={id} variant={tab === id ? "default" : "outline"} onClick={() => setTab(id!)}>{label}</Button>)}</nav>
+  <div className="border-b border-border"><SubtabNav ariaLabel="Discovery tools" active={tab} onSelect={key => setTab(key as typeof tab)} tabs={[{ key: "watchlist", label: "Watchlists" }, { key: "ratings", label: "Ratings" }, { key: "artwork", label: "Artwork" }, { key: "search", label: "Search & recaps" }]} /></div>
   {loading ? <Spinner label="Loading discovery settings" /> : <>
    {(tab === "watchlist" || tab === "artwork") && <label className="block text-sm">Viewer<select className={select} value={viewer} onChange={e => setViewer(Number(e.target.value))}>{users.map(user => <option key={user.id} value={user.id}>{user.title || user.username}</option>)}</select></label>}
    {tab === "watchlist" && settings && <section className={panel}>
@@ -92,5 +92,5 @@ export default function Discovery() {
     <Button disabled={busy} onClick={() => void perform(saveDiscovery)}>Save search settings</Button>
    </section>}
   </>}
- </div>;
+ </PageContainer>;
 }

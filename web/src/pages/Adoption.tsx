@@ -1,4 +1,4 @@
-import { Button, Input, PageHeader, toast } from "@braedonsaunders/appkit-ui";
+import { Button, Input, PageContainer, PageHeader, SubtabNav, toast } from "@braedonsaunders/appkit-ui";
 import { useCallback, useEffect, useState } from "react";
 import { api, apiBlob, apiFetch, API_BASE, errorMessage, getToken } from "../lib/api";
 import { TitleSearch } from "../components/pickers";
@@ -29,11 +29,11 @@ async function upload(path: string, file: File, contentType: string) {
 
 export default function Adoption() {
   const [tab, setTab] = useState<"migration" | "libraries" | "backups">("migration");
-  return <div className="space-y-6 p-6">
+  return <PageContainer className="space-y-6">
     <PageHeader title="Bring your library" description="Move your Plex history, use local media, and keep portable backups." />
-    <nav aria-label="Adoption tools" className="flex flex-wrap gap-2">{([ ["migration", "Migration"], ["libraries", "Local libraries"], ["backups", "Backups"] ] as const).map(([key, label]) => <Button key={key} variant={tab === key ? "default" : "outline"} onClick={() => setTab(key)}>{label}</Button>)}</nav>
+    <div className="border-b border-border"><SubtabNav ariaLabel="Adoption tools" active={tab} onSelect={key => setTab(key as typeof tab)} tabs={[{ key: "migration", label: "Migration" }, { key: "libraries", label: "Local libraries" }, { key: "backups", label: "Backups" }]} /></div>
     {tab === "migration" ? <Migration /> : tab === "libraries" ? <LocalLibraries /> : <BackupPanel />}
-  </div>;
+  </PageContainer>;
 }
 function Migration() {
   const [url, setURL] = useState(""); const [token, setToken] = useState(""); const [users, setUsers] = useState<EtherUser[]>([]); const [viewer, setViewer] = useState("");
