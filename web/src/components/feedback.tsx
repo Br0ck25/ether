@@ -1,0 +1,90 @@
+import { Alert, AlertDescription, AlertTitle, Button, EmptyState, Skeleton, Spinner } from "@braedonsaunders/appkit-ui";
+import { CloudOff, RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
+import { ApiError, errorMessage, isUnavailable } from "../lib/api";
+
+export function LoadingRows({ rows = 3, className }: { rows?: number; className?: string }) {
+  return (
+    <div className={className} role="status" aria-label="Loading">
+      <div className="space-y-3">
+        {Array.from({ length: rows }, (_, i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)}
+      </div>
+    </div>
+  );
+}
+
+export function LoadingInline({ label = "Loading…" }: { label?: string }) {
+  return (
+    <span role="status" className="inline-flex items-center gap-2 text-sm text-fg-muted">
+      <Spinner size={14} label={label} /> {label}
+    </span>
+  );
+}
+
+export function PosterSkeletons({ count = 12, className = "grid grid-cols-[repeat(auto-fill,minmax(7.5rem,1fr))] gap-3" }: { count?: number; className?: string }) {
+  return (
+    <div className={className} role="status" aria-label="Loading titles">
+      {Array.from({ length: count }, (_, i) => <Skeleton key={i} className="aspect-[2/3] w-full rounded-md" />)}
+    </div>
+  );
+}
+
+/**
+ * Error panel for a failed load. A 404/501 from a feature the server doesn't
+ * offer renders as a calm "unavailable" state instead of a red error.
+ */
+export function ErrorPanel({ error, onRetry, feature, className }: {
+  error: unknown; onRetry?: () => void; feature?: string; className?: string;
+}) {
+  if (!error) return null;
+  if (feature && isUnavailable(error)) {
+    return (
+      <EmptyState
+        className={className}
+        icon={<CloudOff />}
+        title={`${feature} isn't available on this server`}
+        description="Update Ether to the latest version to use it. Everything else keeps working in the meantime."
+        action={onRetry ? <Button variant="outline" size="sm" onClick={onRetry}><RefreshCw size={14} /> Check again</Button> : undefined}
+      />
+    );
+  }
+  return (
+    <Alert variant="destructive" className={className} role="alert">
+      <AlertTitle>{error instanceof ApiError && error.status === 0 ? "Can't reach Ether" : "Something went wrong"}</AlertTitle>
+      <AlertDescription>
+        <span className="block">{errorMessage(error)}</span>
+        {onRetry ? <Button variant="outline" size="sm" className="mt-3" onClick={onRetry}><RefreshCw size={14} /> Try again</Button> : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/** Inline banner for mutation errors, with validation field messages listed. */
+export function MutationError({ error }: { error: unknown }) {
+  if (!error) return null;
+  const fields = error instanceof ApiError ? error.fields ?? [] : [];
+  return (
+    <Alert variant="destructive" role="alert">
+      <AlertTitle>{fields.length ? "Please fix the highlighted fields" : "Couldn't save"}</AlertTitle>
+      <AlertDescription>
+        {fields.length ? (
+          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+            {fields.map((f) => <li key={f.field}><code className="text-xs">{f.field}</code> {f.message}</li>)}
+          </ul>
+        ) : errorMessage(error)}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+export function SectionHeading({ title, description, actions, id }: { title: string; description?: ReactNode; actions?: ReactNode; id?: string }) {
+  return (
+    <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+      <div className="min-w-0">
+        <h2 id={id} className="text-sm font-semibold text-fg">{title}</h2>
+        {description ? <p className="mt-0.5 text-sm text-fg-muted">{description}</p> : null}
+      </div>
+      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+    </div>
+  );
+}

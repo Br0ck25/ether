@@ -1,14 +1,29 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
     <title>Ether</title>
-    <script type="module" crossorigin src="/ether/assets/index-C9wBWSpD.js"></script>
-    <link rel="stylesheet" crossorigin href="/ether/assets/index-BYCB8Ftg.css">
+    <script>
+      // Dark is the default; the owner can switch to light from the header.
+      // Runs before paint so there is no flash of the wrong theme.
+      (function () {
+        var key = "ether-theme";
+        var theme = "dark";
+        try {
+          theme = localStorage.getItem(key) === "light" ? "light" : "dark";
+          localStorage.setItem(key, theme);
+        } catch (_) {}
+        var el = document.documentElement;
+        el.classList.toggle("dark", theme === "dark");
+        el.classList.toggle("light", theme === "light");
+      })();
+    </script>
+    <script type="module" crossorigin src="/ether/assets/index-yLgwvcD1.js"></script>
+    <link rel="stylesheet" crossorigin href="/ether/assets/index-Ddnbc16i.css">
   </head>
-  <body>
+  <body class="bg-bg text-fg antialiased">
     <div id="root"></div>
   </body>
 </html>

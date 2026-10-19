@@ -1,61 +1,88 @@
+import { Badge, Button, EmptyState, Input, ListPageLayout, PageHeader, Switch, confirmDialog, toast, cn } from "@braedonsaunders/appkit-ui";
+import { RefreshCw, ScrollText, Search, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "../api";
-import { ErrorBanner, Spinner } from "../components";
-import type { LogEntry } from "../types";
+import { ErrorPanel, LoadingRows } from "../components/feedback";
+import { Segmented } from "../components/fields";
+import { api, errorMessage } from "../lib/api";
+import { useDebouncedValue } from "../lib/hooks";
+import type { LogEntry } from "../lib/types";
+
+const LEVELS = [
+  { value: "", label: "All" }, { value: "debug", label: "Debug+" }, { value: "info", label: "Info+" }, { value: "warn", label: "Warnings+" }, { value: "error", label: "Errors" },
+];
+
+function levelVariant(l: string): "destructive" | "warning" | "info" | "secondary" {
+  const v = l.toLowerCase();
+  return v.startsWith("err") ? "destructive" : v.startsWith("warn") ? "warning" : v === "info" ? "info" : "secondary";
+}
 
 export default function Logs() {
   const [entries, setEntries] = useState<LogEntry[] | null>(null);
   const [total, setTotal] = useState(0);
   const [level, setLevel] = useState("");
   const [q, setQ] = useState("");
+  const query = useDebouncedValue(q, 250);
   const [follow, setFollow] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.logs({ limit: 500, level, q });
-      setEntries(r.entries); setTotal(r.total); setError(null);
+      const r = await api.logs({ limit: 1000, level, q: query });
+      setEntries(r.entries ?? []); setTotal(r.total); setError(null);
     } catch (e) { setError(e); }
-  }, [level, q]);
+  }, [level, query]);
 
-  useEffect(() => { const t = setTimeout(load, 200); return () => clearTimeout(t); }, [load]);
+  useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     if (!follow) return;
-    const t = setInterval(load, 2000);
-    return () => clearInterval(t);
+    const t = window.setInterval(() => void load(), 2000);
+    return () => window.clearInterval(t);
   }, [follow, load]);
   useEffect(() => { if (follow) endRef.current?.scrollIntoView({ block: "end" }); }, [entries, follow]);
 
+  const clear = async () => {
+    if (!(await confirmDialog({ title: "Clear logs?", message: "The in-memory log buffer is emptied. Log files on disk are not affected.", confirmLabel: "Clear", tone: "danger" }))) return;
+    try { await api.clearLogs(); await load(); toast.success("Logs cleared"); }
+    catch (e) { toast.error("Couldn't clear logs", { description: errorMessage(e) }); }
+  };
+
   return (
-    <div className="page">
-      <div className="page-head"><h1>Logs</h1><span className="muted">{total} entries retained</span></div>
-      <ErrorBanner error={error} />
-      <div className="toolbar" role="search">
-        <input className="input" type="search" placeholder="Filter messages…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Filter logs" />
-        <select className="input input-narrow" value={level} onChange={(e) => setLevel(e.target.value)} aria-label="Minimum level">
-          <option value="">All levels</option><option value="debug">Debug+</option>
-          <option value="info">Info+</option><option value="warn">Warnings+</option><option value="error">Errors</option>
-        </select>
-        <label className="toggle"><input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> Follow</label>
-        <button type="button" className="btn btn-small" onClick={load}>Reload</button>
-        <button type="button" className="btn btn-small btn-ghost" onClick={async () => { try { await api.clearLogs(); await load(); } catch (e) { setError(e); } }}>Clear</button>
-      </div>
-      {!entries ? <Spinner /> : entries.length === 0 ? <p className="muted">No log entries match.</p> : (
-        <div className="log-view" role="log" aria-label="Server logs">
-          {entries.map((e, i) => (
-            <div key={i} className="log-line">
-              <time>{new Date(e.time).toLocaleTimeString()}</time>
-              <span className={`log-level log-${e.level.toLowerCase()}`}>{e.level}</span>
-              <span className="log-msg">{e.message}</span>
-              {e.attrs && Object.keys(e.attrs).length ? (
-                <span className="log-attrs">{Object.entries(e.attrs).map(([k, v]) => `${k}=${v}`).join(" ")}</span>
-              ) : null}
+    <ListPageLayout
+      header={
+        <>
+          <PageHeader title="Logs" description={`What the server has been doing. ${total.toLocaleString()} entries retained in memory.`}
+            actions={<div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void load()}><RefreshCw size={14} /> Reload</Button><Button variant="ghost" size="sm" onClick={() => void clear()}><Trash2 size={14} /> Clear</Button></div>} />
+          <div className="flex flex-wrap items-center gap-3" role="search">
+            <div className="relative min-w-52 flex-1 sm:max-w-sm">
+              <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" aria-hidden />
+              <Input type="search" className="h-9 pl-8" placeholder="Filter messages…" value={q} onChange={(e) => setQ(e.currentTarget.value)} aria-label="Filter logs" />
             </div>
-          ))}
-          <div ref={endRef} />
+            <Segmented ariaLabel="Minimum level" size="sm" value={level} onChange={setLevel} options={LEVELS} />
+            <label className="flex items-center gap-2 text-sm text-fg-muted"><Switch checked={follow} onChange={(e) => setFollow(e.currentTarget.checked)} /> Follow</label>
+          </div>
+        </>
+      }
+    >
+      {error ? <ErrorPanel error={error} onRetry={() => void load()} /> : !entries ? <LoadingRows rows={6} /> : entries.length === 0 ? (
+        <EmptyState icon={<ScrollText />} title="No log entries match" description={q || level ? "Try a broader filter." : "The server hasn't logged anything since it started or was last cleared."} />
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-border bg-surface" role="log" aria-label="Server logs">
+          <div className="max-h-[calc(100vh-15rem)] overflow-auto font-mono text-xs">
+            {entries.map((e, i) => (
+              <div key={i} className={cn("flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-border-subtle px-3 py-1.5 last:border-b-0", e.level.toLowerCase().startsWith("err") && "bg-danger-subtle/40")}>
+                <time className="shrink-0 tabular-nums text-fg-subtle" dateTime={e.time} title={new Date(e.time).toLocaleString()}>{new Date(e.time).toLocaleTimeString()}</time>
+                <Badge variant={levelVariant(e.level)} className="w-14 justify-center font-mono text-[10px] uppercase">{e.level}</Badge>
+                <span className="min-w-0 flex-1 break-words text-fg">{e.message}</span>
+                {e.attrs && Object.keys(e.attrs).length ? (
+                  <span className="w-full break-all pl-[calc(4.5rem+3.5rem)] text-fg-muted sm:w-auto sm:pl-0">{Object.entries(e.attrs).map(([k, v]) => <span key={k} className="mr-2"><span className="text-fg-subtle">{k}=</span>{v}</span>)}</span>
+                ) : null}
+              </div>
+            ))}
+            <div ref={endRef} />
+          </div>
         </div>
       )}
-    </div>
+    </ListPageLayout>
   );
 }

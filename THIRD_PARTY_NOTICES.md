@@ -44,6 +44,29 @@ Other work packages may add modules; they must extend this table in the
 same PR (see CONTRIBUTING.md). Regenerate the ground truth any time
 with `go list -m all` and each module's `LICENSE` file.
 
+## Owner web UI (npm packages bundled into `internal/admin/dist`)
+
+The `/ether/` owner UI (`web/`) is built with Vite and embedded in the
+binary. The bundle includes these packages (exact versions are pinned in
+[`web/pnpm-lock.yaml`](web/pnpm-lock.yaml)):
+
+| Package | Used for | Licence |
+| --- | --- | --- |
+| `@braedonsaunders/appkit-ui`, `@braedonsaunders/appkit-tokens`, `@braedonsaunders/appkit-dashboard` (primitives entry) | Design system: components, semantic tokens, dashboard tiles | AGPL-3.0-or-later |
+| `react`, `react-dom`, `react-router`, `react-router-dom` | UI runtime and routing | MIT |
+| `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` | Accessible drag-to-reorder | MIT |
+| `lucide-react` | Icons | ISC |
+| `framer-motion` (+ `motion-dom`, `motion-utils`) | AppKit interaction motion | MIT |
+| `clsx`, `tailwind-merge` | Class composition (via AppKit) | MIT |
+| `class-variance-authority` | Component variants (via AppKit) | Apache-2.0 |
+| `tailwindcss` (build-time; generated CSS ships) | Utility CSS | MIT |
+
+AppKit is AGPL-3.0-or-later. GPLv3 section 13 expressly permits combining
+GPLv3 code with AGPLv3 code; the AppKit parts keep their AGPL terms,
+including the obligation to offer source to users interacting with them
+over a network. Ether's complete source, including `web/`, is public at
+the repository above, which satisfies that offer.
+
 ## AltMount (reference only)
 
 Ether was designed with [AltMount](https://github.com/javi11/altmount)
