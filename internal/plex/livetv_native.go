@@ -11,21 +11,19 @@ import (
 )
 
 // PMS's channel-tune route serializes a rolling subscription, rather than an
-// ordinary play queue. Its grab's Video and Media are single objects, unlike
-// normal library metadata. Keep these shapes separate from catalogue models.
-type nativeLiveVideo struct {
-	Metadata model.Metadata `plex:",inline"`
-	Media    model.Media    `plex:"Media,object"`
-}
+// ordinary play queue. Current native clients read grab.Metadata directly,
+// then map its Media array. Keep that client contract separate from the Web
+// bootstrap and from the older PMS binary's Video/Media serialization.
 
 type nativeLiveGrab struct {
-	Key            string          `plex:"key"`
-	ID             string          `plex:"id"`
-	SubscriptionID int64           `plex:"mediaSubscriptionID"`
-	MediaIndex     int             `plex:"mediaIndex"`
-	Status         string          `plex:"status"`
-	Rolling        bool            `plex:"rolling"`
-	Video          nativeLiveVideo `plex:"Video,object"`
+	Key            string         `plex:"key"`
+	ID             string         `plex:"id"`
+	SubscriptionID int64          `plex:"mediaSubscriptionID"`
+	MediaIndex     int            `plex:"mediaIndex"`
+	Status         string         `plex:"status"`
+	Rolling        bool           `plex:"rolling"`
+	Provider       string         `plex:"provider"`
+	Metadata       model.Metadata `plex:"Metadata,object"`
 }
 
 type nativeLiveSubscription struct {
@@ -52,8 +50,7 @@ func nativeLiveRequest(r *http.Request) bool {
 
 func (s *Server) nativeLiveSubscriptionFor(info livetv.SessionInfo) nativeLiveSubscription {
 	md := s.liveSessionMetadata(info)
-	media := md.Media[0]
-	md.Media = nil
+	md.Extra = append(md.Extra, model.A("source", "server://"+s.identity().MachineIdentifier), model.A("itemType", "live"))
 	web := s.liveSubscriptionFor(info)
 	return nativeLiveSubscription{
 		Key: strconv.FormatInt(info.SubscriptionID, 10), Type: 4,
@@ -61,7 +58,7 @@ func (s *Server) nativeLiveSubscriptionFor(info livetv.SessionInfo) nativeLiveSu
 		Grab: []nativeLiveGrab{{
 			Key: "/media/grabbers/operations/" + info.ID, ID: info.ID,
 			SubscriptionID: info.SubscriptionID, Status: "inprogress", Rolling: true,
-			Video: nativeLiveVideo{Metadata: md, Media: media},
+			Provider: s.identity().MachineIdentifier, Metadata: md,
 		}},
 	}
 }

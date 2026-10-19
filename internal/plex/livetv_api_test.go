@@ -200,8 +200,8 @@ func (t *liveProbeTranscoder) Decide(info core.MediaInfo, caps core.ClientCaps, 
 	return transcode.Decide(info, caps, opts, transcode.Policy{})
 }
 
-// Cardinality and element names here follow the saved PMS tune handler and its
-// rolling-subscription/grab serializers, rather than the OpenAPI sample.
+// Current publisher native-client tune parsing reads nonempty subscription/grab
+// arrays, grab.Metadata, and a Media array. The older PMS serializer differs.
 func TestNativeTuneReturnsRollingSubscription(t *testing.T) {
 	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
 	f, service, c := liveFixture(t, tc)
@@ -224,13 +224,13 @@ func TestNativeTuneReturnsRollingSubscription(t *testing.T) {
 				mc := decodeJSON(t, tune)
 				sub := mc["MediaSubscription"].([]any)[0].(map[string]any)
 				op := sub["MediaGrabOperation"].([]any)[0].(map[string]any)
-				video := op["Video"].(map[string]any)
-				media := video["Media"].(map[string]any)
+				video := op["Metadata"].(map[string]any)
+				media := video["Media"].([]any)[0].(map[string]any)
 				if sub["type"] != float64(4) || sub["channelIdentifier"] != c.ID || op["status"] != "inprogress" || video["genuineMediaAnalysis"] != true {
 					t.Fatal(body)
 				}
 				subID, ok := op["mediaSubscriptionID"].(float64)
-				if !ok || subID <= 0 || sub["key"] != fmt.Sprintf("%.0f", subID) || op["Metadata"] != nil || mc["Metadata"] != nil {
+				if !ok || subID <= 0 || sub["key"] != fmt.Sprintf("%.0f", subID) || op["Video"] != nil || mc["Metadata"] != nil || op["provider"] != f.srv.identity().MachineIdentifier {
 					t.Fatal(body)
 				}
 				uuid := media["uuid"].(string)
@@ -261,9 +261,9 @@ func TestNativeLiveSubscriptionOwnershipAndPlayback(t *testing.T) {
 	}
 	sub := decodeJSON(t, tune)["MediaSubscription"].([]any)[0].(map[string]any)
 	op := sub["MediaGrabOperation"].([]any)[0].(map[string]any)
-	video := op["Video"].(map[string]any)
+	video := op["Metadata"].(map[string]any)
 	path := video["key"].(string)
-	id := video["Media"].(map[string]any)["uuid"].(string)
+	id := video["Media"].([]any)[0].(map[string]any)["uuid"].(string)
 	subPath := "/media/subscriptions/" + sub["key"].(string)
 	opPath := op["key"].(string)
 	for _, target := range []string{subPath, opPath} {
