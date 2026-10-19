@@ -163,6 +163,8 @@ export const PLEX: FieldGroup[] = [
         help: "Leave empty to use the tracked public PMS version.",
       },
       { key: "latestCompatibilityVersion", label: "Latest public PMS version", kind: "readonly" },
+      // Edited at Home screens › Clean Home.
+      { key: "disableCleanHome", label: "Clean Home", kind: "hidden" },
     ],
   },
 ];
@@ -249,6 +251,8 @@ export const CATALOG: FieldGroup[] = [
       { key: "minPopularity", label: "Minimum popularity", kind: "number", min: 0, step: 1 },
       { key: "minVotes", label: "Minimum votes", kind: "number", min: 0, step: 10 },
       { key: "includeAdult", label: "Include adult titles", kind: "bool" },
+      // Legacy: the server always enforces release dates.
+      { key: "showUnreleased", label: "Show unreleased titles", kind: "hidden" },
     ],
   },
 ];
@@ -405,7 +409,7 @@ export const LLM: FieldGroup[] = [
 
 export const UPDATES: FieldGroup[] = [
   {
-    title: "Updates",
+    title: "Release channel",
     fields: [
       {
         key: "channel",
@@ -430,12 +434,18 @@ export const UPDATES: FieldGroup[] = [
 
 export const SPIKE: FieldGroup[] = [
   {
-    title: "Local files",
+    title: "Test playback with a local file",
     description:
-      "Serve files from disk to verify a Plex client's playback. Meant for troubleshooting.",
+      "Serve a file from this computer to your Plex apps to tell whether a playback problem is the app or the stream. This is a diagnostic, not a library; turn it off when you're done.",
     fields: [
-      { key: "enabled", label: "Enabled", kind: "bool" },
-      { key: "localFiles", label: "Files", kind: "list", placeholder: "/path/to/movie.mkv" },
+      { key: "enabled", label: "Serve test files", kind: "bool" },
+      {
+        key: "localFiles",
+        label: "Test files",
+        kind: "list",
+        placeholder: "/path/to/movie.mkv",
+        help: "Full paths to video files on this computer.",
+      },
     ],
   },
 ];

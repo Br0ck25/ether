@@ -1,5 +1,4 @@
 import { Drawer } from "../../components/Drawer";
-import { EditPanel } from "../../components/EditPanel";
 import { Badge, Button, Input, cn } from "@braedonsaunders/appkit-ui";
 import { ChevronDown, Plus, RotateCcw, Search, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -58,6 +57,7 @@ export function RowPool({
 }) {
   const [q, setQ] = useState("");
   const [custom, setCustom] = useState("");
+  const [patternOpen, setPatternOpen] = useState(false);
   const entries = useMemo<PoolEntry[]>(() => {
     const out: PoolEntry[] = available
       .filter((a) => !FRONT_END_ROWS.has(a.kind))
@@ -121,10 +121,22 @@ export function RowPool({
           />
         ))}
       </ul>
-      <EditPanel
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-8 text-xs text-fg-muted"
+        onClick={() => setPatternOpen(true)}
+      >
+        <Plus size={14} /> Add custom pattern
+      </Button>
+      <Drawer
+        open={patternOpen}
+        onClose={() => {
+          setPatternOpen(false);
+          setCustom("");
+        }}
         title="Custom row pattern"
         description="Advanced: target row IDs, kinds or glob patterns."
-        action="Add custom pattern"
         size="md"
       >
         <form
@@ -135,8 +147,9 @@ export function RowPool({
             if (!row) return;
             if (!policyIn(draft, layer, section, row))
               onChange(setPolicy(draft, layer, section, { row, status: "eligible" }));
-            onFocusRow(row);
             setCustom("");
+            setPatternOpen(false);
+            onFocusRow(row);
           }}
         >
           <Input
@@ -156,7 +169,7 @@ export function RowPool({
             <Plus size={14} /> Add
           </Button>
         </form>
-      </EditPanel>
+      </Drawer>
     </section>
   );
 }

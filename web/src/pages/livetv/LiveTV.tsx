@@ -1,14 +1,6 @@
 import { Drawer } from "../../components/Drawer";
-import { EditPanel } from "../../components/EditPanel";
-import {
-  Button,
-  PagedTable,
-  PageContainer,
-  PageHeader,
-  SubtabNav,
-  Input,
-  Switch,
-} from "@braedonsaunders/appkit-ui";
+import { DomainPage, useRouteTab } from "../../components/layout";
+import { Button, PagedTable, SubtabNav, Input, Switch } from "@braedonsaunders/appkit-ui";
 import { useEffect, useRef, useState } from "react";
 import { api, apiFetch, errorMessage } from "../../lib/api";
 import type { EtherUser } from "../../lib/types";
@@ -55,13 +47,6 @@ type Source = {
   updatedAt: string;
 };
 type Programme = { id: string; channelId: string; start: string; end: string; item: Item };
-type Policy = {
-  userId: number;
-  disabled: boolean;
-  channels: string[];
-  favorites: string[];
-  maxRating: string;
-};
 const input = "rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg";
 const emptyChannel = (): Channel => ({
   id: "",
@@ -196,6 +181,12 @@ function ProgrammePicker({
     </div>
   );
 }
+const TABS = [
+  { key: "channels", label: "Channels" },
+  { key: "sources", label: "IPTV sources" },
+  { key: "guide", label: "Guide" },
+] as const;
+
 const clock = (date: string) =>
   new Date(date).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
 
@@ -225,9 +216,7 @@ export default function LiveTV() {
     guide: "",
   });
   const [users, setUsers] = useState<EtherUser[]>([]);
-  const [viewer, setViewer] = useState(0);
-  const [policy, setPolicy] = useState<Policy | null>(null);
-  const [tab, setTab] = useState<"channels" | "sources" | "guide" | "access">("channels");
+  const tab = useRouteTab(TABS);
   async function refresh() {
     const [c, s, g] = await Promise.all([
       apiFetch<Channel[]>("/livetv/channels"),
@@ -261,20 +250,6 @@ export default function LiveTV() {
       });
     return () => controller.abort();
   }, []);
-  useEffect(() => {
-    if (!viewer) {
-      setPolicy(null);
-      return;
-    }
-    const ctrl = new AbortController();
-    setPolicy(null);
-    void apiFetch<Policy>(`/livetv/policies/${viewer}`, { signal: ctrl.signal })
-      .then(setPolicy)
-      .catch((e) => {
-        if (!ctrl.signal.aborted) setMessage(errorMessage(e));
-      });
-    return () => ctrl.abort();
-  }, [viewer]);
   async function action(fn: () => Promise<void>) {
     setBusy(true);
     setMessage("");
@@ -423,29 +398,20 @@ export default function LiveTV() {
     </div>
   );
   return (
-    <PageContainer className="space-y-6">
-      <PageHeader
-        title="Live TV"
-        description="Create virtual channels from your catalogue, or import your own M3U playlist and XMLTV guide. Plex Live TV uses the owner’s verified Plex Pass status."
-      />
-      {message && !editing && !sourceOpen && (
-        <p role="status" className="rounded-md border border-border p-3 text-sm">
-          {message}
-        </p>
-      )}
-      <div className="border-b border-border">
-        <SubtabNav
-          ariaLabel="Live TV sections"
-          active={tab}
-          onSelect={(key) => setTab(key as typeof tab)}
-          tabs={[
-            { key: "channels", label: "Channels" },
-            { key: "sources", label: "IPTV sources" },
-            { key: "guide", label: "Guide preview" },
-            { key: "access", label: "Viewer access" },
-          ]}
-        />
-      </div>
+    <DomainPage
+      title="Live TV"
+      description="Build channels from your catalogue or import your own M3U playlist and XMLTV guide. Live TV in Plex needs your Plex Pass. Which channels each viewer gets is set on their profile."
+      base="/livetv"
+      tabs={TABS}
+      active={tab}
+      status={
+        message && !editing && !sourceOpen ? (
+          <p role="status" className="rounded-md border border-border bg-surface p-3 text-sm">
+            {message}
+          </p>
+        ) : null
+      }
+    >
       {tab === "channels" && (
         <>
           <div className="flex flex-wrap gap-2">
@@ -1186,88 +1152,6 @@ export default function LiveTV() {
           {showGuide(guide)}
         </>
       )}
-      {tab === "access" && (
-        <div className="space-y-4 rounded-lg border border-border p-5">
-          <label className="flex flex-col gap-2 text-sm">
-            Viewer
-            <select
-              className={input}
-              value={viewer}
-              onChange={(e) => setViewer(Number(e.target.value))}
-            >
-              <option value={0}>Select a viewer</option>
-              {users.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.title || u.username}
-                </option>
-              ))}
-            </select>
-          </label>
-          {policy && (
-            <EditPanel
-              title="Live TV access"
-              description="Choose allowed channels and additional parental limits for this viewer."
-              action="Edit Live TV access"
-            >
-              <fieldset disabled={busy} className="min-w-0 space-y-4">
-                <label className="flex items-center gap-2 text-sm">
-                  <Switch
-                    type="checkbox"
-                    checked={policy.disabled}
-                    onChange={(e) => setPolicy({ ...policy, disabled: e.target.checked })}
-                  />
-                  Disable Live TV for this viewer
-                </label>
-                <label className="flex flex-col gap-2 text-sm">
-                  Additional maximum rating
-                  <Input
-                    className={input}
-                    value={policy.maxRating || ""}
-                    onChange={(e) => setPolicy({ ...policy, maxRating: e.target.value })}
-                    placeholder="Blank inherits viewer’s existing parental limits"
-                  />
-                </label>
-                <p className="text-xs text-fg-muted">
-                  Select allowed channels; an empty selection permits all channels. Existing viewer
-                  rating and section limits also apply to guide, tune, manifests and segments.
-                </p>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {channels.map((c) => (
-                    <label key={c.id} className="flex items-center gap-2 text-sm">
-                      <Switch
-                        type="checkbox"
-                        checked={(policy.channels || []).includes(c.id)}
-                        onChange={(e) =>
-                          setPolicy({
-                            ...policy,
-                            channels: e.target.checked
-                              ? [...(policy.channels || []), c.id]
-                              : (policy.channels || []).filter((id) => id !== c.id),
-                          })
-                        }
-                      />
-                      {c.number} · {c.name}
-                    </label>
-                  ))}
-                </div>
-                <Button
-                  onClick={() =>
-                    void action(async () => {
-                      await apiFetch(`/livetv/policies/${viewer}`, {
-                        method: "PUT",
-                        body: JSON.stringify(policy),
-                      });
-                      setMessage("Live TV access saved.");
-                    })
-                  }
-                >
-                  Save viewer access
-                </Button>
-              </fieldset>
-            </EditPanel>
-          )}
-        </div>
-      )}
-    </PageContainer>
+    </DomainPage>
   );
 }

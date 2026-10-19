@@ -1,0 +1,289 @@
+import {
+  Button,
+  EmptyState,
+  Input,
+  SearchSelect,
+  SettingsSection,
+  confirmDialog,
+} from "@braedonsaunders/appkit-ui";
+import { ListFilter, Plus } from "lucide-react";
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { ErrorPanel, LoadingRows } from "../../components/feedback";
+import { Section } from "../../components/layout";
+import { useViewers, viewerName } from "../../components/pickers";
+import { SettingsRow } from "../../components/SettingsRow";
+import type { Viewer } from "../../lib/contract";
+import type { QualityRule } from "../../lib/types";
+import {
+  OrderButtons,
+  RecordDrawer,
+  RecordItem,
+  recordErrors,
+  swap,
+  toastError,
+  type Errors,
+} from "../sources/form";
+import { useQuality } from "./useQuality";
+
+const DEVICES = [
+  "Plex for Apple TV",
+  "Plex Web",
+  "Plex for iOS",
+  "Plex for Android",
+  "Roku",
+  "Fire TV",
+  "LG",
+  "Samsung",
+  "Xbox",
+  "PlayStation",
+];
+const CUSTOM = "__custom__";
+
+function ruleViewer(r: QualityRule, viewers: Viewer[] | null) {
+  if (!r.userId) return "";
+  const v = viewers?.find((x) => x.id === r.userId);
+  return v ? viewerName(v) : "Unavailable viewer";
+}
+
+function ruleSummary(r: QualityRule, viewers: Viewer[] | null) {
+  return [r.product || "Any device", r.platform, ruleViewer(r, viewers)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** Client rules: the first rule matching an app picks its quality profile. */
+export function ClientRulesTab() {
+  const { config, quality, commit } = useQuality();
+  const { viewers } = useViewers();
+  const [editing, setEditing] = useState<{ index: number; draft: QualityRule } | null>(null);
+  const [errors, setErrors] = useState<Errors>({});
+  const [error, setError] = useState<unknown>(null);
+  const [saving, setSaving] = useState(false);
+
+  if (config.error) return <ErrorPanel error={config.error} onRetry={() => void config.reload()} />;
+  if (!quality) return <LoadingRows rows={3} />;
+
+  const rules = quality.rules ?? [];
+  const profiles = quality.profiles ?? [];
+  const names = profiles.map((p) => ({ value: p.name, label: p.name }));
+
+  const open = (index: number, draft: QualityRule) => {
+    setErrors({});
+    setError(null);
+    setEditing({ index, draft: { ...draft } });
+  };
+
+  async function save() {
+    if (!editing || !quality) return;
+    const { index, draft } = editing;
+    const list =
+      index < rules.length ? rules.map((r, j) => (j === index ? draft : r)) : [...rules, draft];
+    setSaving(true);
+    setError(null);
+    setErrors({});
+    try {
+      await commit({ ...quality, rules: list }, index < rules.length ? "Rule saved" : "Rule added");
+      setEditing(null);
+    } catch (e) {
+      setError(e);
+      setErrors(recordErrors(e, `quality.rules[${index}].`));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!editing || !quality) return;
+    const { index } = editing;
+    const ok = await confirmDialog({
+      title: "Remove rule?",
+      message: "Apps it matched will use the next matching rule, or the defaults.",
+      confirmLabel: "Remove",
+      tone: "danger",
+    });
+    if (!ok) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await commit({ ...quality, rules: rules.filter((_, j) => j !== index) }, "Rule removed");
+      setEditing(null);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function move(i: number, d: -1 | 1) {
+    if (!quality) return;
+    try {
+      await commit({ ...quality, rules: swap(rules, i, i + d) }, "Rule order saved");
+    } catch (e) {
+      toastError("Couldn't reorder rules", e);
+    }
+  }
+
+  const draft = editing?.draft;
+  const isNew = editing ? editing.index >= rules.length : false;
+  const set = (patch: Partial<QualityRule>) =>
+    setEditing((e) => (e ? { ...e, draft: { ...e.draft, ...patch } } : e));
+  const custom =
+    draft?.product !== undefined && !DEVICES.includes(draft.product) && draft.product !== "";
+
+  return (
+    <>
+      <Section
+        title="Client rules"
+        description="Checked from the top. The first rule that matches an app picks its quality profile; apps no rule matches use the defaults."
+        actions={
+          <Button
+            size="sm"
+            onClick={() =>
+              open(rules.length, { profile: quality.default || profiles[0]?.name || "" })
+            }
+            disabled={!profiles.length}
+          >
+            <Plus size={14} /> Add rule
+          </Button>
+        }
+        bodyClassName=""
+      >
+        {rules.length === 0 ? (
+          <EmptyState
+            icon={<ListFilter />}
+            title="No rules"
+            description="Every app uses the default quality profiles."
+          />
+        ) : (
+          <ul className="divide-y divide-border">
+            {rules.map((r, i) => (
+              <RecordItem
+                key={i}
+                title={`${i + 1}. ${ruleSummary(r, viewers)}`}
+                description={`Uses ${r.profile || "no profile"}`}
+                order={
+                  <OrderButtons
+                    label={`rule ${i + 1}`}
+                    i={i}
+                    n={rules.length}
+                    onMove={(d) => void move(i, d)}
+                  />
+                }
+                editLabel={`Edit rule ${i + 1}`}
+                onEdit={() => open(i, r)}
+              />
+            ))}
+          </ul>
+        )}
+      </Section>
+      <p className="text-sm text-fg-muted">
+        Rules choose among your quality profiles. What each app can actually play is still checked
+        before playback.{" "}
+        <Link className="text-primary underline" to="/playback/devices">
+          View device capabilities
+        </Link>
+      </p>
+
+      <RecordDrawer
+        open={editing !== null}
+        onClose={() => !saving && setEditing(null)}
+        title={isNew ? "New rule" : `Rule ${(editing?.index ?? 0) + 1}`}
+        description="Match an app by device, platform or viewer."
+        onSave={() => void save()}
+        saving={saving}
+        saveLabel="Save rule"
+        onRemove={isNew ? undefined : () => void remove()}
+        removeLabel="Remove rule"
+        error={error}
+      >
+        {draft ? (
+          <SettingsSection title="Match">
+            <SettingsRow
+              title="Device"
+              description="The Plex app's product name."
+              control={
+                <div className="w-56">
+                  <SearchSelect
+                    value={custom ? CUSTOM : (draft.product ?? "")}
+                    onChange={(v) =>
+                      set({ product: v === CUSTOM ? "Custom device" : v || undefined })
+                    }
+                    options={[
+                      { value: "", label: "Any device" },
+                      ...DEVICES.map((v) => ({ value: v, label: v })),
+                      { value: CUSTOM, label: "Custom product name…" },
+                    ]}
+                    ariaLabel="Device"
+                  />
+                </div>
+              }
+            />
+            {custom ? (
+              <SettingsRow
+                title="Product name contains"
+                control={
+                  <Input
+                    value={draft.product ?? ""}
+                    onChange={(e) => set({ product: e.currentTarget.value })}
+                    aria-label="Custom product"
+                    className="sm:w-56"
+                  />
+                }
+              />
+            ) : null}
+            <SettingsRow
+              title="Platform"
+              description="e.g. tvOS, Android. Empty matches any."
+              control={
+                <Input
+                  value={draft.platform ?? ""}
+                  placeholder="Any"
+                  onChange={(e) => set({ platform: e.currentTarget.value || undefined })}
+                  aria-label="Platform"
+                  className="sm:w-56"
+                />
+              }
+            />
+            <SettingsRow
+              title="Viewer"
+              control={
+                <div className="w-56">
+                  <SearchSelect
+                    value={String(draft.userId ?? 0)}
+                    onChange={(v) => set({ userId: Number(v) || undefined })}
+                    options={[
+                      { value: "0", label: "Everyone" },
+                      ...(viewers ?? []).map((v) => ({
+                        value: String(v.id),
+                        label: viewerName(v),
+                      })),
+                    ]}
+                    ariaLabel="Viewer"
+                  />
+                </div>
+              }
+            />
+            <SettingsRow
+              title="Quality profile"
+              description={
+                errors.profile ? <span className="text-danger">{errors.profile}</span> : undefined
+              }
+              control={
+                <div className="w-56">
+                  <SearchSelect
+                    value={draft.profile}
+                    onChange={(v) => set({ profile: v })}
+                    options={names}
+                    ariaLabel="Profile"
+                    searchable={false}
+                  />
+                </div>
+              }
+            />
+          </SettingsSection>
+        ) : null}
+      </RecordDrawer>
+    </>
+  );
+}

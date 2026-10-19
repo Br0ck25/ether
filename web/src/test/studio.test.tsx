@@ -13,6 +13,19 @@ function hasRule(spec: CollectionSpec, pred: (r: Rule) => boolean) {
 }
 
 describe("Collection Studio editor", () => {
+  it("is a full page with a way back to the collections list", async () => {
+    renderApp("/collections/new?draft=test-page");
+    await screen.findByLabelText("Collection name", {}, WAIT);
+    const page = screen.getByRole("region", { name: "Collection Studio" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(within(page).getByRole("link", { name: /Collections/ })).toHaveAttribute(
+      "href",
+      "/collections",
+    );
+    expect(within(page).getByText("New collection")).toBeInTheDocument();
+    expect(screen.queryByText("Edge of your seat")).toBeNull();
+  });
+
   it("edits rules with live, debounced previews, undo, and saves", async () => {
     const { fake } = renderApp("/collections/new?draft=test-1");
     const name = await screen.findByLabelText("Collection name", {}, WAIT);
@@ -21,7 +34,7 @@ describe("Collection Studio editor", () => {
     // The initial preview arrives without any rules.
     await waitFor(() => expect(previewBodies(fake).length).toBeGreaterThan(0), WAIT);
     expect(
-      await within(screen.getByRole("dialog", { name: "Collection Studio" })).findByText(
+      await within(screen.getByRole("region", { name: "Live preview" })).findByText(
         /\d+ titles/,
         {},
         WAIT,
@@ -81,7 +94,7 @@ describe("Collection Studio editor", () => {
       WAIT,
     );
     expect(
-      await within(screen.getByRole("dialog", { name: "Collection Studio" })).findByText(
+      await within(screen.getByRole("region", { name: "Collection Studio" })).findByText(
         "Draft",
         {},
         WAIT,
