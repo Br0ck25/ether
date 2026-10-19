@@ -11,7 +11,8 @@ still has to answer. Keep this current when a client teaches us something.
 | Community spec `github.com/LukeHagar/plex-api-spec` | Cross-check of endpoint paths (`/myplex/account`, `/servers`, `/security/resources`) |
 | `python-plexapi` source | Attribute names clients actually parse (Media/Part/Stream, play queues, playlists) |
 | A reference PMS 1.43.4 (read-only GETs and decision probes, redacted) | Byte-level shapes: attribute order and JSON types, hub identifiers/keys/contexts, decision responses for Plex Web/iOS/Apple TV header sets, section listings, filters/sorts/fields |
-| `testdata/pms` fixtures + `cmd/pmsdiff` (main) | Structural diffs of the spike server against the reference |
+| `testdata/pms` fixtures + `cmd/pmsdiff` (main) | Structural diffs of Ether against the reference; see [Conformance](#conformance-pmsdiff) |
+| The Plex Web bundle served by the reference PMS (read-only, not copied) | `hasMDE=1` on decisions, which `*DecisionCode` fields the player reads, `/library/search` usage |
 
 No third-party code was copied; there are no notices to add.
 
@@ -36,9 +37,19 @@ One struct model renders as either format (`model.Marshal`).
   (`<MediaContainer size="0">\n</MediaContainer>`); children self-close with
   `" />"`. `'` is escaped as `&#39;` and `"` as `&#34;`, like PMS.
 - Decision responses are special: every element's attributes are
-  alphabetical with `decision`, `selected`, `location` appended; in JSON
-  `allowSync`, `librarySectionID`, `mediaTagVersion`, Media/Part/Stream `id`
-  and `hasVoiceActivity` are strings (`"id": "221632"`, `"allowSync": "1"`).
+  alphabetical with `decision`, `selected`, `location` appended (a Stream
+  sorts `selected` with the rest); a transcoded Media/Part lists the
+  attributes kept from the source first (`audioProfile hasVoiceActivity id
+  videoProfile`), then its own. In JSON `allowSync`, `librarySectionID`,
+  `mediaTagVersion`, Media/Part/Stream/tag `id`, `hasVoiceActivity`,
+  `canNormalizeLoudness`, `aspectRatio` and Rating `value` are strings
+  (`"id": "221632"`, `"allowSync": "1"`, `"aspectRatio": "1.85"`),
+  `UltraBlurColors` is an array (it is an object everywhere else), and the
+  item has no `Image` or `Guid` children.
+- Children order on items: Media, Image, UltraBlurColors, then Genre,
+  Country, Guid, Rating, Collection, Director, Writer, Role, Producer,
+  Label, Similar; detail pages end with Extras then Related. List items that
+  carry Guid (related hubs) put it before Genre.
 - Quirks preserved: `Media.optimizedForStreaming` is an int in JSON while
   `Part.optimizedForStreaming` is a bool; both only appear for MP4/MOV.
   Season-children containers carry `grandparentRatingKey` as an int.
@@ -105,16 +116,21 @@ headers allowed.
 | `/library/sections/{id}/firstCharacter` | Needs `Catalog.Facet(t, "firstCharacter")` (the spike implements it); empty otherwise. |
 | `/library/sections/{id}/categories` | Genre tiles (`type="directory"`) + `Meta`. |
 | `/library/sections/{id}/collections` | `Collections.List`; collection items are `/library/collections/{key}/children`. |
-| `/library/metadata/{keys}` | Comma lists supported. Detail adds all tags with `id`/`filter`, `Guid` children (imdb/tmdb/tvdb), `Rating` (TMDB audience), `Image`, streams. `includeChildren`, `includeOnDeck`, `includeRelated`, `includeExtras` honoured; `checkFiles`, `asyncAugmentMetadata` etc. accepted and ignored. Collections and playlists resolve here too. |
+| `/library/metadata/{keys}` | Comma lists supported. Detail adds all tags with `id`/`filter`, `Guid` children (imdb/tmdb/tvdb), `Rating` (TMDB audience), streams. `includeChildren`, `includeOnDeck`, `includeRelated`, `includeExtras` honoured; `checkFiles`, `asyncAugmentMetadata` etc. accepted and ignored. Collections and playlists resolve here too. |
+| Items everywhere (listings, hubs, children, search, detail) | `Image` children per PMS: movie/show `coverPoster`, `background`, `clearLogo`; season `coverPoster` (season, else show), `background`, show `clearLogo`; episode show `coverPoster`, `snapshot` (still), show `background`, show `clearLogo` (only artwork Ether can serve; no `backgroundSquare`). `UltraBlurColors` on movies, shows and collections (see below). `slug` from the title (`grandparentSlug`/`parentSlug` on episodes/seasons). Seasons carry `parentStudio`/`parentYear` and no dates, ratings, sort title or genre/country; episodes carry the show's `contentRating` and no `year`, sort title or genre/country. Lists show three plain tags per kind (shows: Role only); episodes in hubs and On Deck render in full (tag ids, Guid, Rating, streams) except in the Home hero row, as PMS does. Related hubs add `Guid` (before the tags) and omit `librarySection*`/`promoted`. |
+| Title enrichment | TMDB list results (most hub rows) carry no credits, studio, certification, tagline or logo. The first render schedules a background `Catalog.Get` (3 workers, 512-deep queue, duplicates coalesced, 6 h cache of 4000 trimmed titles, failures retried after 30 min); later renders merge the detail in. Seasons/episodes use the cached show for clear logo, studio, year and rating. Listings never wait for it. |
+| UltraBlurColors | Computed from the TMDB `w300` backdrop (through the artwork cache): each quadrant's mean colour is mapped into PMS's dark, saturated range (HSL lightness `0.10 + 0.35·L`, saturation `1.4·S + 0.15` unless near-grey). PMS picks palette colours, so hues match but values are not identical. Lazy: 2 workers, results kept in memory (50 000 entries) and in `plex_ultrablur` (key, backdrop path, four colours); renders batch-load stored colours, a changed backdrop is recomputed, failures retried after 1 h. |
 | `/children`, `/allLeaves`, `/grandchildren`, `/parent`, `/grandparent`, `/similar`, `/related`, `/onDeck` | Show children include PMS's "All episodes" `Directory` (suppressed with `excludeAllLeaves=1`); seasons/shows get `viewedLeafCount` from watch state. |
 | `/library/metadata/{key}/{thumb,art,clearLogo,...}/{ts}` | Proxied from TMDB through an in-memory LRU (128 MiB) with request coalescing. |
 | `/photo/:/transcode` | `url` may be one of our artwork paths (relative or absolute to this server / localhost / plex.direct) or an absolute TMDB URL; anything else is 403 (not an open proxy). No pixel work: the closest TMDB width variant ≥ the requested width is served (`w92`…`w1280`, `original`). |
-| `/hubs`, `/hubs/promoted` | Continue Watching first (`home.continue`, key `/hubs/home/continueWatching`, style `hero`), then `Recommender.HomeHubs`. `contentDirectoryID`, `excludeContinueWatching`, `identifier` honoured. |
-| `/hubs/continueWatching` (+`/items`) | `hubIdentifier="continueWatching"`, `context="hub.continueWatching"`, key `/hubs/continueWatching/items`. |
+| `/hubs`, `/hubs/promoted` | Continue Watching first (`home.continue`, key `/hubs/home/continueWatching`, style `hero`), then `Recommender.HomeHubs`, then "Recent Playlists" (`home.playlists`, the user's playlists, only when there are some and no `contentDirectoryID`). `contentDirectoryID`, `excludeContinueWatching`, `identifier` honoured. |
+| `/hubs/continueWatching` (+`/items`) | `hubIdentifier="continueWatching"`, `context="hub.continueWatching"`, key `/hubs/continueWatching/items`; items carry `includedAt` (their last view). |
 | `/hubs/sections/{id}` | `movie.inprogress.{id}` / `tv.inprogress.{id}` (key `/hubs/sections/{id}/continueWatching/items`), `movie.recentlyadded.{id}` (key `/library/sections/{id}/all?sort=addedAt:desc`) / `tv.recentlyadded.{id}` (key `/hubs/home/recentlyAdded?type=2&sectionID={id}`), then `Recommender.SectionHubs`. Hubs keep `size=0` rows like PMS. |
 | `/hubs/items?identifier=` | Re-fetches a generated hub with more items (count / container size). Ether hubs without a backing collection use this as their `key`. |
-| `/hubs/search`, `/search`, `/library/search` | Hub search returns Movies/Episodes/Collections/Shows hubs (empty ones included) with `score` strings; `/library/search` returns `SearchResult{score, Metadata}`. |
-| `/library/onDeck`, `/library/recentlyAdded`, `/hubs/home/*` | From `State.InProgress` and `Catalog.Browse(SortAdded)`. |
+| `/hubs/search`, `/search`, `/library/search` | Hub search returns Movies/Episodes/Collections/Shows hubs (empty ones included) with `score` strings; an empty `query` is PMS's HTML 400. `/library/search` (Plex Web's universal search) returns `SearchResult{score, Metadata}` with `librarySectionTitle` but no section id/key, like PMS. |
+| `/library/onDeck`, `/library/recentlyAdded`, `/hubs/home/*` | From `State.InProgress` and `Catalog.Browse(SortAdded)`. On Deck items lead with `allowSync` (false) and `librarySectionUUID`; episodes in full. |
+| `/library/sections/{id}/prefs` | The section settings apps read (`hidden`, `collectionMode`, `originalTitles`, `enableBIFGeneration`, `enableCreditsMarkerGeneration`; movies `enableCinemaTrailers`; shows `episodeSort`, `showOrdering` = `tmdbAiring`, `useSeasonTitles`, `flattenSeasons`, `enableIntroMarkerGeneration`) with Ether's real values; `default`/`value` are strings here, as in PMS. Writes are ignored. |
+| `/playlists...` items | Playlists report `duration` (sum of item runtimes) once every item's runtime is in the title cache. |
 | `/playlists...` | List/create (`uri=` or `playQueueID=`), get, delete, items (`playlistItemID` = 1-based position), add (`uri=`), remove, clear, move (`after=`). Renames are not in `core.Playlists` and are ignored. |
 | `/playQueues...` | In memory (6 h idle expiry, 2000 queues). Create from `uri` (server://, library://item, library://directory, plain paths; shows/seasons/collections/playlists expand to playable items) or `playlistID`; `key` selects the start item; `continuous=1` on an episode queues the rest of the show; `shuffle`. Get with `window`/`includeBefore`/`includeAfter`; add (`next=1` = play next), remove, move, shuffle/unshuffle/reset/clear. Timeline `playQueueItemID` moves the selection. |
 | `/:/timeline` | `State.Progress`, session tracking for `/status/sessions` and `playing` notifications, `Playback.Touch` (optional `plex.SessionToucher`), transcode keep-alive, `Hooks.OnTimeline`. `state=stopped` stops the play and transcode sessions. Owner kills are delivered as `terminationCode="2006" terminationText=...` on the next timeline (this is how PMS shows a message on the client). |
@@ -134,8 +150,22 @@ Flow: client creates a play queue, fetches metadata, then asks
 `Transcoder.Decide`, and remembers the binding under the client's `session`
 id (falling back to `X-Plex-Session-Identifier`, then client id + key).
 
+- Client-side decisions (`hasMDE=1`). Current Plex Web (and, per the
+  reference PMS's answers, iOS and Apple TV) send `hasMDE=1`: the app's own
+  media decision engine decides. With direct play allowed, PMS answers
+  `mdeDecisionCode=1000 mdeDecisionText="Direct play OK."` with the source
+  Media as direct play and no general/directPlay/transcode codes, even for
+  media it would transcode for that client without MDE; Ether does the same.
+  Ether still runs `Transcoder.Decide` and stores the result: if the app
+  then asks `start.m3u8` with `directPlay=0`, a stored direct-play decision
+  is re-decided without direct play (so a needed transcode isn't a plain
+  remux). With `hasMDE=1&directPlay=0` (Plex Web's stream request) the
+  normal transcode answer is returned. Failures add `mdeDecisionCode=2000`
+  and the message to the usual 2000/3000/4000 codes; Plex Web shows the
+  first `*DecisionText` whose code is ≥ 2000 (transcode, general, then mde).
 - Direct play: `generalDecisionCode=1000`, Part `decision="directplay"`,
-  streams `location="direct"`. The client then fetches the Part key
+  streams `location="direct"` (only the video and the selected audio and
+  subtitle streams, like PMS). The client then fetches the Part key
   `/library/parts/{ratingKey}/{changestamp}/file.{ext}`, which goes to
   `Playback.ServeRange` (preparing a session if none exists, e.g. clients that
   skip the decision). Part and Media ids are the ratingKey; Stream ids are a
@@ -144,7 +174,11 @@ id (falling back to `X-Plex-Session-Identifier`, then client id + key).
 - Remux/transcode: `1001 Direct play not available; Conversion OK.`,
   `directPlayDecisionCode=3000` with "Direct play is disabled." or the
   transcoder's reason, Media `protocol="hls" container="mpegts"`, Part without
-  key/file, streams `location="segments-av"` (subtitles `sidecar`/`burn`).
+  key/file or aspectRatio, streams `location="segments-av"` (subtitles
+  `sidecar`/`burn`). Transcoded streams drop the source-only details PMS
+  drops (video profile/chroma/scan type, audio layout/profile/sampling
+  rate/title); the decision's video `displayTitle` is the short form
+  ("1080p") with the codec in `extendedDisplayTitle`.
   `start.m3u8` then calls `Transcoder.StartHLS` with `Playback.InputURL` and
   returns a master playlist pointing at
   `session/{id}/base/index.m3u8`; session playlist and segment URLs are passed
@@ -180,8 +214,11 @@ id (falling back to `X-Plex-Session-Identifier`, then client id + key).
    affordances in a way that breaks detail pages, and that Plex's online
    features don't misbehave for these items.
 4. **Apple TV decisions.** Record the Apple TV app's real profile-extra and
-   check it accepts Ether's directplay/transcode decisions (attribute order
-   and string-typed ids now mirror PMS).
+   check it accepts Ether's directplay/transcode decisions. Field names,
+   JSON types, child order and XML attribute order now match the recorded
+   PMS decisions for all three clients (legacy, MDE direct, MDE stream;
+   `TestDecisionConformsToPMS`); what remains unverified is the apps'
+   behaviour on a real stream.
 5. **Plex Pass gating** for remote streams against a third-party server:
    what the apps check (`myPlexSubscription`, `ownerFeatures`).
 6. **plex.direct certificate** availability (handled by plextv/remote).
@@ -189,3 +226,142 @@ id (falling back to `X-Plex-Session-Identifier`, then client id + key).
    the alphabet jump bar; director/actor filter value lists aren't offered.
 8. **Downloads/sync.** `allowSync` is reported false everywhere; the new
    `downloadQueue` API is not implemented.
+
+## Conformance (pmsdiff)
+
+`testdata/pms` holds redacted responses recorded from a real PMS 1.43.4 for
+Plex Web, iOS and Apple TV header sets (XML and JSON): 27 requests × 6
+variants. `cmd/pmsdiff` compares a live Ether against them:
+
+```sh
+go build -o /tmp/pmsdiff ./cmd/pmsdiff
+pmsdiff compare --reference testdata/pms --target http://127.0.0.1:32400 \
+  --token <token> --client all --summary [--values] \
+  [--ignore "$(cat testdata/pms/data-gaps.regexp)"] [--only <path substring>]
+pmsdiff record --server <pms> --token <token> --only /transcode/universal/decision
+```
+
+How the comparison works (`internal/pmsconform`):
+
+- Bodies become schemas: array indices are collapsed (`/MediaContainer/Video/@slug`,
+  `$/MediaContainer/Metadata[]/Image[]/url`), each path keeps its value
+  types, distinct values and occurrence count, and child-element order is
+  kept as "a before b" pairs. Two libraries of different titles therefore
+  compare by shape.
+- `missing` (PMS has the path, Ether doesn't), `extra`, `type` (a JSON
+  type PMS never uses at that path; disjoint inferred types in XML, except
+  free-text attributes) and status/header/parse errors are blocking.
+  Descendants of a missing/extra element are folded into it (`+N nested`).
+- Values that legitimately differ (titles, ids, keys, timestamps, counts,
+  sizes, versions, platform, redacted values...) are compared by type only;
+  keys and URLs also by shape (`/library/metadata/{id}/children`). Other
+  single-valued paths and child order are reported as informational
+  `value` differences (`--values`).
+- `--summary` groups by endpoint across clients and formats and ends with a
+  count table (distinct schema paths). `--only` narrows the corpus; a
+  partial `record` keeps the saved discovery IDs and manifest notes.
+  `--ignore` drops paths matching a regexp; `testdata/pms/data-gaps.regexp`
+  lists data Ether doesn't have (Common Sense Media ages, critic ratings,
+  extras/chapters, producers/labels/similar, theme music, BIF indexes,
+  scanner stream details, watch state, Live TV provider, public address).
+- Older fixtures redacted `"multiuser":true` into invalid JSON; they are
+  repaired on load, and `Redact` now keeps JSON valid.
+- The iOS/Apple TV profiles now send the platform values the apps send
+  (`iOS`, `tvOS`); PMS answered the old `iPhone`/`Apple TV` platforms' decision
+  probes with 400. Those fixtures were re-recorded, and `hasMDE=1` decision
+  probes (direct play and `directPlay=0`) plus searches with results were
+  added.
+
+Beyond the live diff, `internal/plex` renders the recorded titles
+("The 'Burbs", "9-1-1" S01E01) with the same media and diffs them against
+the fixtures in tests (`TestDecisionConformsToPMS`,
+`TestDetailConformsToPMS`, `TestTVConformsToPMS`): no structural, type,
+child-order or XML attribute-order differences are allowed beyond the data
+gaps.
+
+### Before / after (October 2026)
+
+Dev instance with the real TMDB catalogue, same fixtures and pmsdiff build,
+before = `main` at the start of this pass, after = this branch. Counts are
+distinct schema paths summed over XML and JSON (all three clients agree).
+The dev instance cannot resolve releases, so its decisions are the
+"not available" answer: their remaining `missing` is the `Media` element
+and the `extra` is the error codes.
+
+All differences:
+
+| Endpoint | Before: err / missing / extra / type | After: err / missing / extra / type |
+| --- | --- | --- |
+| `/` | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/:/prefs` | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/hubs` | 0 / 106 / 3 / 0 | 0 / 125 / 1 / 0 |
+| `/hubs/continueWatching` | 0 / 72 / 0 / 0 | 0 / 94 / 0 / 0 |
+| `/hubs/promoted` | 0 / 106 / 2 / 0 | 0 / 125 / 0 / 0 |
+| `/hubs/search?query=` | 4 / 2 / 2 / 0 | 0 / 0 / 0 / 0 |
+| `/hubs/search?query=burbs…` | 0 / 24 / 5 / 0 | 0 / 18 / 5 / 0 |
+| `/hubs/sections/{{section}}` | 0 / 44 / 0 / 0 | 0 / 38 / 0 / 0 |
+| `/identity` | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/library/collections/{{collectionKey}}` | 0 / 12 / 2 / 0 | 0 / 10 / 2 / 0 |
+| `/library/metadata/{{episodeKey}}` | 0 / 44 / 14 / 0 | 0 / 40 / 8 / 0 |
+| `/library/metadata/{{movieKey}}?includeExtras…` | 0 / 100 / 14 / 0 | 0 / 86 / 6 / 0 |
+| `/library/metadata/{{seasonKey}}/children` | 0 / 32 / 8 / 0 | 0 / 24 / 4 / 0 |
+| `/library/metadata/{{showKey}}/children` | 0 / 14 / 14 / 0 | 0 / 6 / 0 / 0 |
+| `/library/onDeck` | 0 / 76 / 0 / 0 | 0 / 96 / 0 / 0 |
+| `/library/search?query=burbs…` | 0 / 24 / 9 / 0 | 0 / 18 / 5 / 0 |
+| `/library/sections` | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/library/sections/{{movieSection}}/prefs` | 0 / 2 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/library/sections/{{section}}/all` | 0 / 42 / 2 / 0 | 0 / 36 / 2 / 0 |
+| `/library/sections/{{showSection}}/prefs` | 0 / 2 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/media/providers` | 0 / 12 / 0 / 0 | 0 / 12 / 0 / 0 |
+| `/myplex/account` | 0 / 6 / 0 / 0 | 0 / 6 / 0 / 0 |
+| `/playlists/{{playlistKey}}` | 0 / 2 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/status/sessions` | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| decision `hasMDE=1&directPlay=0` | 0 / 66 / 0 / 1 | 0 / 22 / 6 / 0 |
+| decision `hasMDE=1&directPlay=1` | 0 / 70 / 12 / 1 | 0 / 22 / 14 / 0 |
+| decision (legacy) | 0 / 66 / 0 / 1 | 0 / 22 / 2 / 0 |
+| **total** | 4 / 924 / 87 / 3 | 0 / 800 / 55 / 0 |
+
+The raw counts understate the change: before, whole elements were missing
+and counted once (`Hub/Video/Image +3 nested`, `Media/Part/Stream +40
+nested`); now those elements exist and the remaining gaps are individual
+attributes PMS only has data for (e.g. the On Deck and hub rows went up
+because detailed episodes now carry `Stream`, whose scanner attributes
+Ether can't know).
+
+Excluding `testdata/pms/data-gaps.regexp`:
+
+| Endpoint | Before: err / missing / extra / type | After: err / missing / extra / type |
+| --- | --- | --- |
+| `/hubs` | 0 / 60 / 2 / 0 | 0 / 41 / 0 / 0 |
+| `/hubs/continueWatching` | 0 / 40 / 0 / 0 | 0 / 28 / 0 / 0 |
+| `/hubs/promoted` | 0 / 60 / 2 / 0 | 0 / 41 / 0 / 0 |
+| `/hubs/search?query=` | 4 / 2 / 2 / 0 | 0 / 0 / 0 / 0 |
+| `/hubs/search?query=burbs…` | 0 / 8 / 5 / 0 | 0 / 2 / 5 / 0 |
+| `/hubs/sections/{{section}}` | 0 / 10 / 0 / 0 | 0 / 4 / 0 / 0 |
+| `/library/collections/{{collectionKey}}` | 0 / 2 / 2 / 0 | 0 / 0 / 2 / 0 |
+| `/library/metadata/{{episodeKey}}` | 0 / 14 / 4 / 0 | 0 / 10 / 0 / 0 |
+| `/library/metadata/{{movieKey}}?includeExtras…` | 0 / 14 / 10 / 0 | 0 / 0 / 2 / 0 |
+| `/library/metadata/{{seasonKey}}/children` | 0 / 20 / 4 / 0 | 0 / 10 / 0 / 0 |
+| `/library/metadata/{{showKey}}/children` | 0 / 10 / 12 / 0 | 0 / 2 / 0 / 0 |
+| `/library/onDeck` | 0 / 44 / 0 / 0 | 0 / 28 / 0 / 0 |
+| `/library/search?query=burbs…` | 0 / 8 / 9 / 0 | 0 / 2 / 5 / 0 |
+| `/library/sections/{{movieSection}}/prefs` | 0 / 2 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/library/sections/{{section}}/all` | 0 / 6 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/library/sections/{{showSection}}/prefs` | 0 / 2 / 0 / 0 | 0 / 0 / 0 / 0 |
+| `/playlists/{{playlistKey}}` | 0 / 2 / 0 / 0 | 0 / 0 / 0 / 0 |
+| decision `hasMDE=1&directPlay=0` | 0 / 46 / 0 / 1 | 0 / 2 / 6 / 0 |
+| decision `hasMDE=1&directPlay=1` | 0 / 50 / 12 / 1 | 0 / 2 / 14 / 0 |
+| decision (legacy) | 0 / 46 / 0 / 1 | 0 / 2 / 2 / 0 |
+| **total** (all endpoints) | 4 / 446 / 64 / 3 | 0 / 174 / 36 / 0 |
+
+(`/`, `/:/prefs`, `/identity`, `/library/sections`, `/media/providers`,
+`/myplex/account` and `/status/sessions` are 0 / 0 / 0 / 0 in both.)
+
+What remains, all data-dependent: the dev catalogue's episodes have no
+crew/ratings (hub/On Deck episodes lack Role ids, Rating), no season items
+in hubs, `/library/search` returning shows the
+reference library doesn't have, a collection `art` PMS's collection lacks,
+seasons without per-season UltraBlur (PMS computes it from season art),
+TMDB writer photos PMS lacks. Values that differ by design (`/` and
+`/media/providers` capabilities: no sync, camera upload, Live TV, channels,
+media deletion, updater, voice search) are honest and informational.
