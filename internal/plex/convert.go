@@ -146,6 +146,8 @@ func seasonTitle(t *core.Title) string {
 
 // metadata renders one title.
 func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o renderOpts) model.Metadata {
+	t = s.enrich(t)
+	show := s.showOf(t)
 	m := model.Metadata{
 		RatingKey:     t.Key.String(),
 		Key:           metadataKey(t.Key, t.Type),
@@ -193,7 +195,10 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 	}
 
 	switch t.Type {
+	case core.TypeMovie:
+		m.Slug = slugify(t.Title)
 	case core.TypeShow:
+		m.Slug = slugify(t.Title)
 		m.Index = model.Ptr(1)
 		if t.ChildCount > 0 {
 			m.ChildCount = model.Ptr(t.ChildCount)
@@ -201,50 +206,78 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 		m.LeafCount = model.Ptr(t.LeafCount)
 		m.ViewedLeafCount = model.Ptr(0)
 	case core.TypeSeason:
+		// PMS seasons carry the show's slug/studio/year as parent*, and no
+		// dates, ratings, sort title or genre/country tags of their own.
 		m.Index = model.Ptr(t.Season)
 		if t.Title == "" {
 			m.Title = seasonTitle(t)
 		}
-		show := t.ShowKey
-		if show == 0 {
-			show = t.Key.Parent()
+		showKey := t.ShowKey
+		if showKey == 0 {
+			showKey = t.Key.Parent()
 		}
-		m.ParentRatingKey = show.String()
-		m.ParentGUID = showGUID(show)
-		m.ParentKey = "/library/metadata/" + show.String()
+		m.ParentRatingKey = showKey.String()
+		m.ParentGUID = showGUID(showKey)
+		m.ParentKey = "/library/metadata/" + showKey.String()
 		m.ParentTitle = t.ShowTitle
+		m.ParentSlug = slugify(t.ShowTitle)
 		m.ParentIndex = model.Ptr(1)
-		m.ParentThumb = "/library/metadata/" + show.String() + "/thumb/" + imageStamp(t)
+		m.ParentThumb = "/library/metadata/" + showKey.String() + "/thumb/" + imageStamp(t)
 		if m.Art == "" {
-			m.Art = "/library/metadata/" + show.String() + "/art/" + imageStamp(t)
+			m.Art = "/library/metadata/" + showKey.String() + "/art/" + imageStamp(t)
 		}
 		if m.Thumb == "" {
 			m.Thumb = m.ParentThumb
 		}
+		if show != nil {
+			if len(show.Studios) > 0 {
+				m.ParentStudio = show.Studios[0]
+			}
+			m.ParentYear = show.Year
+			if m.ParentTitle == "" {
+				m.ParentTitle = show.Title
+				m.ParentSlug = slugify(show.Title)
+			}
+		}
 		m.LeafCount = model.Ptr(t.ChildCount)
 		m.ViewedLeafCount = model.Ptr(0)
+		m.Year, m.OriginallyAvailableAt, m.TitleSort = 0, "", ""
+		m.ContentRating, m.AudienceRating, m.AudienceRatingImage = "", 0, ""
+		m.Studio = ""
 	case core.TypeEpisode:
+		// PMS episodes have no year, sort title or genre/country tags; the
+		// show's slug and content rating are carried over.
 		m.Index = model.Ptr(t.Episode)
 		m.ParentIndex = model.Ptr(t.Season)
 		season := t.Key.Parent()
-		show := t.ShowKey
-		if show == 0 {
-			show = season.Parent()
+		showKey := t.ShowKey
+		if showKey == 0 {
+			showKey = season.Parent()
 		}
 		m.ParentRatingKey = season.String()
-		m.ParentGUID = fmt.Sprintf("com.plexapp.agents.themoviedb://%d/%d?lang=en", show.TMDB(), t.Season)
-		m.GrandparentGUID = showGUID(show)
+		m.ParentGUID = fmt.Sprintf("com.plexapp.agents.themoviedb://%d/%d?lang=en", showKey.TMDB(), t.Season)
+		m.GrandparentGUID = showGUID(showKey)
 		m.ParentKey = "/library/metadata/" + season.String()
 		m.ParentTitle = seasonTitle(t)
 		m.ParentThumb = "/library/metadata/" + season.String() + "/thumb/" + imageStamp(t)
-		m.GrandparentRatingKey = show.String()
-		m.GrandparentKey = "/library/metadata/" + show.String()
+		m.GrandparentRatingKey = showKey.String()
+		m.GrandparentKey = "/library/metadata/" + showKey.String()
 		m.GrandparentTitle = t.ShowTitle
-		m.GrandparentThumb = "/library/metadata/" + show.String() + "/thumb/" + imageStamp(t)
-		m.GrandparentArt = "/library/metadata/" + show.String() + "/art/" + imageStamp(t)
+		m.GrandparentThumb = "/library/metadata/" + showKey.String() + "/thumb/" + imageStamp(t)
+		m.GrandparentArt = "/library/metadata/" + showKey.String() + "/art/" + imageStamp(t)
 		if m.Art == "" {
 			m.Art = m.GrandparentArt
 		}
+		if show != nil {
+			if m.GrandparentTitle == "" {
+				m.GrandparentTitle = show.Title
+			}
+			if m.ContentRating == "" {
+				m.ContentRating = show.ContentRating
+			}
+		}
+		m.GrandparentSlug = slugify(m.GrandparentTitle)
+		m.Year, m.TitleSort, m.Studio = 0, "", ""
 	}
 
 	// Per-user state.
@@ -265,7 +298,11 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 	if o.detail {
 		maxTags = math.MaxInt
 	}
-	for i, g := range t.Genres {
+	genres, countries := t.Genres, t.Countries
+	if t.Type == core.TypeSeason || t.Type == core.TypeEpisode {
+		genres, countries = nil, nil
+	}
+	for i, g := range genres {
 		if i >= maxTags {
 			break
 		}
@@ -276,7 +313,7 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 		}
 		m.Genre = append(m.Genre, tag)
 	}
-	for i, c := range t.Countries {
+	for i, c := range countries {
 		if i >= maxTags {
 			break
 		}
@@ -303,7 +340,12 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 		if t.Rating > 0 {
 			m.Rating_ = []model.RatingTag{{Image: "themoviedb://image.rating", Value: math.Round(t.Rating*10) / 10, Type: "audience"}}
 		}
-		m.Image = s.imageTags(t)
+	}
+	// PMS sends Image (and, for movies and shows, UltraBlurColors) on
+	// every item, in listings and hubs as well as detail pages.
+	m.Image = s.imageTags(t, show)
+	if ultraBlurType(t.Type) {
+		m.UltraBlurColors = s.ultraBlurFor(t.Key, t.BackdropPath)
 	}
 
 	if o.media && isPlayable(t.Type) {
@@ -315,20 +357,62 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 	return m
 }
 
-func (s *Server) imageTags(t *core.Title) []model.Image {
+// imageTags are an item's <Image> children, composed like PMS's:
+//
+//	movie, show: coverPoster, background, clearLogo
+//	season:      coverPoster (season, else show), background (show), clearLogo (show)
+//	episode:     coverPoster (show), snapshot (still), background (show), clearLogo (show)
+//
+// Only artwork Ether can serve is listed; the show's clear logo needs the
+// show's detail (show), which may not be cached on the first render.
+func (s *Server) imageTags(t *core.Title, show *core.Title) []model.Image {
+	alt := t.Title
+	if alt == "" && t.Type == core.TypeSeason {
+		alt = seasonTitle(t)
+	}
+	img := func(typ, url string) model.Image { return model.Image{Alt: alt, Type: typ, URL: url} }
+	stamp := imageStamp(t)
 	var out []model.Image
-	if th := thumbURL(t); th != "" {
-		typ := "coverPoster"
-		if t.Type == core.TypeEpisode {
-			typ = "snapshot"
+	switch t.Type {
+	case core.TypeSeason, core.TypeEpisode:
+		showKey := t.ShowKey
+		if showKey == 0 {
+			showKey = t.Key.Parent()
+			if t.Type == core.TypeEpisode {
+				showKey = showKey.Parent()
+			}
 		}
-		out = append(out, model.Image{Alt: t.Title, Type: typ, URL: th})
-	}
-	if a := artURL(t); a != "" {
-		out = append(out, model.Image{Alt: t.Title, Type: "background", URL: a})
-	}
-	if t.LogoPath != "" {
-		out = append(out, model.Image{Alt: t.Title, Type: "clearLogo", URL: "/library/metadata/" + t.Key.String() + "/clearLogo/" + imageStamp(t)})
+		showPath := "/library/metadata/" + showKey.String()
+		if t.Type == core.TypeSeason {
+			if th := thumbURL(t); th != "" {
+				out = append(out, img("coverPoster", th))
+			} else {
+				out = append(out, img("coverPoster", showPath+"/thumb/"+stamp))
+			}
+		} else {
+			out = append(out, img("coverPoster", showPath+"/thumb/"+stamp))
+			if th := thumbURL(t); th != "" {
+				out = append(out, img("snapshot", th))
+			}
+		}
+		if a := artURL(t); a != "" {
+			out = append(out, img("background", a))
+		} else {
+			out = append(out, img("background", showPath+"/art/"+stamp))
+		}
+		if show != nil && show.LogoPath != "" {
+			out = append(out, img("clearLogo", showPath+"/clearLogo/"+stamp))
+		}
+	default:
+		if th := thumbURL(t); th != "" {
+			out = append(out, img("coverPoster", th))
+		}
+		if a := artURL(t); a != "" {
+			out = append(out, img("background", a))
+		}
+		if t.LogoPath != "" {
+			out = append(out, img("clearLogo", "/library/metadata/"+t.Key.String()+"/clearLogo/"+stamp))
+		}
 	}
 	return out
 }
@@ -909,6 +993,7 @@ func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title,
 	if o.state == nil {
 		o.state = s.stateFor(ctx, pr, ts)
 	}
+	s.preloadUltraBlur(ctx, ts)
 	out := make([]model.Metadata, 0, len(ts))
 	for i := range ts {
 		out = append(out, s.metadata(ctx, pr, &ts[i], o))

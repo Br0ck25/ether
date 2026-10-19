@@ -19,6 +19,7 @@
         "ratingKey": "1000000000000550",
         "key": "/library/metadata/1000000000000550",
         "guid": "com.plexapp.agents.themoviedb://550?lang=en",
+        "slug": "fight-club",
         "studio": "Fox 2000 Pictures",
         "type": "movie",
         "title": "Fight Club",
@@ -37,6 +38,24 @@
         "addedAt": 1790812800,
         "updatedAt": 1790812800,
         "audienceRatingImage": "themoviedb://image.rating",
+        "Image": [
+          {
+            "alt": "Fight Club",
+            "type": "coverPoster",
+            "url": "/library/metadata/1000000000000550/thumb/1790812800"
+          },
+          {
+            "alt": "Fight Club",
+            "type": "background",
+            "url": "/library/metadata/1000000000000550/art/1790812800"
+          }
+        ],
+        "UltraBlurColors": {
+          "topLeft": "8c000c",
+          "topRight": "542400",
+          "bottomRight": "600007",
+          "bottomLeft": "538700"
+        },
         "Genre": [
           {
             "tag": "Drama"

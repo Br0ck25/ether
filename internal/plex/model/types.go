@@ -186,6 +186,9 @@ type Metadata struct {
 	ParentGUID            string  `plex:"parentGuid,omitempty"`
 	GrandparentGUID       string  `plex:"grandparentGuid,omitempty"`
 	Slug                  string  `plex:"slug,omitempty"`
+	GrandparentSlug       string  `plex:"grandparentSlug,omitempty"`
+	ParentSlug            string  `plex:"parentSlug,omitempty"`
+	ParentStudio          string  `plex:"parentStudio,omitempty"`
 	Studio                string  `plex:"studio,omitempty"`
 	Type                  string  `plex:"type,omitempty"`
 	Subtype               string  `plex:"subtype,omitempty"`
@@ -251,19 +254,24 @@ type Metadata struct {
 
 	Extra []Attr `plex:",attrs"`
 
-	Media      []Media     `plex:"Media"`
-	Image      []Image     `plex:"Image"`
-	Genre      []Tag       `plex:"Genre"`
-	Country    []Tag       `plex:"Country"`
-	Guid       []GUID      `plex:"Guid"`
-	Rating_    []RatingTag `plex:"Rating"`
-	Collection []Tag       `plex:"Collection"`
-	Director   []Tag       `plex:"Director"`
-	Writer     []Tag       `plex:"Writer"`
-	Producer   []Tag       `plex:"Producer"`
-	Role       []Tag       `plex:"Role"`
-	Similar    []Tag       `plex:"Similar"`
-	Studio_    []Tag       `plex:"Studio"`
+	// Children follow PMS's order: Media, Image, UltraBlurColors, then the
+	// tags (Genre, Country, Guid, Rating, Collection, Director, Writer,
+	// Role, Producer, Label, Similar).
+	Media           []Media          `plex:"Media"`
+	Image           []Image          `plex:"Image"`
+	UltraBlurColors *UltraBlurColors `plex:"UltraBlurColors,object"`
+	Genre           []Tag            `plex:"Genre"`
+	Country         []Tag            `plex:"Country"`
+	Guid            []GUID           `plex:"Guid"`
+	Rating_         []RatingTag      `plex:"Rating"`
+	Collection      []Tag            `plex:"Collection"`
+	Director        []Tag            `plex:"Director"`
+	Writer          []Tag            `plex:"Writer"`
+	Role            []Tag            `plex:"Role"`
+	Producer        []Tag            `plex:"Producer"`
+	Label           []Tag            `plex:"Label"`
+	Similar         []Tag            `plex:"Similar"`
+	Studio_         []Tag            `plex:"Studio"`
 
 	User             *SessionUser   `plex:"User,object"`
 	Player           *Player        `plex:"Player,object"`
@@ -345,6 +353,16 @@ type Image struct {
 	Alt  string `plex:"alt"`
 	Type string `plex:"type"`
 	URL  string `plex:"url"`
+}
+
+// UltraBlurColors are the four corner colours (6-digit hex, no "#") the
+// newer Plex apps blend into a blurred background behind an item. One
+// element in XML, an object (not an array) in JSON.
+type UltraBlurColors struct {
+	TopLeft     string `plex:"topLeft"`
+	TopRight    string `plex:"topRight"`
+	BottomRight string `plex:"bottomRight"`
+	BottomLeft  string `plex:"bottomLeft"`
 }
 
 // Media is one version of an item. Ether always exposes exactly one.

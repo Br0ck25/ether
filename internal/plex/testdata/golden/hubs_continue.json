@@ -23,6 +23,7 @@
             "guid": "com.plexapp.agents.themoviedb://1396/1/1?lang=en",
             "parentGuid": "com.plexapp.agents.themoviedb://1396/1?lang=en",
             "grandparentGuid": "com.plexapp.agents.themoviedb://1396?lang=en",
+            "grandparentSlug": "breaking-bad",
             "type": "episode",
             "title": "Pilot",
             "grandparentKey": "/library/metadata/2000000000001396",
@@ -37,7 +38,6 @@
             "parentIndex": 1,
             "viewOffset": 600000,
             "lastViewedAt": 1792321200,
-            "year": 2008,
             "thumb": "/library/metadata/4000013960010001/thumb/1790899200",
             "art": "/library/metadata/2000000000001396/art/1790899200",
             "parentThumb": "/library/metadata/3000000013960001/thumb/1790899200",
@@ -74,6 +74,23 @@
                     "videoProfile": "high"
                   }
                 ]
+              }
+            ],
+            "Image": [
+              {
+                "alt": "Pilot",
+                "type": "coverPoster",
+                "url": "/library/metadata/2000000000001396/thumb/1790899200"
+              },
+              {
+                "alt": "Pilot",
+                "type": "snapshot",
+                "url": "/library/metadata/4000013960010001/thumb/1790899200"
+              },
+              {
+                "alt": "Pilot",
+                "type": "background",
+                "url": "/library/metadata/2000000000001396/art/1790899200"
               }
             ]
           }

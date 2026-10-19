@@ -4,6 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,6 +20,57 @@ import (
 )
 
 var fixedNow = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+
+// ---------------------------------------------------------------------------
+// Artwork CDN
+
+// fakeArtwork is an offline image CDN: every image is a JPEG whose four
+// quadrants have colours derived from the URL path, so UltraBlurColors are
+// deterministic. Paths containing "missing" are 404.
+type fakeArtwork struct {
+	mu   sync.Mutex
+	hits map[string]int
+}
+
+func newFakeArtwork() *fakeArtwork { return &fakeArtwork{hits: map[string]int{}} }
+
+func (a *fakeArtwork) count(path string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.hits[path]
+}
+
+func (a *fakeArtwork) RoundTrip(r *http.Request) (*http.Response, error) {
+	a.mu.Lock()
+	a.hits[r.URL.Path]++
+	a.mu.Unlock()
+	if strings.Contains(r.URL.Path, "missing") {
+		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+	}
+	h := fnv.New32a()
+	h.Write([]byte(r.URL.Path))
+	seed := h.Sum32()
+	img := image.NewRGBA(image.Rect(0, 0, 64, 36))
+	for y := 0; y < 36; y++ {
+		for x := 0; x < 64; x++ {
+			q := uint32(0)
+			if x >= 32 {
+				q++
+			}
+			if y >= 18 {
+				q += 2
+			}
+			v := seed >> (q * 6)
+			img.Set(x, y, color.RGBA{uint8(v * 37), uint8(v * 91), uint8(v * 53), 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 100}); err != nil {
+		return nil, err
+	}
+	return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{"Content-Type": []string{"image/jpeg"}},
+		Body: io.NopCloser(bytes.NewReader(buf.Bytes())), ContentLength: int64(buf.Len()), Request: r}, nil
+}
 
 // ---------------------------------------------------------------------------
 // Catalog
@@ -657,6 +713,7 @@ type fixture struct {
 	pls      *fakePlaylists
 	cols     *fakeCollections
 	hooks    chan string
+	art      *fakeArtwork
 }
 
 func newFixture() *fixture {
@@ -685,6 +742,7 @@ func newFixture() *fixture {
 			items: map[core.RatingKey][]core.Title{core.CollectionKey(8091): {alien}},
 		},
 		hooks: make(chan string, 16),
+		art:   newFakeArtwork(),
 	}
 	rec := &fakeRecommender{
 		home: []core.Hub{{ID: "trending.week.movie", Title: "Trending This Week", Type: core.TypeMovie, Context: "hub.movie.trending", Promoted: true, Items: []core.Title{fightClub, alien}, More: true}},
@@ -701,6 +759,7 @@ func newFixture() *fixture {
 		Auth:        &fakeAuth{users: map[string]core.User{ownerToken: ownerUser, friendToken: friendUser}},
 		Playback:    f.playback,
 		Transcoder:  f.trans,
+		HTTPClient:  &http.Client{Transport: f.art},
 		Config: func() config.Config {
 			c := config.Config{}
 			c.Server.Port = 32400

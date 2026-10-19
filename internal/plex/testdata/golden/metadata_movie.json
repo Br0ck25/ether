@@ -13,6 +13,7 @@
         "ratingKey": "1000000000000550",
         "key": "/library/metadata/1000000000000550",
         "guid": "com.plexapp.agents.themoviedb://550?lang=en",
+        "slug": "fight-club",
         "studio": "Fox 2000 Pictures",
         "type": "movie",
         "title": "Fight Club",
@@ -145,6 +146,12 @@
             "url": "/library/metadata/1000000000000550/art/1790812800"
           }
         ],
+        "UltraBlurColors": {
+          "topLeft": "8c000c",
+          "topRight": "542400",
+          "bottomRight": "600007",
+          "bottomLeft": "538700"
+        },
         "Genre": [
           {
             "id": 1106135894,
