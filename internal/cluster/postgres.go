@@ -58,9 +58,30 @@ type Options struct {
 	MinBackoff         time.Duration // bus reconnect backoff (500ms)
 	MaxBackoff         time.Duration // (30s)
 	AddrTimeout        time.Duration // bound on Local.Addrs (30s)
+	// IdentityPath names this node's node.json in duplicate-node errors.
+	IdentityPath string
 
 	LockKey int32  // DefaultLockKey
 	Channel string // derived from the schema when empty
+
+	// OnFatal is called once, from a runtime goroutine, when this node
+	// must stop serving as a cluster member: another live process
+	// heartbeats under the same node ID (a cloned machine or copied data
+	// directory). The runtime has already stopped heartbeating, released
+	// leadership and left the bus when it is called. The error wraps
+	// ErrDuplicateNode.
+	OnFatal func(error)
+}
+
+// ErrDuplicateNode means another running process uses this node's ID: its
+// node.json was copied from another node.
+var ErrDuplicateNode = errors.New("cluster: another running node uses this node's identity")
+
+// duplicateNodeError is the owner-facing explanation; path is this node's
+// node.json.
+func duplicateNodeError(nodeID, path string) error {
+	return fmt.Errorf("%w (node ID %s). This happens when a machine is cloned or a data directory is copied: "+
+		"stop this server, delete %s on the copy and start it again so it joins as a new node", ErrDuplicateNode, shortID(nodeID), path)
 }
 
 // Postgres is the clustered runtime.
@@ -117,6 +138,7 @@ type Postgres struct {
 	busUp      bool
 	lastSkew   time.Duration
 	lastBeatOK time.Time
+	fatal      error
 }
 
 var _ Cluster = (*Postgres)(nil)
@@ -156,6 +178,9 @@ func NewPostgres(o Options) (*Postgres, error) {
 	}
 	if o.LockKey == 0 {
 		o.LockKey = DefaultLockKey
+	}
+	if o.IdentityPath == "" {
+		o.IdentityPath = NodeFile
 	}
 	log := o.Logger.With("component", "cluster", "node", shortID(o.Local.Identity.NodeID))
 	p := &Postgres{
@@ -273,6 +298,10 @@ func (p *Postgres) Start(ctx context.Context) error {
 	}
 	p.channel.Store(&ch)
 	p.checkClock(ctx)
+	if err := p.checkDuplicate(ctx); err != nil {
+		p.log.Error("cluster: refusing to join", "err", err)
+		return err
+	}
 
 	rctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
@@ -402,14 +431,48 @@ func (p *Postgres) beat(ctx context.Context) error {
 	addrsJSON, _ := json.Marshal(addrs)
 	capsJSON, _ := json.Marshal(caps)
 	id := p.local.Identity.NodeID
-	_, err := p.db.ExecContext(ctx, `INSERT INTO cluster_nodes(id,name,version,addrs,caps,active_sessions,started_at,last_seen,incarnation)
+	p.mu.Lock()
+	joined, fatal := p.joined, p.fatal
+	p.mu.Unlock()
+	if fatal != nil {
+		return fatal
+	}
+	if joined {
+		// Once joined, only this process may write the row: an update that
+		// finds another incarnation's row means a second live process
+		// shares our node ID.
+		res, err := p.db.ExecContext(ctx, `UPDATE cluster_nodes SET name=?, version=?, addrs=?, caps=?, active_sessions=?, started_at=?, last_seen=?
+WHERE id=? AND incarnation=?`,
+			p.local.Identity.Name, p.local.Version, string(addrsJSON), string(capsJSON), load,
+			started.UnixMilli(), now.UnixMilli(), id, p.inc)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			var other string
+			err := p.db.QueryRowContext(ctx, `SELECT incarnation FROM cluster_nodes WHERE id=?`, id).Scan(&other)
+			switch {
+			case err == nil && other != p.inc:
+				p.fail(duplicateNodeError(id, p.o.IdentityPath))
+				return ErrDuplicateNode
+			case err != nil && !errors.Is(err, sql.ErrNoRows):
+				return err
+			}
+			// The row is gone (pruned while this node was stalled): re-insert
+			// it below.
+			joined = false
+		}
+	}
+	if !joined {
+		_, err := p.db.ExecContext(ctx, `INSERT INTO cluster_nodes(id,name,version,addrs,caps,active_sessions,started_at,last_seen,incarnation)
 VALUES(?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name, version=excluded.version, addrs=excluded.addrs, caps=excluded.caps,
 active_sessions=excluded.active_sessions, started_at=excluded.started_at, last_seen=excluded.last_seen, incarnation=excluded.incarnation`,
-		id, p.local.Identity.Name, p.local.Version, string(addrsJSON), string(capsJSON), load,
-		started.UnixMilli(), now.UnixMilli(), p.inc)
-	if err != nil {
-		return err
+			id, p.local.Identity.Name, p.local.Version, string(addrsJSON), string(capsJSON), load,
+			started.UnixMilli(), now.UnixMilli(), p.inc)
+		if err != nil {
+			return err
+		}
 	}
 	p.mu.Lock()
 	p.self.Addrs, p.self.Caps, p.self.Load, p.self.LastSeen = addrs, caps, load, now
@@ -434,6 +497,74 @@ active_sessions=excluded.active_sessions, started_at=excluded.started_at, last_s
 		}
 	}
 	return nil
+}
+
+// checkDuplicate refuses to join while another live process heartbeats
+// under this node ID. A row left by this node's own previous process (a
+// crash or kill) also looks live for up to LiveAfter, so a recent row with
+// another incarnation is watched for two heartbeat intervals: a live
+// process advances its last_seen, a dead one does not.
+func (p *Postgres) checkDuplicate(ctx context.Context) error {
+	id := p.local.Identity.NodeID
+	read := func() (inc string, seen int64, ok bool, err error) {
+		err = p.db.QueryRowContext(ctx, `SELECT incarnation, last_seen FROM cluster_nodes WHERE id=?`, id).Scan(&inc, &seen)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", 0, false, nil
+		}
+		return inc, seen, err == nil, err
+	}
+	inc, seen, ok, err := read()
+	if err != nil || !ok || inc == p.inc {
+		return nil // a database error is retried by the heartbeat loop
+	}
+	if p.o.Now().Sub(time.UnixMilli(seen)) > p.o.LiveAfter {
+		return nil // long dead: take the row over
+	}
+	p.log.Info("cluster: this node's heartbeat row is recent; checking that no other process uses this node ID", "wait", 2*p.o.HeartbeatInterval)
+	deadline := time.Now().Add(2*p.o.HeartbeatInterval + p.o.HeartbeatInterval/2)
+	step := max(p.o.HeartbeatInterval/4, 10*time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(step):
+		}
+		inc2, seen2, ok2, err := read()
+		if err != nil || !ok2 {
+			return nil
+		}
+		if inc2 != inc || seen2 != seen {
+			return duplicateNodeError(id, p.o.IdentityPath)
+		}
+	}
+	return nil
+}
+
+// fail stops this node's cluster membership after a fatal conflict and
+// reports it once through OnFatal.
+func (p *Postgres) fail(err error) {
+	p.mu.Lock()
+	if p.fatal != nil {
+		p.mu.Unlock()
+		return
+	}
+	p.fatal = err
+	p.mu.Unlock()
+	p.log.Error("cluster: leaving the cluster", "err", err)
+	if p.cancel != nil {
+		p.cancel() // stops heartbeats, election (releasing the lock) and the bus
+	}
+	p.lead.set(false, 0)
+	if p.o.OnFatal != nil {
+		go p.o.OnFatal(err)
+	}
+}
+
+// Err is the fatal error that ended this node's membership, if any.
+func (p *Postgres) Err() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.fatal
 }
 
 // Nodes lists live members.

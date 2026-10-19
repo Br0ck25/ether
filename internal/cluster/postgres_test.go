@@ -20,6 +20,20 @@ import (
 // processes would have).
 func pgCluster(t *testing.T) func(name string, tweak func(*Options)) *Postgres {
 	t.Helper()
+	start := pgClusterStart(t)
+	return func(name string, tweak func(*Options)) *Postgres {
+		t.Helper()
+		p, err := start(name, tweak)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+}
+
+// pgClusterStart is pgCluster returning Start's error instead of failing.
+func pgClusterStart(t *testing.T) func(name string, tweak func(*Options)) (*Postgres, error) {
+	t.Helper()
 	raw := os.Getenv(store.TestPostgresEnv)
 	if raw == "" {
 		t.Skip("set " + store.TestPostgresEnv + " to run PostgreSQL cluster tests")
@@ -41,7 +55,7 @@ func pgCluster(t *testing.T) func(name string, tweak func(*Options)) *Postgres {
 	q := u.Query()
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
-	return func(name string, tweak func(*Options)) *Postgres {
+	return func(name string, tweak func(*Options)) (*Postgres, error) {
 		t.Helper()
 		db, err := sql.Open(store.PostgresDriverName, u.String())
 		if err != nil {
@@ -65,14 +79,11 @@ func pgCluster(t *testing.T) func(name string, tweak func(*Options)) *Postgres {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := p.Start(ctx); err != nil {
-			t.Fatal(err)
-		}
 		t.Cleanup(func() {
 			p.Close()
 			db.Close()
 		})
-		return p
+		return p, p.Start(ctx)
 	}
 }
 

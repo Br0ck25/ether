@@ -90,6 +90,9 @@ type App struct {
 	// caches the other nodes' URIs for the plex.tv publisher.
 	cluster cluster.Cluster
 	peers   *peerSet
+	// clusterFatal receives the error that ended this node's cluster
+	// membership (a duplicate node identity); nil on a standalone server.
+	clusterFatal chan error
 
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
@@ -491,6 +494,9 @@ func (a *App) Run(ctx context.Context) error {
 	// Leave the cluster last, after background work has stopped.
 	defer a.cluster.Close()
 	if err := a.cluster.Start(ctx); err != nil {
+		if errors.Is(err, cluster.ErrDuplicateNode) {
+			return err
+		}
 		a.log.Warn("cluster", "err", err)
 	}
 	var background backgroundGroup
@@ -560,6 +566,7 @@ func (a *App) Run(ctx context.Context) error {
 			return err
 		}
 	case runErr = <-watchdogErr:
+	case runErr = <-a.clusterFatal: // nil channel (never ready) when standalone
 	}
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()

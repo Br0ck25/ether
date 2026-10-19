@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -39,7 +40,18 @@ func (a *App) buildCluster(dialect store.Dialect) error {
 		a.cluster = cluster.NewSolo(local, log)
 		return nil
 	}
-	pg, err := cluster.NewPostgres(cluster.Options{DB: a.db, Local: local, Logger: log})
+	a.clusterFatal = make(chan error, 1)
+	pg, err := cluster.NewPostgres(cluster.Options{
+		DB: a.db, Local: local, Logger: log,
+		IdentityPath: filepath.Join(a.opts.DataDir, cluster.NodeFile),
+		// A clone of this node (copied node.json) is running: stop serving.
+		OnFatal: func(err error) {
+			select {
+			case a.clusterFatal <- err:
+			default:
+			}
+		},
+	})
 	if err != nil {
 		return err
 	}
