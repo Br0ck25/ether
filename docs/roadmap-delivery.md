@@ -27,7 +27,7 @@ isolated unclaimed server and synthetic viewers; it does not modify a real Plex
 account or start provider downloads. Core interfaces and configuration changes
 are additive.
 
-The web typecheck, 66 tests and embedded production build passed with public npm
+The web typecheck, 67 tests and embedded production build passed with public npm
 releases of AppKit UI 0.4.0, tokens 0.2.0 and Dashboard 4.0.0. Final browser checks
 covered Home, Home Designer, Live TV, stream preferences and Insights at 1280px
 and 390px, with no console errors or horizontal overflow. Theme switching

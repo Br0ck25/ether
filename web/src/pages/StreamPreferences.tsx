@@ -1,5 +1,5 @@
 import { Button, PageHeader } from "@braedonsaunders/appkit-ui";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, apiFetch, errorMessage } from "../lib/api";
 import { TitleSearch } from "../components/pickers";
 import type { EtherUser } from "../lib/types";
@@ -31,12 +31,17 @@ export default function StreamPreferences() {
   const [synced, setSynced] = useState("");
   const [cached,setCached]=useState<{id:string;language:string;release:string}[]>([]);
   const [showName,setShowName]=useState("");
+  const applyRules = useCallback((r: Rules) => {
+    const normalized = {...initial,...r,audioLanguages:r.audioLanguages??[],subtitleLanguages:r.subtitleLanguages??[]};
+    setRules(normalized);
+    setAudioText(normalized.audioLanguages.join(", "));
+    setSubtitleText(normalized.subtitleLanguages.join(", "));
+  }, []);
   useEffect(()=>{void apiFetch<{id:string;language:string;release:string}[]>("/subtitle-sync/").then(setCached).catch(()=>setCached([]))},[]);
   useEffect(() => { let active = true; void api.users().then(v => { if (active) setUsers(v); }).catch(e => { if (active) setMessage(errorMessage(e)); }); return () => { active = false; }; }, []);
-  useEffect(() => { const controller = new AbortController(); setLoaded(false); setMessage(""); void Promise.all([apiFetch<Rules>(`/stream-preferences/${user}`, { signal: controller.signal }), apiFetch<Memory[]>(`/stream-preferences/${user}/shows`, { signal: controller.signal })]).then(([r, m]) => { setRules({...initial,...r,audioLanguages:r.audioLanguages??[],subtitleLanguages:r.subtitleLanguages??[]}); setMemory(m??[]); setLoaded(true); }).catch(e => { if (!controller.signal.aborted) setMessage(errorMessage(e)); }); return () => controller.abort(); }, [user]);
-  useEffect(() => { setAudioText((rules.audioLanguages??[]).join(", ")); setSubtitleText((rules.subtitleLanguages??[]).join(", ")); }, [rules.audioLanguages, rules.subtitleLanguages]);
+  useEffect(() => { const controller = new AbortController(); setLoaded(false); setMessage(""); void Promise.all([apiFetch<Rules>(`/stream-preferences/${user}`, { signal: controller.signal }), apiFetch<Memory[]>(`/stream-preferences/${user}/shows`, { signal: controller.signal })]).then(([r, m]) => { if (controller.signal.aborted) return; applyRules(r); setMemory(m??[]); setLoaded(true); }).catch(e => { if (!controller.signal.aborted) setMessage(errorMessage(e)); }); return () => controller.abort(); }, [user, applyRules]);
   async function save() { setBusy(true); setMessage(""); try { await apiFetch(`/stream-preferences/${user}`, { method: "PUT", body: JSON.stringify({ ...rules, audioLanguages: languages(audioText), subtitleLanguages: languages(subtitleText) }) }); setMessage("Stream preferences saved."); } catch (e) { setMessage(errorMessage(e)); } finally { setBusy(false); } }
-  async function reset() { setBusy(true); try { await apiFetch(`/stream-preferences/${user}`, { method: "DELETE" }); setRules(await apiFetch<Rules>(`/stream-preferences/${user}`)); setMessage("Owner defaults restored."); } catch (e) { setMessage(errorMessage(e)); } finally { setBusy(false); } }
+  async function reset() { setBusy(true); try { await apiFetch(`/stream-preferences/${user}`, { method: "DELETE" }); applyRules(await apiFetch<Rules>(`/stream-preferences/${user}`)); setMessage("Owner defaults restored."); } catch (e) { setMessage(errorMessage(e)); } finally { setBusy(false); } }
   async function forget(showId: number) { try { await apiFetch(`/stream-preferences/${user}/shows/${showId}`, { method: "DELETE" }); setMemory(m => m.filter(x => x.showId !== showId)); } catch (e) { setMessage(errorMessage(e)); } }
   async function loadCoverage() { setCoverage(null); try { setCoverage(await apiFetch<Coverage>(`/markers/shows/${encodeURIComponent(show)}`)); } catch (e) { setMessage(errorMessage(e)); } }
   async function sync() { setBusy(true); setSynced(""); try { const result = await apiFetch<{ externalUrl: string }>(`/subtitle-sync/${encodeURIComponent(subtitle.replace(/^ether-subtitle:/, ""))}`, { method: "POST", body: JSON.stringify({ offsetMs: Number(offset), rate: Number(rate), reference, apply: applySync }) }); setSynced(result.externalUrl); } catch (e) { setMessage(errorMessage(e)); } finally { setBusy(false); } }
