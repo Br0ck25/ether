@@ -281,13 +281,24 @@ type Store struct {
 	mu            sync.RWMutex
 	cfg           Config
 	subs          []func(Config)
+
+	// Cluster mode (see shared.go). shared is nil on a standalone server,
+	// where config.json is the only source. writeMu sequences cluster-mode
+	// writers (Update, refresh) so mu is never held across database calls.
+	writeMu    sync.Mutex
+	shared     SharedBackend
+	sharedVer  int64
+	sharedOpts SharedOptions
+	notifier   Notifier
+	unsubs     []func()
+	kick       chan struct{}
 }
 
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
-	s := &Store{path: filepath.Join(dataDir, "config.json"), cfg: Defaults(dataDir)}
+	s := &Store{path: filepath.Join(dataDir, "config.json"), cfg: Defaults(dataDir), kick: make(chan struct{}, 1)}
 	b, err := os.ReadFile(s.path)
 	readErr := err
 	key, keyErr := credentialKey(dataDir, b)
@@ -329,7 +340,14 @@ func (s *Store) Get() Config {
 }
 
 // Update applies fn to a copy of the config, saves it and notifies subscribers.
+//
+// On a cluster node the shared part is written to the database with an
+// optimistic version check; when another node changed it first, fn is
+// applied again to the fresh settings, so fn must only mutate its argument.
 func (s *Store) Update(fn func(*Config) error) error {
+	if s.Clustered() {
+		return s.updateClustered(fn)
+	}
 	s.mu.Lock()
 	next := clone(s.cfg)
 	if err := fn(&next); err != nil {
