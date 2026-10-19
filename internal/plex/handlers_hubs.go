@@ -650,8 +650,11 @@ func (s *Server) handleMetadataHubs(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, mc)
 }
 
-// handlePostplay is /hubs/metadata/{key}/postplay: next episode, then
-// related rows.
+// handlePostplay is /hubs/metadata/{key}/postplay. An episode with a
+// next episode keeps Up Next first; everything else leads with the
+// viewer's personalized hook queue (#30, the same #1 pick prefetch
+// pre-buffered), then the related rows. Without a PostPlayer this is the
+// old behaviour: Up Next, then related.
 func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
@@ -660,18 +663,31 @@ func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
+	count := countParam(r, 12)
 	mc := hubContainer()
+	seen := map[core.RatingKey]bool{k: true}
 	if k.Kind() == core.KindEpisode {
 		if next, err := s.d.Catalog.NextEpisode(ctx, k); err == nil && next != nil {
 			h := core.Hub{ID: "tv.upnext", Title: "Up Next", Type: core.TypeEpisode, Context: "hub.tv.upnext", Items: []core.Title{*next}}
 			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{related: k}))
+			seen[next.Key] = true
 		}
 	}
-	if s.d.Recommender != nil {
-		if hubs, err := s.d.Recommender.Related(ctx, pr.User, k, countParam(r, 12)); err == nil {
-			mc.Hub = append(mc.Hub, s.renderHubs(ctx, pr, hubs, hubCtx{related: k})...)
+	if picks := s.postPlayPicks(ctx, pr, k, count); len(picks) > 0 {
+		// Skip whatever Up Next already covers so the queue never
+		// repeats the next episode as a "recommendation".
+		kept := picks[:0:0]
+		for _, p := range picks {
+			if !seen[p.Title.Key] {
+				seen[p.Title.Key] = true
+				kept = append(kept, p)
+			}
+		}
+		if mh, ok := s.postPlayHub(ctx, pr, k, kept); ok {
+			mc.Hub = append(mc.Hub, mh)
 		}
 	}
+	s.relatedAfterPostPlay(ctx, pr, mc, k, count, seen)
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
 }
@@ -715,6 +731,31 @@ func (s *Server) runSearch(ctx context.Context, pr *Request, query string, secti
 	return s.filterAllowed(pr.User, res), nil
 }
 
+func (s *Server) vibeSearch(ctx context.Context, pr *Request, query string) (*core.Collection, []core.Title, bool, error) {
+	searcher := s.d.VibeSearch
+	if searcher == nil {
+		searcher, _ = s.d.Collections.(core.VibeSearcher)
+	}
+	if searcher == nil || pr == nil {
+		return nil, nil, false, nil
+	}
+	c, items, ok, err := searcher.VibeCollection(ctx, pr.User, query)
+	if err != nil || !ok {
+		return c, items, ok, err
+	}
+	return c, s.filterAllowed(pr.User, items), true, nil
+}
+
+func (s *Server) collectionDirectory(ctx context.Context, c *core.Collection) model.Directory {
+	m := s.collectionMetadata(c)
+	return model.Directory{
+		Key: "/library/collections/" + c.Key.String() + "/children", Type: "collection",
+		Title: c.Title, Thumb: m.Thumb, Art: m.Art,
+		LeafCount: model.Ptr(c.ChildCount),
+		Extra:     []model.Attr{model.A("ratingKey", c.Key.String()), model.A("subtype", string(c.Type)), model.A("childCount", c.ChildCount), model.A("librarySectionID", m.LibrarySectionID)},
+	}
+}
+
 func (s *Server) handleHubSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
@@ -729,10 +770,20 @@ func (s *Server) handleHubSearch(w http.ResponseWriter, r *http.Request) {
 		limit = min(n, 100)
 	}
 	sectionID, _ := strconv.Atoi(q.Get("sectionId"))
-	res, err := s.runSearch(ctx, pr, q.Get("query"), sectionID, limit*2)
+	vibe, vibeItems, isVibe, err := s.vibeSearch(ctx, pr, q.Get("query"))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
+	}
+	var res []core.Title
+	if isVibe {
+		res = vibeItems
+	} else {
+		res, err = s.runSearch(ctx, pr, q.Get("query"), sectionID, limit*2)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
 	}
 	byType := map[core.MediaType][]core.Title{}
 	for _, t := range res {
@@ -761,6 +812,10 @@ func (s *Server) handleHubSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		h := core.Hub{ID: string(hd.t), Title: hd.title, Type: hd.t, Items: items, More: more, Style: "shelf"}
 		mh := s.renderHub(ctx, pr, hubSpec{Hub: h, noPromoted: true}, hubCtx{})
+		if hd.t == "collection" && isVibe && vibe != nil {
+			mh.Directory = []model.Directory{s.collectionDirectory(ctx, vibe)}
+			mh.Size = len(mh.Directory)
+		}
 		mh.Context, mh.Key, mh.HubKey = "", "", ""
 		for i := range mh.Metadata {
 			mh.Metadata[i].Score = strconv.FormatFloat(searchScore(i, len(mh.Metadata)), 'f', 5, 64)
@@ -806,23 +861,38 @@ func (s *Server) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 	if n, _ := strconv.Atoi(q.Get("limit")); n > 0 {
 		limit = min(n, 200)
 	}
-	res, err := s.runSearch(ctx, pr, q.Get("query"), 0, limit)
+	vibe, vibeItems, isVibe, err := s.vibeSearch(ctx, pr, q.Get("query"))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
+	var res []core.Title
+	if isVibe {
+		res = vibeItems
+	} else {
+		res, err = s.runSearch(ctx, pr, q.Get("query"), 0, limit)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+	}
+	searchCollections := false
 	if st := q.Get("searchTypes"); st != "" {
 		allow := map[core.MediaType]bool{}
 		for _, v := range strings.Split(st, ",") {
 			switch strings.TrimSpace(v) {
 			case "movies", "movie":
 				allow[core.TypeMovie] = true
+			case "collections", "collection":
+				searchCollections = true
 			case "tv", "shows", "show":
 				allow[core.TypeShow] = true
 				allow[core.TypeEpisode] = true
 			}
 		}
-		if len(allow) > 0 {
+		if len(allow) == 0 {
+			res = nil
+		} else {
 			filtered := res[:0:0]
 			for _, t := range res {
 				if allow[t.Type] {
@@ -839,6 +909,10 @@ func (s *Server) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 		// PMS names the section here but sends no section id or key.
 		md[i].LibrarySectionID, md[i].LibrarySectionKey = 0, ""
 		mc.SearchResult = append(mc.SearchResult, model.SearchResult{Score: score, Metadata: &md[i]})
+	}
+	if isVibe && vibe != nil && (searchCollections || q.Get("searchTypes") == "") {
+		d := s.collectionDirectory(ctx, vibe)
+		mc.SearchResult = append(mc.SearchResult, model.SearchResult{Score: 1, Directory: &d})
 	}
 	mc.Size = len(mc.SearchResult)
 	s.write(w, r, mc)

@@ -42,6 +42,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	offset := msParam(q.Get("time"))
 	duration := msParam(q.Get("duration"))
 	user := pr.User
+	s.log.Debug("playback timeline", "user", user.ID, "client", pr.ClientID, "key", key, "state", state, "position", offset, "duration", duration)
 
 	if s.d.State != nil && key.Kind() != core.KindExtra {
 		if err := s.d.State.Progress(ctx, user.ID, key, offset, duration, state); err != nil {
@@ -204,6 +205,21 @@ func (s *Server) handleRate(w http.ResponseWriter, r *http.Request) {
 	}
 	if rating > 10 {
 		rating = 10
+	}
+	if rating > 0 {
+		promoter := s.d.VibeSearch
+		if promoter == nil {
+			promoter, _ = s.d.Collections.(core.VibeSearcher)
+		}
+		if promoter != nil {
+			if _, promoted, err := promoter.PromoteEphemeral(ctx, pr.User, key); err != nil {
+				s.writeErr(w, r, err)
+				return
+			} else if promoted {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
 	}
 	if err := s.d.State.Rate(ctx, pr.User.ID, key, rating); err != nil {
 		s.writeErr(w, r, err)

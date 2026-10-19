@@ -62,6 +62,11 @@ type playRequest struct {
 	audioSel  int // stream position, -1 = default
 	subSel    int // stream position, -1 = none/default
 	subSet    bool
+	// mediaIndex is the "Play Version" position the viewer picked
+	// (0 = Auto / not sent); partReleaseID names the release directly
+	// when the request addressed a variant's Part key.
+	mediaIndex    int
+	partReleaseID string
 	// mde: the client runs its own media decision engine (hasMDE=1, sent
 	// by current Plex Web, iOS and Apple TV apps).
 	mde bool
@@ -77,12 +82,29 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 	if key == 0 {
 		key = keyFromPath(q.Get("ratingKey"))
 	}
+	// A "Play Version" pick may address the chosen Part key directly.
+	var partReleaseID string
+	if key == 0 {
+		for _, v := range []string{q.Get("path"), q.Get("key")} {
+			if partID, ok := partIDFromPath(v); ok {
+				if k, rel, found := s.partTitle(partID); found {
+					key, partReleaseID = k, rel
+					break
+				}
+			}
+		}
+	}
 	if key == 0 || !isPlayableKey(key) {
 		return playRequest{}, fmt.Errorf("no playable item in request")
 	}
 	caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
 	applyDecisionQuery(&caps, q)
-	p := playRequest{key: key, caps: caps, audioSel: -1, subSel: -1, protocol: q.Get("protocol"), mde: q.Get("hasMDE") == "1"}
+	p := playRequest{key: key, caps: caps, audioSel: -1, subSel: -1, protocol: q.Get("protocol"), mde: q.Get("hasMDE") == "1", partReleaseID: partReleaseID}
+	// "Play Version" selection: position in the rendered Media list.
+	// partIndex is always 0 (one Part per Media) and ignored.
+	if n, err := strconv.Atoi(q.Get("mediaIndex")); err == nil && n > 0 {
+		p.mediaIndex = n
+	}
 	if p.protocol == "" {
 		p.protocol = "hls"
 	}
@@ -213,7 +235,7 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
 		return t, nil, core.Decision{}, core.ErrUnauthorized
 	}
-	ps, err := s.d.Playback.Prepare(ctx, pr.User, p.key, p.caps)
+	ps, err := s.preparePlayback(ctx, pr, p)
 	if err != nil {
 		return t, nil, core.Decision{}, err
 	}
@@ -231,13 +253,30 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 		}
 	}
 	// On-demand sources can change during failover. A copy-only remux gives
-	// MDE clients fresh container headers at the resumed timestamp.
-	if p.mde && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
+	// MDE clients fresh container headers at the resumed timestamp. A
+	// session flagged RequiresRemux (direct-play failover found no
+	// exact-size replacement) gets the same treatment for every client.
+	requiresRemux := ps.RequiresRemux
+	if rr, ok := s.d.Playback.(core.RemuxRequirer); ok && rr.RequiresRemux(ps.ID) {
+		requiresRemux = true
+	}
+	if (p.mde || requiresRemux) && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
 		dec.Kind = core.DecisionRemux
 		dec.VideoCopy, dec.AudioCopy = true, true
-		dec.Container = transcode.ContainerMPEGTS
-		if v := ps.Info.Video(); v != nil && (v.Codec == "hevc" || v.Codec == "av1" || v.Codec == "vp9") {
+		videoCodec, audioCodec := "", ""
+		if v := ps.Info.Video(); v != nil {
+			videoCodec = v.Codec
+		}
+		for _, st := range ps.Info.Streams {
+			if st.Type == "audio" && st.Index == dec.AudioStream {
+				audioCodec = st.Codec
+				break
+			}
+		}
+		if p.protocol == core.ProtocolDASH {
 			dec.Container = transcode.ContainerFMP4
+		} else {
+			dec.Container = transcode.HLSContainer(p.caps, videoCodec, audioCodec)
 		}
 		dec.Reason = "Direct stream preserves playback across source changes."
 	}
@@ -454,6 +493,8 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 	m.Container = "mpegts"
 	if dec.Container == transcode.ContainerFMP4 {
 		m.Container = "mp4"
+	} else if dec.Container == transcode.ContainerMatroska {
+		m.Container = "mkv"
 	}
 	part.Container = m.Container
 	part.Protocol = p.protocol
@@ -609,12 +650,12 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing, ok := s.d.Transcoder.Session(p.sessionID); ok && existing != nil {
 		if entry.started && entry.offset == p.offset {
-			s.writeMasterPlaylist(w, r, p.sessionID, ps.Info, dec)
+			s.writeMasterPlaylist(w, r, p.sessionID, existing, ps.Info, dec)
 			return
 		}
 		s.d.Transcoder.Stop(p.sessionID)
 	}
-	_, err = s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
+	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
 		SessionID:   p.sessionID,
 		InputURL:    s.d.Playback.InputURL(ps.ID),
 		Info:        ps.Info,
@@ -628,10 +669,46 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	}
 	entry.decision, entry.offset, entry.started, entry.updatedAt = dec, p.offset, true, s.now()
 	s.transcodes.put(entry)
-	s.writeMasterPlaylist(w, r, p.sessionID, ps.Info, dec)
+	s.writeMasterPlaylist(w, r, p.sessionID, hs, ps.Info, dec)
 }
 
-func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, sessionID string, info core.MediaInfo, dec core.Decision) {
+func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, sessionID string, hs core.HLSSession, info core.MediaInfo, dec core.Decision) {
+	// A ladder-capable session advertises every rung; the client's native
+	// ABR (AVPlayer, hls.js) steps between them and the session starts a
+	// rung's encoder lazily on its first segment request. The primary
+	// rung keeps the historic "base" URI.
+	if ls, ok := hs.(core.HLSLadderSession); ok {
+		if rungs := ls.Rungs(); len(rungs) > 1 {
+			var b strings.Builder
+			b.WriteString("#EXTM3U\n")
+			for _, rg := range rungs {
+				line := fmt.Sprintf("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=%d", rg.Bandwidth)
+				if rg.AverageBandwidth > 0 {
+					line += fmt.Sprintf(",AVERAGE-BANDWIDTH=%d", rg.AverageBandwidth)
+				}
+				if rg.Width > 0 && rg.Height > 0 {
+					line += fmt.Sprintf(",RESOLUTION=%dx%d", rg.Width, rg.Height)
+				}
+				if rg.Codecs != "" {
+					line += fmt.Sprintf(",CODECS=%q", rg.Codecs)
+				}
+				if rg.FrameRate > 0 {
+					line += fmt.Sprintf(",FRAME-RATE=%.3f", rg.FrameRate)
+				}
+				b.WriteString(line + "\nsession/" + sessionID + "/" + rg.ID + "/index.m3u8\n")
+			}
+			body := b.String()
+			h := w.Header()
+			h.Set("Content-Type", "application/vnd.apple.mpegurl")
+			h.Set("Cache-Control", "no-cache")
+			h.Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(http.StatusOK)
+			if r.Method != http.MethodHead {
+				_, _ = io.WriteString(w, body)
+			}
+			return
+		}
+	}
 	bw := info.BitrateKbps
 	if !dec.VideoCopy && dec.BitrateKbps > 0 {
 		bw = dec.BitrateKbps
@@ -680,6 +757,29 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 	name := rest
 	if i := strings.LastIndexByte(rest, '/'); i >= 0 {
 		name = rest[i+1:]
+	}
+	// ABR ladder: session/{id}/{rung}/index.m3u8 and .../{rung}/{seg}.ts.
+	// The primary rung is "base"; sessions without a ladder fall through
+	// to the historic single-rung handling.
+	if ls, isLadder := hs.(core.HLSLadderSession); isLadder {
+		if rungID, _, found := strings.Cut(rest, "/"); found {
+			for _, rg := range ls.Rungs() {
+				if rg.ID != rungID {
+					continue
+				}
+				if strings.HasSuffix(name, ".m3u8") {
+					ls.ServeRungPlaylist(w, r, rungID)
+					return
+				}
+				n, ok := segmentNumber(name)
+				if !ok {
+					writeHTTPError(w, http.StatusNotFound)
+					return
+				}
+				ls.ServeRungSegment(w, r, rungID, n)
+				return
+			}
+		}
 	}
 	if strings.HasSuffix(name, ".m3u8") {
 		s.serveStreamManifest(w, r, id, hs.ServePlaylist)
@@ -798,7 +898,8 @@ func transcodeSessionModel(te *transcodeEntry) model.TranscodeSess {
 // Direct play
 
 // handlePart serves /library/parts/{part}/{changestamp}/{file} with Range
-// support through Playback.ServeRange.
+// support through Playback.ServeRange. A variant Part id names a specific
+// release of the title ("Play Version" direct play).
 func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 	if s.handleExtraPart(w, r) {
 		return
@@ -806,8 +907,12 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	id, err := strconv.ParseInt(chi.URLParam(r, "part"), 10, 64)
-	key := core.RatingKey(id)
-	if err != nil || !key.Valid() || !isPlayableKey(key) || s.d.Playback == nil {
+	if err != nil || s.d.Playback == nil {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
+	key, releaseID, found := s.partTitle(id)
+	if !found {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
@@ -823,6 +928,10 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
+	// A live session on a different release does not satisfy a variant part.
+	if ok && ps != nil && releaseID != "" && (ps.Resolution == nil || ps.Resolution.Release.ID != releaseID) {
+		ok = false
+	}
 	if !ok || ps == nil {
 		t, err := s.d.Catalog.Get(ctx, key)
 		if err == nil && !s.titleVisible(pr.User, t) {
@@ -833,7 +942,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
-		ps, err = s.d.Playback.Prepare(ctx, pr.User, key, caps)
+		ps, err = s.prepareForRelease(ctx, pr.User, key, caps, releaseID)
 		if err != nil {
 			s.log.Info("direct play failed", "key", key, "err", err)
 			s.writeErr(w, r, err)
@@ -853,6 +962,10 @@ func (s *Server) handlePartSelect(w http.ResponseWriter, r *http.Request) {
 	if err != nil || pr.User == nil {
 		writeHTTPError(w, http.StatusNotFound)
 		return
+	}
+	// Stream selections are per title, even when addressed at a variant part.
+	if k, _, found := s.partTitle(id); found {
+		id = int64(k)
 	}
 	q := r.URL.Query()
 	s.selections.update(pr.User.ID, id, func(sel *selection) {

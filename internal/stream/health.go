@@ -47,11 +47,8 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 	// STAT the likely main candidate while its headers are inspected.
 	type statResult struct {
 		files    []*postedFile
-		missing  int
-		total    int
-		err      error
+		out      sampleOutcome
 		duration time.Duration
-		samples  int
 	}
 	statCh := make(chan statResult, 1)
 	sctx, cancelStats := context.WithCancel(ctx)
@@ -61,11 +58,16 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 		guessed = cands[0].files
 		go func() {
 			started := time.Now()
-			m, t, err := e.statSample(sctx, guessed)
-			statCh <- statResult{files: guessed, missing: m, total: t, err: err, duration: time.Since(started), samples: t}
+			out := e.statSample(sctx, guessed)
+			statCh <- statResult{files: guessed, out: out, duration: time.Since(started)}
 		}()
 	} else {
 		statCh <- statResult{}
+	}
+	record := func(res statResult) {
+		trace.STAT, trace.Samples = res.duration, res.out.total
+		trace.Body, trace.BodyProbes, trace.BodyOK = res.out.bodyDuration, res.out.bodyProbes, res.out.bodyOK
+		trace.FailFast, trace.FailReason = res.out.failFast, res.out.reason
 	}
 
 	type planned struct {
@@ -98,11 +100,11 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 			return false, ctx.Err()
 		case res = <-statCh:
 			gotStats = true
-			trace.STAT, trace.Samples = res.duration, res.samples
-			if res.err != nil || res.missing > 0 {
+			record(res)
+			if res.out.err != nil || res.out.missing > 0 {
 				cancelStats()
-				if res.err != nil {
-					return false, res.err
+				if res.out.err != nil {
+					return false, res.out.err
 				}
 				return false, fmt.Errorf("stream: sampled BODY or STAT unavailable: %w", core.ErrArticleMissing)
 			}
@@ -117,16 +119,15 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 	p := ready.p
 	if !sameFiles(res.files, p.vols) {
 		started := time.Now()
-		m, t, err := e.statSample(ctx, p.vols)
-		res = statResult{files: p.vols, missing: m, total: t, err: err, duration: time.Since(started), samples: t}
+		out := e.statSample(ctx, p.vols)
+		res = statResult{files: p.vols, out: out, duration: time.Since(started)}
 	}
-	trace.STAT = res.duration
-	trace.Samples = res.samples
-	if res.err != nil {
-		return false, res.err
+	record(res)
+	if res.out.err != nil {
+		return false, res.out.err
 	}
-	if res.missing > 0 {
-		return false, fmt.Errorf("stream: %d of %d sampled articles of %s missing: %w", res.missing, res.total, p.name, core.ErrArticleMissing)
+	if res.out.missing > 0 {
+		return false, fmt.Errorf("stream: %d of %d sampled articles of %s missing: %w", res.out.missing, res.out.total, p.name, core.ErrArticleMissing)
 	}
 	return true, nil
 }
@@ -191,81 +192,205 @@ type slotRef struct {
 	slot int
 }
 
-// statSample STATs the health sample of files in parallel.
-func (e *Engine) statSample(ctx context.Context, files []*postedFile) (missing, total int, err error) {
+// Optional fetcher capabilities the health check uses when present. The
+// production fetcher (internal/usenet) implements all of them; plain
+// core.ArticleFetcher implementations fall back to per-article Stat and a
+// full Body fetch for probes.
+type bodyPartChecker interface {
+	CheckBodyPart(context.Context, string, []string, core.Priority, core.ArticlePart) error
+}
+type bodyChecker interface {
+	CheckBody(context.Context, string, []string, core.Priority) error
+}
+type statStreamer interface {
+	StatStream(context.Context, []string, func(id string, present bool) bool) error
+}
+
+// sampleOutcome is the verdict of sampling one candidate's articles.
+type sampleOutcome struct {
+	missing      int
+	total        int
+	bodyProbes   int
+	bodyOK       int
+	bodyDuration time.Duration // slowest BODY probe
+	failFast     bool          // bailed on the first confirmed miss
+	reason       string        // which probe confirmed the miss
+	err          error
+}
+
+// expectedPart is what the yEnc header of slot's article must say, so far
+// as the index already knows it: the part number and total always, the
+// file size and byte range once learned from a fetched header.
+func (pf *postedFile) expectedPart(slot int) core.ArticlePart {
+	want := core.ArticlePart{Part: slot + 1, Total: pf.numSlots()}
+	pf.mu.RLock()
+	defer pf.mu.RUnlock()
+	if pf.known {
+		want.FileSize = pf.size
+	}
+	if slot >= 0 && slot < len(pf.slots) && pf.slots[slot].known {
+		// Slots are [begin,end) 0-based; yEnc is 1-based inclusive.
+		want.Begin = pf.slots[slot].begin + 1
+		want.End = pf.slots[slot].end
+	}
+	return want
+}
+
+// bodyProbeSlots picks which samples get a real BODY (yEnc header) probe:
+// one or two mid-file segments, where DMCA takedowns hide behind STAT 223.
+func bodyProbeSlots(n int) map[int]bool {
+	switch {
+	case n >= 4:
+		return map[int]bool{n / 3: true, n * 2 / 3: true}
+	case n == 3:
+		return map[int]bool{1: true}
+	}
+	return nil
+}
+
+// statSample checks the health sample of files: BODY probes on the
+// mid-file samples run concurrently with pipelined STATs of the rest, and
+// the first article confirmed missing on every provider tier ends the
+// check immediately — outstanding STAT and BODY work is cancelled rather
+// than awaited.
+func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sampleOutcome) {
 	refs := healthSample(files, e.opts.HealthSamples)
-	ctx, cancel := context.WithCancel(ctx)
+	out.total = len(refs)
+	if len(refs) == 0 {
+		return out
+	}
+	ctx, cancel := context.WithCancel(parent)
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	defer cancel()
-	type result struct {
-		missing bool
-		err     error
+
+	type event struct {
+		body     bool
+		statDone bool // the STAT stream ended; err explains undecided ids
+		missing  bool
+		id       string
+		err      error
+		dur      time.Duration
 	}
-	results := make(chan result, len(refs))
-	type job struct {
-		ref  slotRef
-		body bool
-	}
-	jobs := make(chan job, len(refs))
-	for _, wantBody := range []bool{true, false} {
-		for i, ref := range refs {
-			body := len(refs) >= 4 && (i == len(refs)/3 || i == len(refs)*2/3)
-			if body == wantBody {
-				jobs <- job{ref, body}
-			}
-		}
-	}
-	close(jobs)
-	check := func(j job) result {
-		ref := j.ref
+	events := make(chan event, len(refs)+1)
+
+	probes := bodyProbeSlots(len(refs))
+	var statIDs []string
+	for i, ref := range refs {
 		id := ref.pf.msgID(ref.slot)
-		if id == "" {
-			return result{missing: true}
+		body := probes[i]
+		switch {
+		case id == "":
+			events <- event{body: body, missing: true}
+		case body:
+			out.bodyProbes++
+			wg.Add(1)
+			go func(ref slotRef, id string) {
+				defer wg.Done()
+				started := time.Now()
+				err := e.probeBody(ctx, ref, id)
+				events <- event{body: true, missing: isMissing(err), id: id, err: err, dur: time.Since(started)}
+			}(ref, id)
+		default:
+			statIDs = append(statIDs, id)
 		}
-		if j.body {
-			var err error
-			if checker, ok := e.fetcher.(interface {
-				CheckBody(context.Context, string, []string, core.Priority) error
-			}); ok {
-				err = checker.CheckBody(ctx, id, ref.pf.groups, core.PriorityLive)
-			} else {
-				_, err = e.fetcher.Body(ctx, id, ref.pf.groups, core.PriorityLive)
-			}
-			return result{missing: isMissing(err), err: err}
-		}
-		ok, err := e.fetcher.Stat(ctx, id)
-		return result{missing: (!ok && err == nil) || isMissing(err), err: err}
 	}
-	for i := 0; i < min(e.opts.HealthParallel, len(refs)); i++ {
+	if streamer, ok := e.fetcher.(statStreamer); ok && len(statIDs) > 0 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case j, ok := <-jobs:
-					if !ok {
-						return
-					}
-					results <- check(j)
-				}
-			}
+			err := streamer.StatStream(ctx, statIDs, func(id string, present bool) bool {
+				events <- event{missing: !present, id: id}
+				return ctx.Err() == nil
+			})
+			events <- event{statDone: true, err: err}
 		}()
+	} else {
+		jobs := make(chan string, len(statIDs))
+		for _, id := range statIDs {
+			jobs <- id
+		}
+		close(jobs)
+		for i := 0; i < min(e.opts.HealthParallel, len(statIDs)); i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case id, ok := <-jobs:
+						if !ok {
+							return
+						}
+						present, err := e.fetcher.Stat(ctx, id)
+						events <- event{missing: (!present && err == nil) || isMissing(err), id: id, err: err}
+					}
+				}
+			}()
+		}
 	}
-	for range refs {
+
+	needStat := len(statIDs)
+	statReceived, decided := 0, 0
+	var statErr error
+	for decided < len(refs) {
 		select {
-		case <-ctx.Done():
-			return 0, len(refs), ctx.Err()
-		case r := <-results:
-			if r.missing {
-				return 1, len(refs), nil
+		case <-parent.Done():
+			out.err = parent.Err()
+			return out
+		case ev := <-events:
+			if ev.statDone {
+				// Ids never reported are undecided (a provider errored);
+				// they count as decided-with-error, never as missing.
+				statErr = ev.err
+				decided += needStat - statReceived
+				continue
 			}
-			if r.err != nil {
-				return 0, len(refs), r.err
+			decided++
+			if ev.body {
+				out.bodyDuration = max(out.bodyDuration, ev.dur)
+				if ev.err == nil && !ev.missing {
+					out.bodyOK++
+				}
+			} else {
+				statReceived++
+			}
+			if ev.missing {
+				out.missing = 1
+				out.failFast = decided < len(refs)
+				kind := "STAT"
+				if ev.body {
+					kind = "BODY"
+				}
+				if ev.id == "" {
+					out.reason = "segment absent from NZB"
+				} else {
+					out.reason = fmt.Sprintf("%s missing on %s", kind, ev.id)
+				}
+				return out
+			}
+			if ev.err != nil && parent.Err() == nil {
+				out.err = ev.err
+				return out
 			}
 		}
 	}
-	return 0, len(refs), nil
+	if statErr != nil && parent.Err() == nil {
+		out.err = statErr
+	}
+	return out
+}
+
+// probeBody runs one BODY probe, preferring the yEnc-header check that
+// validates the part against the NZB.
+func (e *Engine) probeBody(ctx context.Context, ref slotRef, id string) error {
+	if checker, ok := e.fetcher.(bodyPartChecker); ok {
+		return checker.CheckBodyPart(ctx, id, ref.pf.groups, core.PriorityLive, ref.pf.expectedPart(ref.slot))
+	}
+	if checker, ok := e.fetcher.(bodyChecker); ok {
+		return checker.CheckBody(ctx, id, ref.pf.groups, core.PriorityLive)
+	}
+	_, err := e.fetcher.Body(ctx, id, ref.pf.groups, core.PriorityLive)
+	return err
 }

@@ -36,6 +36,11 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		OnTimeline: func(u *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
 			if u != nil {
 				a.playback.Timeline(u.ID, key, state)
+				// Session intent (#32): a detail open that just turned
+				// into this playback was a conversion, not browsing.
+				if state == "playing" {
+					a.personalize.NotePlayback(u, key)
+				}
 			}
 			a.prefetch.OnTimeline(u, key, offset, duration, state)
 		},
@@ -57,6 +62,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		deps = plex.Deps{
 			Catalog:     a.catalog,
 			Collections: a.discoveryPersonal.ReviewCollections(a.collections),
+			VibeSearch:  a.collections,
 			Recommender: a.personalize,
 			State:       a.state,
 			Playlists:   a.state.Playlists(),
@@ -67,6 +73,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 			DB:          a.db, // plex_ultrablur
 		}
 	}
+	deps.Variants = a.resolver // "Play Version" release picker (cache-only)
 	deps.PlexGUID = plexguid.New(a.db, plexguid.Options{Token: func() string { return a.cfg.Get().Plex.Token }})
 	deps.EpisodeOrder = a.episodeorder
 	deps.Discovery = a.plexDiscovery

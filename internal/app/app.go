@@ -207,6 +207,9 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Catalog: a.catalog,
 		Logger:  log.With("component", "llm"),
 	})
+	if a.collections != nil {
+		a.collections.SetVibeRefiner(a.llm)
+	}
 	a.recommend = recommend.New(recommend.Options{
 		Catalog: a.catalog, State: a.state, LLM: a.llm,
 		Logger: log.With("component", "recommend"),
@@ -220,6 +223,15 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Collections: a.collections, // owner collections as targeted Home/section rows
 		ServerName:  func() string { return a.cfg.Get().Server.FriendlyName },
 		Logger:      log.With("component", "personalize"),
+		// Netflix-style hooks (#31/#32) follow the owner's live switches.
+		IntentEnabled: func() bool { return a.cfg.Get().Personalize.SessionIntent },
+		ClockFormat: func() string {
+			c := a.cfg.Get()
+			if c.Personalize.ClockFormat != "" {
+				return c.Personalize.ClockFormat
+			}
+			return c.Catalog.Language
+		},
 	}); err != nil {
 		return fmt.Errorf("personalization: %w", err)
 	}
@@ -235,7 +247,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	})
 
 	// Usenet, cache, stream engine.
-	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet")})
+	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet"), MinIdle: cfg.Usenet.MinIdle})
 	a.closers = append(a.closers, func() { a.fetcher.Close() })
 	if a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log); err != nil {
 		return fmt.Errorf("segment cache: %w", err)
@@ -293,6 +305,12 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
 		},
 		FetchNZB: a.indexers.FetchNZB,
+		Aligner: func() core.TimelineAligner {
+			if a.subtitles == nil {
+				return nil
+			}
+			return a.subtitles.TimelineAligner()
+		}(),
 		// Transcode sessions are keyed by the client's session id; the Plex
 		// front end (built below) maps playback sessions to them.
 		HLSLookup: func(id string) (core.HLSSession, bool) {
@@ -365,10 +383,22 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger: log.With("component", "gdm"),
 	})
 
+	// Post-play pre-buffering (#30): prewarm through the playback manager
+	// once it implements core.Prewarmer; until then prefetch resolves and
+	// pulls the opening bytes itself.
+	var prewarmer core.Prewarmer
+	if pw, ok := any(a.playback).(core.Prewarmer); ok {
+		prewarmer = pw
+	}
 	a.prefetch, err = prefetch.New(prefetch.Deps{
 		Catalog: a.catalog, Resolver: a.resolver, Engine: a.engine,
 		State: a.state, Auth: a.users, Hints: a.playback,
-		Logger: log.With("component", "prefetch"),
+		Logger:   log.With("component", "prefetch"),
+		PostPlay: a.personalize, Prewarmer: prewarmer, Markers: a.markers,
+		PostPlayEnabled: func() bool {
+			c := a.cfg.Get().Personalize
+			return c.PostPlay && c.PostPlayPrebuffer
+		},
 	}, cfg.Cache, prefetch.Options{})
 	if err != nil {
 		return fmt.Errorf("prefetch: %w", err)
@@ -406,7 +436,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 func (a *App) applyConfig(c config.Config) {
 	a.tmdb.UpdateConfig(c.Catalog)
 	a.llm.UpdateConfig(c.LLM)
-	a.fetcher.Update(c.Usenet.Providers)
+	a.fetcher.UpdateConfig(c.Usenet)
 	a.indexers.ApplyConfig(c)
 	a.resolver.UpdateConfig(c)
 	a.catalog.UpdateConfig(c.Catalog)

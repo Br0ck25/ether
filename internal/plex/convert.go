@@ -362,10 +362,12 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 	}
 
 	if o.media && isPlayable(t.Type) {
+		var editionTitle string
+		m.Media, editionTitle = s.mediaFor(ctx, pr, t, detail, o.detail)
+		applyEditionTitle(&m, editionTitle)
 		if s.downloadsAllowed(pr.User) {
 			m.AllowSync = model.Ptr(true)
 		}
-		m.Media = s.mediaFor(ctx, pr, t, detail)
 		if detail {
 			s.addStreamFeatures(ctx, pr, t, &m)
 		}
@@ -479,8 +481,13 @@ func (s *Server) mediaInfoFor(ctx context.Context, pr *Request, t *core.Title) (
 	return s.d.Playback.Estimate(ctx, t, caps), nil
 }
 
-// mediaFor renders the single virtual Media/Part of a playable title.
-func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withStreams bool) []model.Media {
+// mediaFor renders the virtual Media/Part of a playable title: one per
+// release variant on detail pages (withVariants, driving the "Play
+// Version" picker), otherwise the single Media. The second return value
+// is the item's editionTitle, or "". A live session keeps describing the
+// version actually playing (its probed info), so variants are only
+// offered before playback starts for this client.
+func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withStreams bool, withVariants bool) ([]model.Media, string) {
 	info, ps := s.mediaInfoFor(ctx, pr, t)
 	stamp := unixOrZero(t.UpdatedAt)
 	if ps != nil && !ps.StartedAt.IsZero() {
@@ -488,6 +495,11 @@ func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withS
 	}
 	if stamp <= 0 {
 		stamp = 1
+	}
+	if withVariants && withStreams && ps == nil {
+		if media, edition := s.mediaForVariants(ctx, pr, t, stamp); len(media) > 0 {
+			return media, edition
+		}
 	}
 	m := buildMedia(t, info, stamp)
 	if ps != nil && ps.Resolution != nil && s.d.Trickplay != nil && s.d.Trickplay.TrickplayAvailable(ps.Resolution.Release.ID) {
@@ -502,7 +514,7 @@ func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withS
 		sel = s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
 		m.Part[0].Stream = s.buildStreams(t.Key, info, sel, pr.User)
 	}
-	return []model.Media{m}
+	return []model.Media{m}, ""
 }
 
 // partFileName is the virtual file name shown in "Get Info".

@@ -33,6 +33,7 @@ type Config struct {
 	Spike         Spike         `json:"spike"`
 	Downloads     Downloads     `json:"downloads"`
 	Markers       Markers       `json:"markers"`
+	Personalize   Personalize   `json:"personalize"`
 	Extras        Extras        `json:"extras"`
 	SetupComplete bool          `json:"setupComplete"`
 }
@@ -77,6 +78,12 @@ type Plex struct {
 
 type Usenet struct {
 	Providers []UsenetProvider `json:"providers"`
+	// MinIdle is how many connections per primary (non-backfill) provider
+	// are kept warm (dialled, authenticated, DATE-pinged) at all times so
+	// Play never pays a cold handshake. 0 = default (2); negative = off
+	// (connections are dialled lazily and expire when idle). A provider's
+	// own MinIdle overrides this.
+	MinIdle int `json:"minIdle"`
 }
 
 type UsenetProvider struct {
@@ -92,6 +99,11 @@ type UsenetProvider struct {
 	Priority int  `json:"priority"`
 	Backfill bool `json:"backfill"` // only used for articles missing elsewhere
 	Enabled  bool `json:"enabled"`
+	// MinIdle overrides Usenet.MinIdle for this provider: 0 = inherit the
+	// global setting, positive = that many warm connections, negative =
+	// no warm floor for this provider. Backfill providers are never kept
+	// warm regardless.
+	MinIdle int `json:"minIdle,omitempty"`
 }
 
 type Indexer struct {
@@ -168,6 +180,18 @@ type Transcode struct {
 	TempDir              string `json:"tempDir"`
 	MaxTranscodes        int    `json:"maxTranscodes"`
 	RemoteMaxBitrateKbps int    `json:"remoteMaxBitrateKbps"`
+
+	// Adaptive HLS engine (additive). Numeric zero values select the
+	// transcode package defaults; see Defaults for the shipped values.
+	FastStart          bool     `json:"fastStart"`          // short, quick opening segments
+	FastStartSegments  int      `json:"fastStartSegments"`  // opening segments in the ramp (default 2)
+	FastStartSegment   Duration `json:"fastStartSegment"`   // ramp segment length (default 2s)
+	FastStartMaxHeight int      `json:"fastStartMaxHeight"` // ramp encode height cap (default 720)
+	ABRLadder          bool     `json:"abrLadder"`          // multi-rung master playlist / MPD
+	VBVReservoir       bool     `json:"vbvReservoir"`       // constant-quality + generous VBV for capped transcodes
+	VBVBufferSeconds   int      `json:"vbvBufferSeconds"`   // VBV buffer depth in seconds of maxrate (default 8)
+	SpikeGovernor      bool     `json:"spikeGovernor"`      // clamp VBR spikes in copy streams to measured goodput
+	SpikeMarginPercent int      `json:"spikeMarginPercent"` // spike threshold over goodput, percent (default 125)
 }
 
 // Downloads controls Plex offline downloads (allowSync + the Download

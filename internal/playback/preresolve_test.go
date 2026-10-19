@@ -9,7 +9,7 @@ import (
 )
 
 func TestPreResolveReusedWithoutLiveSessionOrHistory(t *testing.T) {
-	h := newHarness(t, []*fakeRelease{mkv("r1", 1<<20, 90*time.Minute)}, []string{"r1"})
+	h := newHarness(t, []*fakeRelease{mkv("r1", 2<<30, 90*time.Minute)}, []string{"r1"})
 	caps := defaultCaps("client")
 	if !h.m.PreResolve(context.Background(), owner, movieKey, caps) {
 		t.Fatal("first warm skipped")
@@ -88,6 +88,11 @@ func TestAdoptedMediaSkipsResolverAndNNTP(t *testing.T) {
 		t.Fatalf("missing local media %+v", ps)
 	}
 	h.m.Stop(ps.ID)
+	// The source closes once the (cancelled) background index read ends.
+	deadline := time.Now().Add(2 * time.Second)
+	for !local.src.closed.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if !local.src.closed.Load() {
 		t.Fatal("local file not closed")
 	}

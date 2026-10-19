@@ -125,7 +125,8 @@ func child(b []byte, k string) []byte {
 	return nil
 }
 func (r *indexReader) mp4() ([]IndexPoint, error) {
-	for off, n := int64(0), 0; off < r.size && n < 256; n++ {
+	var sidxPts []IndexPoint // fragmented MP4 fallback (sidx)
+	for off, n := int64(0), 0; off < r.size && n < 1024; n++ {
 		h, e := r.read(off, 8)
 		if e != nil {
 			return nil, e
@@ -166,11 +167,78 @@ func (r *indexReader) mp4() ([]IndexPoint, error) {
 					}
 				}
 			}
-			return nil, errIndex
+			// No usable sync-sample table (fragmented MP4 keeps empty
+			// sample tables): keep scanning for an sidx.
+		}
+		if string(h[4:8]) == "sidx" && sidxPts == nil && size-head <= 1<<20 {
+			b, e := r.read(off+head, int(size-head))
+			if e != nil {
+				return nil, e
+			}
+			sidxPts, _ = parseSidx(b, off+size, r.size)
 		}
 		off += size
 	}
+	if len(sidxPts) > 0 {
+		return sidxPts, nil
+	}
 	return nil, errIndex
+}
+
+// parseSidx turns a Segment Index Box into points at each referenced
+// sub-segment: first_offset counts from the first byte after the sidx
+// box (base), times accumulate sub-segment durations over the timescale.
+func parseSidx(b []byte, base, fileSize int64) ([]IndexPoint, error) {
+	if len(b) < 12 {
+		return nil, errIndex
+	}
+	version := b[0]
+	timescale := u32(b, 8)
+	if timescale == 0 {
+		return nil, errIndex
+	}
+	var ept, first uint64
+	pos := 12
+	if version == 0 {
+		if len(b) < pos+12 {
+			return nil, errIndex
+		}
+		ept = uint64(u32(b, pos))
+		first = uint64(u32(b, pos+4))
+		pos += 8
+	} else if version == 1 {
+		if len(b) < pos+20 {
+			return nil, errIndex
+		}
+		ept = binary.BigEndian.Uint64(b[pos:])
+		first = binary.BigEndian.Uint64(b[pos+8:])
+		pos += 16
+	} else {
+		return nil, errIndex
+	}
+	count := int(binary.BigEndian.Uint16(b[pos+2:]))
+	pos += 4
+	if count == 0 || count > maxIndexEntries || pos+count*12 > len(b) {
+		return nil, errIndex
+	}
+	off := base + int64(first)
+	stamp := ept
+	var pts []IndexPoint
+	for i := 0; i < count; i++ {
+		ref := b[pos+i*12:]
+		size := u32(ref, 0) & 0x7fffffff
+		dur := u32(ref, 4)
+		if off < 0 || off >= fileSize {
+			return nil, errIndex
+		}
+		seconds := float64(stamp) / float64(timescale)
+		if seconds < float64((time.Duration(1<<63-1))/time.Second) {
+			pts = append(pts, IndexPoint{off, time.Duration(seconds * float64(time.Second))})
+		}
+		off += int64(size)
+		stamp += uint64(dur)
+	}
+	return pts, nil
 }
 func u32(b []byte, off int) uint32 { return binary.BigEndian.Uint32(b[off : off+4]) }
 func table(b []byte, width int) (int, error) {
@@ -536,6 +604,7 @@ func (r *indexReader) matroska() ([]IndexPoint, error) {
 	scale := uint64(1000000)
 	video := uint64(0)
 	var cues []byte
+	seenInfo, seenTracks := false, false
 	targets := map[uint64]int64{}
 	visited := map[int64]bool{}
 	inspect := func(e ebmlElement) error {
@@ -554,12 +623,14 @@ func (r *indexReader) matroska() ([]IndexPoint, error) {
 		case 0x1c53bb6b:
 			cues = b
 		case 0x1549a966:
+			seenInfo = true
 			for _, c := range children {
 				if c.id == 0x2ad7b1 {
 					scale = ebmlUint(c.b)
 				}
 			}
 		case 0x1654ae6b:
+			seenTracks = true
 			for _, c := range children {
 				if c.id != 0xae {
 					continue
@@ -600,7 +671,11 @@ func (r *indexReader) matroska() ([]IndexPoint, error) {
 		}
 		return nil
 	}
-	for off, n := seg.start, 0; off < seg.end && n < 256; n++ {
+	// Walk segment-level elements, skipping Clusters by offset (their
+	// payloads are never read), so Cues written at the end of the file
+	// are found even without a SeekHead pointing at them. SeekHead
+	// targets below cover files whose cluster count exceeds the cap.
+	for off, n := seg.start, 0; off < seg.end && n < 8192; n++ {
 		e, err := r.element(off, seg.end)
 		if err != nil {
 			return nil, err
@@ -609,8 +684,11 @@ func (r *indexReader) matroska() ([]IndexPoint, error) {
 		if err = inspect(e); err != nil {
 			return nil, err
 		}
-		if e.id == 0x1f43b675 {
+		if cues != nil && seenInfo && seenTracks {
 			break
+		}
+		if e.end <= off {
+			return nil, errIndex
 		}
 		off = e.end
 	}

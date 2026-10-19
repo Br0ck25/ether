@@ -84,7 +84,9 @@ and sample actual article bodies as well as article existence.
 The media decision chooses direct play, copy-only remux, or transcoding. HLS and
 DASH use output containers appropriate to the selected codecs. Apple HLS includes
 codec and dynamic-range declarations, Dolby Vision signaling where applicable,
-and valid initialization-segment URLs. Hardware encoding is used when available;
+and valid initialization-segment URLs. A client that explicitly requests segmented
+Matroska receives independent Matroska fragments; direct-play support for MKV
+alone does not enable that transport. Hardware encoding is used when available;
 software encoding remains a fallback.
 
 Missing or corrupt articles, stalled reads, and premature source termination can

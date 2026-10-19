@@ -77,12 +77,16 @@ type Deps struct {
 	AccessPolicy AccessPolicy
 	Catalog      core.Catalog
 	Collections  core.Collections
+	VibeSearch   core.VibeSearcher
 	Recommender  core.Recommender
 	State        core.State
 	Playlists    core.Playlists
 	Auth         core.Auth
 	Playback     core.Playback
 	Transcoder   core.Transcoder
+	// Variants lists distinct release versions for "Play Version" detail
+	// pages (optional: without it, detail pages stay single-Media).
+	Variants core.VariantResolver
 	// Downloads remuxes resolved sources to temp MP4s for the Download
 	// Queue API; nil disables downloads (allowSync stays "0").
 	Downloads        core.DownloadRemuxer
@@ -126,16 +130,18 @@ type Server struct {
 
 	sections []Section
 
-	images     *imageCache
-	streams    *streamRegistry
-	downloads  *downloadStore
-	queues     *playQueueStore
-	sessions   *sessionTracker
-	transcodes *transcodeTable
-	extraPlay  *extraPlayStore
-	selections *selectionStore
-	notifier   *notifier
-	facets     *facetCache
+	images           *imageCache
+	streams          *streamRegistry
+	variantIDs       *variantIDRegistry
+	renderedVariants *renderedVariants
+	downloads        *downloadStore
+	queues           *playQueueStore
+	sessions         *sessionTracker
+	transcodes       *transcodeTable
+	extraPlay        *extraPlayStore
+	selections       *selectionStore
+	notifier         *notifier
+	facets           *facetCache
 
 	// Background enrichment (nil when disabled).
 	titles    *titleCache
@@ -175,20 +181,22 @@ func NewServer(d Deps) *Server {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Server{
-		d:          d,
-		log:        d.Logger.With("component", "plex"),
-		images:     newImageCache(d.ImageCacheBytes, d.HTTPClient),
-		streams:    newStreamRegistry(),
-		downloads:  newDownloadStore(),
-		queues:     newPlayQueueStore(),
-		sessions:   newSessionTracker(),
-		transcodes: newTranscodeTable(),
-		extraPlay:  newExtraPlayStore(),
-		selections: newSelectionStore(),
-		notifier:   newNotifier(),
-		facets:     newFacetCache(),
-		ctx:        ctx,
-		cancel:     cancel,
+		d:                d,
+		log:              d.Logger.With("component", "plex"),
+		images:           newImageCache(d.ImageCacheBytes, d.HTTPClient),
+		streams:          newStreamRegistry(),
+		variantIDs:       newVariantIDRegistry(d.DB),
+		renderedVariants: newRenderedVariants(),
+		downloads:        newDownloadStore(),
+		queues:           newPlayQueueStore(),
+		sessions:         newSessionTracker(),
+		transcodes:       newTranscodeTable(),
+		extraPlay:        newExtraPlayStore(),
+		selections:       newSelectionStore(),
+		notifier:         newNotifier(),
+		facets:           newFacetCache(),
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 	s.sections = s.buildSections()
 	if !d.DisableEnrichment && d.Catalog != nil {
@@ -348,6 +356,7 @@ func (s *Server) janitor() {
 			now := s.now()
 			s.expireDownloads(now)
 			s.queues.expire(now, 6*time.Hour)
+			s.renderedVariants.expire(now, renderedVariantsTTL)
 			s.transcodes.expire(now, 2*time.Hour)
 			s.extraPlay.expire(now, 2*time.Hour)
 			for _, e := range s.sessions.expire(now, 2*time.Minute) {

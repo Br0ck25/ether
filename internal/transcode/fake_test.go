@@ -298,6 +298,10 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 	pattern := argValue(args, "-hls_segment_filename")
 	start, _ := strconv.Atoi(argValue(args, "-start_number"))
 	init := argValue(args, "-hls_fmp4_init_filename")
+	if argValue(args, "-segment_format") == "matroska" {
+		pattern, playlist = playlist, argValue(args, "-segment_list")
+		start, _ = strconv.Atoi(argValue(args, "-segment_start_number"))
+	}
 	if failStart {
 		if cmd.Stderr != nil {
 			_, _ = io.WriteString(cmd.Stderr, stderr+"\n")

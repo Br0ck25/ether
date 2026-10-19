@@ -18,7 +18,12 @@ import (
 //	KindSeason      payload = show*10^4 + season           (season < 10^4)
 //	KindEpisode     payload = show*10^7 + season*10^4 + ep  (show < 10^8, season < 1000, ep < 10^4)
 //	KindCollection  payload = tmdb collection id (franchise)
-//	KindSmart       payload = local smart-collection / generated hub id
+//	KindSmart       payload = local smart-collection / generated hub id;
+//	                payloads in [EphemeralSmartBase, EphemeralSmartEnd)
+//	                are reserved for ephemeral (in-memory, per-viewer)
+//	                generated collections, and payloads from
+//	                EphemeralSmartEnd up for personalize's Year in Review
+//	                collections; database ids stay far below both
 //	KindPlaylist    payload = local playlist id
 //	KindExtra       payload = compact extra id from the extras registry
 //	KindLocal       payload = local file id (spike / test library)
@@ -47,6 +52,27 @@ func SmartKey(id int64) RatingKey      { return RatingKey(int64(KindSmart)*keyBa
 func PlaylistKey(id int64) RatingKey   { return RatingKey(int64(KindPlaylist)*keyBase + id) }
 func ExtraKey(id int64) RatingKey      { return RatingKey(int64(KindExtra)*keyBase + id) }
 func LocalKey(id int64) RatingKey      { return RatingKey(int64(KindLocal)*keyBase + id) }
+
+// EphemeralSmartBase and EphemeralSmartEnd bound the KindSmart payloads
+// reserved for ephemeral generated collections. The range stops where
+// personalize's Year in Review collections begin (payload 9*10^14 and
+// up), and database smart-collection ids stay far below it.
+const (
+	EphemeralSmartBase int64 = 800_000_000_000_000
+	EphemeralSmartEnd  int64 = 900_000_000_000_000
+)
+
+// EphemeralSmartKey builds an ephemeral collection key from a sequence
+// number (1 .. 10^14-1).
+func EphemeralSmartKey(seq int64) RatingKey {
+	return SmartKey(EphemeralSmartBase + seq)
+}
+
+// IsEphemeral reports whether k is an ephemeral generated collection key.
+func (k RatingKey) IsEphemeral() bool {
+	p := k.payload()
+	return k.Kind() == KindSmart && p >= EphemeralSmartBase && p < EphemeralSmartEnd
+}
 func SeasonKey(show int64, season int) RatingKey {
 	return RatingKey(int64(KindSeason)*keyBase + show*10_000 + int64(season))
 }

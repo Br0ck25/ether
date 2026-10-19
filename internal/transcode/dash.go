@@ -98,6 +98,36 @@ func renderMPD(duration, segDur time.Duration, initURL, mediaURL string, reps []
 	fmt.Fprintf(&b, "\tmaxSegmentDuration=%q\n", mpdSeconds(2*segDur))
 	fmt.Fprintf(&b, "\tminBufferTime=%q>\n", mpdSeconds(2*segDur))
 	fmt.Fprintf(&b, "\t<Period start=\"PT0S\" id=\"0\" duration=%q>\n", mpdDuration(duration))
+	// Several video representations form one AdaptationSet (an ABR
+	// ladder the player may switch within); a single video keeps the
+	// historic one-set-per-representation layout byte for byte.
+	videoReps := 0
+	for _, r := range reps {
+		if r.Kind != "audio" {
+			videoReps++
+		}
+	}
+	if videoReps > 1 {
+		var rest []dashRep
+		b.WriteString("\t\t<AdaptationSet segmentAlignment=\"true\" contentType=\"video\">\n")
+		fmt.Fprintf(&b, "\t\t\t<SegmentTemplate timescale=\"%d\" duration=\"%d\" initialization=\"%s\" media=\"%s\" startNumber=\"0\">\n",
+			timescale, segTicks, html.EscapeString(initURL), html.EscapeString(mediaURL))
+		b.WriteString("\t\t\t</SegmentTemplate>\n")
+		for _, r := range reps {
+			if r.Kind == "audio" {
+				rest = append(rest, r)
+				continue
+			}
+			fmt.Fprintf(&b, "\t\t\t<Representation id=\"%d\" mimeType=\"%s\" codecs=\"%s\" bandwidth=\"%d\"",
+				r.ID, r.mimeType(), html.EscapeString(r.Codecs), r.Bandwidth)
+			if r.Width > 0 && r.Height > 0 {
+				fmt.Fprintf(&b, " width=\"%d\" height=\"%d\"", r.Width, r.Height)
+			}
+			b.WriteString(">\n\t\t\t</Representation>\n")
+		}
+		b.WriteString("\t\t</AdaptationSet>\n")
+		reps = rest
+	}
 	for _, r := range reps {
 		b.WriteString("\t\t<AdaptationSet segmentAlignment=\"true\">\n")
 		fmt.Fprintf(&b, "\t\t\t<SegmentTemplate timescale=\"%d\" duration=\"%d\" initialization=\"%s\" media=\"%s\" startNumber=\"0\">\n",

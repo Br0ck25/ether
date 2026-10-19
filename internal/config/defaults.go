@@ -18,7 +18,11 @@ func randomID(n int) string {
 // Defaults returns a fresh config for a new install.
 func Defaults(dataDir string) Config {
 	return Config{
+		Usenet:  Usenet{MinIdle: 2},
 		Markers: Markers{TheIntroDB: true, DetectCached: true},
+		Personalize: Personalize{
+			PostPlay: true, PostPlayPrebuffer: true, MicroReasons: true, SessionIntent: true,
+		},
 		Extras:  Extras{LocalTrailers: true, PrewarmBytes: 48 << 20, ResolverTimeout: Duration(20 * time.Second)},
 		Server: Server{
 			Port:               32400,
@@ -61,6 +65,15 @@ func Defaults(dataDir string) Config {
 			TempDir:              filepath.Join(dataDir, "transcode"),
 			MaxTranscodes:        2,
 			RemoteMaxBitrateKbps: 8000,
+			FastStart:            true,
+			FastStartSegments:    2,
+			FastStartSegment:     Duration(2 * time.Second),
+			FastStartMaxHeight:   720,
+			ABRLadder:            true,
+			VBVReservoir:         true,
+			VBVBufferSeconds:     8,
+			SpikeGovernor:        false, // rewrites upcoming playlist entries; opt-in until field-proven
+			SpikeMarginPercent:   125,
 		},
 		Downloads: Downloads{
 			Enabled:              true,

@@ -107,8 +107,53 @@ func eventPlaylist(done []int, segDur time.Duration, container string, ended boo
 	return b.Bytes()
 }
 
+// planPlaylist renders a Timeline as a media playlist: exact per-segment
+// #EXTINF durations, the timeline's target duration, and a
+// #EXT-X-DISCONTINUITY (plus a fresh #EXT-X-MAP for fMP4) wherever discont
+// says the encode parameters change. With event set it renders an EVENT
+// playlist of the full timeline without ENDLIST until ended, so clients
+// that reload it pick up re-planned segments ahead of the playhead; with
+// total==0 timelines only the first limit segments are listed.
+func planPlaylist(tl *Timeline, container string, name func(n int) string, discont func(n int) bool, event, ended bool, limit int) []byte {
+	var b bytes.Buffer
+	version := 3
+	if container == ContainerFMP4 {
+		version = 7
+	}
+	b.WriteString("#EXTM3U\n")
+	fmt.Fprintf(&b, "#EXT-X-VERSION:%d\n", version)
+	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", int(tl.TargetDuration().Seconds()))
+	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
+	if event {
+		b.WriteString("#EXT-X-PLAYLIST-TYPE:EVENT\n")
+	} else {
+		b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
+		b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
+	}
+	if container == ContainerFMP4 {
+		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", InitSegmentName)
+	}
+	n := tl.Total()
+	if n == 0 {
+		n = limit
+	}
+	for i := 0; i < n; i++ {
+		if i > 0 && discont != nil && discont(i) {
+			b.WriteString("#EXT-X-DISCONTINUITY\n")
+			if container == ContainerFMP4 {
+				fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", InitSegmentName)
+			}
+		}
+		fmt.Fprintf(&b, "#EXTINF:%.6f,\n%s\n", tl.Dur(i).Seconds(), name(i))
+	}
+	if !event || ended {
+		b.WriteString("#EXT-X-ENDLIST\n")
+	}
+	return b.Bytes()
+}
+
 // SegmentName is the default playlist URI of segment n: "00042.ts" or
-// "00042.m4s" (relative, so it resolves next to index.m3u8).
+// "00042.m4s" or "00042.mkv" (relative to index.m3u8).
 func SegmentName(n int, container string) string {
 	return segmentFile(n, segmentExt(container))
 }
@@ -123,7 +168,7 @@ func ParseSegmentName(name string) (int, bool) {
 		return InitSegment, true
 	}
 	base, ext, ok := strings.Cut(name, ".")
-	if !ok || (ext != "ts" && ext != "m4s") || base == "" {
+	if !ok || (ext != "ts" && ext != "m4s" && ext != "mkv") || base == "" {
 		return 0, false
 	}
 	n, err := strconv.Atoi(base)

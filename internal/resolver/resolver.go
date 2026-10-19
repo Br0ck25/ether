@@ -277,7 +277,7 @@ func flightKey(req core.ResolveRequest, profile core.QualityProfile) string {
 	sort.Strings(ex)
 	capsJSON, _ := json.Marshal(req.Client)
 	profileJSON, _ := json.Marshal(profile)
-	return fmt.Sprintf("%d|%s|%s|%s|%s", req.Title.Key, profile.Name, strings.Join(ex, ","), capsJSON, profileJSON)
+	return fmt.Sprintf("%d|%s|%s|%s|%s|%s", req.Title.Key, profile.Name, strings.Join(ex, ","), capsJSON, profileJSON, req.Prefer)
 }
 
 // Resolve implements core.Resolver. Concurrent calls for the same
@@ -321,8 +321,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	defer func() { s.addTrace(trace) }()
 
 	// Fast path: cached unavailable answer, unless this is a failover
-	// request that already knows about specific releases.
-	if len(req.Exclude) == 0 {
+	// request that already knows about specific releases, or the viewer
+	// picked a specific version.
+	if len(req.Exclude) == 0 && req.Prefer == "" {
 		if e, ok := s.getAvailability(ctx, int64(t.Key)); ok && !e.available {
 			trace.Err = "cached unavailable (cooloff)"
 			return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
@@ -338,57 +339,12 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, err
 	}
 
-	exclude := map[string]bool{}
-	for _, id := range req.Exclude {
-		exclude[id] = true
-	}
 	rcfg := s.resolverCfg()
-	var cands []candidate
-	clientRejected := false
-	for _, rel := range results {
-		ct := CandidateTrace{ReleaseID: rel.ID, Name: rel.Name, Indexer: rel.Indexer}
-		if reason := s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude); reason != "" {
-			ct.Rejected = true
-			switch reason {
-			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile":
-				clientRejected = true
-			}
-			ct.Reason = reason
-			trace.Candidates = append(trace.Candidates, ct)
-			continue
-		}
-		s.cfgMu.RLock()
-		scorer, scorerErr := s.scorer, s.scorerErr
-		s.cfgMu.RUnlock()
-		if scorerErr != nil {
-			trace.Err = scorerErr.Error()
-			return nil, scorerErr
-		}
-		formatScore, matches, scoreErr := scorer.ScoreWithScores(rel, profile.CustomFormatScores)
-		if scoreErr != nil {
-			trace.Err = scoreErr.Error()
-			return nil, scoreErr
-		}
-		ct.CustomFormats = matches
-		minimum := rcfg.MinCustomFormatScore
-		if profile.MinCustomFormatScore != nil {
-			minimum = profile.MinCustomFormatScore
-		}
-		if minimum != nil && formatScore < *minimum {
-			clientRejected = true
-			ct.Rejected = true
-			ct.Reason = "below minimum custom format score"
-			trace.Candidates = append(trace.Candidates, ct)
-			continue
-		}
-		compatibility, note := compatibilityScore(rel, req.Client, t)
-		ct.CompatibilityReason = note
-		rel.Score = s.score(rel, profile, t) + float64(formatScore) + compatibility
-		ct.Score = rel.Score
-		trace.Candidates = append(trace.Candidates, ct)
-		cands = append(cands, candidate{rel: rel, trace: len(trace.Candidates) - 1})
+	cands, clientRejected, err := s.scoreCandidates(req, sreq, profile, results, &trace)
+	if err != nil {
+		trace.Err = err.Error()
+		return nil, err
 	}
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rel.Score > cands[j].rel.Score })
 
 	if len(cands) == 0 {
 		// Client/profile rejection is not proof that the title is unavailable for everyone.
@@ -400,7 +356,45 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 
 	var optimisticErr error
-	if rcfg.OptimisticStart {
+	// The viewer picked a version ("Play Version"): health-check that
+	// release first, ahead of the normal ranking. When it is gone or
+	// unhealthy, fall back to the normal choice below.
+	preferTried := false
+	if req.Prefer != "" {
+		prefIdx := -1
+		for i := range cands {
+			if cands[i].rel.ID == req.Prefer {
+				prefIdx = i
+				break
+			}
+		}
+		if prefIdx < 0 {
+			s.log.Info("preferred release not among candidates; using normal ranking",
+				"title", t.Key, "prefer", req.Prefer)
+		} else {
+			preferTried = true
+			pref := cands[prefIdx]
+			idx, nzb, verr := s.validateCandidates(ctx, []candidate{pref}, &trace, rcfg.HealthRace)
+			if verr != nil {
+				trace.Err = verr.Error()
+				return nil, verr
+			}
+			if idx >= 0 {
+				s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
+				trace.Winner = pref.rel.ID
+				return s.resolution(t.Key, cands, prefIdx, nzb, &trace), nil
+			}
+			s.log.Info("preferred release unhealthy; falling back to normal ranking",
+				"title", t.Key, "prefer", req.Prefer)
+			cands = append(cands[:prefIdx], cands[prefIdx+1:]...)
+			if len(cands) == 0 {
+				trace.Err = "preferred release unhealthy and no other candidates"
+				return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
+			}
+		}
+	}
+
+	if rcfg.OptimisticStart && !preferTried {
 		nzb, err := s.indexer.FetchNZB(ctx, cands[0].rel)
 		if err == nil {
 			winner := cands[0]
@@ -447,8 +441,12 @@ func displayTitle(t *core.Title) string {
 	return t.Title
 }
 
+func searchCacheKey(req core.SearchRequest) string {
+	return fmt.Sprintf("%s|%v|%s|%d|%d|%d", req.Type, req.IDs, strings.ToLower(req.Title), req.Year, req.Season, req.Episode)
+}
+
 func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
-	key := fmt.Sprintf("%s|%v|%s|%d|%d|%d", req.Type, req.IDs, strings.ToLower(req.Title), req.Year, req.Season, req.Episode)
+	key := searchCacheKey(req)
 	s.mu.RLock()
 	e, ok := s.searchCache[key]
 	s.mu.RUnlock()
@@ -471,9 +469,79 @@ func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	return results, nil
 }
 
+// scoreCandidates filters and ranks search results for a request and
+// profile. trace may be nil (the variants path); candidate.trace is then
+// -1 and no trace rows are written.
+func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace) ([]candidate, bool, error) {
+	t := req.Title
+	exclude := map[string]bool{}
+	for _, id := range req.Exclude {
+		exclude[id] = true
+	}
+	rcfg := s.resolverCfg()
+	var cands []candidate
+	clientRejected := false
+	for _, rel := range results {
+		ct := CandidateTrace{ReleaseID: rel.ID, Name: rel.Name, Indexer: rel.Indexer}
+		preferred := req.Prefer != "" && rel.ID == req.Prefer
+		if reason := s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred); reason != "" {
+			ct.Rejected = true
+			switch reason {
+			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile":
+				clientRejected = true
+			}
+			ct.Reason = reason
+			if trace != nil {
+				trace.Candidates = append(trace.Candidates, ct)
+			}
+			continue
+		}
+		s.cfgMu.RLock()
+		scorer, scorerErr := s.scorer, s.scorerErr
+		s.cfgMu.RUnlock()
+		if scorerErr != nil {
+			return nil, clientRejected, scorerErr
+		}
+		formatScore, matches, scoreErr := scorer.ScoreWithScores(rel, profile.CustomFormatScores)
+		if scoreErr != nil {
+			return nil, clientRejected, scoreErr
+		}
+		ct.CustomFormats = matches
+		minimum := rcfg.MinCustomFormatScore
+		if profile.MinCustomFormatScore != nil {
+			minimum = profile.MinCustomFormatScore
+		}
+		if minimum != nil && formatScore < *minimum && !preferred {
+			clientRejected = true
+			ct.Rejected = true
+			ct.Reason = "below minimum custom format score"
+			if trace != nil {
+				trace.Candidates = append(trace.Candidates, ct)
+			}
+			continue
+		}
+		compatibility, note := compatibilityScore(rel, req.Client, t)
+		ct.CompatibilityReason = note
+		rel.Score = s.score(rel, profile, t) + float64(formatScore) + compatibility
+		ct.Score = rel.Score
+		tr := -1
+		if trace != nil {
+			trace.Candidates = append(trace.Candidates, ct)
+			tr = len(trace.Candidates) - 1
+		}
+		cands = append(cands, candidate{rel: rel, trace: tr})
+	}
+	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rel.Score > cands[j].rel.Score })
+	return cands, clientRejected, nil
+}
+
 // rejectReason returns "" to accept, or the reason to drop a release.
+// preferred (the viewer's explicit Play Version pick) bypasses the
+// profile-policy gates — max height, DV policy, imported quality gates,
+// per-profile size range — but never the hard client gates or the
+// identity/absolute-size sanity checks.
 func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.SearchRequest,
-	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool) string {
+	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool) string {
 	if rel.Password {
 		return "passworded"
 	}
@@ -535,8 +603,10 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 			return "year mismatch"
 		}
 	}
-	// Client / profile hard gates.
-	if len(profile.AllowedQualities) > 0 {
+	// Client / profile hard gates. The viewer's explicit pick bypasses the
+	// profile-policy gates (an explicit 4K pick on a 1080p profile must
+	// still resolve), never the client's codec support.
+	if !preferred && len(profile.AllowedQualities) > 0 {
 		allowed := false
 		for _, q := range profile.AllowedQualities {
 			if q == releaseQuality(rel.Info) {
@@ -547,17 +617,19 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 			return "quality excluded by imported profile"
 		}
 	}
-	if profile.MaxHeight > 0 && rel.Info.Height > profile.MaxHeight {
+	if !preferred && profile.MaxHeight > 0 && rel.Info.Height > profile.MaxHeight {
 		return "above profile max height"
 	}
-	if rel.Info.DolbyVision && !profile.AllowDolbyVision && !(rel.Info.HDR10 && profile.AllowHDR) {
+	if !preferred && rel.Info.DolbyVision && !profile.AllowDolbyVision && !(rel.Info.HDR10 && profile.AllowHDR) {
 		return "dolby vision not allowed for client"
 	}
 	if rel.Info.VideoCodec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(rel.Info.VideoCodec) {
 		return "video codec unsupported by client"
 	}
-	// Size sanity against runtime.
-	if rel.Size > 0 && t.Runtime > 0 {
+	// Size sanity against runtime. The per-profile size range is policy
+	// (a 4K remux exceeds a 1080p profile's ceiling), so an explicit pick
+	// bypasses it; the absolute implausibility floor below still applies.
+	if !preferred && rel.Size > 0 && t.Runtime > 0 {
 		mbPerMin := float64(rel.Size) / (1 << 20) / t.Runtime.Minutes()
 		if profile.MinSizeMBPerMin > 0 && mbPerMin < profile.MinSizeMBPerMin {
 			return "size too small for runtime"

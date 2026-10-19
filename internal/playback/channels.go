@@ -31,7 +31,7 @@ func (m *Manager) PrepareChannel(ctx context.Context, u *core.User, key core.Rat
 	ps, err := m.Prepare(ctx, u, key, caps)
 	if err != nil {
 		m.mu.Lock()
-		if m.byIdent[id] == nil && m.flights[id] == nil {
+		if m.byIdent[id] == nil && !m.hasFlightLocked(id) {
 			delete(m.channelGroups, id)
 		}
 		m.mu.Unlock()
