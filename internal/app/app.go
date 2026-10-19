@@ -169,10 +169,25 @@ func New(ctx context.Context, opts Options) (*App, error) {
 			}
 		}
 	}
-	if a.db, err = store.Open(ctx, opts.DataDir); err != nil {
+	dbCfg := cfg.Database.Effective(os.Getenv)
+	var dialect store.Dialect
+	if a.db, dialect, err = store.OpenWith(ctx, store.Options{
+		DataDir: opts.DataDir, Driver: dbCfg.Driver, URL: dbCfg.URL,
+		Logger: a.log.With("component", "store"),
+	}); err != nil {
 		return nil, fmt.Errorf("database: %w", err)
 	}
+	if dialect == store.Postgres {
+		a.log.Info("database: using PostgreSQL", "url", dbCfg.Redacted().URL)
+	}
 	a.closers = append(a.closers, func() { a.db.Close() })
+	// A restored PostgreSQL-style bundle leaves a logical dump to import.
+	if imported, err := backup.ImportPending(ctx, a.db, opts.DataDir); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("database: %w", err)
+	} else if imported {
+		a.log.Info("database: imported restored backup")
+	}
 	if err := a.build(ctx, cfg); err != nil {
 		a.Close()
 		return nil, err

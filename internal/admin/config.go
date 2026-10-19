@@ -35,7 +35,11 @@ func (h *Handler) saveConfig(next config.Config) ([]FieldError, error) {
 	}
 	err := h.deps.Config.Update(func(c *config.Config) error {
 		keepMachine, keepClient := c.Server.MachineIdentifier, c.Plex.ClientIdentifier
+		// The database is node-local and chosen at startup (config file or
+		// ETHER_DATABASE_URL); the admin API shows it redacted, never edits it.
+		keepDatabase := c.Database
 		*c = next
+		c.Database = keepDatabase
 		if keepMachine != "" {
 			c.Server.MachineIdentifier = keepMachine
 		}

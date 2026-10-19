@@ -602,7 +602,7 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_programmes WHERE source_id=?`, src.ID); err != nil {
 		return src, err
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_channels WHERE json_extract(data,'$.sourceId')=?`, src.ID); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_channels WHERE `+store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId")+`=?`, src.ID); err != nil {
 		return src, err
 	}
 	for _, c := range cs {
@@ -650,7 +650,7 @@ func (s *Service) DeleteSource(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM livetv_channels WHERE json_extract(data,'$.sourceId')=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`} {
+	for _, q := range []string{`DELETE FROM livetv_channels WHERE ` + store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId") + `=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`} {
 		if _, err = tx.ExecContext(ctx, q, id); err != nil {
 			return err
 		}

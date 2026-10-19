@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // Browse queries the browsable mirror entirely in SQL.
@@ -152,7 +153,8 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 		args = append(args, f.Studio)
 	}
 	if f.Query != "" {
-		conds = append(conds, "(t.title LIKE ? ESCAPE '\\' OR t.original_title LIKE ? ESCAPE '\\')")
+		op := store.Like(store.DialectOf(c.db))
+		conds = append(conds, "(t.title "+op+" ? ESCAPE '\\' OR t.original_title "+op+" ? ESCAPE '\\')")
 		like := "%" + escapeLike(f.Query) + "%"
 		args = append(args, like, like)
 	}

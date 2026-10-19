@@ -533,3 +533,34 @@ func TestValidateMaintenanceWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestDatabaseSettingsRedactedAndNotEditable(t *testing.T) {
+	const dbURL = "postgres://ether:db-secret@db.invalid:5432/ether"
+	store := newStore(t, func(c *config.Config) {
+		seededConfig(c)
+		c.SetupComplete = true
+		c.Database = config.Database{Driver: config.DatabasePostgres, URL: dbURL}
+	})
+	h := admin.New(admin.Deps{Config: store})
+	r := req(http.MethodGet, "/ether/api/config", "")
+	r.Header.Set("X-Plex-Token", ownerToken)
+	rec := serve(h, r)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "db-secret") {
+		t.Fatalf("GET config leaked the database password: %d %s", rec.Code, rec.Body)
+	}
+	// A client that drops or rewrites the database section changes nothing.
+	var env struct {
+		Config config.Config `json:"config"`
+	}
+	decode(t, rec, &env)
+	env.Config.Database = config.Database{Driver: config.DatabaseSQLite}
+	raw, _ := json.Marshal(env)
+	r2 := req(http.MethodPut, "/ether/api/config", string(raw))
+	r2.Header.Set("X-Plex-Token", ownerToken)
+	if rec2 := serve(h, r2); rec2.Code != http.StatusOK {
+		t.Fatalf("PUT config: %d %s", rec2.Code, rec2.Body)
+	}
+	if got := store.Get().Database; got.Driver != config.DatabasePostgres || got.URL != dbURL {
+		t.Fatalf("database settings changed through the admin API: %+v", got.Redacted())
+	}
+}
