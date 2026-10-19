@@ -101,6 +101,7 @@ func New(db *sql.DB, opts Options) *Service {
 // claimTimeout is how long a claimed row may stay in 'sending' before it is
 // presumed abandoned by a node that stopped mid-delivery.
 const claimTimeout = 10 * time.Minute
+
 func (s *Service) channels(ctx context.Context) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT config FROM notify_channels ORDER BY id`)
 	if err != nil {
