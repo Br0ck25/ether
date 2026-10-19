@@ -144,14 +144,32 @@ type Engine struct {
 	ctx    context.Context // cancelled by Close; parent of every fetch
 	cancel context.CancelFunc
 
-	mu       sync.Mutex
-	releases map[string]*list.Element // digest -> *release
-	relLRU   *list.List
-	flights  map[segKey]*flight
-	wg       sync.WaitGroup // fetch goroutines
-	closed   bool
+	mu          sync.Mutex
+	healthMu    sync.RWMutex
+	healthTrace HealthTrace
+	releases    map[string]*list.Element // digest -> *release
+	relLRU      *list.List
+	flights     map[segKey]*flight
+	wg          sync.WaitGroup // fetch goroutines
+	closed      bool
 
 	fetches, fetchedBytes, hotHits, cacheHits, missing, coalesced, active atomic.Int64
+}
+
+// HealthTrace describes the most recent release validation phases.
+type HealthTrace struct {
+	Warm    time.Duration `json:"warm"`
+	Parse   time.Duration `json:"parse"`
+	Plan    time.Duration `json:"plan"`
+	STAT    time.Duration `json:"stat"`
+	Samples int           `json:"samples"`
+}
+
+// HealthTimings returns timing for the most recent Check call.
+func (e *Engine) HealthTimings() HealthTrace {
+	e.healthMu.RLock()
+	defer e.healthMu.RUnlock()
+	return e.healthTrace
 }
 
 var (

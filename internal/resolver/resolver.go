@@ -347,10 +347,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	var alternatesStart int
 	// Fetch and validate the leading candidates together. Selection remains in
 	// score order, so latency improves without changing ranking or acceptance.
-	limit := min(len(cands), maxHealthAttempts)
-	if limit > 3 {
-		limit = 3
-	}
+	limit := min(len(cands), 2)
 	type validation struct {
 		nzb            []byte
 		fetchErr       error

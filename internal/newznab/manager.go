@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ether-media/ether/internal/config"
 	"github.com/ether-media/ether/internal/core"
@@ -24,8 +25,24 @@ type Manager struct {
 	log  *slog.Logger
 	par  int
 
-	mu      sync.RWMutex
-	clients []*Client
+	mu             sync.RWMutex
+	clients        []*Client
+	searchTimingMu sync.RWMutex
+	searchTimings  []SearchTiming
+}
+
+// SearchTiming records the most recent aggregate search's per-indexer cost.
+type SearchTiming struct {
+	Indexer  string
+	Duration time.Duration
+	Err      string
+}
+
+// SearchTimings returns a copy of the most recent per-indexer search timings.
+func (m *Manager) SearchTimings() []SearchTiming {
+	m.searchTimingMu.RLock()
+	defer m.searchTimingMu.RUnlock()
+	return append([]SearchTiming(nil), m.searchTimings...)
 }
 
 var _ core.Indexer = (*Manager)(nil)
@@ -123,9 +140,10 @@ func (m *Manager) Remaining(ctx context.Context) ([]Remaining, error) {
 func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
 	clients := m.Clients()
 	type slot struct {
-		results []core.Release
-		err     error
-		skipped bool
+		results  []core.Release
+		err      error
+		skipped  bool
+		duration time.Duration
 	}
 	slots := make([]slot, len(clients))
 	sem := make(chan struct{}, m.par)
@@ -150,11 +168,27 @@ func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 				slots[i].err = ctx.Err()
 				return
 			}
+			started := time.Now()
 			res, err := cl.Search(ctx, req)
+			slots[i].duration = time.Since(started)
 			slots[i].results, slots[i].err = res, err
 		}(i, cl)
 	}
 	wg.Wait()
+	timings := make([]SearchTiming, 0, len(clients))
+	for i, s := range slots {
+		if !s.skipped {
+			label := clients[i].Name()
+			e := ""
+			if s.err != nil {
+				e = s.err.Error()
+			}
+			timings = append(timings, SearchTiming{Indexer: label, Duration: s.duration, Err: e})
+		}
+	}
+	m.searchTimingMu.Lock()
+	m.searchTimings = timings
+	m.searchTimingMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		// Still return whatever arrived if anything did.
 	}

@@ -563,6 +563,108 @@ func TestStat(t *testing.T) {
 	}
 }
 
+func TestStatManyPipelinesAndFallsBackToBlockProvider(t *testing.T) {
+	s1 := nntptest.Start(t, nntptest.Options{Username: "u", Password: "p"})
+	s2 := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, s1, "primary@x", []byte("p"))
+	addSeg(t, s1, "taken@x", []byte("primary takedown"))
+	addSeg(t, s2, "block@x", []byte("b"))
+	addSeg(t, s2, "taken@x", []byte("secondary copy"))
+	s1.SetFault(func(cmd, arg string) nntptest.Fault {
+		if cmd == "STAT" && arg == "taken@x" {
+			return nntptest.Fault{Code: 451, Text: "0 <taken@x>"}
+		}
+		return nntptest.Fault{}
+	})
+	p2 := s2.Provider("block", 2)
+	p2.Backfill = true
+	f := newFetcher(t, []config.UsenetProvider{s1.Provider("primary", 4), p2}, Options{})
+	if err := f.Warm(context.Background(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if got := s1.Stats().Accepted; got < 2 {
+		t.Fatalf("warm opened %d connections, want at least 2", got)
+	}
+	got, err := f.StatMany(context.Background(), []string{"primary@x", "block@x", "gone@x", "taken@x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["primary@x"] || !got["block@x"] || got["gone@x"] || !got["taken@x"] {
+		t.Fatalf("results %v", got)
+	}
+	stats := f.Stats()
+	if stats[0].STATBatches == 0 {
+		t.Fatalf("primary did not pipeline STATs: %+v", stats[0])
+	}
+}
+
+func TestPooledStatManyThenBodyAndTimeoutRecovery(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{Username: "user", Password: "pass"})
+	addSeg(t, s, "present@x", []byte("stream body"))
+	p := s.Provider("primary", 1)
+	f := New([]config.UsenetProvider{p}, Options{CommandTimeout: 40 * time.Millisecond, Retries: 0})
+	t.Cleanup(func() { _ = f.Close() })
+	if err := f.Warm(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.StatMany(context.Background(), []string{"present@x", "missing@x"})
+	if err != nil || !got["present@x"] || got["missing@x"] {
+		t.Fatalf("STAT result=%v err=%v", got, err)
+	}
+	body, _, err := f.BodyPart(context.Background(), "present@x", nil, core.PriorityLive)
+	if err != nil || string(body) != "stream body" {
+		t.Fatalf("BODY=%q err=%v", body, err)
+	}
+	if dials := f.Stats()[0].Dials; dials != 1 {
+		t.Fatalf("STAT->BODY should reuse one pooled connection, dials=%d", dials)
+	}
+
+	s.SetFault(func(cmd, _ string) nntptest.Fault {
+		if cmd == "STAT" {
+			return nntptest.Fault{Delay: 150 * time.Millisecond}
+		}
+		return nntptest.Fault{}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, err = f.StatMany(ctx, []string{"present@x", "missing@x", "present@x"})
+	cancel()
+	if err == nil {
+		t.Fatal("expected STAT pipeline timeout")
+	}
+	s.SetFault(nil)
+	time.Sleep(180 * time.Millisecond) // let the fake server drain the abandoned pipeline
+	body, _, err = f.BodyPart(context.Background(), "present@x", nil, core.PriorityLive)
+	if err != nil || string(body) != "stream body" {
+		t.Fatalf("BODY after pipeline timeout=%q err=%v", body, err)
+	}
+	if dials := f.Stats()[0].Dials; dials != 2 {
+		t.Fatalf("timed-out pipeline connection should be discarded; dials=%d want 2", dials)
+	}
+}
+
+func TestConcurrentWarmDoesNotMultiplyPerProviderLimit(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{MaxConns: 8})
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("primary", 8)}, Options{})
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := f.Warm(context.Background(), 4); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	stats := s.Stats()
+	if stats.MaxActive > 4 {
+		t.Fatalf("concurrent Warm opened %d connections, limit is 4", stats.MaxActive)
+	}
+	if stats.Active != 4 {
+		t.Fatalf("expected four warm idle connections, active=%d", stats.Active)
+	}
+}
+
 func TestHotReload(t *testing.T) {
 	s1 := nntptest.Start(t, nntptest.Options{})
 	s2 := nntptest.Start(t, nntptest.Options{})
@@ -919,5 +1021,24 @@ func TestTakedown451FallsThrough(t *testing.T) {
 	only := newFetcher(t, []config.UsenetProvider{p1}, Options{})
 	if _, err := only.Body(context.Background(), "gone@x", nil, core.PriorityLive); !errors.Is(err, core.ErrArticleMissing) {
 		t.Fatalf("err = %v, want ErrArticleMissing", err)
+	}
+}
+
+// NZBs carry message-ids without angle brackets; StatMany must answer under
+// the ids exactly as given, or every lookup misses and healthy releases are
+// rejected.
+func TestStatManyKeysByCallerID(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, s, "here@x", []byte("alpha"))
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 2)}, Options{})
+	got, err := f.StatMany(context.Background(), []string{"here@x", "<here@x>", "gone@x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["here@x"] || !got["<here@x>"] || got["gone@x"] {
+		t.Fatalf("got %v", got)
+	}
+	if _, ok := got["gone@x"]; !ok {
+		t.Fatal("missing ids must be reported as false, not absent")
 	}
 }
