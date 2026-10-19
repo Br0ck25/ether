@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="3">
+<Agent hasAttribution="0" hasPrefs="0" identifier="tv.plex.agents.movie" primary="1" name="Plex Movie">
+<MediaType mediaType="1" name="movie" />
+</Agent>
+<Agent hasAttribution="0" hasPrefs="0" identifier="tv.plex.agents.series" primary="1" name="Plex Series">
+<MediaType mediaType="2" name="show" />
+</Agent>
+<Agent hasAttribution="0" hasPrefs="0" identifier="com.plexapp.agents.none" primary="0" name="Personal Media">
+<MediaType mediaType="1" name="movie" />
+<MediaType mediaType="2" name="show" />
+</Agent>
+</MediaContainer>

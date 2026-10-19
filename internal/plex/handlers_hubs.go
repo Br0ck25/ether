@@ -1,0 +1,607 @@
+package plex
+
+import (
+	"context"
+	"errors"
+	"math"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/ether-media/ether/internal/core"
+	"github.com/ether-media/ether/internal/plex/model"
+)
+
+// hubCtx says where a hub list came from, so each hub's "key" can fetch
+// the full row again.
+type hubCtx struct {
+	section int
+	related core.RatingKey
+}
+
+// hubSpec is a hub plus the PMS presentation details Ether generates for
+// its own rows (key, promoted flag, watch state).
+type hubSpec struct {
+	core.Hub
+	key        string // overrides the computed key
+	noPromoted bool   // omit the promoted attribute (section rows)
+	state      map[core.RatingKey]core.WatchStatus
+}
+
+func hubItemsKey(h core.Hub, hc hubCtx) string {
+	if h.Key != 0 {
+		return "/library/collections/" + h.Key.String() + "/children"
+	}
+	k := "/hubs/items?identifier=" + url.QueryEscape(h.ID)
+	if hc.section > 0 {
+		k += "&contentDirectoryID=" + strconv.Itoa(hc.section)
+	}
+	if hc.related != 0 {
+		k += "&metadataID=" + hc.related.String()
+	}
+	return k
+}
+
+func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
+	h := hs.Hub
+	items := s.filterAllowed(pr.User, h.Items)
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state})
+	keys := make([]string, 0, len(items))
+	for _, t := range items {
+		keys = append(keys, t.Key.String())
+	}
+	typ := string(h.Type)
+	if typ == "" {
+		typ = "mixed"
+	}
+	style := h.Style
+	if style == "" {
+		style = "shelf"
+	}
+	ctxName := h.Context
+	if ctxName == "" {
+		ctxName = "hub." + h.ID
+	}
+	key := hs.key
+	if key == "" {
+		key = hubItemsKey(h, hc)
+	}
+	mh := model.Hub{
+		Key:           key,
+		Title:         h.Title,
+		Type:          typ,
+		HubIdentifier: h.ID,
+		Context:       ctxName,
+		Size:          len(md),
+		More:          h.More,
+		Style:         style,
+		Metadata:      md,
+	}
+	if !hs.noPromoted {
+		mh.Promoted = model.Ptr(h.Promoted)
+	}
+	if len(keys) > 0 {
+		mh.HubKey = "/library/metadata/" + strings.Join(keys, ",")
+	}
+	return mh
+}
+
+func (s *Server) renderHubs(ctx context.Context, pr *Request, hubs []core.Hub, hc hubCtx) []model.Hub {
+	out := make([]model.Hub, 0, len(hubs))
+	for _, h := range hubs {
+		out = append(out, s.renderHub(ctx, pr, hubSpec{Hub: h}, hc))
+	}
+	return out
+}
+
+func countParam(r *http.Request, def int) int {
+	if n, err := strconv.Atoi(r.URL.Query().Get("count")); err == nil && n > 0 {
+		return min(n, 200)
+	}
+	return def
+}
+
+// Continue Watching variants, as PMS names them.
+type cwVariant int
+
+const (
+	cwHome    cwVariant = iota // /hubs, /hubs/promoted
+	cwGlobal                   // /hubs/continueWatching
+	cwSection                  // /hubs/sections/{id}
+)
+
+// continueHub builds a Continue Watching hub.
+func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec Section, count int) hubSpec {
+	t := core.MediaType("")
+	if v == cwSection {
+		t = sec.Type
+	}
+	items, state := s.inProgressTitles(ctx, pr, t, count+1)
+	hs := hubSpec{Hub: core.Hub{Title: "Continue Watching", Style: "hero", Promoted: true}, state: state}
+	switch v {
+	case cwHome:
+		hs.ID, hs.Context, hs.key = "home.continue", "hub.home.continue", "/hubs/home/continueWatching"
+	case cwGlobal:
+		hs.ID, hs.Context, hs.key, hs.noPromoted = "continueWatching", "hub.continueWatching", "/hubs/continueWatching/items", true
+	case cwSection:
+		id := strconv.Itoa(sec.ID)
+		hs.Style, hs.noPromoted = "shelf", true
+		hs.key = "/hubs/sections/" + id + "/continueWatching/items"
+		if sec.Type == core.TypeShow {
+			hs.ID, hs.Context, hs.Type = "tv.inprogress."+id, "hub.tv.inprogress", core.TypeEpisode
+		} else {
+			hs.ID, hs.Context, hs.Type = "movie.inprogress."+id, "hub.movie.inprogress", core.TypeMovie
+		}
+	}
+	if len(items) > count {
+		items, hs.More = items[:count], true
+	}
+	hs.Items = items
+	return hs
+}
+
+func (s *Server) recentlyAddedHub(ctx context.Context, pr *Request, sec Section, count int) (hubSpec, error) {
+	q := core.BrowseQuery{Filter: core.Filter{Type: sec.Type}, Sort: core.SortAdded, Desc: true, Limit: count + 1}
+	if pr.User != nil {
+		q.Filter.MaxContentRating = pr.User.MaxContentRating
+	}
+	page, err := s.d.Catalog.Browse(ctx, q)
+	if err != nil {
+		return hubSpec{}, err
+	}
+	id := strconv.Itoa(sec.ID)
+	hs := hubSpec{Hub: core.Hub{Title: "Recently Added in " + sec.Title, Type: sec.Type, Style: "shelf", Promoted: true, Items: page.Items}}
+	if sec.Type == core.TypeShow {
+		hs.ID, hs.Context, hs.Type = "tv.recentlyadded."+id, "hub.tv.recentlyadded", ""
+		hs.key = "/hubs/home/recentlyAdded?type=2&sectionID=" + id
+	} else {
+		hs.ID, hs.Context = "movie.recentlyadded."+id, "hub.movie.recentlyadded"
+		hs.key = "/library/sections/" + id + "/all?sort=addedAt:desc"
+	}
+	if len(hs.Items) > count {
+		hs.Items, hs.More = hs.Items[:count], true
+	}
+	return hs, nil
+}
+
+// parseSectionList parses "1,2" (contentDirectoryID).
+func parseSectionList(s string) []int {
+	var out []int
+	for _, p := range strings.Split(s, ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// hubInSections reports whether a hub's items belong to one of the
+// sections (mixed hubs always match).
+func (s *Server) hubInSections(h core.Hub, ids []int) bool {
+	if len(ids) == 0 || h.Type == "" {
+		return true
+	}
+	sec, ok := s.sectionFor(h.Type)
+	if !ok {
+		return true
+	}
+	return containsInt(ids, sec.ID)
+}
+
+func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly bool) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	q := r.URL.Query()
+	count := countParam(r, 12)
+	sections := parseSectionList(q.Get("contentDirectoryID"))
+	mc := hubContainer()
+	if q.Get("excludeContinueWatching") != "1" {
+		mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, s.continueHub(ctx, pr, cwHome, Section{}, count), hubCtx{}))
+	}
+	if s.d.Recommender != nil {
+		hubs, err := s.d.Recommender.HomeHubs(ctx, pr.User, count)
+		if err != nil {
+			s.log.Warn("home hubs", "err", err)
+		}
+		for _, h := range hubs {
+			if promotedOnly && !h.Promoted {
+				continue
+			}
+			if !s.hubInSections(h, sections) {
+				continue
+			}
+			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{}))
+		}
+	}
+	if ids := q["identifier"]; len(ids) > 0 {
+		mc.Hub = filterHubs(mc.Hub, ids)
+	}
+	mc.Size = len(mc.Hub)
+	s.write(w, r, mc)
+}
+
+func filterHubs(hs []model.Hub, ids []string) []model.Hub {
+	want := map[string]bool{}
+	for _, v := range ids {
+		for _, id := range strings.Split(v, ",") {
+			want[id] = true
+		}
+	}
+	var out []model.Hub
+	for _, h := range hs {
+		if want[h.HubIdentifier] {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+func (s *Server) handleHubs(w http.ResponseWriter, r *http.Request)         { s.homeHubs(w, r, false) }
+func (s *Server) handlePromotedHubs(w http.ResponseWriter, r *http.Request) { s.homeHubs(w, r, true) }
+
+func (s *Server) handleContinueWatching(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	mc := hubContainer()
+	mc.Hub = []model.Hub{s.renderHub(ctx, pr, s.continueHub(ctx, pr, cwGlobal, Section{}, countParam(r, 20)), hubCtx{})}
+	mc.Size = 1
+	s.write(w, r, mc)
+}
+
+// handleContinueWatchingItems is the flat item list of Continue Watching
+// (/hubs/continueWatching/items, /hubs/home/continueWatching and
+// /hubs/sections/{id}/continueWatching/items).
+func (s *Server) handleContinueWatchingItems(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	v, sec := cwGlobal, Section{}
+	if id, err := strconv.Atoi(chi.URLParam(r, "section")); err == nil {
+		var ok bool
+		if sec, ok = s.sectionByID(id); !ok || !s.canSeeSection(pr.User, id) {
+			writeHTTPError(w, http.StatusNotFound)
+			return
+		}
+		v = cwSection
+	}
+	count := countParam(r, 50)
+	if pr.HasPage && pr.Size > 0 {
+		count = min(pr.Size, 200)
+	}
+	hs := s.continueHub(ctx, pr, v, sec, count)
+	mc := hubContainer()
+	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state})
+	mc.Size = len(mc.Metadata)
+	s.write(w, r, mc)
+}
+
+func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
+	sec, ok := s.sectionParam(w, r)
+	if !ok {
+		return
+	}
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	count := countParam(r, 12)
+	mc := hubContainer()
+	mc.LibrarySectionID = model.Ptr(sec.ID)
+	mc.LibrarySectionTitle = sec.Title
+	mc.LibrarySectionUUID = sec.UUID
+	hc := hubCtx{section: sec.ID}
+	mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, s.continueHub(ctx, pr, cwSection, sec, count), hc))
+	if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
+		mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, ra, hc))
+	} else {
+		s.log.Warn("recently added hub", "section", sec.ID, "err", err)
+	}
+	if s.d.Recommender != nil {
+		hubs, err := s.d.Recommender.SectionHubs(ctx, pr.User, sec.Type, count)
+		if err != nil {
+			s.log.Warn("section hubs", "section", sec.ID, "err", err)
+		}
+		for _, h := range hubs {
+			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hc))
+		}
+	}
+	mc.Size = len(mc.Hub)
+	s.write(w, r, mc)
+}
+
+// handleHubItems is /hubs/items?identifier=...: one hub with more items.
+func (s *Server) handleHubItems(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	q := r.URL.Query()
+	id := q.Get("identifier")
+	count := countParam(r, 50)
+	if pr.HasPage && pr.Size > 0 {
+		count = min(pr.Size, 200)
+	}
+	mc := hubContainer()
+	sections := parseSectionList(q.Get("contentDirectoryID"))
+	if hs, ok := s.findHub(ctx, pr, id, sections, q.Get("metadataID"), count); ok {
+		hc := hubCtx{}
+		if len(sections) == 1 {
+			hc.section = sections[0]
+		}
+		if k, err := core.ParseRatingKey(q.Get("metadataID")); err == nil {
+			hc.related = k
+		}
+		mc.Hub = []model.Hub{s.renderHub(ctx, pr, hs, hc)}
+	}
+	mc.Size = len(mc.Hub)
+	s.write(w, r, mc)
+}
+
+// sectionFromHubID parses the trailing section id of "movie.inprogress.1".
+func (s *Server) sectionFromHubID(id string) (Section, bool) {
+	i := strings.LastIndexByte(id, '.')
+	if i < 0 {
+		return Section{}, false
+	}
+	n, err := strconv.Atoi(id[i+1:])
+	if err != nil {
+		return Section{}, false
+	}
+	return s.sectionByID(n)
+}
+
+func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections []int, metadataID string, count int) (hubSpec, bool) {
+	switch {
+	case id == "home.continue":
+		return s.continueHub(ctx, pr, cwHome, Section{}, count), true
+	case id == "continueWatching":
+		return s.continueHub(ctx, pr, cwGlobal, Section{}, count), true
+	case strings.HasPrefix(id, "movie.inprogress.") || strings.HasPrefix(id, "tv.inprogress."):
+		if sec, ok := s.sectionFromHubID(id); ok && s.canSeeSection(pr.User, sec.ID) {
+			return s.continueHub(ctx, pr, cwSection, sec, count), true
+		}
+		return hubSpec{}, false
+	case strings.HasPrefix(id, "movie.recentlyadded.") || strings.HasPrefix(id, "tv.recentlyadded."):
+		if sec, ok := s.sectionFromHubID(id); ok && s.canSeeSection(pr.User, sec.ID) {
+			if hs, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
+				return hs, true
+			}
+		}
+		return hubSpec{}, false
+	}
+	if s.d.Recommender == nil {
+		return hubSpec{}, false
+	}
+	if k, err := core.ParseRatingKey(metadataID); err == nil {
+		if hubs, err := s.d.Recommender.Related(ctx, pr.User, k, count); err == nil {
+			for _, h := range hubs {
+				if h.ID == id {
+					return hubSpec{Hub: h}, true
+				}
+			}
+		}
+	}
+	if hubs, err := s.d.Recommender.HomeHubs(ctx, pr.User, count); err == nil {
+		for _, h := range hubs {
+			if h.ID == id {
+				return hubSpec{Hub: h}, true
+			}
+		}
+	}
+	for _, sec := range s.userSections(pr.User) {
+		if len(sections) > 0 && !containsInt(sections, sec.ID) {
+			continue
+		}
+		if hubs, err := s.d.Recommender.SectionHubs(ctx, pr.User, sec.Type, count); err == nil {
+			for _, h := range hubs {
+				if h.ID == id {
+					return hubSpec{Hub: h}, true
+				}
+			}
+		}
+	}
+	return hubSpec{}, false
+}
+
+func containsInt(xs []int, x int) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+// handleMetadataHubs is /hubs/metadata/{key}[/related] and
+// /library/metadata/{key}/related.
+func (s *Server) handleMetadataHubs(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	k, err := keyParam(r)
+	if err != nil {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
+	mc := hubContainer()
+	if s.d.Recommender != nil {
+		hubs, err := s.d.Recommender.Related(ctx, pr.User, k, countParam(r, 12))
+		if err != nil && !errors.Is(err, core.ErrNotFound) {
+			s.log.Debug("related hubs", "key", k, "err", err)
+		}
+		mc.Hub = s.renderHubs(ctx, pr, hubs, hubCtx{related: k})
+	}
+	mc.Size = len(mc.Hub)
+	s.write(w, r, mc)
+}
+
+// handlePostplay is /hubs/metadata/{key}/postplay: next episode, then
+// related rows.
+func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	k, err := core.ParseRatingKey(chi.URLParam(r, "key"))
+	if err != nil {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
+	mc := hubContainer()
+	if k.Kind() == core.KindEpisode {
+		if next, err := s.d.Catalog.NextEpisode(ctx, k); err == nil && next != nil {
+			h := core.Hub{ID: "tv.upnext", Title: "Up Next", Type: core.TypeEpisode, Context: "hub.tv.upnext", Items: []core.Title{*next}}
+			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{related: k}))
+		}
+	}
+	if s.d.Recommender != nil {
+		if hubs, err := s.d.Recommender.Related(ctx, pr.User, k, countParam(r, 12)); err == nil {
+			mc.Hub = append(mc.Hub, s.renderHubs(ctx, pr, hubs, hubCtx{related: k})...)
+		}
+	}
+	mc.Size = len(mc.Hub)
+	s.write(w, r, mc)
+}
+
+// ---------------------------------------------------------------------------
+// Search
+
+func (s *Server) searchTypes(u *core.User, sectionID int) []core.MediaType {
+	var out []core.MediaType
+	for _, sec := range s.userSections(u) {
+		if sectionID > 0 && sec.ID != sectionID {
+			continue
+		}
+		out = append(out, sec.Type)
+	}
+	return out
+}
+
+func (s *Server) runSearch(ctx context.Context, pr *Request, query string, sectionID, limit int) ([]core.Title, error) {
+	types := s.searchTypes(pr.User, sectionID)
+	if strings.TrimSpace(query) == "" || len(types) == 0 {
+		return nil, nil
+	}
+	res, err := s.d.Catalog.Search(ctx, query, types, limit)
+	if err != nil {
+		return nil, err
+	}
+	return s.filterAllowed(pr.User, res), nil
+}
+
+func (s *Server) handleHubSearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	q := r.URL.Query()
+	limit := 10
+	if n, _ := strconv.Atoi(q.Get("limit")); n > 0 {
+		limit = min(n, 100)
+	}
+	sectionID, _ := strconv.Atoi(q.Get("sectionId"))
+	res, err := s.runSearch(ctx, pr, q.Get("query"), sectionID, limit*2)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	byType := map[core.MediaType][]core.Title{}
+	for _, t := range res {
+		byType[t.Type] = append(byType[t.Type], t)
+	}
+	allowed := map[core.MediaType]bool{}
+	for _, t := range s.searchTypes(pr.User, sectionID) {
+		allowed[t] = true
+		if t == core.TypeShow {
+			allowed[core.TypeEpisode] = true
+		}
+	}
+	// PMS returns every result hub, empty ones included, in this order.
+	mc := &model.MediaContainer{}
+	for _, hd := range []struct {
+		t     core.MediaType
+		title string
+	}{{core.TypeMovie, "Movies"}, {core.TypeEpisode, "Episodes"}, {"collection", "Collections"}, {core.TypeShow, "Shows"}} {
+		items := byType[hd.t]
+		if !allowed[hd.t] {
+			items = nil
+		}
+		more := false
+		if len(items) > limit {
+			items, more = items[:limit], true
+		}
+		h := core.Hub{ID: string(hd.t), Title: hd.title, Type: hd.t, Items: items, More: more, Style: "shelf"}
+		mh := s.renderHub(ctx, pr, hubSpec{Hub: h, noPromoted: true}, hubCtx{})
+		mh.Context, mh.Key, mh.HubKey = "", "", ""
+		for i := range mh.Metadata {
+			mh.Metadata[i].Score = strconv.FormatFloat(searchScore(i, len(mh.Metadata)), 'f', 5, 64)
+		}
+		mc.Hub = append(mc.Hub, mh)
+	}
+	mc.Size = len(mc.Hub)
+	s.write(w, r, mc)
+}
+
+// searchScore is a descending relevance score for the i-th of n results.
+func searchScore(i, n int) float64 {
+	return 1 - float64(i)/float64(n+1)
+}
+
+// handleSearch is the legacy flat /search?query=.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	q := r.URL.Query()
+	limit := 50
+	if n, _ := strconv.Atoi(q.Get("limit")); n > 0 {
+		limit = min(n, 200)
+	}
+	res, err := s.runSearch(ctx, pr, q.Get("query"), 0, limit)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	mc := libraryContainer()
+	mc.Metadata = s.renderTitles(ctx, pr, res, renderOpts{media: true})
+	mc.Size = len(mc.Metadata)
+	s.write(w, r, mc)
+}
+
+// handleLibrarySearch is /library/search, used by the newer apps: results
+// wrapped in SearchResult with a score.
+func (s *Server) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	pr := FromContext(ctx)
+	q := r.URL.Query()
+	limit := 50
+	if n, _ := strconv.Atoi(q.Get("limit")); n > 0 {
+		limit = min(n, 200)
+	}
+	res, err := s.runSearch(ctx, pr, q.Get("query"), 0, limit)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	if st := q.Get("searchTypes"); st != "" {
+		allow := map[core.MediaType]bool{}
+		for _, v := range strings.Split(st, ",") {
+			switch strings.TrimSpace(v) {
+			case "movies", "movie":
+				allow[core.TypeMovie] = true
+			case "tv", "shows", "show":
+				allow[core.TypeShow] = true
+				allow[core.TypeEpisode] = true
+			}
+		}
+		if len(allow) > 0 {
+			filtered := res[:0:0]
+			for _, t := range res {
+				if allow[t.Type] {
+					filtered = append(filtered, t)
+				}
+			}
+			res = filtered
+		}
+	}
+	md := s.renderTitles(ctx, pr, res, renderOpts{media: true})
+	mc := &model.MediaContainer{}
+	for i := range md {
+		score := math.Round(searchScore(i, len(md))*10000) / 10000
+		mc.SearchResult = append(mc.SearchResult, model.SearchResult{Score: score, Metadata: &md[i]})
+	}
+	mc.Size = len(mc.SearchResult)
+	s.write(w, r, mc)
+}

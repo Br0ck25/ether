@@ -1,0 +1,970 @@
+package plex
+
+import (
+	"context"
+	"fmt"
+	"hash/fnv"
+	"math"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/ether-media/ether/internal/core"
+	"github.com/ether-media/ether/internal/plex/model"
+)
+
+// renderOpts controls how much of an item is rendered.
+type renderOpts struct {
+	detail bool // full tags, Guid children, streams
+	media  bool // Media/Part for playable items
+	// inSection: the container already carries the section attributes
+	// (section listings, children), so items omit librarySection*.
+	inSection bool
+	// state holds the user's watch status for the rendered keys.
+	state map[core.RatingKey]core.WatchStatus
+}
+
+// metadataKey is the item's "key": children list for containers, the item
+// itself for playables.
+func metadataKey(k core.RatingKey, t core.MediaType) string {
+	switch t {
+	case core.TypeShow, core.TypeSeason:
+		return "/library/metadata/" + k.String() + "/children"
+	}
+	return "/library/metadata/" + k.String()
+}
+
+func isPlayable(t core.MediaType) bool { return t == core.TypeMovie || t == core.TypeEpisode }
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func ms(d time.Duration) int64 { return d.Milliseconds() }
+
+// guidFor returns the primary guid attribute. Ether has no plex:// guids, so
+// it uses the legacy TMDB agent form, which every client understands as a
+// legacy-agent item.
+func guidFor(t *core.Title) string {
+	switch t.Key.Kind() {
+	case core.KindLocal:
+		h := fnv.New64a()
+		fmt.Fprintf(h, "%d", int64(t.Key))
+		return fmt.Sprintf("com.plexapp.agents.none://%016x?lang=xn", h.Sum64())
+	}
+	switch t.Type {
+	case core.TypeMovie:
+		if t.IDs.TMDB > 0 {
+			return fmt.Sprintf("com.plexapp.agents.themoviedb://%d?lang=en", t.IDs.TMDB)
+		}
+	case core.TypeShow:
+		if t.IDs.TMDB > 0 {
+			return fmt.Sprintf("com.plexapp.agents.themoviedb://%d?lang=en", t.IDs.TMDB)
+		}
+	case core.TypeSeason:
+		return fmt.Sprintf("com.plexapp.agents.themoviedb://%d/%d?lang=en", t.Key.TMDB(), t.Season)
+	case core.TypeEpisode:
+		return fmt.Sprintf("com.plexapp.agents.themoviedb://%d/%d/%d?lang=en", t.Key.TMDB(), t.Season, t.Episode)
+	}
+	return "com.plexapp.agents.none://" + t.Key.String() + "?lang=xn"
+}
+
+func showGUID(show core.RatingKey) string {
+	return fmt.Sprintf("com.plexapp.agents.themoviedb://%d?lang=en", show.TMDB())
+}
+
+// externalGuids are the <Guid id="..."/> children.
+func externalGuids(t *core.Title) []model.GUID {
+	var out []model.GUID
+	if t.IDs.IMDB != "" {
+		out = append(out, model.GUID{ID: "imdb://" + t.IDs.IMDB})
+	}
+	if t.IDs.TMDB > 0 {
+		out = append(out, model.GUID{ID: "tmdb://" + strconv.FormatInt(t.IDs.TMDB, 10)})
+	}
+	if t.IDs.TVDB > 0 {
+		out = append(out, model.GUID{ID: "tvdb://" + strconv.FormatInt(t.IDs.TVDB, 10)})
+	}
+	return out
+}
+
+func tagID(kind, name string) int64 {
+	h := fnv.New32a()
+	h.Write([]byte(kind + ":" + strings.ToLower(name)))
+	return int64(h.Sum32()&0x7fffffff) + 1
+}
+
+func imageStamp(t *core.Title) string {
+	if ts := unixOrZero(t.UpdatedAt); ts > 0 {
+		return strconv.FormatInt(ts, 10)
+	}
+	return "1"
+}
+
+// thumbURL / artURL are our own artwork endpoints for an item.
+func thumbURL(t *core.Title) string {
+	if t.PosterPath == "" && t.StillPath == "" {
+		return ""
+	}
+	return "/library/metadata/" + t.Key.String() + "/thumb/" + imageStamp(t)
+}
+
+func artURL(t *core.Title) string {
+	if t.BackdropPath == "" {
+		return ""
+	}
+	return "/library/metadata/" + t.Key.String() + "/art/" + imageStamp(t)
+}
+
+func showThumbURL(t *core.Title) string {
+	if t.ShowKey == 0 {
+		return ""
+	}
+	return "/library/metadata/" + t.ShowKey.String() + "/thumb/" + imageStamp(t)
+}
+
+func showArtURL(t *core.Title) string {
+	if t.ShowKey == 0 {
+		return ""
+	}
+	return "/library/metadata/" + t.ShowKey.String() + "/art/" + imageStamp(t)
+}
+
+func seasonTitle(t *core.Title) string {
+	if t.SeasonTitle != "" {
+		return t.SeasonTitle
+	}
+	if t.Season == 0 {
+		return "Specials"
+	}
+	return "Season " + strconv.Itoa(t.Season)
+}
+
+// metadata renders one title.
+func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o renderOpts) model.Metadata {
+	m := model.Metadata{
+		RatingKey:     t.Key.String(),
+		Key:           metadataKey(t.Key, t.Type),
+		GUID:          guidFor(t),
+		Type:          string(t.Type),
+		Title:         t.Title,
+		Summary:       t.Summary,
+		Tagline:       t.Tagline,
+		Year:          t.Year,
+		ContentRating: t.ContentRating,
+		Thumb:         thumbURL(t),
+		Art:           artURL(t),
+		AddedAt:       unixOrZero(t.UpdatedAt),
+		UpdatedAt:     unixOrZero(t.UpdatedAt),
+	}
+	if t.SortTitle != "" && t.SortTitle != t.Title {
+		m.TitleSort = t.SortTitle
+	}
+	if t.OriginalTitle != "" && t.OriginalTitle != t.Title {
+		m.OriginalTitle = t.OriginalTitle
+	}
+	if !t.Released.IsZero() {
+		m.OriginallyAvailableAt = t.Released.Format("2006-01-02")
+		if m.AddedAt == 0 {
+			m.AddedAt = t.Released.Unix()
+		}
+		if m.Year == 0 {
+			m.Year = t.Released.Year()
+		}
+	}
+	if t.Runtime > 0 {
+		m.Duration = ms(t.Runtime)
+	}
+	if t.Rating > 0 {
+		m.AudienceRating = math.Round(t.Rating*10) / 10
+		m.AudienceRatingImage = "themoviedb://image.rating"
+	}
+	if len(t.Studios) > 0 {
+		m.Studio = t.Studios[0]
+	}
+	if sec, ok := s.sectionFor(t.Type); ok && !o.inSection && t.Key.Kind() != core.KindCollection {
+		m.LibrarySectionID = sec.ID
+		m.LibrarySectionKey = "/library/sections/" + strconv.Itoa(sec.ID)
+		m.LibrarySectionTitle = sec.Title
+	}
+
+	switch t.Type {
+	case core.TypeShow:
+		m.Index = model.Ptr(1)
+		if t.ChildCount > 0 {
+			m.ChildCount = model.Ptr(t.ChildCount)
+		}
+		m.LeafCount = model.Ptr(t.LeafCount)
+		m.ViewedLeafCount = model.Ptr(0)
+	case core.TypeSeason:
+		m.Index = model.Ptr(t.Season)
+		if t.Title == "" {
+			m.Title = seasonTitle(t)
+		}
+		show := t.ShowKey
+		if show == 0 {
+			show = t.Key.Parent()
+		}
+		m.ParentRatingKey = show.String()
+		m.ParentGUID = showGUID(show)
+		m.ParentKey = "/library/metadata/" + show.String()
+		m.ParentTitle = t.ShowTitle
+		m.ParentIndex = model.Ptr(1)
+		m.ParentThumb = "/library/metadata/" + show.String() + "/thumb/" + imageStamp(t)
+		if m.Art == "" {
+			m.Art = "/library/metadata/" + show.String() + "/art/" + imageStamp(t)
+		}
+		if m.Thumb == "" {
+			m.Thumb = m.ParentThumb
+		}
+		m.LeafCount = model.Ptr(t.ChildCount)
+		m.ViewedLeafCount = model.Ptr(0)
+	case core.TypeEpisode:
+		m.Index = model.Ptr(t.Episode)
+		m.ParentIndex = model.Ptr(t.Season)
+		season := t.Key.Parent()
+		show := t.ShowKey
+		if show == 0 {
+			show = season.Parent()
+		}
+		m.ParentRatingKey = season.String()
+		m.ParentGUID = fmt.Sprintf("com.plexapp.agents.themoviedb://%d/%d?lang=en", show.TMDB(), t.Season)
+		m.GrandparentGUID = showGUID(show)
+		m.ParentKey = "/library/metadata/" + season.String()
+		m.ParentTitle = seasonTitle(t)
+		m.ParentThumb = "/library/metadata/" + season.String() + "/thumb/" + imageStamp(t)
+		m.GrandparentRatingKey = show.String()
+		m.GrandparentKey = "/library/metadata/" + show.String()
+		m.GrandparentTitle = t.ShowTitle
+		m.GrandparentThumb = "/library/metadata/" + show.String() + "/thumb/" + imageStamp(t)
+		m.GrandparentArt = "/library/metadata/" + show.String() + "/art/" + imageStamp(t)
+		if m.Art == "" {
+			m.Art = m.GrandparentArt
+		}
+	}
+
+	// Per-user state.
+	if st, ok := o.state[t.Key]; ok {
+		m.ViewCount = st.ViewCount
+		if st.ViewOffset > 0 && isPlayable(t.Type) {
+			m.ViewOffset = ms(st.ViewOffset)
+		}
+		m.LastViewedAt = unixOrZero(st.LastViewedAt)
+		if st.UserRating > 0 {
+			m.UserRating = st.UserRating
+			m.LastRatedAt = unixOrZero(st.UpdatedAt)
+		}
+	}
+
+	// Tags.
+	maxTags := 3
+	if o.detail {
+		maxTags = math.MaxInt
+	}
+	for i, g := range t.Genres {
+		if i >= maxTags {
+			break
+		}
+		tag := model.Tag{Tag: g}
+		if o.detail {
+			tag.ID = tagID("genre", g)
+			tag.Filter = "genre=" + url.QueryEscape(g)
+		}
+		m.Genre = append(m.Genre, tag)
+	}
+	for i, c := range t.Countries {
+		if i >= maxTags {
+			break
+		}
+		tag := model.Tag{Tag: c}
+		if o.detail {
+			tag.ID = tagID("country", c)
+			tag.Filter = "country=" + url.QueryEscape(c)
+		}
+		m.Country = append(m.Country, tag)
+	}
+	m.Director = s.personTags(t.Directors, "director", maxTags, o.detail, false)
+	m.Writer = s.personTags(t.Writers, "writer", maxTags, o.detail, false)
+	m.Role = s.personTags(t.Cast, "actor", maxTags, o.detail, true)
+	if t.CollectionID > 0 && t.CollectionName != "" {
+		tag := model.Tag{Tag: t.CollectionName}
+		if o.detail {
+			tag.ID = t.CollectionID
+			tag.Filter = "collection=" + strconv.FormatInt(t.CollectionID, 10)
+		}
+		m.Collection = []model.Tag{tag}
+	}
+	if o.detail {
+		m.Guid = externalGuids(t)
+		if t.Rating > 0 {
+			m.Rating_ = []model.RatingTag{{Image: "themoviedb://image.rating", Value: math.Round(t.Rating*10) / 10, Type: "audience"}}
+		}
+		m.Image = s.imageTags(t)
+	}
+
+	if o.media && isPlayable(t.Type) {
+		m.Media = s.mediaFor(ctx, pr, t, o.detail)
+		if m.Duration == 0 && len(m.Media) > 0 {
+			m.Duration = m.Media[0].Duration
+		}
+	}
+	return m
+}
+
+func (s *Server) imageTags(t *core.Title) []model.Image {
+	var out []model.Image
+	if th := thumbURL(t); th != "" {
+		typ := "coverPoster"
+		if t.Type == core.TypeEpisode {
+			typ = "snapshot"
+		}
+		out = append(out, model.Image{Alt: t.Title, Type: typ, URL: th})
+	}
+	if a := artURL(t); a != "" {
+		out = append(out, model.Image{Alt: t.Title, Type: "background", URL: a})
+	}
+	if t.LogoPath != "" {
+		out = append(out, model.Image{Alt: t.Title, Type: "clearLogo", URL: "/library/metadata/" + t.Key.String() + "/clearLogo/" + imageStamp(t)})
+	}
+	return out
+}
+
+func (s *Server) personTags(ps []core.Person, kind string, max int, detail, withRole bool) []model.Tag {
+	var out []model.Tag
+	for i, p := range ps {
+		if i >= max {
+			break
+		}
+		tag := model.Tag{Tag: p.Name}
+		if detail {
+			if p.TMDB > 0 {
+				tag.ID = p.TMDB
+				tag.Filter = kind + "=" + strconv.FormatInt(p.TMDB, 10)
+				tag.TagKey = "tmdb-person-" + strconv.FormatInt(p.TMDB, 10)
+			} else {
+				tag.ID = tagID(kind, p.Name)
+			}
+			if withRole {
+				tag.Role = p.Role
+			}
+			if p.ThumbPath != "" {
+				tag.Thumb = s.d.ImageURL(p.ThumbPath, "w185")
+			}
+		}
+		out = append(out, tag)
+	}
+	return out
+}
+
+// mediaInfoFor is the media info shown for a title: the live session's when
+// one exists for this client, otherwise the playback estimate.
+func (s *Server) mediaInfoFor(ctx context.Context, pr *Request, t *core.Title) (core.MediaInfo, *core.PlaySession) {
+	if s.d.Playback == nil {
+		return core.MediaInfo{Estimated: true, Duration: t.Runtime}, nil
+	}
+	if pr.User != nil {
+		if ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, t.Key); ok && ps != nil {
+			return ps.Info, ps
+		}
+	}
+	caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
+	return s.d.Playback.Estimate(ctx, t, caps), nil
+}
+
+// mediaFor renders the single virtual Media/Part of a playable title.
+func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withStreams bool) []model.Media {
+	info, ps := s.mediaInfoFor(ctx, pr, t)
+	stamp := unixOrZero(t.UpdatedAt)
+	if ps != nil && !ps.StartedAt.IsZero() {
+		stamp = ps.StartedAt.Unix()
+	}
+	if stamp <= 0 {
+		stamp = 1
+	}
+	m := buildMedia(t, info, stamp)
+	if withStreams {
+		var userID int64
+		if pr.User != nil {
+			userID = pr.User.ID
+		}
+		sel := s.selections.get(userID, int64(t.Key))
+		m.Part[0].Stream = s.buildStreams(t.Key, info, sel, pr.User)
+	}
+	return []model.Media{m}
+}
+
+// partFileName is the virtual file name shown in "Get Info".
+func partFileName(t *core.Title, ext string) string {
+	name := t.Title
+	switch t.Type {
+	case core.TypeEpisode:
+		name = fmt.Sprintf("%s - s%02de%02d - %s", t.ShowTitle, t.Season, t.Episode, t.Title)
+	default:
+		if t.Year > 0 {
+			name = fmt.Sprintf("%s (%d)", t.Title, t.Year)
+		}
+	}
+	name = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`/\:*?"<>|`, r) {
+			return -1
+		}
+		return r
+	}, name)
+	return "/ether/" + name + "." + ext
+}
+
+func buildMedia(t *core.Title, info core.MediaInfo, stamp int64) model.Media {
+	container := plexContainer(info.Container)
+	ext := containerExt(container)
+	dur := ms(info.Duration)
+	if dur <= 0 {
+		dur = ms(t.Runtime)
+	}
+	id := int64(t.Key)
+	m := model.Media{
+		ID:        id,
+		Duration:  dur,
+		Bitrate:   info.BitrateKbps,
+		Container: container,
+	}
+	// PMS only reports the MP4 atoms for MP4/MOV files (an int on Media,
+	// a bool on Part).
+	isMP4 := container == "mp4" || container == "mov"
+	if isMP4 {
+		m.OptimizedForStreaming = model.Ptr(1)
+		m.Has64bitOffsets = model.Ptr(false)
+	}
+	var firstAudio *core.StreamInfo
+	for i := range info.Streams {
+		if info.Streams[i].Type == "audio" {
+			if firstAudio == nil || info.Streams[i].Default && !firstAudio.Default {
+				firstAudio = &info.Streams[i]
+			}
+		}
+	}
+	if v := info.Video(); v != nil {
+		m.Width, m.Height = v.Width, v.Height
+		if v.Height > 0 {
+			m.AspectRatio = math.Round(float64(v.Width)/float64(v.Height)*100) / 100
+		}
+		m.VideoCodec = plexCodec(v.Codec)
+		m.VideoResolution = videoResolution(v.Width, v.Height)
+		m.VideoFrameRate = frameRateName(v.FrameRate)
+		m.VideoProfile = strings.ToLower(v.Profile)
+	}
+	if firstAudio != nil {
+		m.AudioChannels = firstAudio.Channels
+		m.AudioCodec = plexCodec(firstAudio.Codec)
+		m.AudioProfile = audioProfile(firstAudio)
+	}
+	m.HasVoiceActivity = model.Ptr(false)
+	p := model.Part{
+		ID:           id,
+		Key:          fmt.Sprintf("/library/parts/%d/%d/file.%s", id, stamp, ext),
+		Duration:     dur,
+		File:         partFileName(t, ext),
+		Size:         info.Size,
+		AudioProfile: m.AudioProfile,
+		Container:    container,
+		VideoProfile: m.VideoProfile,
+	}
+	if isMP4 {
+		p.Has64bitOffsets = model.Ptr(false)
+		p.OptimizedForStreaming = model.Ptr(true)
+	}
+	m.Part = []model.Part{p}
+	return m
+}
+
+// audioProfile is PMS's audioProfile ("lc" for AAC, "dts"/"ma" for DTS...).
+func audioProfile(st *core.StreamInfo) string {
+	if st.Profile != "" {
+		p := strings.ToLower(st.Profile)
+		switch p {
+		case "dts-hd ma":
+			return "ma"
+		case "dts-hd hra":
+			return "hra"
+		}
+		return p
+	}
+	switch strings.ToLower(st.Codec) {
+	case "aac":
+		return "lc"
+	case "dts":
+		return "dts"
+	case "dtshd":
+		return "ma"
+	}
+	return ""
+}
+
+// buildStreams renders Stream elements and registers their ids.
+func (s *Server) buildStreams(key core.RatingKey, info core.MediaInfo, sel selection, u *core.User) []model.Stream {
+	var out []model.Stream
+	audioSelected := -1
+	if sel.audioSet {
+		audioSelected = sel.audio
+	}
+	// Default audio: explicit selection, then preferred language, then the
+	// default flag, then the first audio stream.
+	if audioSelected < 0 {
+		audioSelected = pickAudio(info, u)
+	}
+	subSelected := -1
+	if sel.subtitleSet {
+		subSelected = sel.subtitle
+	}
+	for i, st := range info.Streams {
+		id := s.streams.register(key, i, st)
+		ps := model.Stream{
+			ID:       id,
+			Codec:    plexCodec(st.Codec),
+			Bitrate:  st.BitrateKbps,
+			Title:    st.Title,
+			Default:  boolPtrIf(st.Default),
+			Forced:   boolPtrIf(st.Forced),
+			Language: languageName(st.Language),
+		}
+		if st.Language != "" {
+			ps.LanguageCode = languageCode3(st.Language)
+			ps.LanguageTag = languageTag(st.Language)
+		}
+		if !st.External {
+			ps.Index = model.Ptr(st.Index)
+		}
+		switch st.Type {
+		case "video":
+			ps.StreamType = 1
+			if info.Video() == &info.Streams[i] {
+				ps.Default = model.Ptr(true) // PMS flags the primary video stream default
+			}
+			ps.Width, ps.Height = st.Width, st.Height
+			ps.FrameRate = math.Round(st.FrameRate*1000) / 1000
+			ps.BitDepth = st.BitDepth
+			ps.Profile = strings.ToLower(st.Profile)
+			ps.ChromaSubsampling = "4:2:0"
+			switch st.ColorTransfer {
+			case "smpte2084", "arib-std-b67":
+				ps.ColorTrc = st.ColorTransfer
+				ps.ColorPrimaries = "bt2020"
+				ps.ColorSpace = "bt2020nc"
+			case "":
+			default:
+				ps.ColorTrc = st.ColorTransfer
+			}
+			if st.DolbyVision {
+				ps.DOVIPresent = model.Ptr(true)
+			}
+			ps.DisplayTitle = videoDisplayTitle(st)
+			ps.ExtendedDisplayTitle = ps.DisplayTitle
+		case "audio":
+			ps.StreamType = 2
+			ps.Channels = st.Channels
+			ps.AudioChannelLayout = st.ChannelLayout
+			ps.SamplingRate = st.SampleRate
+			ps.Profile = strings.ToLower(st.Profile)
+			if i == audioSelected {
+				ps.Selected = model.Ptr(true)
+			}
+			ps.DisplayTitle = audioDisplayTitle(st)
+			ps.ExtendedDisplayTitle = extendedTitle(st.Title, ps.DisplayTitle)
+		case "subtitle":
+			ps.StreamType = 3
+			if st.External {
+				ps.Key = "/library/streams/" + strconv.FormatInt(id, 10)
+				ps.Format = ps.Codec
+				ps.External = model.Ptr(true)
+			}
+			if i == subSelected {
+				ps.Selected = model.Ptr(true)
+			}
+			ps.DisplayTitle = subtitleDisplayTitle(st)
+			ps.ExtendedDisplayTitle = extendedTitle(st.Title, ps.DisplayTitle)
+		default:
+			continue
+		}
+		out = append(out, ps)
+	}
+	return out
+}
+
+func extendedTitle(title, display string) string {
+	if title == "" {
+		return display
+	}
+	return title + " (" + display + ")"
+}
+
+func pickAudio(info core.MediaInfo, u *core.User) int {
+	if u != nil {
+		for _, lang := range u.AudioLanguages {
+			for i, st := range info.Streams {
+				if st.Type == "audio" && sameLanguage(st.Language, lang) {
+					return i
+				}
+			}
+		}
+	}
+	first := -1
+	for i, st := range info.Streams {
+		if st.Type != "audio" {
+			continue
+		}
+		if st.Default {
+			return i
+		}
+		if first < 0 {
+			first = i
+		}
+	}
+	return first
+}
+
+func boolPtrIf(b bool) *bool {
+	if b {
+		return model.Ptr(true)
+	}
+	return nil
+}
+
+// plexCodec maps ffprobe/core codec names to the names PMS uses.
+func plexCodec(c string) string {
+	switch strings.ToLower(c) {
+	case "dts":
+		return "dca"
+	case "dtshd", "dts-hd", "dts-hd ma":
+		return "dca-ma"
+	case "subrip":
+		return "srt"
+	case "hdmv_pgs_subtitle", "pgssub":
+		return "pgs"
+	case "dvd_subtitle", "dvdsub":
+		return "vobsub"
+	case "webvtt":
+		return "vtt"
+	case "h265":
+		return "hevc"
+	case "avc", "avc1":
+		return "h264"
+	case "e-ac3", "ec3":
+		return "eac3"
+	}
+	return strings.ToLower(c)
+}
+
+// plexContainer maps container names to PMS's.
+func plexContainer(c string) string {
+	c = strings.ToLower(c)
+	switch {
+	case c == "":
+		return "mkv"
+	case strings.Contains(c, "matroska"), c == "mkv", c == "webm":
+		if c == "webm" {
+			return "webm"
+		}
+		return "mkv"
+	case strings.Contains(c, "mp4"), c == "m4v":
+		return "mp4"
+	case c == "mov":
+		return "mov"
+	case c == "mpegts", c == "ts", c == "m2ts":
+		return "mpegts"
+	case c == "avi":
+		return "avi"
+	}
+	return c
+}
+
+func containerExt(c string) string {
+	switch c {
+	case "mpegts":
+		return "ts"
+	case "":
+		return "mkv"
+	}
+	return c
+}
+
+// videoResolution is PMS's videoResolution value.
+func videoResolution(w, h int) string {
+	switch {
+	case w >= 3200 || h >= 1800:
+		return "4k"
+	case w >= 1700 || h >= 1000:
+		return "1080"
+	case w >= 1200 || h >= 700:
+		return "720"
+	case h >= 560:
+		return "576"
+	case h >= 400:
+		return "480"
+	case h > 0:
+		return "sd"
+	}
+	return ""
+}
+
+func resolutionLabel(w, h int) string {
+	switch r := videoResolution(w, h); r {
+	case "4k":
+		return "4K"
+	case "sd", "":
+		return "SD"
+	default:
+		return r + "p"
+	}
+}
+
+// frameRateName is PMS's videoFrameRate value.
+func frameRateName(f float64) string {
+	switch {
+	case f <= 0:
+		return ""
+	case f < 24.5:
+		return "24p"
+	case f < 25.5:
+		return "PAL"
+	case f < 30.5:
+		return "NTSC"
+	case f < 50.5:
+		return "50p"
+	default:
+		return "60p"
+	}
+}
+
+func videoDisplayTitle(st core.StreamInfo) string {
+	res := resolutionLabel(st.Width, st.Height)
+	parts := []string{}
+	if st.DolbyVision {
+		parts = append(parts, "DoVi")
+	}
+	switch st.ColorTransfer {
+	case "smpte2084":
+		parts = append(parts, "HDR10")
+	case "arib-std-b67":
+		parts = append(parts, "HLG")
+	}
+	if len(parts) > 0 {
+		res += " " + strings.Join(parts, "/")
+	}
+	codec := strings.ToUpper(st.Codec)
+	switch strings.ToLower(st.Codec) {
+	case "h264":
+		codec = "H.264"
+	case "hevc":
+		codec = "HEVC"
+	}
+	if st.Profile != "" {
+		codec += " " + titleCase(st.Profile)
+	}
+	return res + " (" + codec + ")"
+}
+
+func titleCase(s string) string {
+	words := strings.Fields(strings.ReplaceAll(s, "_", " "))
+	for i, w := range words {
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
+	}
+	return strings.Join(words, " ")
+}
+
+func channelsLabel(n int, layout string) string {
+	switch n {
+	case 1:
+		return "Mono"
+	case 2:
+		return "Stereo"
+	case 6:
+		return "5.1"
+	case 8:
+		return "7.1"
+	case 0:
+		return ""
+	}
+	if layout != "" {
+		return layout
+	}
+	return strconv.Itoa(n) + "ch"
+}
+
+func audioDisplayTitle(st core.StreamInfo) string {
+	lang := languageName(st.Language)
+	if lang == "" {
+		lang = "Unknown"
+	}
+	codec := strings.ToUpper(plexCodec(st.Codec))
+	switch codec {
+	case "DCA":
+		codec = "DTS"
+	case "DCA-MA":
+		codec = "DTS-HD MA"
+	case "TRUEHD":
+		codec = "TrueHD"
+	}
+	inner := codec
+	if ch := channelsLabel(st.Channels, st.ChannelLayout); ch != "" {
+		inner += " " + ch
+	}
+	return lang + " (" + inner + ")"
+}
+
+func subtitleDisplayTitle(st core.StreamInfo) string {
+	lang := languageName(st.Language)
+	if lang == "" {
+		lang = "Unknown"
+	}
+	inner := strings.ToUpper(plexCodec(st.Codec))
+	if st.External {
+		inner += " External"
+	}
+	if st.Forced {
+		lang += " Forced"
+	}
+	return lang + " (" + inner + ")"
+}
+
+// Languages: ISO 639-1 / 639-2 codes to names. Covers what releases and
+// OpenSubtitles commonly carry; unknown codes pass through.
+var languages = map[string][3]string{
+	// code1: {name, code3(639-2/B), tag}
+	"en": {"English", "eng", "en"}, "fr": {"French", "fre", "fr"}, "de": {"German", "ger", "de"},
+	"es": {"Spanish", "spa", "es"}, "it": {"Italian", "ita", "it"}, "pt": {"Portuguese", "por", "pt"},
+	"nl": {"Dutch", "dut", "nl"}, "sv": {"Swedish", "swe", "sv"}, "no": {"Norwegian", "nor", "no"},
+	"nb": {"Norwegian Bokmål", "nob", "nb"}, "da": {"Danish", "dan", "da"}, "fi": {"Finnish", "fin", "fi"},
+	"pl": {"Polish", "pol", "pl"}, "cs": {"Czech", "cze", "cs"}, "hu": {"Hungarian", "hun", "hu"},
+	"ru": {"Russian", "rus", "ru"}, "uk": {"Ukrainian", "ukr", "uk"}, "el": {"Greek", "gre", "el"},
+	"tr": {"Turkish", "tur", "tr"}, "ar": {"Arabic", "ara", "ar"}, "he": {"Hebrew", "heb", "he"},
+	"hi": {"Hindi", "hin", "hi"}, "ja": {"Japanese", "jpn", "ja"}, "ko": {"Korean", "kor", "ko"},
+	"zh": {"Chinese", "chi", "zh"}, "th": {"Thai", "tha", "th"}, "vi": {"Vietnamese", "vie", "vi"},
+	"id": {"Indonesian", "ind", "id"}, "ro": {"Romanian", "rum", "ro"}, "bg": {"Bulgarian", "bul", "bg"},
+	"hr": {"Croatian", "hrv", "hr"}, "sr": {"Serbian", "srp", "sr"}, "sk": {"Slovak", "slo", "sk"},
+	"sl": {"Slovenian", "slv", "sl"}, "et": {"Estonian", "est", "et"}, "lv": {"Latvian", "lav", "lv"},
+	"lt": {"Lithuanian", "lit", "lt"}, "fa": {"Persian", "per", "fa"}, "ms": {"Malay", "may", "ms"},
+	"ta": {"Tamil", "tam", "ta"}, "te": {"Telugu", "tel", "te"}, "is": {"Icelandic", "ice", "is"},
+	"ca": {"Catalan", "cat", "ca"}, "eu": {"Basque", "baq", "eu"}, "gl": {"Galician", "glg", "gl"},
+}
+
+var lang3to1 = func() map[string]string {
+	m := map[string]string{}
+	for k, v := range languages {
+		m[v[1]] = k
+	}
+	// 639-2/T variants
+	for t, b := range map[string]string{"fra": "fr", "deu": "de", "nld": "nl", "ces": "cs", "ell": "el", "zho": "zh", "ron": "ro", "slk": "sk", "fas": "fa", "msa": "ms", "isl": "is", "eus": "eu"} {
+		m[t] = b
+	}
+	return m
+}()
+
+func normLang(code string) string {
+	c := strings.ToLower(strings.TrimSpace(code))
+	if i := strings.IndexAny(c, "-_"); i > 0 {
+		c = c[:i]
+	}
+	if len(c) == 3 {
+		if two, ok := lang3to1[c]; ok {
+			return two
+		}
+	}
+	return c
+}
+
+func sameLanguage(a, b string) bool { return a != "" && normLang(a) == normLang(b) }
+
+func languageName(code string) string {
+	if code == "" {
+		return ""
+	}
+	if l, ok := languages[normLang(code)]; ok {
+		return l[0]
+	}
+	return code
+}
+
+func languageCode3(code string) string {
+	if l, ok := languages[normLang(code)]; ok {
+		return l[1]
+	}
+	return strings.ToLower(code)
+}
+
+func languageTag(code string) string {
+	if l, ok := languages[normLang(code)]; ok {
+		return l[2]
+	}
+	return strings.ToLower(code)
+}
+
+// renderTitles renders a list, loading the user's watch state in one call.
+func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title, o renderOpts) []model.Metadata {
+	if len(ts) == 0 {
+		return nil
+	}
+	if o.state == nil {
+		o.state = s.stateFor(ctx, pr, ts)
+	}
+	out := make([]model.Metadata, 0, len(ts))
+	for i := range ts {
+		out = append(out, s.metadata(ctx, pr, &ts[i], o))
+	}
+	return out
+}
+
+func (s *Server) stateFor(ctx context.Context, pr *Request, ts []core.Title) map[core.RatingKey]core.WatchStatus {
+	if s.d.State == nil || pr.User == nil || len(ts) == 0 {
+		return nil
+	}
+	keys := make([]core.RatingKey, len(ts))
+	for i := range ts {
+		keys[i] = ts[i].Key
+	}
+	st, err := s.d.State.GetMany(ctx, pr.User.ID, keys)
+	if err != nil {
+		s.log.Warn("load watch state", "err", err)
+		return nil
+	}
+	return st
+}
+
+// applyLeafCounts fills viewedLeafCount for shows and seasons by loading
+// their episodes' watch state. Used on detail and children pages only.
+func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model.Metadata, ts []core.Title) {
+	if s.d.State == nil || pr.User == nil {
+		return
+	}
+	for i := range ts {
+		var eps []core.Title
+		var err error
+		switch ts[i].Type {
+		case core.TypeShow:
+			eps, err = s.d.Catalog.Grandchildren(ctx, ts[i].Key)
+		case core.TypeSeason:
+			eps, err = s.d.Catalog.Children(ctx, ts[i].Key)
+		default:
+			continue
+		}
+		if err != nil || len(eps) == 0 {
+			continue
+		}
+		st := s.stateFor(ctx, pr, eps)
+		viewed := 0
+		for _, e := range eps {
+			if st[e.Key].ViewCount > 0 {
+				viewed++
+			}
+		}
+		items[i].ViewedLeafCount = model.Ptr(viewed)
+		if items[i].LeafCount == nil || *items[i].LeafCount == 0 {
+			items[i].LeafCount = model.Ptr(len(eps))
+		}
+		if viewed == len(eps) {
+			items[i].ViewCount = max(items[i].ViewCount, 1)
+		}
+	}
+}

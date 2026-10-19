@@ -1,0 +1,263 @@
+{
+  "MediaContainer": {
+    "size": 1,
+    "allowCameraUpload": false,
+    "allowChannelAccess": false,
+    "allowMediaDeletion": false,
+    "allowSharing": true,
+    "allowSync": false,
+    "allowTuners": false,
+    "apiVersion": "1.2.3",
+    "backgroundProcessing": false,
+    "certificate": false,
+    "companionProxy": true,
+    "countryCode": "usa",
+    "diagnostics": "",
+    "eventStream": true,
+    "friendlyName": "Ether Test",
+    "livetv": 0,
+    "machineIdentifier": "0123456789abcdef0123456789abcdef01234567",
+    "musicAnalysis": 0,
+    "myPlex": true,
+    "myPlexMappingState": "mapped",
+    "myPlexSigninState": "ok",
+    "myPlexSubscription": false,
+    "myPlexUsername": "owner",
+    "offlineTranscode": 0,
+    "ownerFeatures": "",
+    "platform": "Linux",
+    "platformVersion": "6.1",
+    "pluginHost": false,
+    "pushNotifications": false,
+    "readOnlyLibraries": false,
+    "streamingBrainABRVersion": 3,
+    "streamingBrainVersion": 2,
+    "sync": false,
+    "transcoderActiveVideoSessions": 0,
+    "transcoderAudio": true,
+    "transcoderLyrics": false,
+    "transcoderSubtitles": true,
+    "transcoderVideo": true,
+    "transcoderVideoBitrates": "64,96,208,320,720,1500,2000,3000,4000,8000,10000,12000,20000",
+    "transcoderVideoQualities": "0,1,2,3,4,5,6,7,8,9,10,11,12",
+    "transcoderVideoResolutions": "128,128,160,240,320,480,768,720,720,1080,1080,1080,1080",
+    "updatedAt": 1792324800,
+    "updater": false,
+    "version": "1.43.4.10903-e5521bd8c",
+    "voiceSearch": false,
+    "MediaProvider": [
+      {
+        "identifier": "com.plexapp.plugins.library",
+        "title": "Library",
+        "types": "video",
+        "protocols": "stream,download",
+        "Feature": [
+          {
+            "key": "/library/sections",
+            "type": "content",
+            "Directory": [
+              {
+                "hubKey": "/hubs",
+                "title": "Home"
+              },
+              {
+                "agent": "tv.plex.agents.movie",
+                "language": "en-US",
+                "refreshing": false,
+                "scanner": "Plex Movie",
+                "uuid": "1dc336c6-64af-dcfe-d33e-ccd1243d2b6a",
+                "id": "1",
+                "key": "/library/sections/1",
+                "hubKey": "/hubs/sections/1",
+                "type": "movie",
+                "title": "Movies",
+                "updatedAt": 1792324800,
+                "scannedAt": 1792324800,
+                "Pivot": [
+                  {
+                    "id": "recommended",
+                    "key": "/hubs/sections/1",
+                    "type": "hub",
+                    "title": "Recommended",
+                    "context": "content.discover",
+                    "symbol": "star"
+                  },
+                  {
+                    "id": "library",
+                    "key": "/library/sections/1/all?type=1",
+                    "type": "list",
+                    "title": "Library",
+                    "context": "content.library",
+                    "symbol": "library"
+                  },
+                  {
+                    "id": "collections",
+                    "key": "/library/sections/1/collections",
+                    "type": "list",
+                    "title": "Collections",
+                    "context": "content.collections",
+                    "symbol": "stack"
+                  },
+                  {
+                    "id": "playlists",
+                    "key": "/playlists?type=15&sectionID=1&playlistType=video",
+                    "type": "list",
+                    "title": "Playlists",
+                    "context": "content.playlists",
+                    "symbol": "playlist"
+                  },
+                  {
+                    "id": "categories",
+                    "key": "/library/sections/1/categories",
+                    "type": "list",
+                    "title": "Categories",
+                    "context": "content.categories",
+                    "symbol": "stack"
+                  }
+                ]
+              },
+              {
+                "agent": "tv.plex.agents.series",
+                "language": "en-US",
+                "refreshing": false,
+                "scanner": "Plex TV Series",
+                "uuid": "3ef35822-1c2b-8b72-8efb-de2992ef085e",
+                "id": "2",
+                "key": "/library/sections/2",
+                "hubKey": "/hubs/sections/2",
+                "type": "show",
+                "title": "TV Shows",
+                "updatedAt": 1792324800,
+                "scannedAt": 1792324800,
+                "Pivot": [
+                  {
+                    "id": "recommended",
+                    "key": "/hubs/sections/2",
+                    "type": "hub",
+                    "title": "Recommended",
+                    "context": "content.discover",
+                    "symbol": "star"
+                  },
+                  {
+                    "id": "library",
+                    "key": "/library/sections/2/all?type=2",
+                    "type": "list",
+                    "title": "Library",
+                    "context": "content.library",
+                    "symbol": "library"
+                  },
+                  {
+                    "id": "collections",
+                    "key": "/library/sections/2/collections",
+                    "type": "list",
+                    "title": "Collections",
+                    "context": "content.collections",
+                    "symbol": "stack"
+                  },
+                  {
+                    "id": "playlists",
+                    "key": "/playlists?type=15&sectionID=2&playlistType=video",
+                    "type": "list",
+                    "title": "Playlists",
+                    "context": "content.playlists",
+                    "symbol": "playlist"
+                  },
+                  {
+                    "id": "categories",
+                    "key": "/library/sections/2/categories",
+                    "type": "list",
+                    "title": "Categories",
+                    "context": "content.categories",
+                    "symbol": "stack"
+                  }
+                ]
+              },
+              {
+                "id": "playlists",
+                "key": "/playlists",
+                "type": "playlist",
+                "title": "Playlists",
+                "Pivot": [
+                  {
+                    "id": "playlists.video",
+                    "key": "/playlists?playlistType=video",
+                    "type": "list",
+                    "title": "Video",
+                    "context": "content.playlists.video",
+                    "symbol": "playlist"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "key": "/hubs/search",
+            "type": "search"
+          },
+          {
+            "key": "/library/matches",
+            "type": "match"
+          },
+          {
+            "key": "/library/metadata",
+            "type": "metadata"
+          },
+          {
+            "key": "/:/rate",
+            "type": "rate"
+          },
+          {
+            "key": "/photo/:/transcode",
+            "type": "imagetranscoder"
+          },
+          {
+            "key": "/hubs/promoted",
+            "type": "promoted"
+          },
+          {
+            "key": "/hubs/continueWatching",
+            "type": "continuewatching"
+          },
+          {
+            "key": "/actions",
+            "type": "actions",
+            "Action": [
+              {
+                "id": "removeFromContinueWatching",
+                "key": "/actions/removeFromContinueWatching"
+              }
+            ]
+          },
+          {
+            "flavor": "universal",
+            "key": "/playlists",
+            "type": "playlist"
+          },
+          {
+            "flavor": "universal",
+            "key": "/playQueues",
+            "type": "playqueue"
+          },
+          {
+            "key": "/library/collections",
+            "type": "collection"
+          },
+          {
+            "scrobbleKey": "/:/scrobble",
+            "unscrobbleKey": "/:/unscrobble",
+            "key": "/:/timeline",
+            "type": "timeline"
+          },
+          {
+            "type": "queryParser"
+          },
+          {
+            "key": "/library/search",
+            "type": "universalsearch"
+          }
+        ]
+      }
+    ]
+  }
+}
+
