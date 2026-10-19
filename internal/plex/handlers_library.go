@@ -829,10 +829,11 @@ func (s *Server) handleOnDeck(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, mc)
 }
 
-// onDeckItems renders On Deck the way PMS does: every item in full (tag
-// ids, Guid, Rating, streams), led by its sync flag and section UUID.
+// onDeckItems renders On Deck the way PMS does: movies as list items,
+// episodes in full (tag ids, Guid, Rating, streams), every item led by its
+// sync flag and section UUID.
 func (s *Server) onDeckItems(ctx context.Context, pr *Request, items []core.Title, state map[core.RatingKey]core.WatchStatus) []model.Metadata {
-	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, detail: true, state: state})
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, detailEpisodes: true, state: state})
 	for i := range md {
 		md[i].AllowSync = model.Ptr(false)
 		if sec, ok := s.sectionFor(items[i].Type); ok {

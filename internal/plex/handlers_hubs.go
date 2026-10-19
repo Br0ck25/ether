@@ -28,10 +28,10 @@ type hubSpec struct {
 	core.Hub
 	key        string // overrides the computed key
 	noPromoted bool   // omit the promoted attribute (section rows)
-	// detail renders every item in full and stamps includedAt, as PMS's
+	// included stamps includedAt on the items, as PMS's
 	// /hubs/continueWatching does.
-	detail bool
-	state  map[core.RatingKey]core.WatchStatus
+	included bool
+	state    map[core.RatingKey]core.WatchStatus
 }
 
 func hubItemsKey(h core.Hub, hc hubCtx) string {
@@ -54,8 +54,8 @@ func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubC
 	// Related hubs (detail pages, postplay) omit the items' library section
 	// and the hub's promoted flag, like PMS.
 	related := hc.related != 0
-	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detail: hs.detail, detailEpisodes: true})
-	if hs.detail {
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detailEpisodes: true})
+	if hs.included {
 		stampIncluded(md)
 	}
 	keys := make([]string, 0, len(items))
@@ -145,7 +145,7 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 		hs.ID, hs.Context, hs.key = "home.continue", "hub.home.continue", "/hubs/home/continueWatching"
 	case cwGlobal:
 		hs.ID, hs.Context, hs.key, hs.noPromoted = "continueWatching", "hub.continueWatching", "/hubs/continueWatching/items", true
-		hs.detail = true
+		hs.included = true
 	case cwSection:
 		id := strconv.Itoa(sec.ID)
 		hs.Style, hs.noPromoted = "shelf", true
@@ -292,8 +292,8 @@ func (s *Server) handleContinueWatchingItems(w http.ResponseWriter, r *http.Requ
 	}
 	hs := s.continueHub(ctx, pr, v, sec, count)
 	mc := hubContainer()
-	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state, detail: hs.detail})
-	if hs.detail {
+	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state, detailEpisodes: true})
+	if hs.included {
 		stampIncluded(mc.Metadata)
 	}
 	mc.Size = len(mc.Metadata)
