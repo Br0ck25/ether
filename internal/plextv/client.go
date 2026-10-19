@@ -222,16 +222,19 @@ func (e *APIError) Is(target error) bool {
 }
 
 type request struct {
-	method      string
-	path        string
-	host        string // optional service host override (e.g. servers.plex.tv)
-	query       url.Values
-	token       string
-	tokenQuery  string // also send the token as this query parameter (legacy endpoints)
-	body        []byte
-	contentType string
-	accept      string // default application/json
-	okStatus    []int  // accepted statuses besides 2xx
+	method     string
+	path       string
+	host       string // optional service host override (e.g. servers.plex.tv)
+	query      url.Values
+	token      string
+	tokenQuery string // also send the token as this query parameter (legacy endpoints)
+	// queryTokenOnly sends the token only as tokenQuery, without the
+	// X-Plex-Token header (PMS's servers.xml POST).
+	queryTokenOnly bool
+	body           []byte
+	contentType    string
+	accept         string // default application/json
+	okStatus       []int  // accepted statuses besides 2xx
 }
 
 type response struct {
@@ -303,7 +306,11 @@ func (c *Client) once(ctx context.Context, r request) (*response, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.setHeaders(req.Header, r.token)
+	headerToken := r.token
+	if r.queryTokenOnly && r.tokenQuery != "" {
+		headerToken = ""
+	}
+	c.setHeaders(req.Header, headerToken)
 	accept := r.accept
 	if accept == "" {
 		accept = "application/json"

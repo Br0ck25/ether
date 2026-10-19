@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -41,53 +42,112 @@ func (c *Client) PublishConnections(ctx context.Context, serverToken string, uri
 
 // ServerRegistration is the server info PMS sends to POST /servers.xml
 // ("MyPlex: Sending Server Info to myPlex (user=…, ip=…, port=…)"), which
-// is where plex.tv learns the public address/port and the mapping state.
+// is where plex.tv learns the public address/port.
 type ServerRegistration struct {
 	Name           string
 	Address        string // public IP; empty lets plex.tv use the request's source address
-	Port           int    // public port
-	PrivateAddress string // primary LAN address
-	PrivatePort    int    // listener port
+	Port           int    // public (mapped) port; 0 when not published
+	PrivateAddress string // primary LAN address (not part of the PMS body)
+	PrivatePort    int    // listener port (not part of the PMS body)
 	Version        string
 	LocalAddresses []string // LAN IPs
 	// MappingState mirrors PMS's states: "mapped", "unmapped", "unknown".
+	// PMS does not send it in servers.xml; it is kept for callers.
 	MappingState string
+	// Now stamps the "date" attribute; zero means time.Now().
+	Now time.Time
 }
 
-// RegisterServer sends ServerRegistration: POST /servers.xml?auth_token=…&async=1.
-// The endpoint and its 201 response are confirmed from PMS logs; the field
-// names follow the registration/resource vocabulary found in the PMS
-// executable. The live request body is not present in DEBUG logs; failures
-// remain non-fatal because clients discover connections through resources.
-func (c *Client) RegisterServer(ctx context.Context, serverToken string, reg ServerRegistration) error {
-	q := url.Values{"async": {"1"}}
-	// The PMS registration request uses XML. Keep this to resource fields whose
-	// names are present in the PMS vocabulary rather than sending guessed
-	// aliases for the separate connectivity status record.
+// registrationXML builds the body PMS 1.43.4 POSTs to servers.xml
+// (MyPlexManager::getServerXML): its generic serializer writing a
+// MediaContainer around one Server. Server::serialize emits, in order,
+// name, host, address (skipped when empty or "0.0.0.0"), localAddresses
+// (comma-joined, IPv6 bracketed), port (skipped when 0), machineIdentifier,
+// version, date, and the optional protocol/product/deviceClass/
+// protocolVersion/protocolCapabilities strings; empty strings are not
+// written. getServerXML additionally sets relay (bool) and, only when the
+// relay is on, relayProtocols="ssh". Ether never offers a relay.
+func registrationXML(machineID string, reg ServerRegistration) ([]byte, error) {
+	now := reg.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	locals := make([]string, 0, len(reg.LocalAddresses))
+	for _, a := range reg.LocalAddresses {
+		if ip := net.ParseIP(a); ip != nil && ip.To4() == nil && !strings.HasPrefix(a, "[") {
+			a = "[" + a + "]"
+		}
+		locals = append(locals, a)
+	}
+	address := reg.Address
+	if address == "0.0.0.0" {
+		address = ""
+	}
+	// PMS always registers a port (the mapped public one; its listener port
+	// when there is no mapping). plex.tv answers 422 for a body without one.
+	port := reg.Port
+	if port == 0 {
+		port = reg.PrivatePort
+	}
 	type serverElement struct {
 		XMLName           xml.Name `xml:"Server"`
-		Name              string   `xml:"name,attr"`
+		Name              string   `xml:"name,attr,omitempty"`
 		Address           string   `xml:"address,attr,omitempty"`
-		Port              int      `xml:"port,attr,omitempty"`
-		Version           string   `xml:"version,attr,omitempty"`
-		MachineIdentifier string   `xml:"machineIdentifier,attr"`
 		LocalAddresses    string   `xml:"localAddresses,attr,omitempty"`
+		Port              int      `xml:"port,attr,omitempty"`
+		MachineIdentifier string   `xml:"machineIdentifier,attr,omitempty"`
+		Version           string   `xml:"version,attr,omitempty"`
+		Date              int64    `xml:"date,attr"`
+		Relay             string   `xml:"relay,attr"`
 	}
-	body, err := xml.Marshal(serverElement{Name: reg.Name, Address: reg.Address, Port: reg.Port,
-		Version: reg.Version, MachineIdentifier: c.id.ClientIdentifier, LocalAddresses: strings.Join(reg.LocalAddresses, ",")})
+	type container struct {
+		XMLName xml.Name `xml:"MediaContainer"`
+		Size    int      `xml:"size,attr"`
+		Server  serverElement
+	}
+	body, err := xml.Marshal(container{Size: 1, Server: serverElement{
+		Name: reg.Name, Address: address, LocalAddresses: strings.Join(locals, ","), Port: port,
+		MachineIdentifier: machineID, Version: reg.Version, Date: registrationDate(now), Relay: "0",
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), body...), nil
+}
+
+// registrationDate encodes the servers.xml "date" attribute as PMS does:
+// microseconds since the Unix epoch (_Xtime_get_ticks()/10) with the low
+// four bits replaced by four PMS-local status flags, then two xor-folds of
+// the next bits into them. Ether has none of the conditions PMS flags, so
+// all four flags are clear.
+func registrationDate(t time.Time) int64 {
+	v := t.UnixMicro() &^ 0xf
+	v ^= (v >> 3) & 0x38
+	v ^= (v >> 3) & 0x7
+	return v
+}
+
+// RegisterServer sends ServerRegistration as PMS does:
+// POST {servers host}/servers.xml?auth_token=<server token> with
+// Content-Type: application/xml and the MediaContainer/Server XML body of
+// registrationXML. PMS sends its X-Plex-* identity headers but no
+// X-Plex-Token header and no other query parameters. Failures remain
+// non-fatal because clients discover connections through resources.
+func (c *Client) RegisterServer(ctx context.Context, serverToken string, reg ServerRegistration) error {
+	body, err := registrationXML(c.id.ClientIdentifier, reg)
 	if err != nil {
 		return fmt.Errorf("plextv: encode server registration: %w", err)
 	}
 	_, err = c.do(ctx, request{
-		method:      http.MethodPost,
-		host:        c.serversHost(),
-		path:        "/servers.xml",
-		query:       q,
-		token:       serverToken,
-		tokenQuery:  "auth_token",
-		body:        body,
-		contentType: "application/xml",
-		accept:      "application/xml",
+		method:         http.MethodPost,
+		host:           c.serversHost(),
+		path:           "/servers.xml",
+		token:          serverToken,
+		tokenQuery:     "auth_token",
+		queryTokenOnly: true,
+		body:           body,
+		contentType:    "application/xml",
+		accept:         "application/xml",
 	})
 	return err
 }

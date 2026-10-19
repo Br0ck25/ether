@@ -1,11 +1,14 @@
 package plextv
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"encoding/xml"
@@ -38,7 +41,10 @@ type fakePlexTV struct {
 	registered   []string // servers.xml bodies
 	connectivity int
 	certHash     string
-	csrStatus    int // status to fail CSR upload with
+	csrStatus    int    // status to fail CSR upload with
+	csrUploads   int    // CSR PUTs received
+	subjectAttr  string // overrides the base64 DER "subject" attribute
+	lastCSR      *x509.CertificateRequest
 	pendingDL    int // 202s before the certificate is ready
 	issued       []byte
 	caKey        *ecdsa.PrivateKey
@@ -87,6 +93,17 @@ func newFakePlexTV(t *testing.T, machineID string) *fakePlexTV {
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+// subjectDER is the X.509 Name plex.tv returns (base64) in the subject
+// response; the structure, not the values, mirrors the real response.
+func (f *fakePlexTV) subjectDER() []byte {
+	der, err := asn1.Marshal(pkix.Name{Country: []string{"US"}, Organization: []string{"Example Org"},
+		CommonName: "*." + f.certHash + ".plex.direct"}.ToRDNSequence())
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return der
 }
 
 func (f *fakePlexTV) addUser(token string, a Account) {
@@ -224,25 +241,31 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 		f.published = r.URL.Query()["Connection[][uri]"]
 		io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><Device/>`)
 	case r.Method == http.MethodPost && r.URL.Path == "/servers.xml":
-		if !authed || r.URL.Query().Get("async") != "1" || r.Header.Get("Content-Type") != "application/xml" {
+		// PMS: token only as auth_token, no other query parameters, XML body.
+		if !authed || r.Header.Get("X-Plex-Token") != "" || len(r.URL.Query()) != 1 || r.Header.Get("Content-Type") != "application/xml" {
 			w.WriteHeader(401)
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
 		f.registered = append(f.registered, string(b))
 		var payload struct {
-			XMLName           xml.Name `xml:"Server"`
-			Name              string   `xml:"name,attr"`
-			Address           string   `xml:"address,attr"`
-			Port              int      `xml:"port,attr"`
-			MachineIdentifier string   `xml:"machineIdentifier,attr"`
-			LocalAddresses    string   `xml:"localAddresses,attr"`
+			XMLName xml.Name `xml:"MediaContainer"`
+			Server  struct {
+				Name              string `xml:"name,attr"`
+				Address           string `xml:"address,attr"`
+				Port              int    `xml:"port,attr"`
+				MachineIdentifier string `xml:"machineIdentifier,attr"`
+				LocalAddresses    string `xml:"localAddresses,attr"`
+			}
 		}
-		if xml.Unmarshal(b, &payload) != nil || payload.Name == "" || payload.MachineIdentifier != f.machineID {
+		// plex.tv answers 422 without a port (observed live).
+		if xml.Unmarshal(b, &payload) != nil || payload.Server.Name == "" || payload.Server.Port == 0 ||
+			payload.Server.MachineIdentifier != f.machineID {
 			w.WriteHeader(422)
 			return
 		}
 		w.WriteHeader(201)
+		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?><MediaContainer size="1"><Server address=%q port="%d"/></MediaContainer>`, payload.Server.Address, payload.Server.Port)
 	case r.Method == http.MethodPut && r.URL.Path == "/api/servers/"+f.machineID+"/connectivity":
 		if !authed || r.URL.Query().Get("X-Plex-Token") == "" || r.URL.Query().Get("asyncIdentifier") == "" {
 			w.WriteHeader(401)
@@ -328,7 +351,11 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/xml")
-		fmt.Fprintf(w, `<subject commonName="*.%s.plex.direct" subject="redacted certificate subject"/>`, f.certHash)
+		subject := f.subjectAttr
+		if subject == "" {
+			subject = base64.StdEncoding.EncodeToString(f.subjectDER())
+		}
+		fmt.Fprintf(w, `<subject commonName="*.%s.plex.direct" subject=%q/>`, f.certHash, subject)
 	case r.URL.Path == devPrefix+"csr" && r.Method == http.MethodPut:
 		if !authed {
 			w.WriteHeader(401)
@@ -342,19 +369,45 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(400)
 			return
 		}
-		b, _ := io.ReadAll(r.Body)
+		// PMS uploads multipart/form-data with one part "file" (no filename,
+		// Content-Type application/x-pem-file) holding the PEM CSR. Like the
+		// live service, anything else (raw PEM, form, JSON, and a part with
+		// filename="", which form parsers drop as an empty file input) is
+		// answered with 422 code 1008 "Blank CSR".
+		f.csrUploads++
+		mr, err := r.MultipartReader()
+		if err != nil {
+			f.jsonErr(w, 422, 1008, "Blank CSR")
+			return
+		}
+		var b []byte
+		for {
+			p, err := mr.NextPart()
+			if err != nil {
+				break
+			}
+			if p.FormName() == "file" && p.Header.Get("Content-Type") == "application/x-pem-file" &&
+				!strings.Contains(p.Header.Get("Content-Disposition"), "filename") {
+				b, _ = io.ReadAll(p)
+			}
+		}
 		blk, _ := pem.Decode(b)
-		if blk == nil || blk.Type != "CERTIFICATE REQUEST" {
-			w.WriteHeader(400)
+		if blk == nil || blk.Type != "NEW CERTIFICATE REQUEST" {
+			f.jsonErr(w, 422, 1008, "Blank CSR")
 			return
 		}
 		csr, err := x509.ParseCertificateRequest(blk.Bytes)
-		if err != nil || csr.CheckSignature() != nil || csr.Subject.CommonName != "*."+f.certHash+".plex.direct" {
+		if err != nil || csr.CheckSignature() != nil || csr.Subject.CommonName != "*."+f.certHash+".plex.direct" || len(csr.Extensions) != 0 {
 			w.WriteHeader(400)
 			return
 		}
+		if f.subjectAttr == "" && !bytes.Equal(csr.RawSubject, f.subjectDER()) {
+			w.WriteHeader(400)
+			return
+		}
+		f.lastCSR = csr
 		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: csr.Subject, DNSNames: csr.DNSNames,
+			SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: csr.Subject, DNSNames: []string{csr.Subject.CommonName},
 			NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(f.certTTL),
 			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		}

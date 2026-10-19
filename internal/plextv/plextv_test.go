@@ -1,9 +1,14 @@
 package plextv
 
 import (
+	"bytes"
 	"context"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -248,22 +253,43 @@ func TestPublishAndResources(t *testing.T) {
 	if err := c.PublishConnections(ctx, "server-token-42", uris); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.RegisterServer(ctx, "server-token-42", ServerRegistration{Name: "Ether", Address: "203.0.113.7", Port: 32400,
-		PrivateAddress: "192.168.1.5", PrivatePort: 32400, Version: "1.42", LocalAddresses: []string{"192.168.1.5"}, MappingState: "mapped"}); err != nil {
+	if err := c.RegisterServer(ctx, "server-token-42", ServerRegistration{Name: "Ether", Address: "203.0.113.7", Port: 32401,
+		PrivateAddress: "192.168.1.5", PrivatePort: 32400, Version: "1.42", LocalAddresses: []string{"192.168.1.5", "fd00::5"}, MappingState: "mapped"}); err != nil {
 		t.Fatal(err)
 	}
-	var reg struct {
-		XMLName           xml.Name `xml:"Server"`
-		Name              string   `xml:"name,attr"`
-		Address           string   `xml:"address,attr"`
-		Port              int      `xml:"port,attr"`
-		Version           string   `xml:"version,attr"`
-		MachineIdentifier string   `xml:"machineIdentifier,attr"`
-		LocalAddresses    string   `xml:"localAddresses,attr"`
-		PrivateAddress    string   `xml:"privateAddress,attr"`
+	if !strings.HasPrefix(f.registered[0], `<?xml version="1.0" encoding="UTF-8"?>`) {
+		t.Fatalf("registration body lacks the XML declaration: %s", f.registered[0])
 	}
-	if err := xml.Unmarshal([]byte(f.registered[0]), &reg); err != nil || reg.Name != "Ether" || reg.Address != "203.0.113.7" || reg.Port != 32400 || reg.Version != "1.42" || reg.MachineIdentifier != testMachineID || reg.LocalAddresses != "192.168.1.5" || reg.PrivateAddress != "" {
+	var reg struct {
+		XMLName xml.Name `xml:"MediaContainer"`
+		Size    int      `xml:"size,attr"`
+		Server  struct {
+			Name              string     `xml:"name,attr"`
+			Address           string     `xml:"address,attr"`
+			Port              int        `xml:"port,attr"`
+			Version           string     `xml:"version,attr"`
+			MachineIdentifier string     `xml:"machineIdentifier,attr"`
+			LocalAddresses    string     `xml:"localAddresses,attr"`
+			Date              int64      `xml:"date,attr"`
+			Relay             string     `xml:"relay,attr"`
+			Attrs             []xml.Attr `xml:",any,attr"`
+		}
+	}
+	if err := xml.Unmarshal([]byte(f.registered[0]), &reg); err != nil || reg.Size != 1 || reg.Server.Name != "Ether" || reg.Server.Address != "203.0.113.7" ||
+		reg.Server.Port != 32401 || reg.Server.Version != "1.42" || reg.Server.MachineIdentifier != testMachineID ||
+		reg.Server.LocalAddresses != "192.168.1.5,[fd00::5]" || reg.Server.Relay != "0" || reg.Server.Date <= 0 || len(reg.Server.Attrs) != 0 {
 		t.Fatalf("registration=%+v err=%v", reg, err)
+	}
+	if h := f.header("/servers.xml"); h.Get("X-Plex-Token") != "" || h.Get("X-Plex-Client-Identifier") != testMachineID {
+		t.Fatalf("servers.xml headers: %v", h)
+	}
+	// Without a public port the listener port is registered: plex.tv rejects
+	// a body with no port at all (422).
+	if err := c.RegisterServer(ctx, "server-token-42", ServerRegistration{Name: "Ether", PrivatePort: 32400, Version: "1.42"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(f.registered[1], `port="32400"`) || strings.Contains(f.registered[1], "address=") {
+		t.Fatalf("registration without remote access: %s", f.registered[1])
 	}
 	asyncID, err := c.ReportConnectivity(ctx, "server-token-42")
 	if err != nil || len(asyncID) != 36 || f.connectivity != 1 {
@@ -396,6 +422,46 @@ func TestRequestPlexDirectCertificate(t *testing.T) {
 	}
 	if f.count("GET /api/v2/devices/"+testMachineID+"/certificate/download") != 3 {
 		t.Fatal("expected two 202 polls before success")
+	}
+	// The CSR carries plex.tv's DER subject verbatim, no extensions, an
+	// RSA-2048 key and a SHA-256 signature (the fake enforces subject and
+	// multipart shape).
+	if csr := f.lastCSR; csr == nil || csr.SignatureAlgorithm != x509.SHA256WithRSA ||
+		csr.PublicKey.(*rsa.PublicKey).N.BitLen() != 2048 || len(csr.DNSNames) != 0 {
+		t.Fatalf("csr %+v", f.lastCSR)
+	}
+	if ct := f.header("/api/v2/devices/" + testMachineID + "/certificate/csr").Get("Content-Type"); !strings.HasPrefix(ct, "multipart/form-data; boundary=") {
+		t.Fatalf("csr content type %q", ct)
+	}
+
+	// Without a decodable DER subject the CSR falls back to CN only.
+	f.mu.Lock()
+	f.subjectAttr = "not base64 DER"
+	f.mu.Unlock()
+	if _, err := c.RequestPlexDirectCertificate(context.Background(), "server-token-42", CertRequest{PollInterval: 5 * time.Millisecond, Timeout: 2 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.lastCSR.Subject.Names); n != 1 {
+		t.Fatalf("fallback subject has %d attributes", n)
+	}
+
+	// A 5xx upload is not retried within one attempt (rate limits).
+	f.mu.Lock()
+	f.csrStatus = http.StatusBadGateway
+	before := f.csrUploads
+	f.mu.Unlock()
+	if _, err := c.RequestPlexDirectCertificate(context.Background(), "server-token-42", CertRequest{}); err == nil || f.count("PUT ") < 1 {
+		t.Fatal("expected upload failure")
+	}
+	f.mu.Lock()
+	uploads := f.csrUploads - before
+	f.csrStatus = 0
+	f.mu.Unlock()
+	if uploads != 0 { // the fake rejects with csrStatus before counting
+		t.Fatalf("uploads %d", uploads)
+	}
+	if n := f.count("PUT /api/v2/devices/" + testMachineID + "/certificate/csr"); n != 3 {
+		t.Fatalf("csr PUTs %d, want 3 (one per attempt)", n)
 	}
 
 	// A device plex.tv will not certify.
@@ -861,5 +927,42 @@ func TestRegistrarPublishBackoff(t *testing.T) {
 	r.runDue(ctx)
 	if f.count("PUT /devices/") == puts {
 		t.Fatal("no retry after back-off")
+	}
+}
+
+func TestRegistrationDateEncoding(t *testing.T) {
+	// PMS: v = µs &^ 0xf | flags; v ^= (v>>3)&0x38; v ^= (v>>3)&7.
+	if got := registrationDate(time.UnixMicro(0x1C3)); got != 0x1FF {
+		t.Fatalf("date %#x", got)
+	}
+	now := time.Now()
+	if d := registrationDate(now) - now.UnixMicro(); d < -64 || d > 64 {
+		t.Fatalf("date drifted by %d µs", d)
+	}
+}
+
+func TestParseCertificateSubject(t *testing.T) {
+	der, _ := asn1.Marshal(pkix.Name{CommonName: "*.abc123.plex.direct"}.ToRDNSequence())
+	s, err := parseCertificateSubject([]byte(`<subject commonName="*.ABC123.plex.direct" subject="` + base64.StdEncoding.EncodeToString(der) + `"/>`))
+	if err != nil || s.hash != "abc123" || s.cn != "*.abc123.plex.direct" || !bytes.Equal(s.rawSubject, der) {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if s, err := parseCertificateSubject([]byte(`<subject commonName="*.abc123.plex.direct"/>`)); err != nil || s.rawSubject != nil {
+		t.Fatalf("%+v %v", s, err)
+	}
+	if _, err := parseCertificateSubject([]byte(`<subject/>`)); !errors.Is(err, ErrCertUnavailable) {
+		t.Fatal(err)
+	}
+}
+
+func TestCSRUploadBody(t *testing.T) {
+	body, ct, err := csrUploadBody([]byte("-----BEGIN NEW CERTIFICATE REQUEST-----\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(ct, "multipart/form-data; boundary=") ||
+		!bytes.Contains(body, []byte("Content-Disposition: form-data; name=\"file\"\r\n")) || bytes.Contains(body, []byte("filename")) ||
+		!bytes.Contains(body, []byte("Content-Type: application/x-pem-file\r\n\r\n-----BEGIN NEW CERTIFICATE REQUEST-----\n")) {
+		t.Fatalf("%s\n%s", ct, body)
 	}
 }

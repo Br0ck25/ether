@@ -145,25 +145,52 @@ server token confirmed that `GET .../certificate/subject` returns an XML
 with `Accept: application/xml`; the root is `<subject>` with `commonName`
 and `subject` attributes. `Accept: application/json` returns HTTP 406, Plex
 error 1006. Both `servers.plex.tv` and `plex.tv` returned the XML shape.
-Ether requests XML and extracts the assigned wildcard name from `commonName`.
-The remaining CSR PUT and certificate download cannot be tested
-against the reference because they would mutate production state.
+Ether requests XML and uses both attributes: the wildcard name from
+`commonName` and the base64 DER subject from `subject`. The CSR upload and
+download were later solved and exercised live with Ether's own identity;
+see §6. They were never sent for the reference PMS identity, because that
+would mutate production state.
 
-The binary strings also contain `Content-Type`, `application/xml`, and the
-registration vocabulary. Ether now sends an XML `<Server>` resource with
-`name`, `address`, `port`, `version`, `machineIdentifier`, and
-`localAddresses` attributes to `POST https://servers.plex.tv/servers.xml`
-with `auth_token` in the query. The live Ether build previously returned 422
-from `plex.tv` while sending the old form-encoded alias set; the corrected
-host and XML serialization have not been exercised with the production
-identity. Exact optional registration attributes remain uncertain because
-the PMS body is not present in the filtered logs and native decompilation was
-unavailable. REA was invoked
-with `npx -y rea-agents@latest analyze`, but no PE native-analysis provider
-was configured (Ghidra, Hopper, IDA, and Kuna were unavailable), so the
-binary findings here come from its static string table rather than
-decompilation. Ether emits the minimal established resource fields; it does
-not send speculative mapping aliases in the registration XML.
+### servers.xml registration body (solved)
+
+**Solved 2026-10-19** by decompiling PMS 1.43.4's `MyPlexManager` server
+registration path (the function that logs "MyPlex: Sending Server Info to
+myPlex", its `Server` object builder, and `Server::serialize`) and then
+confirming it live against the owner's claimed Ether install.
+
+- Request: `POST {servers host}/servers.xml?auth_token=<server token>`,
+  `Content-Type: application/xml`. The token goes **only** in the
+  `auth_token` query parameter — PMS sends its `X-Plex-*` identity headers
+  but no `X-Plex-Token` header here — and there are no other query
+  parameters (in particular no `async=1`; that belongs to the separate
+  connectivity PUT). Success is 201 with a small `MediaContainer` echo.
+- Body: PMS's generic XML serializer writes the standard
+  `<?xml version="1.0" encoding="UTF-8"?>` declaration and wraps one
+  `<Server>` element in a `<MediaContainer>`. `Server::serialize` writes,
+  in this order, only the attributes that are set: `name`, `host`,
+  `address` (skipped when empty or `0.0.0.0`), `localAddresses`
+  (comma-joined; IPv6 members are bracketed), `port` (skipped when 0),
+  `machineIdentifier`, `version`, `date`, then the optional
+  `protocol`, `product`, `deviceClass`, `protocolVersion` and
+  `protocolCapabilities` strings. The registration builder additionally
+  sets `relay` (a bool, from the `RelayEnabled` preference and the
+  account's relay entitlement) and, only when the relay is on,
+  `relayProtocols="ssh"`. `host` is left unset by this path. `date` is a
+  timestamp in microseconds whose low bits PMS reuses as local status
+  flags.
+- **`port` is required**: a body without it is exactly the `422` Ether was
+  getting. Confirmed live — the same request with `port` added returned
+  201. PMS registers its mapped public port (32401 in the supplied
+  capture); Ether registers the mapped public port when remote access is
+  on and otherwise falls back to its listener port.
+- Mapping-state vocabulary (`mappingState`, `privateAddress`,
+  `publicAddress`, `publicPort`, `remotePublicAddress`,
+  `serverIdentifier`) belongs to the connectivity record and the
+  `/:/prefs`-style status surfaces, **not** to this body; sending those
+  aliases here was part of the original 422.
+
+`Client.RegisterServer` now emits exactly this document
+(`registrationXML`), with `relay="0"` because Ether never offers a relay.
 
 The capture also contains `POST notifications.plex.tv/api/v1/notifications`
 (201), scrobble `/state` traffic, and PMS-generated per-user view-state
@@ -186,13 +213,8 @@ PublicAddressManager: Got public IP from v4.plex.tv/pms/:/ip
   single empty `Connection[][uri]=`.
   `Client.PublishConnections` sends exactly this.
 - `POST /servers.xml` registers the mapped public port; PMS reports port
-  32401 in the supplied capture while its listener is 32400. The binary
-  contains XML content-type and field strings including `name`, `address`,
-  `port`, `machineIdentifier`, `version`, `productVersion`,
-  `localAddresses`, `mappingState`, `privateAddress`, `publicAddress`,
-  `publicPort`, `remotePublicAddress`, and `serverIdentifier`. The filtered
-  log omits the POST body, so the minimal resource XML Ether sends is an
-  evidence-based implementation, while exact optional fields remain unknown.
+  32401 in the supplied capture while its listener is 32400. The exact body
+  and query are documented under "servers.xml registration body" above.
   Registration errors remain non-fatal because resources connection
   publishing is separate.
 - PMS publishes plain `http://ip:port` URIs. plex.tv builds the
@@ -266,29 +288,76 @@ keys are stored as `plex_sections`. If the owner has set no allowed
 sections in Ether, the plex.tv selection becomes the user's
 `AllowedSections`. An Ether-side setting always wins.
 
-## 6. plex.direct certificates (open question 1)
+## 6. plex.direct certificates (solved)
 
-**Unknown: certificate issuance for Ether has not been tested.** The owner has
-a claimed Ether instance, but a branch test instance would share its machine
-identifier; do not register or submit a CSR using that identity. The reference
-PMS identity was used only for read-only subject GETs.
+**Solved 2026-10-19.** plex.tv issued a wildcard plex.direct certificate to
+the owner's Ether install on the first attempt in the corrected format. The
+request format below comes from decompiling the certificate-acquisition
+function of the owner-approved PMS 1.43.4 executable (one function, around
+file offset 0x9bd070 in the image's `.text`, with its helpers and its
+string table entries); no Plex code is reproduced here or in Ether, only
+the protocol facts.
 
-What PMS does (**confirmed** by the PMS executable's strings and public
-PMS logs; exact request headers/body are still partly unknown):
+What PMS does (**confirmed**):
 
-1. `GET https://servers.plex.tv/api/v2/devices/{machineId}/certificate/subject`
+1. `GET https://plex.tv/api/v2/devices/{machineId}/certificate/subject`
    with `Accept: application/xml` returns HTTP 200 and a `<subject>` element
-   whose `commonName` is `*.<hash>.plex.direct`. A JSON Accept returns 406
-   (code 1006). The assigned wildcard is not derived locally.
-2. `PUT https://servers.plex.tv/api/v2/devices/{machineId}/certificate/csr?reason=missing&invalidIn=0`
-   returns 204. When renewing, the call is `reason=expiring&invalidIn=<seconds, negative once expired>`.
-   The executable contains the `application/x-pem-file` content type and
-   Ether sends a PEM-encoded RSA-2048 CSR with subject and SAN set to the
-   returned wildcard.
-3. `GET …/certificate/download` returns 202 while the certificate is pending
-   and 200 once it is ready. PMS polls for about 90 s, then fails with 408.
-4. PMS stores the certificate as `Cache/cert-v2.p12`, alongside the
-   `CertificateUUID` and `CertificateVersion` prefs.
+   with two attributes:
+   - `commonName` = `*.<hash>.plex.direct` (assigned by plex.tv, never
+     derived locally), and
+   - `subject` = the **base64 of the DER X.509 Name** to put in the CSR.
+     PMS base64-decodes it and parses it as a `Name`; the live response for
+     the owner's device decodes to a single-RDN Name whose CN is the same
+     wildcard. A JSON Accept returns 406 (code 1006).
+2. Key generation: an RSA key of **2048 bits** by default; a NIST P-256 key
+   (named-curve encoding) only when the server's "strong ciphers"
+   preference is on. The CSR sets the subject decoded in step 1 **verbatim**
+   and the public key, **adds no extensions at all** (no SAN — the CA adds
+   the wildcard SAN itself), and is signed with **SHA-256**. It is written
+   with OpenSSL's `PEM_write_bio_X509_REQ_NEW`, so the PEM label is
+   `NEW CERTIFICATE REQUEST`, not `CERTIFICATE REQUEST`.
+3. `PUT https://plex.tv/api/v2/devices/{machineId}/certificate/csr?reason=<reason>&invalidIn=<seconds>`
+   uploads it. The body is **`multipart/form-data`** with exactly one part:
+   field name `file`, **no `filename` parameter**, part header
+   `Content-Type: application/x-pem-file`, part body the PEM CSR. PMS builds
+   it through libcurl's form API with a field carrying name/contents/type
+   and an empty filename, which libcurl emits without a filename parameter.
+   This is why the three obvious encodings all fail: a raw PEM body, an
+   `x-www-form-urlencoded` `csr=…` field and a JSON `{"csr":…}` body each
+   get `422 {"code":1008,"message":"Blank CSR"}`. A part with
+   `filename=""` is also rejected the same way (the service treats it as an
+   empty file upload). `reason` is `missing` on first acquisition and
+   `expiring` on renewal; `invalidIn` is the seconds of validity left
+   (0 when missing, negative once expired). Request-level identity is the
+   normal `X-Plex-*` header set plus `X-Plex-Token`; there are no other
+   query parameters. The live success returned **200**, not 204.
+4. `GET …/certificate/download` returns 202 while the certificate is pending
+   and 200 once it is ready; PMS polls for about 90 s and then gives up with
+   its own 408. The 200 body is a **PEM chain**, leaf first: PMS reads the
+   leaf with `PEM_read_bio_X509` and then pushes the remaining PEM
+   certificates onto a chain stack until the reader stops. The live download
+   for Ether returned 3 PEM certificates (leaf + 2 CA certificates).
+5. PMS then builds a PKCS#12 from leaf + key + chain (passphrase `plex`)
+   and stores it as `Cache/cert-v{version}.p12`, with `CertificateUUID` and
+   `CertificateVersion` prefs. Ether keeps PEM files instead; the PKCS#12
+   step is a PMS storage detail, not part of the protocol.
+
+The legacy endpoints in the same code are a fallback used only when a
+feature flag (read from `Flags.dat`) is off:
+`GET {plex.tv}/devices/{machineId}/certificate/authority` fetches the
+intermediate/CA certificate, and
+`GET {plex.tv}/devices/{machineId}/certificate?reason=<reason>` returns the
+leaf for servers whose key pair plex.tv still holds. The v2
+subject/csr/download triple is the current path and the only one Ether
+implements.
+
+Live result (owner's own claimed Ether install, 2026-10-19): the corrected
+request was accepted on the first attempt and plex.tv issued a 90-day
+wildcard `*.<hash>.plex.direct` certificate for the RSA-2048 key, issued by
+Let's Encrypt (so the chain is publicly trusted; the DigiCert-issued
+certificates described in older write-ups have been replaced). The
+certificate and key are installed at `<data dir>/certs/plexdirect.{crt,key}`
+and the failed-attempt `cert-state.json` was removed.
 
 The hash:
 
@@ -315,17 +384,17 @@ reset them. `CertManager` therefore:
 - never requests a certificate when the current one is a valid plex.direct
   certificate.
 
-Still unknown: whether the subject endpoint returns a hash for an Ether
-device, and whether Plex will issue it a certificate. Ether's
-`Client.RequestPlexDirectCertificate` makes the exact interoperability
-attempt: GET `/subject` with `Accept: application/xml`, using the server
-identity and server token; PUT `/csr?reason=missing&invalidIn=0` with an
-`application/x-pem-file` PEM CSR; then GET `/download` until ready (up to
-90 seconds). It accepts PEM, DER, or JSON-wrapped PEM and verifies the
-certificate's key and wildcard coverage. The live Ether install already owns
-its machine identifier, so do not run this flow from a copied branch instance.
-The owner-approved reference server was used only for read-only GETs; no
-CSR/registration was sent for it.
+`Client.RequestPlexDirectCertificate` implements the flow above: GET
+`/subject` with `Accept: application/xml` (keeping the DER subject), a
+fresh RSA-2048 key, a `NEW CERTIFICATE REQUEST` PEM CSR with that subject
+and no extensions, the single-part multipart upload, then GET `/download`
+until ready (up to 90 seconds). Downloads are still parsed liberally (PEM
+chain, DER, or JSON-wrapped PEM) and the issued certificate is checked
+against our key and the wildcard name. The CSR PUT is sent **once** per
+attempt (`Client.once`, not the retrying `do`) so a transport hiccup can
+never double-spend the per-device rate limit. The live Ether install owns
+its machine identifier, so never run this flow from a copied branch
+instance; the reference PMS identity was used only for read-only GETs.
 
 **If no certificate can be obtained**, Ether generates a self-signed
 ECDSA certificate covering `localhost`, the LAN IPs and
@@ -467,9 +536,17 @@ gdm.Start(ctx); defer gdm.Stop()
 - Owner-approved filtered PMS 1.43.4 DEBUG log at the private local
   thread-storage path supplied for this task (reviewed locally; no raw log,
   identifiers, tokens, addresses or hashes are copied into this repository).
-- Static string table from the owner-approved PMS executable at
-  `~/Documents/.ether-ref/pms-bin/Plex Media Server.exe`; the binary is not
-  copied into this repository.
+- Static analysis (radare2: string table, cross-references, and manual
+  decompilation of the certificate-acquisition and MyPlex registration
+  functions) of the owner-approved PMS 1.43.4 executable at
+  `~/Documents/.ether-ref/pms-bin/Plex Media Server.exe`. The binary is not
+  copied into this repository and no Plex code is reproduced: only protocol
+  facts (methods, paths, query parameters, header and body encodings, key
+  and CSR parameters) are recorded, for interoperability.
+- Live verification against plex.tv with the owner's own claimed Ether
+  machine identifier and server token (2026-10-19): one certificate
+  issuance and one successful `servers.xml` registration. No identifiers,
+  tokens, hashes or addresses are recorded here.
 - Older PMS debug log with MyPlex, devices PUT, servers.xml and access_tokens
   calls: https://gist.github.com/keithah/645bad865984f296053e054a630eb8ef
 - Plex forum, certificate flow and 429 rate limiting:
