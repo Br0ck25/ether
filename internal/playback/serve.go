@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"github.com/braedonsaunders/ether/internal/core"
 )
 
 var (
@@ -87,10 +85,10 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			srcpos = alignPacket(ng.tmap.OffsetAt(AlignTime(at, g.info.Duration, ng.info.Duration)))
 			g = ng
 			continue
-		case errors.Is(rerr, core.ErrArticleMissing):
-			g.articleMissing.Store(true)
+		case recoverableSourceFailure(rerr) && ctx.Err() == nil:
+			g.noteReadFailure(rerr)
 			at = g.tmap.TimeAt(srcpos)
-			ng, err := m.failover(ctx, s, g, at, "articles missing during direct play")
+			ng, err := m.failover(ctx, s, g, at, "source read failed during direct play")
 			if err != nil {
 				return err
 			}
@@ -240,8 +238,8 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 		if werr != nil {
 			return werr
 		}
-		if rerr != nil && errors.Is(rerr, core.ErrArticleMissing) {
-			g.articleMissing.Store(true)
+		if rerr != nil && recoverableSourceFailure(rerr) && r.Context().Err() == nil {
+			g.noteReadFailure(rerr)
 			if registered {
 				g.mu.Lock()
 				tm := g.tmap
@@ -270,7 +268,7 @@ func (m *Manager) backgroundFailover(s *session, g *generation, at time.Duration
 		defer m.wg.Done()
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.FailoverTimeout)
 		defer cancel()
-		if _, err := m.failover(ctx, s, g, at, "articles missing while transcoding"); err != nil {
+		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil {
 			m.log.Error("background failover failed", "session", s.id, "err", err)
 		}
 	}()

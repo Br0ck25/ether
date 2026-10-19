@@ -304,17 +304,9 @@ func (e *Engine) SetLayout(ctx context.Context, rules []core.LayoutRule) ([]core
 	if err != nil {
 		return nil, err
 	}
-	if err := e.store.setLayout(ctx, norm, e.now()); err != nil {
+	if _, err := e.SetHomeLayout(ctx, migrateLayout(norm)); err != nil {
 		return nil, err
 	}
-	if err := e.store.setHomeLayout(ctx, migrateLayout(norm)); err != nil {
-		return nil, err
-	}
-	e.mu.Lock()
-	e.layout = norm
-	e.homeLayout = migrateLayout(norm)
-	e.layoutVer++
-	e.mu.Unlock()
 	return e.Layout(ctx)
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -221,7 +222,7 @@ func TestAppleTVTuneReturnsAnalyzedMediaAndCanonicalUUID(t *testing.T) {
 				t.Fatalf("invalid UUID %q", uuid)
 			}
 			part := media["Part"].([]any)[0].(map[string]any)
-			if media["videoCodec"] != "h264" || part["decision"] != nil || len(part["Stream"].([]any)) < 2 {
+			if media["protocol"] != nil || part["key"] != nil || part["decision"] != nil || len(part["Stream"].([]any)) < 2 {
 				t.Fatal(body)
 			}
 		} else if !strings.Contains(body, `genuineMediaAnalysis="1"`) || !strings.Contains(body, `streamType="1"`) || !strings.Contains(body, `streamType="2"`) {
@@ -230,5 +231,34 @@ func TestAppleTVTuneReturnsAnalyzedMediaAndCanonicalUUID(t *testing.T) {
 	}
 	if len(service.Sessions(context.Background(), &ownerUser)) != 1 {
 		t.Fatal("abandoned native tune was not reclaimed")
+	}
+}
+
+func TestModernAppleTVTuneIncludesActiveSubscription(t *testing.T) {
+	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
+	f, _, channel := liveFixture(t, tc)
+	headers := map[string]string{"Accept": "application/json", "X-Plex-Product": "Plex for Apple TV", "X-Plex-Platform": "tvOS", "X-Plex-Version": "2026.20.0"}
+	tune := f.request(t, "POST", "/livetv/dvrs/1/channels/"+channel.ID+"/tune", headers)
+	if tune.Code != 200 || tune.Header().Get("X-Plex-Activity") == "" {
+		t.Fatalf("modern tune has no active bootstrap: %d %s", tune.Code, tune.Body.String())
+	}
+	mc := decodeJSON(t, tune)
+	analysis := mc["Metadata"].([]any)[0].(map[string]any)
+	id := analysis["Media"].([]any)[0].(map[string]any)["uuid"].(string)
+	sub := mc["MediaSubscription"].([]any)[0].(map[string]any)
+	op := sub["MediaGrabOperation"].(map[string]any)
+	if sub["key"] != id || op["mediaSubscriptionID"] != id || analysis["genuineMediaAnalysis"] != true {
+		t.Fatalf("analysis and subscription identify different live sessions: %s", tune.Body.String())
+	}
+	for _, path := range []string{"/media/subscriptions/" + id, "/media/grabbers/operations/" + id} {
+		if r := f.request(t, "GET", path, headers); r.Code != 200 {
+			t.Fatalf("bootstrap fetch %s: %d %s", path, r.Code, r.Body.String())
+		}
+	}
+	md := op["Metadata"].(map[string]any)
+	path := md["key"].(string)
+	start := f.request(t, "GET", "/video/:/transcode/universal/start.m3u8?path="+url.QueryEscape(path), headers)
+	if start.Code != http.StatusTemporaryRedirect || !strings.Contains(start.Header().Get("Location"), id+"/0/index.m3u8") {
+		t.Fatalf("live playback bootstrap did not reach media: %d %s", start.Code, start.Body.String())
 	}
 }

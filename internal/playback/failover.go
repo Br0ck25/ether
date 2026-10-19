@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"slices"
 	"time"
 
@@ -154,10 +156,16 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	cancel()
 	var mi core.MediaInfo
 	switch {
-	case g.articleMissing.Load():
+	case g.sourceFailure() != nil || g.articleMissing.Load():
+		failure := g.sourceFailure()
+		if failure == nil {
+			failure = errSourceBroken
+		}
 		m.dropGeneration(g)
-		m.markBad(res.Release.ID, "articles missing while probing")
-		return nil, errSourceBroken
+		if permanentSourceFailure(failure) {
+			m.markBad(res.Release.ID, "invalid source while probing")
+		}
+		return nil, failure
 	case perr != nil && ctx.Err() != nil:
 		m.dropGeneration(g)
 		return nil, ctx.Err()
@@ -248,7 +256,10 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 	}
 	log := m.log.With("session", s.id, "key", s.ident.key, "at", at)
 	log.Warn("failing over", "release", cur.res.Release.Name, "reason", reason)
-	m.markBad(cur.releaseID(), reason)
+	// A provider outage is not evidence that the release itself is invalid.
+	if failure := cur.sourceFailure(); permanentSourceFailure(failure) {
+		m.markBad(cur.releaseID(), reason)
+	}
 
 	s.mu.Lock()
 	s.tried = append(s.tried, cur.releaseID())
@@ -468,4 +479,15 @@ func (m *Manager) ResumeFor(ctx context.Context, user *core.User, key core.Ratin
 		return nil, nil
 	}
 	return rp, nil
+}
+
+func permanentSourceFailure(err error) bool {
+	return errors.Is(err, core.ErrArticleMissing) || errors.Is(err, core.ErrArticleCorrupt) || errors.Is(err, core.ErrReleaseRejected)
+}
+func recoverableSourceFailure(err error) bool {
+	if permanentSourceFailure(err) || errors.Is(err, core.ErrSourceUnavailable) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrNoProgress) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
 }

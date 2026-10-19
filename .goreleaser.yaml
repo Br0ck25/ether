@@ -36,7 +36,7 @@ builds:
       - -X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64={{ envOrDefault "ETHER_UPDATE_PUBLIC_KEY" "" }}
       # Bundled TMDB API key. The tmdb package exposes this variable name;
       # -X is silently ignored while the symbol does not exist.
-      - -X github.com/braedonsaunders/ether/internal/tmdb.BundledAPIKey={{ envOrDefault "ETHER_TMDB_KEY" "" }}
+      - -X github.com/braedonsaunders/ether/internal/tmdb.BundledKey={{ envOrDefault "ETHER_TMDB_KEY" "" }}
 
   # Tray for the platforms where fyne.io/systray is pure Go. The macOS
   # tray needs CGO and is built natively by packaging/macos/build-app.sh.

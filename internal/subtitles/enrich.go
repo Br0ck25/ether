@@ -28,4 +28,15 @@ func (s *Service) Enrich(ctx context.Context, title *core.Title, user *core.User
 		s.log.Debug("subtitle enrichment unavailable", "error", err)
 	}
 	info.Streams = append(info.Streams, sidecars...)
+	// A session is opening with known failover alternates: warm dialogue
+	// alignments now so a later mid-stream failover (which only allows a
+	// sub-second AlignTime) can land on the exact moment in the new cut.
+	for i, alt := range res.Alternates {
+		if i >= 3 {
+			break
+		}
+		s.TimelineAligner().Prewarm(core.AlignRequest{
+			Key: title.Key, From: res.Release, To: alt, FromDuration: info.Duration,
+		})
+	}
 }

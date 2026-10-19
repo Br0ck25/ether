@@ -42,8 +42,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	offset := msParam(q.Get("time"))
 	duration := msParam(q.Get("duration"))
 	user := pr.User
+	s.log.Debug("playback timeline", "user", user.ID, "client", pr.ClientID, "key", key, "state", state, "position", offset, "duration", duration)
 
-	if s.d.State != nil {
+	if s.d.State != nil && key.Kind() != core.KindExtra {
 		if err := s.d.State.Progress(ctx, user.ID, key, offset, duration, state); err != nil {
 			s.log.Warn("record progress", "key", key, "err", err)
 		}
@@ -171,7 +172,7 @@ func (s *Server) scrobble(w http.ResponseWriter, r *http.Request, watched bool) 
 	case core.KindEpisode:
 		t = core.TypeEpisode
 	}
-	s.notifyTimeline(key, t, "")
+	s.notifyTimeline(key, t, "", FromContext(r.Context()).User.ID)
 	if watched {
 		if hook := s.d.Hooks.OnScrobble; hook != nil {
 			u := *pr.User

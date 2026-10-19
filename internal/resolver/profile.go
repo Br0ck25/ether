@@ -83,6 +83,10 @@ func SelectProfile(q config.Quality, caps core.ClientCaps, user *core.User) core
 		prof.CustomFormatScores = copyScores
 	}
 
+	if caps.Download {
+		prof = downloadProfile(prof, caps)
+	}
+
 	// Clamp to client capabilities.
 	if caps.MaxHeight > 0 && (prof.MaxHeight == 0 || prof.MaxHeight > caps.MaxHeight) {
 		prof.MaxHeight = caps.MaxHeight
@@ -100,6 +104,39 @@ func SelectProfile(q config.Quality, caps core.ClientCaps, user *core.User) core
 			}
 		}
 		prof.PreferredCodecs = kept
+	}
+	return prof
+}
+
+// downloadProfile reshapes the selected profile for an offline download
+// (caps.Download): a compact, mobile-native file that stream-copies into
+// an MP4. No 4K/HDR/Dolby Vision (a copy cannot tone-map, and phones do
+// not need it), WEB-DL first, H.264 — or HEVC when the device decodes
+// it — and MP4-friendly AAC/AC3/EAC3 audio only (no TrueHD/DTS-HD,
+// which neither copies into a broadly playable MP4 nor helps a phone).
+// The size cap (~10 Mbps average) keeps a two-hour film near 9 GB worst
+// case and typical 1080p WEB-DLs well inside it. caps.MaxHeight and
+// caps.MaxBitrateKbps from the client's videoQuality/videoResolution
+// request still clamp on top of this in SelectProfile.
+func downloadProfile(prof core.QualityProfile, caps core.ClientCaps) core.QualityProfile {
+	prof.Name += "+download"
+	if prof.MaxHeight == 0 || prof.MaxHeight > 1080 {
+		prof.MaxHeight = 1080
+	}
+	if prof.MinHeight > prof.MaxHeight {
+		prof.MinHeight = prof.MaxHeight
+	}
+	prof.AllowHDR = false
+	prof.AllowDolbyVision = false
+	prof.PreferredSources = []core.Source{core.SourceWEBDL, core.SourceWEBRip, core.SourceBluRay, core.SourceHDTV}
+	if len(caps.VideoCodecs) == 0 || caps.SupportsVideo("hevc") {
+		prof.PreferredCodecs = []string{"h264", "hevc"}
+	} else {
+		prof.PreferredCodecs = []string{"h264"}
+	}
+	prof.PreferredAudio = []string{"aac", "eac3", "ac3"}
+	if prof.MaxSizeMBPerMin == 0 || prof.MaxSizeMBPerMin > 80 {
+		prof.MaxSizeMBPerMin = 80
 	}
 	return prof
 }

@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/artwork"
+	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -48,6 +49,7 @@ type TitleUpserter interface {
 // Service is the collection engine.
 type Service struct {
 	db       *sql.DB
+	mirror   *catalog.Mirror
 	cat      core.Catalog
 	log      *slog.Logger
 	now      func() time.Time
@@ -173,6 +175,7 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 	}
 	s.api = newTMDBAPI(s.opts.tmdb, s.now)
 	s.names = newNameResolver(db, s.api, s.now)
+	s.mirror = catalog.NewMirror(db, s.now)
 	s.idx = newIndex(db, s.now, s.opts.indexTTL)
 	ua := s.opts.userAgent
 	if ua == "" {
@@ -727,36 +730,8 @@ func (s *Service) DeleteSmart(ctx context.Context, key core.RatingKey) error {
 // Franchises (TMDB collections in the catalogue)
 
 func (s *Service) listFranchises(ctx context.Context, user *core.User) ([]core.Collection, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.collection_id,
-		       COALESCE(NULLIF(MAX(t.collection_name),''), MAX(cc.name), ''),
-		       COUNT(*),
-		       COALESCE(MAX(cc.poster),''), COALESCE(MAX(cc.backdrop),''),
-		       COALESCE(MAX(cc.summary),'')
-		FROM catalog_titles t
-		LEFT JOIN catalog_collections cc ON cc.tmdb_id = t.collection_id
-		WHERE t.type='movie' AND t.browsable=1 AND t.collection_id>0
-		GROUP BY t.collection_id HAVING COUNT(*)>=2
-		ORDER BY COUNT(*) DESC`)
+	out, err := s.mirror.Franchises(ctx)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []core.Collection
-	for rows.Next() {
-		var id int64
-		var name, poster, backdrop, summary string
-		var n int
-		if err := rows.Scan(&id, &name, &n, &poster, &backdrop, &summary); err != nil {
-			return nil, err
-		}
-		if name == "" {
-			name = fmt.Sprintf("Collection %d", id)
-		}
-		out = append(out, core.Collection{Key: core.CollectionKey(id), Title: name, Summary: summary,
-			Kind: "franchise", Type: core.TypeMovie, PosterPath: poster, BackdropPath: backdrop, ChildCount: n})
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	if user != nil && user.MaxContentRating != "" {
@@ -793,9 +768,9 @@ func (s *Service) getFranchise(ctx context.Context, user *core.User, key core.Ra
 	}
 	allowed := filterTitlesByRating(items, user)
 	c := &core.Collection{Key: key, Title: name, Kind: "franchise", Type: core.TypeMovie, ChildCount: len(allowed)}
-	var poster, backdrop, summary string
-	_ = s.db.QueryRowContext(ctx, `SELECT poster, backdrop, summary FROM catalog_collections WHERE tmdb_id=?`, key.TMDB()).Scan(&poster, &backdrop, &summary)
-	c.PosterPath, c.BackdropPath, c.Summary = poster, backdrop, summary
+	if art, err := s.mirror.CollectionArt(ctx, key.TMDB()); err == nil {
+		c.PosterPath, c.BackdropPath, c.Summary = art.PosterPath, art.BackdropPath, art.Summary
+	}
 	if c.PosterPath == "" && len(items) > 0 {
 		c.PosterPath = items[0].PosterPath
 	}

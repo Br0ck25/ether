@@ -31,7 +31,9 @@ type Config struct {
 	LLM           LLM           `json:"llm"`
 	Updates       Updates       `json:"updates"`
 	Spike         Spike         `json:"spike"`
+	Downloads     Downloads     `json:"downloads"`
 	Markers       Markers       `json:"markers"`
+	Extras        Extras        `json:"extras"`
 	SetupComplete bool          `json:"setupComplete"`
 }
 
@@ -178,6 +180,32 @@ type Transcode struct {
 	VBVBufferSeconds   int      `json:"vbvBufferSeconds"`   // VBV buffer depth in seconds of maxrate (default 8)
 	SpikeGovernor      bool     `json:"spikeGovernor"`      // clamp VBR spikes in copy streams to measured goodput
 	SpikeMarginPercent int      `json:"spikeMarginPercent"` // spike threshold over goodput, percent (default 125)
+}
+
+// Downloads controls Plex offline downloads (allowSync + the Download
+// Queue API). A download resolves a compact mobile-native release and
+// remuxes it (stream copy) to a temporary MP4; nothing is stored
+// permanently. Enabled by default for the owner: it is bounded by the
+// disk budget, the concurrency caps and the normal stream limits, and
+// the owner can turn it off entirely here.
+type Downloads struct {
+	Enabled bool `json:"enabled"`
+	// AllowFriends lets shared (non-owner) users download. Off by
+	// default, matching PMS sharing where sync is a separate grant; an
+	// AccessPolicy AllowDownloads decision overrides this per user.
+	AllowFriends bool `json:"allowFriends"`
+	// MaxConcurrent bounds simultaneous remuxes server-wide (default 2),
+	// MaxConcurrentPerUser per viewer (default 1).
+	MaxConcurrent        int `json:"maxConcurrent"`
+	MaxConcurrentPerUser int `json:"maxConcurrentPerUser"`
+	// DiskBudgetBytes bounds the temporary remuxed files on disk at any
+	// time (default 20 GiB). 0 uses the default.
+	DiskBudgetBytes int64 `json:"diskBudgetBytes"`
+	// Expiry is how long a finished download stays fetchable before its
+	// temp file is deleted (default 24h).
+	Expiry Duration `json:"expiry"`
+	// MaxHeight caps the download profile's resolution (default 1080).
+	MaxHeight int `json:"maxHeight"`
 }
 
 type Trakt struct {

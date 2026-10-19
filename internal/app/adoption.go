@@ -22,7 +22,7 @@ func (a *App) buildAdoption() {
 	}
 	a.localmedia = localmedia.New(a.db, a.catalog, probe)
 	a.backups = backup.New(a.db, a.cfg.Path(), filepath.Join(a.opts.DataDir, "backups"), 7)
-	a.migration = migrate.New(a.db, a.catalog)
+	a.migration = migrate.New(a.db, a.catalog, migrate.Options{State: a.state})
 }
 
 func (a *App) buildInvites() {

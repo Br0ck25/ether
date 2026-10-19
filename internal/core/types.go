@@ -95,12 +95,15 @@ func (t *Title) IsReleased(now time.Time) bool {
 }
 
 var (
-	ErrNotFound        = errors.New("not found")
-	ErrNotAvailable    = errors.New("not available yet") // no acceptable release exists
-	ErrArticleMissing  = errors.New("article missing on all providers")
-	ErrBudgetExhausted = errors.New("indexer daily budget exhausted")
-	ErrStreamLimit     = errors.New("stream limit reached")
-	ErrUnauthorized    = errors.New("unauthorized")
+	ErrNotFound          = errors.New("not found")
+	ErrNotAvailable      = errors.New("not available yet") // no acceptable release exists
+	ErrArticleMissing    = errors.New("article missing on all providers")
+	ErrArticleCorrupt    = errors.New("corrupt article or media data")
+	ErrReleaseRejected   = errors.New("release cannot be streamed")
+	ErrSourceUnavailable = errors.New("media source temporarily unavailable")
+	ErrBudgetExhausted   = errors.New("indexer daily budget exhausted")
+	ErrStreamLimit       = errors.New("stream limit reached")
+	ErrUnauthorized      = errors.New("unauthorized")
 )
 
 // User is a Plex account with access to this server: the owner or a friend
@@ -139,6 +142,7 @@ type ClientCaps struct {
 	VideoCodecs    []string            `json:"videoCodecs"`              // h264, hevc, av1, vp9
 	AudioCodecs    []string            `json:"audioCodecs"`              // aac, ac3, eac3, truehd, dts, opus, flac
 	Containers     []string            `json:"containers"`               // mp4, mkv, mpegts
+	HLSContainers  []string            `json:"hlsContainers,omitempty"`  // explicit segmented output targets; distinct from direct-play containers
 	MaxBitrateKbps int                 `json:"maxBitrateKbps"`           // 0 = unlimited
 	SubtitleCodecs []string            `json:"subtitleCodecs,omitempty"` // native image/text subtitle rendering
 	DVProfiles     []int               `json:"dvProfiles,omitempty"`     // explicit Dolby Vision profiles; empty uses product defaults

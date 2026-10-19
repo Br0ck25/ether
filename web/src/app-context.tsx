@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { api } from "./lib/api";
 import { computeHealth, worstLevel, type HealthItem, type HealthLevel } from "./lib/health";
 import type { Bootstrap, DashboardData } from "./lib/types";
@@ -20,7 +29,15 @@ const Ctx = createContext<AppState | null>(null);
 const SLOW_MS = 30_000;
 const FAST_MS = 5_000;
 
-export function AppProvider({ boot, reloadBoot, children }: { boot: Bootstrap; reloadBoot: () => Promise<void>; children: ReactNode }) {
+export function AppProvider({
+  boot,
+  reloadBoot,
+  children,
+}: {
+  boot: Bootstrap;
+  reloadBoot: () => Promise<void>;
+  children: ReactNode;
+}) {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [dashboardError, setDashboardError] = useState<unknown>(null);
   const [live, setLive] = useState(0);
@@ -39,14 +56,21 @@ export function AppProvider({ boot, reloadBoot, children }: { boot: Bootstrap; r
     }
   }, []);
 
-  useEffect(() => { void refreshDashboard(); }, [refreshDashboard]);
+  useEffect(() => {
+    void refreshDashboard();
+  }, [refreshDashboard]);
   useEffect(() => {
     const ms = live > 0 ? FAST_MS : SLOW_MS;
-    const t = window.setInterval(() => { if (document.visibilityState !== "hidden") void refreshDashboard(); }, ms);
+    const t = window.setInterval(() => {
+      if (document.visibilityState !== "hidden") void refreshDashboard();
+    }, ms);
     return () => window.clearInterval(t);
   }, [live, refreshDashboard]);
 
-  const setLivePolling = useCallback((on: boolean) => setLive((n) => Math.max(0, n + (on ? 1 : -1))), []);
+  const setLivePolling = useCallback(
+    (on: boolean) => setLive((n) => Math.max(0, n + (on ? 1 : -1))),
+    [],
+  );
 
   const health = useMemo(() => computeHealth(dashboard?.sections), [dashboard]);
   const overall = useMemo<HealthLevel>(() => {
@@ -55,9 +79,28 @@ export function AppProvider({ boot, reloadBoot, children }: { boot: Bootstrap; r
     return worstLevel(health.map((h) => h.level));
   }, [health, dashboard, dashboardError]);
 
-  const value = useMemo<AppState>(() => ({
-    boot, reloadBoot, dashboard, dashboardError, refreshDashboard, setLivePolling, health, overall,
-  }), [boot, reloadBoot, dashboard, dashboardError, refreshDashboard, setLivePolling, health, overall]);
+  const value = useMemo<AppState>(
+    () => ({
+      boot,
+      reloadBoot,
+      dashboard,
+      dashboardError,
+      refreshDashboard,
+      setLivePolling,
+      health,
+      overall,
+    }),
+    [
+      boot,
+      reloadBoot,
+      dashboard,
+      dashboardError,
+      refreshDashboard,
+      setLivePolling,
+      health,
+      overall,
+    ],
+  );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

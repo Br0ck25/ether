@@ -10,7 +10,15 @@ import { initials } from "../lib/format";
  * token is in use those are fetched with the header and shown from a blob.
  * Everything else (TMDB CDN, plex.tv avatars) is a plain lazy <img>.
  */
-export function Artwork({ src, alt, title, className, imgClassName, eager, icon }: {
+export function Artwork({
+  src,
+  alt,
+  title,
+  className,
+  imgClassName,
+  eager,
+  icon,
+}: {
   src?: string | null;
   alt: string;
   /** Text for the placeholder when there's no image (falls back to alt). */
@@ -35,26 +43,45 @@ export function Artwork({ src, alt, title, className, imgClassName, eager, icon 
     const ctl = new AbortController();
     const load = () => {
       apiBlob(src, ctl.signal)
-        .then((b) => { url = URL.createObjectURL(b); setBlobUrl(url); })
-        .catch(() => { if (!ctl.signal.aborted) setFailedSrc(src); });
+        .then((b) => {
+          url = URL.createObjectURL(b);
+          setBlobUrl(url);
+        })
+        .catch(() => {
+          if (!ctl.signal.aborted) setFailedSrc(src);
+        });
     };
     const el = holder.current;
     let io: IntersectionObserver | null = null;
     if (eager || !el || typeof IntersectionObserver === "undefined") load();
     else {
-      io = new IntersectionObserver((entries) => {
-        if (entries.some((e) => e.isIntersecting)) { io?.disconnect(); load(); }
-      }, { rootMargin: "300px" });
+      io = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            io?.disconnect();
+            load();
+          }
+        },
+        { rootMargin: "300px" },
+      );
       io.observe(el);
     }
-    return () => { ctl.abort(); io?.disconnect(); if (url) URL.revokeObjectURL(url); setBlobUrl(null); };
+    return () => {
+      ctl.abort();
+      io?.disconnect();
+      if (url) URL.revokeObjectURL(url);
+      setBlobUrl(null);
+    };
   }, [needsFetch, src, eager]);
 
-  const shown = needsFetch ? blobUrl : src ?? null;
+  const shown = needsFetch ? blobUrl : (src ?? null);
   const failed = Boolean(src) && failedSrc === src;
-  const imgRef = useCallback((img: HTMLImageElement | null) => {
-    if (img && shown && img.complete && img.naturalWidth > 0) setLoadedSrc(shown);
-  }, [shown]);
+  const imgRef = useCallback(
+    (img: HTMLImageElement | null) => {
+      if (img && shown && img.complete && img.naturalWidth > 0) setLoadedSrc(shown);
+    },
+    [shown],
+  );
 
   return (
     <div ref={holder} className={cn("relative overflow-hidden bg-bg-subtle", className)}>
@@ -73,10 +100,15 @@ export function Artwork({ src, alt, title, className, imgClassName, eager, icon 
         />
       ) : null}
       {!shown || failed ? (
-        <div className="absolute inset-0 grid place-items-center p-2 text-center" aria-hidden={Boolean(alt) || undefined}>
+        <div
+          className="absolute inset-0 grid place-items-center p-2 text-center"
+          aria-hidden={Boolean(alt) || undefined}
+        >
           <div className="flex flex-col items-center gap-1.5 text-fg-subtle">
             {icon ?? <Film size={18} />}
-            <span className="line-clamp-3 text-xs font-medium text-fg-muted">{title ?? (alt ? initials(alt) : "")}</span>
+            <span className="line-clamp-3 text-xs font-medium text-fg-muted">
+              {title ?? (alt ? initials(alt) : "")}
+            </span>
           </div>
         </div>
       ) : null}

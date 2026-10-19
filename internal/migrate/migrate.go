@@ -11,10 +11,10 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	_ "github.com/braedonsaunders/ether/internal/auth"
-	_ "github.com/braedonsaunders/ether/internal/collections"
+	"github.com/braedonsaunders/ether/internal/auth"
+	"github.com/braedonsaunders/ether/internal/collections"
 	"github.com/braedonsaunders/ether/internal/core"
-	_ "github.com/braedonsaunders/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/state"
 	"github.com/braedonsaunders/ether/internal/store"
 	"io"
 	"net/http"
@@ -32,10 +32,35 @@ type Service struct {
 	db      *sql.DB
 	catalog core.Catalog
 	client  *http.Client
+	state   *state.State
+	users   interface {
+		User(context.Context, int64) (*core.User, error)
+	}
 }
 
-func New(db *sql.DB, catalog core.Catalog) *Service {
-	return &Service{db: db, catalog: catalog, client: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+type Options struct {
+	State *state.State
+	Users interface {
+		User(context.Context, int64) (*core.User, error)
+	}
+}
+
+func (s *Service) viewer(ctx context.Context, id int64) (*core.User, error) {
+	if s.users != nil {
+		return s.users.User(ctx, id)
+	}
+	return auth.StoredIdentity(ctx, s.db, id)
+}
+
+func New(db *sql.DB, catalog core.Catalog, opts ...Options) *Service {
+	o := Options{}
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	if o.State == nil {
+		o.State = state.New(db, state.Options{})
+	}
+	return &Service{db: db, catalog: catalog, state: o.State, users: o.Users, client: &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 type Viewer struct {
@@ -265,11 +290,7 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 		if v.LocalUserID <= 0 {
 			return p, errors.New("viewer localUserId required")
 		}
-		var exists int
-		if e = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM auth_users WHERE id=?`, v.LocalUserID).Scan(&exists); e != nil {
-			return p, e
-		}
-		if exists == 0 {
+		if _, err := s.viewer(ctx, v.LocalUserID); err != nil {
 			return p, errors.New("viewer does not exist locally; sync Plex sharing first")
 		}
 		token := v.Token
@@ -420,139 +441,75 @@ func (s *Service) savePlan(ctx context.Context, p Plan) (Plan, error) {
 }
 func (s *Service) Import(ctx context.Context, id string) (Plan, error) {
 	var p Plan
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return p, e
-	}
-	defer tx.Rollback()
-	var doc string
-	var imported bool
-	if e = tx.QueryRowContext(ctx, `SELECT document,imported FROM migrate_plans WHERE id=?`, id).Scan(&doc, &imported); e != nil {
-		return p, e
-	}
-	if e = json.Unmarshal([]byte(doc), &p); e != nil {
-		return p, e
-	}
-	if imported {
-		p.Imported = true
-		return p, nil
-	}
-	now := time.Now().UnixNano()
-	initialUpdated := map[string]int64{}
-	for _, it := range p.Items {
-		if it.Key <= 0 || it.Viewer <= 0 || it.Views < 0 || it.Offset < 0 || it.Rating < 0 || it.Rating > 10 {
-			return p, errors.New("invalid imported item")
+	err := s.state.ImportTransaction(ctx, func(tx *sql.Tx) (state.ImportBatch, error) {
+		var batch state.ImportBatch
+		var doc string
+		var imported bool
+		if err := tx.QueryRowContext(ctx, `SELECT document,imported FROM migrate_plans WHERE id=?`, id).Scan(&doc, &imported); err != nil {
+			return batch, err
 		}
-		if strings.HasPrefix(p.Source, "csv:") && strings.HasSuffix(p.Source, ":watchlist") {
-			if _, e = tx.ExecContext(ctx, `INSERT OR IGNORE INTO migrate_watchlist(viewer,key) VALUES(?,?)`, it.Viewer, it.Key); e != nil {
-				return p, e
+		if err := json.Unmarshal([]byte(doc), &p); err != nil {
+			return batch, err
+		}
+		if imported {
+			p.Imported = true
+			return batch, nil
+		}
+		watchlistOnly := strings.HasPrefix(p.Source, "csv:") && strings.HasSuffix(p.Source, ":watchlist")
+		ratingsOnly := strings.HasPrefix(p.Source, "csv:") && strings.HasSuffix(p.Source, ":ratings")
+		for _, it := range p.Items {
+			if watchlistOnly || it.Watchlist {
+				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO migrate_watchlist(viewer,key) VALUES(?,?)`, it.Viewer, it.Key); err != nil {
+					return batch, err
+				}
 			}
-			continue
-		}
-		if strings.HasPrefix(p.Source, "csv:") && strings.HasSuffix(p.Source, ":ratings") {
-			if _, e = tx.ExecContext(ctx, `INSERT INTO state_watch(user_id,rating_key,user_rating,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id,rating_key) DO UPDATE SET user_rating=excluded.user_rating,updated_at=excluded.updated_at`, it.Viewer, it.Key, it.Rating, now); e != nil {
-				return p, e
-			}
-			continue
-		}
-		if it.Views > 0 {
-			_, e = tx.ExecContext(ctx, `INSERT INTO state_history(user_id,rating_key,viewed_at,completed) SELECT ?,?,?,1 WHERE NOT EXISTS(SELECT 1 FROM state_history WHERE user_id=? AND rating_key=? AND viewed_at=?)`, it.Viewer, it.Key, it.ViewedAt*int64(time.Second), it.Viewer, it.Key, it.ViewedAt*int64(time.Second))
-			if e != nil {
-				return p, e
+			if !watchlistOnly {
+				r := stateImportRecord(it)
+				r.RatingsOnly = ratingsOnly
+				batch.Records = append(batch.Records, r)
 			}
 		}
-		ident := fmt.Sprintf("%d:%d", it.Viewer, it.Key)
-		oldUpdated, seen := initialUpdated[ident]
-		if !seen {
-			if qe := tx.QueryRowContext(ctx, `SELECT updated_at FROM state_watch WHERE user_id=? AND rating_key=?`, it.Viewer, it.Key).Scan(&oldUpdated); qe != nil && !errors.Is(qe, sql.ErrNoRows) {
-				return p, qe
-			}
-			initialUpdated[ident] = oldUpdated
+		for _, it := range p.History {
+			batch.History = append(batch.History, stateImportRecord(it))
 		}
-		if oldUpdated > it.ViewedAt*int64(time.Second) && oldUpdated > 0 && it.ViewedAt > 0 {
-			continue
-		}
-		_, e = tx.ExecContext(ctx, `INSERT INTO state_watch(user_id,rating_key,view_offset_ns,duration_ns,view_count,counted,last_viewed_at,user_rating,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,rating_key) DO UPDATE SET view_offset_ns=excluded.view_offset_ns,duration_ns=excluded.duration_ns,view_count=MAX(state_watch.view_count,excluded.view_count),last_viewed_at=MAX(state_watch.last_viewed_at,excluded.last_viewed_at),user_rating=CASE WHEN excluded.user_rating>0 THEN excluded.user_rating ELSE state_watch.user_rating END,updated_at=excluded.updated_at`, it.Viewer, it.Key, it.Offset*int64(time.Millisecond), it.Duration*int64(time.Millisecond), it.Views, it.Views > 0, it.ViewedAt*int64(time.Second), it.Rating, now)
-		if e != nil {
-			return p, e
-		}
-
-		if it.Watchlist {
-			if _, e = tx.ExecContext(ctx, `INSERT OR IGNORE INTO migrate_watchlist(viewer,key) VALUES(?,?)`, it.Viewer, it.Key); e != nil {
-				return p, e
+		for _, l := range p.Lists {
+			if err := importList(ctx, tx, p.Source, l, time.Now().UnixNano()); err != nil {
+				return batch, err
 			}
 		}
-	}
-	for _, h := range p.History {
-		if h.Key <= 0 || h.Viewer <= 0 || h.ViewedAt <= 0 {
-			return p, errors.New("invalid history event")
-		}
-		if _, e = tx.ExecContext(ctx, `INSERT INTO state_history(user_id,rating_key,viewed_at,completed) SELECT ?,?,?,1 WHERE NOT EXISTS(SELECT 1 FROM state_history WHERE user_id=? AND rating_key=? AND viewed_at=?)`, h.Viewer, h.Key, h.ViewedAt*int64(time.Second), h.Viewer, h.Key, h.ViewedAt*int64(time.Second)); e != nil {
-			return p, e
-		}
-	}
-	for _, l := range p.Lists {
-		if e = importList(ctx, tx, p.Source, l, now); e != nil {
-			return p, e
-		}
-	}
-	if _, e = tx.ExecContext(ctx, `UPDATE migrate_plans SET imported=1 WHERE id=?`, id); e != nil {
-		return p, e
-	}
-	e = tx.Commit()
-	p.Imported = e == nil
-	return p, e
+		_, err := tx.ExecContext(ctx, `UPDATE migrate_plans SET imported=1 WHERE id=?`, id)
+		return batch, err
+	})
+	p.Imported = err == nil
+	return p, err
 }
+
+func stateImportRecord(it Item) state.ImportRecord {
+	r := state.ImportRecord{UserID: it.Viewer, Key: it.Key, Views: it.Views, Offset: time.Duration(it.Offset) * time.Millisecond, Duration: time.Duration(it.Duration) * time.Millisecond, Rating: it.Rating}
+	if it.ViewedAt > 0 {
+		r.ViewedAt = time.Unix(it.ViewedAt, 0)
+	}
+	return r
+}
+
 func importList(ctx context.Context, tx *sql.Tx, source string, l List, now int64) error {
 	var id int64
-	e := tx.QueryRowContext(ctx, `SELECT local_id FROM migrate_objects WHERE source=? AND viewer=? AND kind=? AND external=?`, source, l.Viewer, l.Kind, l.External).Scan(&id)
-	if e != nil && !errors.Is(e, sql.ErrNoRows) {
-		return e
+	err := tx.QueryRowContext(ctx, `SELECT local_id FROM migrate_objects WHERE source=? AND viewer=? AND kind=? AND external=?`, source, l.Viewer, l.Kind, l.External).Scan(&id)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
-	if l.Kind == "playlist" {
-		if id == 0 {
-			res, e := tx.ExecContext(ctx, `INSERT INTO state_playlists(user_id,title,updated_at) VALUES(?,?,?)`, l.Viewer, l.Name, now)
-			if e != nil {
-				return e
-			}
-			id, e = res.LastInsertId()
-			if e != nil {
-				return e
-			}
-		} else {
-			if _, e = tx.ExecContext(ctx, `UPDATE state_playlists SET title=?,updated_at=? WHERE id=?`, l.Name, now, id); e != nil {
-				return e
-			}
-		}
-		if _, e = tx.ExecContext(ctx, `DELETE FROM state_playlist_items WHERE playlist_id=?`, id); e != nil {
-			return e
-		}
-		for i, k := range l.Keys {
-			if _, e = tx.ExecContext(ctx, `INSERT INTO state_playlist_items(playlist_id,position,rating_key) VALUES(?,?,?)`, id, i, k); e != nil {
-				return e
-			}
-		}
-	} else {
-		if id == 0 {
-			if e = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0)+1 FROM collections_specs WHERE id<900000`).Scan(&id); e != nil {
-				return e
-			}
-		}
-		ks := []string{}
-		for _, k := range l.Keys {
-			ks = append(ks, k.String())
-		}
-		sp := core.CollectionSpec{Name: l.Name, MediaType: "mixed", Sources: []core.CollectionSource{{Kind: "titles", Keys: ks}}, Match: "all", Sort: "source", Refresh: "live", Enabled: true, OwnerUserID: l.Viewer, Targets: core.CollectionTargets{CollectionsTab: true, Users: core.UserTargets{IDs: []int64{l.Viewer}}}}
-		raw, e := json.Marshal(sp)
-		if e != nil {
-			return e
-		}
-		_, e = tx.ExecContext(ctx, `INSERT INTO collections_specs(id,owner_user_id,spec_json,enabled,created_at,updated_at) VALUES(?,?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET spec_json=excluded.spec_json,updated_at=excluded.updated_at`, id, l.Viewer, string(raw), now, now)
-		if e != nil {
-			return e
-		}
+	switch l.Kind {
+	case "playlist":
+		id, err = state.ImportPlaylistTx(ctx, tx, id, l.Viewer, l.Name, l.Keys, now)
+	case "collection":
+		id, err = collections.ImportTitlesTx(ctx, tx, id, l.Viewer, l.Name, l.Keys, now)
+	default:
+		return errors.New("invalid imported list kind")
 	}
-	_, e = tx.ExecContext(ctx, `INSERT INTO migrate_objects(source,viewer,kind,external,local_id) VALUES(?,?,?,?,?) ON CONFLICT(source,viewer,kind,external) DO UPDATE SET local_id=excluded.local_id`, source, l.Viewer, l.Kind, l.External, id)
-	return e
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO migrate_objects(source,viewer,kind,external,local_id) VALUES(?,?,?,?,?) ON CONFLICT(source,viewer,kind,external) DO UPDATE SET local_id=excluded.local_id`, source, l.Viewer, l.Kind, l.External, id)
+	return err
 }
 func fingerprint(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }

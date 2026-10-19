@@ -1,5 +1,108 @@
 import { Button, Input, toast } from "@braedonsaunders/appkit-ui";
 import { useState } from "react";
 import { apiFetch, errorMessage } from "../lib/api";
-type Result={indexers:{id:string;name:string;dailyLimit:number;dailyGrabs:number}[];imported:boolean};
-export function ProwlarrImport(){const[url,setURL]=useState("");const[key,setKey]=useState("");const[limit,setLimit]=useState(100);const[grabs,setGrabs]=useState(30);const[result,setResult]=useState<Result|null>(null);const[busy,setBusy]=useState(false);async function run(commit:boolean){setBusy(true);try{const r=await apiFetch<Result>("/playback/prowlarr",{method:"POST",body:JSON.stringify({config:{url,apiKey:key,dailyLimit:limit,dailyGrabs:grabs,priority:0},import:commit})});setResult(r);if(commit){setKey("");toast.success("Prowlarr indexers imported")}}catch(e){toast.error(errorMessage(e))}finally{setBusy(false)}}return <section className="space-y-4 rounded-lg border border-border p-5"><h2 className="text-lg font-medium">Prowlarr indexers</h2><p className="text-sm text-fg-muted">Connect your existing Usenet indexers. Ether applies its own search and download budgets.</p><label className="block text-sm">Prowlarr URL<Input type="url" value={url} onChange={e=>{setURL(e.target.value);setResult(null)}}/></label><label className="block text-sm">API key<Input type="password" autoComplete="off" value={key} onChange={e=>{setKey(e.target.value);setResult(null)}}/></label><div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">Daily API limit per indexer<Input type="number" min={0} value={limit} onChange={e=>setLimit(Number(e.target.value))}/></label><label className="text-sm">Daily grabs per indexer<Input type="number" min={0} value={grabs} onChange={e=>setGrabs(Number(e.target.value))}/></label></div><div className="flex flex-wrap gap-2"><Button variant="outline" disabled={busy||!url||!key} onClick={()=>void run(false)}>Preview indexers</Button><Button disabled={busy||!result||result.imported||!key} onClick={()=>void run(true)}>Import indexers</Button></div>{result&&<ul className="space-y-2 text-sm">{result.indexers.map(i=><li key={i.id}>{i.name} · {i.dailyLimit||"unlimited"} API hits · {i.dailyGrabs||"unlimited"} grabs</li>)}</ul>}</section>}
+type Result = {
+  indexers: { id: string; name: string; dailyLimit: number; dailyGrabs: number }[];
+  imported: boolean;
+};
+export function ProwlarrImport() {
+  const [url, setURL] = useState("");
+  const [key, setKey] = useState("");
+  const [limit, setLimit] = useState(100);
+  const [grabs, setGrabs] = useState(30);
+  const [result, setResult] = useState<Result | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function run(commit: boolean) {
+    setBusy(true);
+    try {
+      const r = await apiFetch<Result>("/playback/prowlarr", {
+        method: "POST",
+        body: JSON.stringify({
+          config: { url, apiKey: key, dailyLimit: limit, dailyGrabs: grabs, priority: 0 },
+          import: commit,
+        }),
+      });
+      setResult(r);
+      if (commit) {
+        setKey("");
+        toast.success("Prowlarr indexers imported");
+      }
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="space-y-4 rounded-lg border border-border p-5">
+      <h2 className="text-lg font-medium">Prowlarr indexers</h2>
+      <p className="text-sm text-fg-muted">
+        Connect your existing Usenet indexers. Ether applies its own search and download budgets.
+      </p>
+      <label className="block text-sm">
+        Prowlarr URL
+        <Input
+          type="url"
+          value={url}
+          onChange={(e) => {
+            setURL(e.target.value);
+            setResult(null);
+          }}
+        />
+      </label>
+      <label className="block text-sm">
+        API key
+        <Input
+          type="password"
+          autoComplete="off"
+          value={key}
+          onChange={(e) => {
+            setKey(e.target.value);
+            setResult(null);
+          }}
+        />
+      </label>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="text-sm">
+          Daily API limit per indexer
+          <Input
+            type="number"
+            min={0}
+            value={limit}
+            onChange={(e) => setLimit(Number(e.target.value))}
+          />
+        </label>
+        <label className="text-sm">
+          Daily grabs per indexer
+          <Input
+            type="number"
+            min={0}
+            value={grabs}
+            onChange={(e) => setGrabs(Number(e.target.value))}
+          />
+        </label>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" disabled={busy || !url || !key} onClick={() => void run(false)}>
+          Preview indexers
+        </Button>
+        <Button
+          disabled={busy || !result || result.imported || !key}
+          onClick={() => void run(true)}
+        >
+          Import indexers
+        </Button>
+      </div>
+      {result && (
+        <ul className="space-y-2 text-sm">
+          {result.indexers.map((i) => (
+            <li key={i.id}>
+              {i.name} · {i.dailyLimit || "unlimited"} API hits · {i.dailyGrabs || "unlimited"}{" "}
+              grabs
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}

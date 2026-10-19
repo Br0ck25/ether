@@ -132,7 +132,7 @@ func (s *Server) sectionParam(w http.ResponseWriter, r *http.Request) (Section, 
 }
 
 func (s *Server) handleLibraryRoot(w http.ResponseWriter, r *http.Request) {
-	mc := &model.MediaContainer{AllowSync: model.Ptr(false), Identifier: model.LibraryIdentifier, MediaTagPrefix: model.MediaTagPrefix, MediaTagVersion: model.MediaTagVersion, Title1: "Plex Library"}
+	mc := &model.MediaContainer{AllowSync: model.Ptr(s.downloadsAllowed(FromContext(r.Context()).User)), Identifier: model.LibraryIdentifier, MediaTagPrefix: model.MediaTagPrefix, MediaTagVersion: model.MediaTagVersion, Title1: "Plex Library"}
 	for _, d := range []struct{ key, title string }{{"sections", "Library Sections"}, {"recentlyAdded", "Recently Added Content"}, {"onDeck", "On Deck Content"}} {
 		mc.Directory = append(mc.Directory, model.Directory{Key: d.key, Title: d.title})
 	}
@@ -142,12 +142,12 @@ func (s *Server) handleLibraryRoot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSections(w http.ResponseWriter, r *http.Request) {
 	u := FromContext(r.Context()).User
-	mc := &model.MediaContainer{AllowSync: model.Ptr(false), Title1: "Plex Library"}
+	mc := &model.MediaContainer{AllowSync: model.Ptr(s.downloadsAllowed(u)), Title1: "Plex Library"}
 	now := s.now().Unix()
 	for _, sec := range s.userSections(u) {
 		agent, scanner := agentFor(sec.Type)
 		mc.Directory = append(mc.Directory, model.Directory{
-			AllowSync:        model.Ptr(false),
+			AllowSync:        model.Ptr(s.downloadsAllowed(u)),
 			Filters:          model.Ptr(true),
 			Refreshing:       model.Ptr(false),
 			Key:              strconv.Itoa(sec.ID),
@@ -827,7 +827,7 @@ func (s *Server) handleOnDeck(w http.ResponseWriter, r *http.Request) {
 func (s *Server) onDeckItems(ctx context.Context, pr *Request, items []core.Title, state map[core.RatingKey]core.WatchStatus) []model.Metadata {
 	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, detailEpisodes: true, state: state})
 	for i := range md {
-		md[i].AllowSync = model.Ptr(false)
+		md[i].AllowSync = model.Ptr(s.downloadsAllowed(pr.User) && isPlayable(items[i].Type))
 		if sec, ok := s.sectionFor(items[i].Type); ok {
 			md[i].LibrarySectionUUID = sec.UUID
 		}

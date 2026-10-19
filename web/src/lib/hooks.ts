@@ -13,7 +13,10 @@ export interface AsyncState<T> {
  * Load data on mount (and whenever `deps` change). Stale responses from a
  * superseded run are dropped so fast dependency changes never flash old data.
  */
-export function useAsync<T>(loader: (signal: AbortSignal) => Promise<T>, deps: unknown[]): AsyncState<T> {
+export function useAsync<T>(
+  loader: (signal: AbortSignal) => Promise<T>,
+  deps: unknown[],
+): AsyncState<T> {
   const [data, setDataState] = useState<T | undefined>(undefined);
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
@@ -48,7 +51,9 @@ export function useAsync<T>(loader: (signal: AbortSignal) => Promise<T>, deps: u
   }, deps);
 
   const setData = useCallback((next: T | ((prev: T | undefined) => T)) => {
-    setDataState((prev) => (typeof next === "function" ? (next as (p: T | undefined) => T)(prev) : next));
+    setDataState((prev) =>
+      typeof next === "function" ? (next as (p: T | undefined) => T)(prev) : next,
+    );
   }, []);
 
   return { data, error, loading, reload: run, setData };
@@ -60,7 +65,9 @@ export function useInterval(fn: () => void, ms: number | null): void {
   ref.current = fn;
   useEffect(() => {
     if (ms === null) return;
-    const tick = () => { if (document.visibilityState !== "hidden") ref.current(); };
+    const tick = () => {
+      if (document.visibilityState !== "hidden") ref.current();
+    };
     const t = window.setInterval(tick, ms);
     return () => window.clearInterval(t);
   }, [ms]);
@@ -77,7 +84,10 @@ export function useDebouncedValue<T>(value: T, ms: number): T {
 
 /** Media query as state (for compact layouts on phones). */
 export function useMediaQuery(query: string): boolean {
-  const get = () => (typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(query).matches : false);
+  const get = () =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(query).matches
+      : false;
   const [matches, setMatches] = useState(get);
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;

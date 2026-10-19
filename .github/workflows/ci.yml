@@ -31,6 +31,11 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go build ./...
+      - name: Verify bundled TMDB linker symbol
+        env:
+          CGO_ENABLED: "0"
+          ETHER_TEST_BUNDLED_KEY: ether-linker-smoke
+        run: go test ./internal/tmdb -run TestBundledKeyLinker -ldflags "-X github.com/braedonsaunders/ether/internal/tmdb.BundledKey=ether-linker-smoke"
       - name: Vet
         env:
           CGO_ENABLED: "0"
@@ -87,6 +92,9 @@ jobs:
       - name: Install
         working-directory: web
         run: pnpm install --frozen-lockfile
+      - name: Formatting
+        working-directory: web
+        run: pnpm format:check
       - name: Typecheck
         working-directory: web
         run: pnpm typecheck
