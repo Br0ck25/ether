@@ -407,7 +407,9 @@ func (b *builder) genNewThisWeek() []*candRow {
 	}
 	var src []core.Title
 	for _, g := range genres {
-		src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}}, Sort: core.SortReleased, Desc: true, Limit: 40})...)
+		// Generous limits: catalogues showing unreleased titles list
+		// upcoming ones first, and those are filtered out.
+		src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}}, Sort: core.SortReleased, Desc: true, Limit: 300})...)
 	}
 	within := func(days int) []core.Title {
 		var out []core.Title
@@ -795,7 +797,7 @@ func (b *builder) genPopularServer() []*candRow {
 
 func (b *builder) genNewReleases() []*candRow {
 	src := b.both(func(t core.MediaType) []core.Title {
-		return b.browse(core.BrowseQuery{Filter: core.Filter{Type: t}, Sort: core.SortReleased, Desc: true, Limit: 40})
+		return b.browse(core.BrowseQuery{Filter: core.Filter{Type: t}, Sort: core.SortReleased, Desc: true, Limit: 300})
 	})
 	items := b.rank(src, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
 		return 0.6*recency(t, b.now) + 0.25*fit + 0.15*quality(t), "Recently released"

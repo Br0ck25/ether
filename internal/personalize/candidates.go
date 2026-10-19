@@ -89,7 +89,7 @@ type fitMemo struct {
 // minPersonalConfidence is the taste confidence below which personal rows
 // (Top 10, Because you watched…) are not generated: popularity rows do a
 // better job for brand-new viewers.
-const minPersonalConfidence = 0.12
+const minPersonalConfidence = 0.08
 
 func (b *builder) personal() bool {
 	return !b.generic && b.taste != nil && b.taste.Confidence >= minPersonalConfidence
@@ -238,11 +238,47 @@ func sortItems(items []candItem) {
 	})
 }
 
+// capItems keeps the best n items, but keeps films and series both
+// represented (at least n/3 each when available) so the Movies and TV
+// screens, which filter a row by type, still have enough to show.
 func capItems(items []candItem, n int) []candItem {
-	if n > 0 && len(items) > n {
-		return items[:n]
+	if n <= 0 || len(items) <= n {
+		return items
 	}
-	return items
+	chosen := make([]bool, len(items))
+	for i := 0; i < n; i++ {
+		chosen[i] = true
+	}
+	isMovie := func(i int) bool { return items[i].t.Type == core.TypeMovie }
+	for _, want := range []bool{true, false} {
+		have := 0
+		for i := 0; i < len(items); i++ {
+			if chosen[i] && isMovie(i) == want {
+				have++
+			}
+		}
+		next := n
+		for drop := len(items) - 1; have < n/3 && drop >= 0; drop-- {
+			if !chosen[drop] || isMovie(drop) == want {
+				continue
+			}
+			for next < len(items) && (chosen[next] || isMovie(next) != want) {
+				next++
+			}
+			if next >= len(items) {
+				break
+			}
+			chosen[drop], chosen[next] = false, true
+			have++
+		}
+	}
+	out := make([]candItem, 0, n)
+	for i, ok := range chosen {
+		if ok {
+			out = append(out, items[i])
+		}
+	}
+	return out
 }
 
 // ---- item features -------------------------------------------------------------
