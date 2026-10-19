@@ -23,10 +23,11 @@ type Debrid struct {
 	// RemoveUncached deletes torrents Ether added that turned out not to be
 	// cached, keeping the owner's account clean (CachedOnly only).
 	RemoveUncached bool `json:"removeUncached"`
-	// ChunkBytes is the HTTP range and cache chunk size (0 = 4 MiB).
+	// ChunkBytes caps one HTTP range request (0 = 8 MiB). Requests start
+	// small for a fast first byte and grow towards this size.
 	ChunkBytes int64 `json:"chunkBytes,omitempty"`
-	// ReadAheadChunks is how many chunks are fetched ahead of sequential
-	// reads (0 = 4; negative disables read-ahead).
+	// ReadAheadChunks fixes the sequential read-ahead window in chunks
+	// (0 = adaptive to measured throughput; negative disables read-ahead).
 	ReadAheadChunks int `json:"readAheadChunks,omitempty"`
 	// MaxConnections caps concurrent range requests per open file (0 = 4).
 	MaxConnections int `json:"maxConnections,omitempty"`
