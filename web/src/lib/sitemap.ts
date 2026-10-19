@@ -89,10 +89,13 @@ export const PAGES: PageDef[] = [
     sections: [
       { key: "quality", title: "Quality profiles", keywords: "resolution 4k 1080p remote" },
       { key: "rules", title: "Client rules", keywords: "device profile" },
-      { key: "selection", title: "Selection & blocklist", keywords: "cam health block groups" },
+      { key: "selection", title: "Selection rules", keywords: "cam health blocked terms groups" },
       { key: "scoring", title: "Custom scoring", keywords: "trash custom formats" },
       { key: "startup", title: "Playback start", keywords: "startup race warm" },
-      { key: "traces", title: "Traces", keywords: "resolver why release debug" },
+      { key: "search", title: "Search", keywords: "interactive search manual release pick" },
+      { key: "pinned", title: "Pinned", keywords: "pin release override" },
+      { key: "blocklist", title: "Blocklist", keywords: "blocked bad release unblock" },
+      { key: "history", title: "History", keywords: "traces resolver why release debug decisions" },
     ],
   },
   {

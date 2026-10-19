@@ -65,6 +65,37 @@ file under these names:
 Preview thumbnails appear while a title plays and fill in as playback
 progresses.
 
+## Choose and fix releases
+
+**Releases** explains and overrides which release plays for each title.
+
+- **Search** finds a movie, or a show then a season and episode, and lists
+  every release the indexers return. Each one shows its score, custom formats,
+  size, age, indexer and Ether's verdict for the chosen quality profile, ranked
+  exactly as playback ranks them, with the release that would play first marked.
+  Choose **No profile limits** to see releases a profile would reject, or
+  **Offline download** for the download profile. **Search again** forgets the
+  cached results and any "unavailable" cool-off for the title. Each release's
+  menu can pin it, block it with a reason, or check its health now.
+- **Pinned** lists releases you pinned. A pin plays first for its title on
+  every app, overriding quality-profile limits and title matching. Ether still
+  skips a pin that is blocklisted, passworded, already tried during the current
+  playback, a season pack for an episode, in a video codec the app cannot
+  decode, or Dolby Vision without an HDR10 base on an app without Dolby Vision.
+  A viewer's own **Play Version** choice wins over a pin, and offline downloads
+  keep their own profile. When a pin fails its health check, Ether plays the
+  next best release and the pin stays, showing why it failed.
+- **Blocklist** lists releases Ether will not pick: ones that failed health
+  checks or broke during playback, and ones you blocked. Filter by title or
+  source; unblocking a release has it checked again the next time it is a
+  candidate.
+- **History** records each release decision: the winner, failovers, pin use
+  and, for every candidate, why it won or lost. It keeps the newest 5,000
+  decisions for up to 60 days.
+
+Pins, blocks and **Search again** take effect on the next play, including for
+titles a detail page has already prepared.
+
 ## Bring your library and history
 
 Use **Libraries & backups** to add existing media or preview a Plex import. Map

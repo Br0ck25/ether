@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/resolver"
 )
 
 // extensionHandlers keeps optional owner features behind the same LAN, token
@@ -26,6 +29,15 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 	m["markers"] = a.markers.Handler()
 	m["subtitle-sync"] = a.subtitles.SyncHandler()
 	m["metadata"] = a.episodeorder.Router()
+	m["releases"] = a.resolver.ConsoleHandler(resolver.ConsoleDeps{
+		Catalog: a.catalog,
+		Invalidate: func(key core.RatingKey) {
+			if a.playback != nil {
+				a.playback.InvalidateTitle(key)
+			}
+		},
+		Logger: a.log.With("component", "release-console"),
+	})
 	a.discoveryHandlers(m)
 	adoptionHandlers(a, m)
 	return m

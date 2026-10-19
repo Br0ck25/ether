@@ -186,7 +186,6 @@ export const api = {
 
   // ---- Status ----------------------------------------------------------------
   dashboard: () => apiFetch<DashboardData>("/dashboard"),
-  traces: () => apiFetch<{ traces: unknown }>("/traces"),
   disk: (path: string) => apiFetch<DiskInfo>(`/disk${qs({ path })}`),
   logs: (params: { limit?: number; level?: string; q?: string }) =>
     apiFetch<{ entries: LogEntry[]; total: number }>(`/logs${qs(params)}`),

@@ -38,6 +38,7 @@ import {
   posterFor,
   type FakeTitle,
 } from "./data";
+import { createReleaseConsoleMock } from "./releases";
 import { TEMPLATES } from "./templates";
 
 const NOW = () => new Date();
@@ -287,6 +288,7 @@ function durationMs(w: string): number {
 export function createFakeServer(opts: FakeOptions = {}) {
   const catalog = buildCatalog();
   const byKey = new Map(catalog.map((t) => [t.key, t]));
+  const releaseConsole = createReleaseConsoleMock(catalog);
   const state = {
     boot: {
       ok: true,
@@ -1232,6 +1234,10 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const seg = p.split("/").filter(Boolean);
     const route = `${method} /${seg.join("/")}`;
 
+    const rc = releaseConsole.handle(method, seg, q, body);
+    if (rc)
+      return rc.status === 204 ? new Response(null, { status: 204 }) : json(rc.body, rc.status);
+
     // Static routes
     switch (route) {
       case "GET /bootstrap":
@@ -1299,57 +1305,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
       case "DELETE /logs":
         state.logs = [];
         return json({ ok: true });
-      case "GET /traces":
-        return json({
-          traces: [
-            {
-              titleKey: catalog[3]!.key,
-              titleName: `${catalog[3]!.title} (${catalog[3]!.year})`,
-              profile: "1080p",
-              at: new Date(Date.now() - 41 * 60000).toISOString(),
-              searchDuration: 1.8e9,
-              winner: "r1",
-              candidates: [
-                {
-                  releaseId: "r1",
-                  name: `${catalog[3]!.title.replace(/ /g, ".")}.1080p.WEB-DL.H264-GRP`,
-                  indexer: "Indexer One",
-                  score: 812,
-                  rejected: false,
-                  healthChecked: true,
-                  healthy: true,
-                  fetchDuration: 3.1e8,
-                  healthDuration: 6.4e8,
-                },
-                {
-                  releaseId: "r2",
-                  name: `${catalog[3]!.title.replace(/ /g, ".")}.2160p.REMUX-GRP`,
-                  indexer: "Indexer Two",
-                  score: 640,
-                  rejected: true,
-                  reason: "above the 1080p profile cap",
-                  healthChecked: false,
-                  healthy: false,
-                  fetchDuration: 0,
-                  healthDuration: 0,
-                },
-                {
-                  releaseId: "r3",
-                  name: `${catalog[3]!.title.replace(/ /g, ".")}.CAM`,
-                  indexer: "Indexer One",
-                  score: 0,
-                  rejected: true,
-                  reason: "CAM releases are disabled",
-                  healthChecked: false,
-                  healthy: false,
-                  fetchDuration: 0,
-                  healthDuration: 0,
-                },
-              ],
-            },
-          ],
-        });
-
       case "GET /collections":
         return json({ collections: state.collections });
       case "POST /collections": {
@@ -1713,7 +1668,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return handle(method, url, body);
   }
 
-  return { fetch: fetchImpl, state, catalog, evaluate, homeFor };
+  return { fetch: fetchImpl, state, catalog, evaluate, homeFor, releaseConsole };
 }
 
 export type FakeServer = ReturnType<typeof createFakeServer>;

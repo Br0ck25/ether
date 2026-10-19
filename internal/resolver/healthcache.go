@@ -27,17 +27,25 @@ func (s *Service) checkHealth(ctx context.Context, releaseID string, nzb []byte)
 		return true, nil
 	}
 	ok, err := s.health.Check(ctx, nzb)
-	if ok && err == nil && s.healthTTL > 0 && releaseID != "" {
-		now := s.now()
-		s.mu.Lock()
-		s.verified[releaseID] = now
-		s.mu.Unlock()
-		if s.db != nil {
-			_, _ = s.db.ExecContext(ctx, `INSERT INTO resolver_verified(release_id, checked_at) VALUES (?, ?)
-				ON CONFLICT(release_id) DO UPDATE SET checked_at=excluded.checked_at`, releaseID, now.Unix())
-		}
+	if ok && err == nil {
+		s.markVerified(ctx, releaseID)
 	}
 	return ok, err
+}
+
+// markVerified records a passed health check for the verified cache.
+func (s *Service) markVerified(ctx context.Context, releaseID string) {
+	if s.healthTTL <= 0 || releaseID == "" {
+		return
+	}
+	now := s.now()
+	s.mu.Lock()
+	s.verified[releaseID] = now
+	s.mu.Unlock()
+	if s.db != nil {
+		_, _ = s.db.ExecContext(ctx, `INSERT INTO resolver_verified(release_id, checked_at) VALUES (?, ?)
+			ON CONFLICT(release_id) DO UPDATE SET checked_at=excluded.checked_at`, releaseID, now.Unix())
+	}
 }
 
 func (s *Service) recentlyVerified(ctx context.Context, releaseID string) bool {

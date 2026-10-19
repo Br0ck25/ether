@@ -34,6 +34,10 @@ type Options struct {
 	// HealthTTL is how long a passed health check is trusted before the
 	// release is sampled again (default 6h; negative disables the cache).
 	HealthTTL time.Duration
+	// HistoryMax bounds the persisted resolution history (default 5000
+	// rows); HistoryMaxAge drops older rows (default 60 days).
+	HistoryMax    int
+	HistoryMaxAge time.Duration
 }
 
 // CandidateTrace explains one candidate's fate in a resolution.
@@ -46,6 +50,8 @@ type CandidateTrace struct {
 	CompatibilityReason string        `json:"compatibilityReason,omitempty"`
 	Rejected            bool          `json:"rejected"`
 	Reason              string        `json:"reason,omitempty"`
+	Size                int64         `json:"size,omitempty"`
+	Pinned              bool          `json:"pinned,omitempty"` // the owner's pin for the title
 	HealthChecked       bool          `json:"healthChecked"`
 	Healthy             bool          `json:"healthy"`
 	FetchDuration       time.Duration `json:"fetchDuration"`
@@ -62,6 +68,14 @@ type Trace struct {
 	Winner         string           `json:"winner,omitempty"` // release id
 	Err            string           `json:"err,omitempty"`
 	SearchDuration time.Duration    `json:"searchDuration"`
+	// Failover marks a resolution that excluded already-tried releases.
+	Failover bool `json:"failover,omitempty"`
+	// Pinned is the owner-pinned release id considered for the title;
+	// PinStatus says what became of it ("used", "unhealthy: …", …).
+	Pinned    string `json:"pinned,omitempty"`
+	PinStatus string `json:"pinStatus,omitempty"`
+	// Omitted counts candidates dropped from a persisted trace.
+	Omitted int `json:"omitted,omitempty"`
 }
 
 type searchCacheEntry struct {
@@ -110,6 +124,8 @@ type Service struct {
 
 	flightMu sync.Mutex
 	flights  map[string]*inflight
+
+	con consoleState // pins, release memory, health results, history (console.go)
 }
 
 var _ core.Resolver = (*Service)(nil)
@@ -144,6 +160,7 @@ func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config
 		s.maxTraces = defaultMaxTraces
 	}
 	s.UpdateConfig(cfg)
+	s.con.init(opts)
 	s.loadPersisted(context.Background())
 	return s
 }
@@ -208,7 +225,8 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 	s.bad[releaseID] = reason
 	s.mu.Unlock()
 	s.forgetVerified(ctx, releaseID)
-	return s.persistBad(ctx, releaseID, reason)
+	s.notePinsBlocked(ctx, releaseID, reason)
+	return s.persistBad(ctx, s.blockEntryFor(releaseID, reason, false))
 }
 
 func (s *Service) isBad(id string) bool {
@@ -317,13 +335,26 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 
 func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile core.QualityProfile) (*core.Resolution, error) {
 	t := req.Title
-	trace := Trace{TitleKey: t.Key, TitleName: displayTitle(t), Profile: profile.Name, At: s.now()}
-	defer func() { s.addTrace(trace) }()
+	trace := Trace{TitleKey: t.Key, TitleName: consoleTitleName(t), Profile: profile.Name, At: s.now(), Failover: len(req.Exclude) > 0}
+	defer func() {
+		s.addTrace(trace)
+		s.recordHistory(ctx, trace)
+	}()
+
+	// The owner's pin for this title, when it applies to this request
+	// (pins.go). It is tried first, like a viewer's Play Version pick.
+	pin, pinNote := s.pinForResolve(req)
+	trace.PinStatus = pinNote
+	pinID := ""
+	if pin != nil {
+		pinID = pin.Release.ID
+		trace.Pinned = pinID
+	}
 
 	// Fast path: cached unavailable answer, unless this is a failover
-	// request that already knows about specific releases, or the viewer
-	// picked a specific version.
-	if len(req.Exclude) == 0 && req.Prefer == "" {
+	// request that already knows about specific releases, the viewer
+	// picked a specific version, or the owner pinned a release.
+	if len(req.Exclude) == 0 && req.Prefer == "" && pin == nil {
 		if e, ok := s.getAvailability(ctx, int64(t.Key)); ok && !e.available {
 			trace.Err = "cached unavailable (cooloff)"
 			return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
@@ -332,64 +363,107 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 
 	sreq := searchRequestFor(t)
 	searchStart := time.Now()
-	results, err := s.search(ctx, sreq)
+	results, searchErr := s.search(ctx, sreq)
 	trace.SearchDuration = time.Since(searchStart)
-	if err != nil {
-		trace.Err = err.Error()
-		return nil, err
+	if searchErr != nil {
+		if pin == nil {
+			trace.Err = searchErr.Error()
+			return nil, searchErr
+		}
+		// A pin carries its full release, so it can still play while
+		// the indexers are failing; the search error stands otherwise.
+		results = nil
+	}
+	s.rememberReleases(t, results)
+	if pin != nil {
+		results = withRelease(results, pin.Release)
 	}
 
 	rcfg := s.resolverCfg()
-	cands, clientRejected, err := s.scoreCandidates(req, sreq, profile, results, &trace)
+	cands, clientRejected, err := s.rankCandidates(req, sreq, profile, results, &trace, pinID)
 	if err != nil {
 		trace.Err = err.Error()
 		return nil, err
 	}
+	failed := func(fallback error) error {
+		if searchErr != nil {
+			trace.Err = searchErr.Error()
+			return searchErr
+		}
+		return fallback
+	}
 
 	if len(cands) == 0 {
+		if pin != nil {
+			s.notePin(ctx, t.Key, pinID, PinRejected, candidateReason(&trace, pinID))
+			trace.PinStatus = "rejected: " + candidateReason(&trace, pinID)
+		}
 		// Client/profile rejection is not proof that the title is unavailable for everyone.
-		if !clientRejected && len(req.Exclude) == 0 {
+		if !clientRejected && len(req.Exclude) == 0 && searchErr == nil {
 			s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
 		}
 		trace.Err = "no acceptable candidates"
-		return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
+		return nil, failed(fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable))
 	}
 
 	var optimisticErr error
-	// The viewer picked a version ("Play Version"): health-check that
-	// release first, ahead of the normal ranking. When it is gone or
-	// unhealthy, fall back to the normal choice below.
+	// The viewer picked a version ("Play Version"), or the owner pinned a
+	// release: health-check that release first, ahead of the normal
+	// ranking. When it is gone or unhealthy, fall back to the normal
+	// choice below.
 	preferTried := false
-	if req.Prefer != "" {
+	prefer := req.Prefer
+	if prefer == "" {
+		prefer = pinID
+	}
+	if prefer != "" {
 		prefIdx := -1
 		for i := range cands {
-			if cands[i].rel.ID == req.Prefer {
+			if cands[i].rel.ID == prefer {
 				prefIdx = i
 				break
 			}
 		}
 		if prefIdx < 0 {
 			s.log.Info("preferred release not among candidates; using normal ranking",
-				"title", t.Key, "prefer", req.Prefer)
+				"title", t.Key, "prefer", prefer)
+			if pin != nil {
+				reason := candidateReason(&trace, pinID)
+				s.notePin(ctx, t.Key, pinID, PinRejected, reason)
+				trace.PinStatus = "rejected: " + reason
+			}
 		} else {
 			preferTried = true
 			pref := cands[prefIdx]
 			idx, nzb, verr := s.validateCandidates(ctx, []candidate{pref}, &trace, rcfg.HealthRace)
 			if verr != nil {
+				if pin != nil {
+					s.notePin(ctx, t.Key, pinID, PinUnavailable, verr.Error())
+					trace.PinStatus = "unavailable: " + verr.Error()
+				}
 				trace.Err = verr.Error()
 				return nil, verr
 			}
 			if idx >= 0 {
+				if pin != nil {
+					s.notePin(ctx, t.Key, pinID, PinHealthy, "")
+					trace.PinStatus = "used"
+				}
 				s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
 				trace.Winner = pref.rel.ID
 				return s.resolution(t.Key, cands, prefIdx, nzb, &trace), nil
 			}
+			if pin != nil {
+				reason := candidateReason(&trace, pinID)
+				s.notePin(ctx, t.Key, pinID, PinUnhealthy, reason)
+				trace.PinStatus = "unhealthy: " + reason
+			}
 			s.log.Info("preferred release unhealthy; falling back to normal ranking",
-				"title", t.Key, "prefer", req.Prefer)
+				"title", t.Key, "prefer", prefer)
 			cands = append(cands[:prefIdx], cands[prefIdx+1:]...)
 			if len(cands) == 0 {
 				trace.Err = "preferred release unhealthy and no other candidates"
-				return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
+				return nil, failed(fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable))
 			}
 		}
 	}
@@ -427,6 +501,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	if optimisticErr != nil {
 		return nil, optimisticErr
 	}
+	if searchErr != nil {
+		return nil, failed(nil)
+	}
 	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts {
 		s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
 	}
@@ -434,28 +511,28 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
 }
 
-func displayTitle(t *core.Title) string {
-	if t.ShowTitle != "" && (t.Type == core.TypeEpisode || t.Type == core.TypeSeason) {
-		return t.ShowTitle
-	}
-	return t.Title
-}
-
 func searchCacheKey(req core.SearchRequest) string {
 	return fmt.Sprintf("%s|%v|%s|%d|%d|%d", req.Type, req.IDs, strings.ToLower(req.Title), req.Year, req.Season, req.Episode)
 }
 
 func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	results, _, err := s.searchCached(ctx, req, false)
+	return results, err
+}
+
+// searchCached answers from the search cache unless fresh is set; cached
+// reports whether the answer came from the cache.
+func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fresh bool) (results []core.Release, cached bool, err error) {
 	key := searchCacheKey(req)
 	s.mu.RLock()
 	e, ok := s.searchCache[key]
 	s.mu.RUnlock()
-	if ok && s.now().Before(e.expires) {
-		return append([]core.Release(nil), e.results...), nil
+	if ok && !fresh && s.now().Before(e.expires) {
+		return append([]core.Release(nil), e.results...), true, nil
 	}
-	results, err := s.indexer.Search(ctx, req)
+	results, err = s.indexer.Search(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	// Ensure Info is populated for indexers that don't parse names.
 	for i := range results {
@@ -466,13 +543,21 @@ func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	s.mu.Lock()
 	s.searchCache[key] = searchCacheEntry{results: append([]core.Release(nil), results...), expires: s.now().Add(s.searchTTL())}
 	s.mu.Unlock()
-	return results, nil
+	return results, false, nil
 }
 
 // scoreCandidates filters and ranks search results for a request and
 // profile. trace may be nil (the variants path); candidate.trace is then
 // -1 and no trace rows are written.
 func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace) ([]candidate, bool, error) {
+	return s.rankCandidates(req, sreq, profile, results, trace, "")
+}
+
+// rankCandidates is scoreCandidates with the owner's pinned release id
+// (pinID, "" for none): the pin is judged by pinRejectReason's hard gates
+// instead of the profile and identity rules, and is otherwise scored and
+// traced like every other result. Interactive search reads the same trace.
+func (s *Service) rankCandidates(req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, error) {
 	t := req.Title
 	exclude := map[string]bool{}
 	for _, id := range req.Exclude {
@@ -482,9 +567,17 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 	var cands []candidate
 	clientRejected := false
 	for _, rel := range results {
-		ct := CandidateTrace{ReleaseID: rel.ID, Name: rel.Name, Indexer: rel.Indexer}
-		preferred := req.Prefer != "" && rel.ID == req.Prefer
-		if reason := s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred); reason != "" {
+		ct := CandidateTrace{ReleaseID: rel.ID, Name: rel.Name, Indexer: rel.Indexer, Size: rel.Size}
+		pinned := pinID != "" && rel.ID == pinID
+		ct.Pinned = pinned
+		preferred := pinned || (req.Prefer != "" && rel.ID == req.Prefer)
+		var reason string
+		if pinned {
+			reason = s.pinRejectReason(rel, sreq, req.Client, exclude)
+		} else {
+			reason = s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred)
+		}
+		if reason != "" {
 			ct.Rejected = true
 			switch reason {
 			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile":
@@ -496,22 +589,12 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 			}
 			continue
 		}
-		s.cfgMu.RLock()
-		scorer, scorerErr := s.scorer, s.scorerErr
-		s.cfgMu.RUnlock()
-		if scorerErr != nil {
-			return nil, clientRejected, scorerErr
+		sc, err := s.scoreRelease(rel, profile, req.Client, t)
+		if err != nil {
+			return nil, clientRejected, err
 		}
-		formatScore, matches, scoreErr := scorer.ScoreWithScores(rel, profile.CustomFormatScores)
-		if scoreErr != nil {
-			return nil, clientRejected, scoreErr
-		}
-		ct.CustomFormats = matches
-		minimum := rcfg.MinCustomFormatScore
-		if profile.MinCustomFormatScore != nil {
-			minimum = profile.MinCustomFormatScore
-		}
-		if minimum != nil && formatScore < *minimum && !preferred {
+		ct.CustomFormats = sc.matches
+		if minimum := minFormatScore(rcfg, profile); minimum != nil && sc.format < *minimum && !preferred {
 			clientRejected = true
 			ct.Rejected = true
 			ct.Reason = "below minimum custom format score"
@@ -520,9 +603,8 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 			}
 			continue
 		}
-		compatibility, note := compatibilityScore(rel, req.Client, t)
-		ct.CompatibilityReason = note
-		rel.Score = s.score(rel, profile, t) + float64(formatScore) + compatibility
+		ct.CompatibilityReason = sc.compat
+		rel.Score = sc.total
 		ct.Score = rel.Score
 		tr := -1
 		if trace != nil {
@@ -533,6 +615,45 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 	}
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rel.Score > cands[j].rel.Score })
 	return cands, clientRejected, nil
+}
+
+// releaseScore is one release's total ranking score and its parts.
+type releaseScore struct {
+	total   float64
+	format  int
+	matches []FormatMatch
+	compat  string
+}
+
+// scoreRelease computes the ranking score of a release for a profile and
+// client: the profile score plus custom formats plus client compatibility.
+func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, caps core.ClientCaps, t *core.Title) (releaseScore, error) {
+	s.cfgMu.RLock()
+	scorer, scorerErr := s.scorer, s.scorerErr
+	s.cfgMu.RUnlock()
+	if scorerErr != nil {
+		return releaseScore{}, scorerErr
+	}
+	formatScore, matches, err := scorer.ScoreWithScores(rel, profile.CustomFormatScores)
+	if err != nil {
+		return releaseScore{}, err
+	}
+	compatibility, note := compatibilityScore(rel, caps, t)
+	return releaseScore{
+		total:   s.score(rel, profile, t) + float64(formatScore) + compatibility,
+		format:  formatScore,
+		matches: matches,
+		compat:  note,
+	}, nil
+}
+
+// minFormatScore is the profile's minimum custom format score, else the
+// resolver-wide one; nil when neither is set.
+func minFormatScore(rcfg config.Resolver, profile core.QualityProfile) *int {
+	if profile.MinCustomFormatScore != nil {
+		return profile.MinCustomFormatScore
+	}
+	return rcfg.MinCustomFormatScore
 }
 
 // rejectReason returns "" to accept, or the reason to drop a release.
