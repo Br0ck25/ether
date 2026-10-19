@@ -47,8 +47,8 @@ high-compatibility 1080p release or an extended cut. Choose one with Plex's
 also accepts descriptions such as "90s thrillers under 100 mins" and offers a
 matching collection; rate it to keep it as a personal collection.
 
-These settings are in the server's configuration file until the owner UI
-exposes them:
+These settings have no dedicated pages yet. Settings lists them with its other
+options; they are stored in the server's configuration file under these names:
 
 - `downloads`: offline downloads, on for the owner. Set `allowFriends` to let
   viewers download.
