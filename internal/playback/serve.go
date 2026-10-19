@@ -262,7 +262,7 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 		if werr != nil {
 			return werr
 		}
-		if rerr != nil && recoverableSourceFailure(rerr) && r.Context().Err() == nil {
+		if rerr != nil && recoverableSourceFailure(rerr) && r.Context().Err() == nil && !background {
 			g.noteReadFailure(rerr)
 			if registered {
 				m.backgroundFailover(s, g, g.timeMapSnapshot().TimeAt(start+n))
