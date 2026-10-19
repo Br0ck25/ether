@@ -29,14 +29,15 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
-	transMu    sync.RWMutex
-	transcodes map[string]core.HLSSession
-	o          Options
-	mu         sync.Mutex
-	sessions   map[string]*session
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	transMu          sync.RWMutex
+	transcodes       map[string]core.HLSSession
+	o                Options
+	mu               sync.Mutex
+	sessions         map[string]*session
+	nextSubscription int64 // guarded by mu
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
 }
 
 func New(o Options) (*Service, error) {
