@@ -34,7 +34,7 @@ import (
 type ref struct {
 	Servers []struct {
 		Name, Host, Username, Password string
-		Port, Connections, Priority   int
+		Port, Connections, Priority    int
 		TLS                            bool
 	}
 	Indexers []struct{ Name, URL, APIKey string }
