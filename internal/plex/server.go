@@ -70,19 +70,22 @@ type SessionToucher interface {
 // Deps are the server's dependencies. Catalog, State, Auth and Playback are
 // required; the rest degrade gracefully when nil.
 type Deps struct {
-	EpisodeOrder     *episodeorder.Service
-	PlexGUID         *plexguid.Service
-	Discovery        *DiscoveryFeatures
-	LiveTV           *livetv.Service
-	AccessPolicy     AccessPolicy
-	Catalog          core.Catalog
-	Collections      core.Collections
-	Recommender      core.Recommender
-	State            core.State
-	Playlists        core.Playlists
-	Auth             core.Auth
-	Playback         core.Playback
-	Transcoder       core.Transcoder
+	EpisodeOrder *episodeorder.Service
+	PlexGUID     *plexguid.Service
+	Discovery    *DiscoveryFeatures
+	LiveTV       *livetv.Service
+	AccessPolicy AccessPolicy
+	Catalog      core.Catalog
+	Collections  core.Collections
+	Recommender  core.Recommender
+	State        core.State
+	Playlists    core.Playlists
+	Auth         core.Auth
+	Playback     core.Playback
+	Transcoder   core.Transcoder
+	// Downloads remuxes resolved sources to temp MP4s for the Download
+	// Queue API; nil disables downloads (allowSync stays "0").
+	Downloads        core.DownloadRemuxer
 	TrackPreferences TrackPreferences
 	Markers          MarkerProvider
 	Subtitles        SubtitleSource
@@ -123,6 +126,7 @@ type Server struct {
 
 	images     *imageCache
 	streams    *streamRegistry
+	downloads  *downloadStore
 	queues     *playQueueStore
 	sessions   *sessionTracker
 	transcodes *transcodeTable
@@ -172,6 +176,7 @@ func NewServer(d Deps) *Server {
 		log:        d.Logger.With("component", "plex"),
 		images:     newImageCache(d.ImageCacheBytes, d.HTTPClient),
 		streams:    newStreamRegistry(),
+		downloads:  newDownloadStore(),
 		queues:     newPlayQueueStore(),
 		sessions:   newSessionTracker(),
 		transcodes: newTranscodeTable(),
@@ -200,6 +205,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.Se
 // Close stops background goroutines and disconnects notification clients.
 func (s *Server) Close() error {
 	s.once.Do(func() {
+		s.releaseAllDownloads()
 		s.cancel()
 		s.notifier.close()
 		s.wg.Wait()
@@ -333,6 +339,7 @@ func (s *Server) janitor() {
 			return
 		case <-t.C:
 			now := s.now()
+			s.expireDownloads(now)
 			s.queues.expire(now, 6*time.Hour)
 			s.transcodes.expire(now, 2*time.Hour)
 			for _, e := range s.sessions.expire(now, 2*time.Minute) {

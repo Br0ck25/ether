@@ -42,7 +42,7 @@ func (s *Server) serverInfoAttrs(providers bool) []model.Attr {
 		model.A("allowChannelAccess", false),
 		model.A("allowMediaDeletion", false),
 		model.A("allowSharing", true),
-		model.A("allowSync", false),
+		model.A("allowSync", s.downloadsEnabled()),
 		model.A("allowTuners", s.liveTVEnabled()),
 		model.A("apiVersion", APIVersion),
 		model.A("backgroundProcessing", false),

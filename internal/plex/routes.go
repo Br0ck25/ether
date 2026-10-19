@@ -148,6 +148,17 @@ func (s *Server) routes() chi.Router {
 	r.Put("/library/parts/{part}", s.handlePartSelect)
 	get("/library/streams/{stream}", s.handleStream)
 
+	// Downloads (Download Queue API)
+	r.Post("/downloadQueue", s.handleDownloadQueueCreate)
+	get("/downloadQueue/{queue}", s.handleDownloadQueue)
+	r.Post("/downloadQueue/{queue}/add", s.handleDownloadQueueAdd)
+	get("/downloadQueue/{queue}/items", s.handleDownloadQueueItems)
+	get("/downloadQueue/{queue}/items/{item}", s.handleDownloadQueueItem)
+	r.Delete("/downloadQueue/{queue}/items/{item}", s.handleDownloadQueueItemDelete)
+	r.Post("/downloadQueue/{queue}/items/{item}/restart", s.handleDownloadQueueItemRestart)
+	get("/downloadQueue/{queue}/item/{item}/decision", s.handleDownloadItemDecision)
+	get("/downloadQueue/{queue}/item/{item}/media", s.handleDownloadItemMedia)
+
 	get("/library/metadata/{id}/discoveryPoster/{version}", s.handleDiscoveryPoster)
 	s.registerLiveTVRoutes(r)
 	return r
