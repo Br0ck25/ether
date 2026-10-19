@@ -109,16 +109,17 @@ func providerLabel(cfg config.UsenetProvider) string {
 func (p *pool) dialOptions() DialOptions {
 	connID := p.connSeq.Add(1)
 	return DialOptions{
-		Host:           p.cfg.Host,
-		Port:           p.cfg.Port,
-		TLS:            p.cfg.TLS,
-		Username:       p.cfg.Username,
-		Password:       p.cfg.Password,
-		TLSConfig:      p.o.TLSConfig,
-		Timeout:        p.o.DialTimeout,
-		CommandTimeout: p.o.CommandTimeout,
-		DialContext:    p.o.DialContext,
-		BytesRead:      &p.bytes,
+		Host:            p.cfg.Host,
+		Port:            p.cfg.Port,
+		TLS:             p.cfg.TLS,
+		Username:        p.cfg.Username,
+		Password:        p.cfg.Password,
+		TLSConfig:       p.o.TLSConfig,
+		Timeout:         p.o.DialTimeout,
+		CommandTimeout:  p.o.CommandTimeout,
+		IdleReadTimeout: p.o.IdleReadTimeout,
+		DialContext:     p.o.DialContext,
+		BytesRead:       &p.bytes,
 		OnPhase: func(phase string, d time.Duration) {
 			switch phase {
 			case "tcp":
@@ -239,7 +240,6 @@ func (p *pool) conn(ctx context.Context) (*Conn, error) {
 		}
 		return nil, err
 	}
-	p.brk.success()
 	p.dials.Add(1)
 	return c, nil
 }
@@ -454,6 +454,7 @@ func (p *pool) body(ctx context.Context, id string, groups []string, prio core.P
 		}
 		return nil, p.failed(err, reused, ctx)
 	}
+	p.brk.success()
 	p.articles.Add(1)
 	p.latMu.Lock()
 	p.latency.add(rtt)
@@ -476,6 +477,7 @@ func (p *pool) stat(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, p.failed(err, reused, ctx)
 	}
+	p.brk.success()
 	if !ok {
 		p.misses.Add(1)
 	}
@@ -505,6 +507,7 @@ func (p *pool) statMany(ctx context.Context, ids []string) (map[string]bool, err
 	if err != nil {
 		return nil, p.failed(err, reused, ctx)
 	}
+	p.brk.success()
 	for _, ok := range result {
 		if !ok {
 			p.misses.Add(1)
@@ -563,11 +566,16 @@ func (p *pool) failed(err error, reused bool, ctx context.Context) error {
 	case ctxErr(ctx) != nil:
 		return ctxErr(ctx)
 	case errors.Is(err, ErrNoSuchArticle):
+		p.brk.success()
 		p.misses.Add(1)
 	case errors.Is(err, ErrInvalidMessageID):
 	default:
 		p.errs.Add(1)
-		p.brk.noteError(err)
+		if isNetworkError(err) || errors.Is(err, ErrServiceUnavailable) {
+			p.brk.connFailure(err)
+		} else {
+			p.brk.noteError(err)
+		}
 		if reused && isNetworkError(err) {
 			p.log.Debug("usenet: idle connection was dropped by the server; discarding idle connections", "err", err)
 			p.discardIdle()

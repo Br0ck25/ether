@@ -1,0 +1,161 @@
+package plex
+
+import (
+	"bytes"
+	"context"
+	"crypto/subtle"
+	"html"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+)
+
+const streamGrantParam = "X-Ether-Stream-Token"
+
+func transcodeSessionID(path string) string {
+	rest, ok := strings.CutPrefix(path, "/video/:/transcode/universal/session/")
+	if !ok {
+		return ""
+	}
+	id, _, ok := strings.Cut(rest, "/")
+	if !ok {
+		return ""
+	}
+	return id
+}
+
+func (s *Server) activeViewer(ctx context.Context, id int64) *core.User {
+	if s.d.Auth == nil {
+		return nil
+	}
+	if a, ok := s.d.Auth.(interface {
+		ActiveUser(context.Context, int64) (*core.User, error)
+	}); ok {
+		u, err := a.ActiveUser(ctx, id)
+		if err == nil {
+			return u
+		}
+		return nil
+	}
+	users, err := s.d.Auth.Users(ctx)
+	if err != nil {
+		return nil
+	}
+	for _, u := range users {
+		if u.ID == id {
+			return &u
+		}
+	}
+	return nil
+}
+
+// Native media loaders often discard Plex headers. An independent, random
+// capability authorizes only this viewer's running stream, never control APIs.
+// Revocation is checked on every request, including cached media segments.
+func (s *Server) authenticateStreamGrant(r *http.Request, pr *Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	id := transcodeSessionID(r.URL.Path)
+	if id == "" {
+		return false
+	}
+	e, ok := s.transcodes.get(id)
+	if !ok || !e.started || e.streamToken == "" {
+		return false
+	}
+	token := r.URL.Query().Get(streamGrantParam)
+	if subtle.ConstantTimeCompare([]byte(token), []byte(e.streamToken)) != 1 {
+		return false
+	}
+	u := s.activeViewer(r.Context(), e.userID)
+	if u == nil {
+		return false
+	}
+	if policy, ok := s.d.AccessPolicy.(interface{ UserPolicy(*core.User) *core.User }); ok {
+		u = policy.UserPolicy(u)
+	}
+	if policy, ok := s.d.AccessPolicy.(interface {
+		CanPlay(*core.User, bool, time.Time) bool
+	}); ok && !policy.CanPlay(u, pr.ClientCaps(0).Remote, s.now()) {
+		return false
+	}
+	pr.User = u
+	return true
+}
+
+func streamGrantURL(raw, token string) string {
+	sep := "?"
+	if strings.Contains(raw, "?") {
+		sep = "&"
+	}
+	return raw + sep + streamGrantParam + "=" + token
+}
+
+// Only manifest responses are buffered. Segments remain streamed directly.
+// URL templates retain their $Number$ / $RepresentationID$ placeholders.
+type manifestResponse struct {
+	http.ResponseWriter
+	body   bytes.Buffer
+	status int
+}
+
+func (w *manifestResponse) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+func (w *manifestResponse) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = 200
+	}
+	return w.body.Write(b)
+}
+
+var manifestURI = regexp.MustCompile(`(URI|initialization|media)="([^"]+)"`)
+
+func (s *Server) serveStreamManifest(w http.ResponseWriter, r *http.Request, id string, serve http.HandlerFunc) {
+	e, ok := s.transcodes.get(id)
+	if !ok {
+		writeHTTPError(w, 404)
+		return
+	}
+	rec := &manifestResponse{ResponseWriter: w}
+	serve(rec, r)
+	body := rec.body.String()
+	if rec.status == 0 {
+		rec.status = 200
+	}
+	if rec.status == 200 {
+		xml := strings.Contains(w.Header().Get("Content-Type"), "dash+xml")
+		body = manifestURI.ReplaceAllStringFunc(body, func(attr string) string {
+			m := manifestURI.FindStringSubmatch(attr)
+			raw := m[2]
+			if xml {
+				raw = html.UnescapeString(raw)
+			}
+			raw = streamGrantURL(raw, e.streamToken)
+			if xml {
+				raw = html.EscapeString(raw)
+			}
+			return m[1] + `="` + raw + `"`
+		})
+		if !xml {
+			lines := strings.Split(body, "\n")
+			for i, line := range lines {
+				if strings.TrimSpace(line) != "" && !strings.HasPrefix(line, "#") {
+					lines[i] = streamGrantURL(line, e.streamToken)
+				}
+			}
+			body = strings.Join(lines, "\n")
+		}
+	}
+	w.Header().Del("Content-Length")
+	w.WriteHeader(rec.status)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write([]byte(body))
+	}
+}

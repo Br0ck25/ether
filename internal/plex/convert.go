@@ -365,6 +365,9 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 		var editionTitle string
 		m.Media, editionTitle = s.mediaFor(ctx, pr, t, detail, o.detail)
 		applyEditionTitle(&m, editionTitle)
+		if s.downloadsAllowed(pr.User) {
+			m.AllowSync = model.Ptr(true)
+		}
 		if detail {
 			s.addStreamFeatures(ctx, pr, t, &m)
 		}

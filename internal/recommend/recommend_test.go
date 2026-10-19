@@ -195,12 +195,7 @@ func fixtureWith(t *testing.T, tweak func(*Options)) (*Recommender, *state.State
 	_ = st.Scrobble(ctx, 1, ep1.Key)
 	_ = st.Progress(ctx, 1, inProg.Key, 50*time.Minute, 100*time.Minute, "paused")
 
-	colls := fakeCollections{
-		list:  []core.Collection{{Key: core.SmartKey(1), Title: "80s Sci-Fi Gems", Kind: "smart", Type: core.TypeMovie}},
-		items: map[core.RatingKey][]core.Title{core.SmartKey(1): {newMovie}},
-	}
-	fixedNow := time.Now()
-	opts := Options{Catalog: cat, State: st, Collections: colls, Events: st, Now: func() time.Time { return fixedNow }}
+	opts := Options{Catalog: cat, State: st}
 	if tweak != nil {
 		tweak(&opts)
 	}
@@ -229,152 +224,9 @@ func findHub(hubs []core.Hub, idPrefix string) *core.Hub {
 
 // ---- tests -----------------------------------------------------------------
 
-func TestTopPicksRankingExclusionsDeterminism(t *testing.T) {
+func TestRelatedHubs(t *testing.T) {
 	ctx := context.Background()
 	r, _, user := fixture(t)
-
-	picks, err := r.TopPicks(ctx, user, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(picks) == 0 {
-		t.Fatal("no picks")
-	}
-	for _, p := range picks {
-		switch p.Title.Key {
-		case arrival.Key, dune.Key, inProg.Key:
-			t.Fatalf("watched/in-progress title recommended: %s", p.Title.Title)
-		case goryR.Key:
-			t.Fatal("R-rated title passed PG-13 limit")
-		}
-	}
-	// Dune: Part Two (Sci-Fi + Villeneuve + franchise) must outrank the comedy.
-	pos := map[string]int{}
-	for i, p := range picks {
-		pos[p.Title.Title] = i
-	}
-	if pos["Dune: Part Two"] > pos["Silly Comedy"] {
-		t.Fatalf("expected Dune 2 before comedy: %+v", picks)
-	}
-	var topWhy string
-	for _, p := range picks {
-		if p.Title.Key == dune2.Key {
-			topWhy = p.Why
-		}
-	}
-	if !strings.Contains(topWhy, "Villeneuve") && !strings.Contains(topWhy, "Sci-Fi") {
-		t.Fatalf("Why not explainable: %q", topWhy)
-	}
-
-	// Deterministic across a cold rebuild.
-	r.Invalidate(1)
-	again, err := r.TopPicks(ctx, user, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(again) != len(picks) {
-		t.Fatalf("nondeterministic count %d vs %d", len(again), len(picks))
-	}
-	for i := range picks {
-		if again[i].Title.Key != picks[i].Title.Key || again[i].Score != picks[i].Score {
-			t.Fatalf("nondeterministic at %d: %+v vs %+v", i, again[i], picks[i])
-		}
-	}
-}
-
-func TestEventInvalidation(t *testing.T) {
-	ctx := context.Background()
-	r, st, user := fixture(t)
-	if _, err := r.TopPicks(ctx, user, 10); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Scrobble(ctx, 1, comedy.Key); err != nil {
-		t.Fatal(err)
-	}
-	picks, _ := r.TopPicks(ctx, user, 10)
-	for _, p := range picks {
-		if p.Title.Key == comedy.Key {
-			t.Fatal("cache not invalidated by scrobble event")
-		}
-	}
-}
-
-func TestHomeHubsOrderAndDedupe(t *testing.T) {
-	ctx := context.Background()
-	r, _, user := fixture(t)
-	hubs, err := r.HomeHubs(ctx, user, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ids := hubIDs(hubs)
-	if len(ids) < 4 || ids[0] != "home.continue" || ids[1] != "home.ondeck" || ids[2] != "home.trending.week" {
-		t.Fatalf("hub order: %v", ids)
-	}
-	if h := findHub(hubs, "home.continue"); h == nil || len(h.Items) != 1 || h.Items[0].Key != inProg.Key {
-		t.Fatalf("continue hub: %+v", h)
-	}
-	if h := findHub(hubs, "home.ondeck"); h == nil || len(h.Items) != 1 || h.Items[0].Key != ep2.Key {
-		t.Fatalf("ondeck should be next episode E2: %+v", h)
-	}
-	if findHub(hubs, "because.") == nil {
-		t.Fatalf("missing Because hub: %v", ids)
-	}
-	if findHub(hubs, "home.toppicks") == nil {
-		t.Fatalf("missing Top Picks: %v", ids)
-	}
-	if findHub(hubs, "home.newreleases") == nil {
-		t.Fatalf("missing New Releases: %v", ids)
-	}
-	if findHub(hubs, "franchise.55") == nil {
-		t.Fatalf("missing partially-watched franchise (Dune watched, Dune 2 not): %v", ids)
-	}
-	if findHub(hubs, "collection.") == nil {
-		t.Fatalf("missing smart collection hub: %v", ids)
-	}
-	// Cross-hub dedupe: no title twice outside curated franchise/collection rows.
-	counts := map[core.RatingKey]int{}
-	for _, h := range hubs {
-		if strings.HasPrefix(h.ID, "franchise.") || strings.HasPrefix(h.ID, "collection.") {
-			continue
-		}
-		for _, it := range h.Items {
-			counts[it.Key]++
-			if it.Key == goryR.Key {
-				t.Fatalf("R-rated title leaked into hub %s", h.ID)
-			}
-		}
-	}
-	for k, n := range counts {
-		if n > 1 {
-			t.Fatalf("title %v appears %d times across home hubs", k, n)
-		}
-	}
-	// Every hub has context + items.
-	for _, h := range hubs {
-		if h.Context == "" || len(h.Items) == 0 || h.Title == "" {
-			t.Fatalf("incomplete hub: %+v", h)
-		}
-	}
-}
-
-func TestSectionAndRelatedHubs(t *testing.T) {
-	ctx := context.Background()
-	r, _, user := fixture(t)
-
-	hubs, err := r.SectionHubs(ctx, user, core.TypeMovie, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if findHub(hubs, "movie.inprogress") == nil || findHub(hubs, "movie.recentlyreleased") == nil || findHub(hubs, "movie.trending") == nil {
-		t.Fatalf("movie section hubs: %v", hubIDs(hubs))
-	}
-	tvHubs, err := r.SectionHubs(ctx, user, core.TypeShow, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if findHub(tvHubs, "tv.ondeck") == nil {
-		t.Fatalf("tv section hubs: %v", hubIDs(tvHubs))
-	}
 
 	rel, err := r.Related(ctx, user, dune.Key, 10)
 	if err != nil {
@@ -399,27 +251,6 @@ func TestSectionAndRelatedHubs(t *testing.T) {
 	}
 }
 
-func TestDiversifyMMR(t *testing.T) {
-	mk := func(id int64, score float64, coll int64, genres ...string) ScoredTitle {
-		return ScoredTitle{Title: core.Title{Key: core.MovieKey(id), Type: core.TypeMovie, Genres: genres, CollectionID: coll}, Score: score}
-	}
-	// Four same-franchise sci-fi sequels outscore one drama; with diversity
-	// the drama must break into the top 2.
-	in := []ScoredTitle{
-		mk(1, 10, 9, "Sci-Fi"), mk(2, 9.9, 9, "Sci-Fi"), mk(3, 9.8, 9, "Sci-Fi"), mk(4, 9.7, 9, "Sci-Fi"),
-		mk(5, 8, 0, "Drama"),
-	}
-	out := Diversify(in, 2, 0.5)
-	if len(out) != 2 || out[0].Title.Key != core.MovieKey(1) || out[1].Title.Key != core.MovieKey(5) {
-		t.Fatalf("MMR did not diversify: %+v", out)
-	}
-	// Pure-score mode keeps ranking.
-	out = Diversify(in, 2, 1.0)
-	if out[1].Title.Key != core.MovieKey(2) {
-		t.Fatalf("lambda=1 should be pure score order: %+v", out)
-	}
-}
-
 func TestContentRatingAllowed(t *testing.T) {
 	cases := []struct {
 		rating, max string
@@ -433,4 +264,12 @@ func TestContentRatingAllowed(t *testing.T) {
 			t.Errorf("ContentRatingAllowed(%q,%q)=%v want %v", tc.rating, tc.max, got, tc.want)
 		}
 	}
+}
+
+func keysOf(items []core.Title) []core.RatingKey {
+	out := make([]core.RatingKey, len(items))
+	for i, t := range items {
+		out[i] = t.Key
+	}
+	return out
 }

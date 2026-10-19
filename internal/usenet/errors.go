@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/core"
 	"io"
 	"net"
 	"os"
@@ -30,17 +31,17 @@ var (
 	ErrNoSuchGroup = errors.New("nntp: no such group")
 	// ErrCorrupt means an article was received but did not decode as valid
 	// yEnc (bad CRC, wrong size, missing headers).
-	ErrCorrupt = errors.New("usenet: corrupt article")
+	ErrCorrupt = core.ErrArticleCorrupt
 	// ErrInvalidMessageID rejects message-ids that would break the protocol.
 	ErrInvalidMessageID = errors.New("usenet: invalid message-id")
 	// ErrNoProviders means no provider is configured and enabled.
-	ErrNoProviders = errors.New("usenet: no usable providers")
+	ErrNoProviders = fmt.Errorf("usenet: no usable providers: %w", core.ErrSourceUnavailable)
 	// ErrProviderBackoff means a provider is temporarily skipped after
 	// repeated connection failures.
-	ErrProviderBackoff = errors.New("usenet: provider backing off after connection failures")
+	ErrProviderBackoff = fmt.Errorf("usenet: provider backing off after connection failures: %w", core.ErrSourceUnavailable)
 	// ErrProviderDisabled means a provider is disabled until its settings
 	// change, after an authentication failure.
-	ErrProviderDisabled = errors.New("usenet: provider disabled after authentication failure")
+	ErrProviderDisabled = fmt.Errorf("usenet: provider disabled after authentication failure: %w", core.ErrSourceUnavailable)
 	// ErrPoolClosed means the provider was removed or the fetcher closed.
 	ErrPoolClosed = errors.New("usenet: connection pool closed")
 	// ErrConnBroken means a connection was used after an I/O failure.

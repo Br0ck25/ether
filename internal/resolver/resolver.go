@@ -355,6 +355,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
 	}
 
+	var optimisticErr error
 	// The viewer picked a version ("Play Version"): health-check that
 	// release first, ahead of the normal ranking. When it is gone or
 	// unhealthy, fall back to the normal choice below.
@@ -407,6 +408,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 		trace.Candidates[cands[0].trace].Rejected = true
 		trace.Candidates[cands[0].trace].Reason = "nzb fetch: " + err.Error()
+		if !permanentFailure(err) {
+			optimisticErr = err
+		}
 		cands = cands[1:]
 	}
 	index, nzb, err := s.validateCandidates(ctx, cands, &trace, rcfg.HealthRace)
@@ -420,6 +424,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return s.resolution(t.Key, cands, index, nzb, &trace), nil
 	}
 
+	if optimisticErr != nil {
+		return nil, optimisticErr
+	}
 	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts {
 		s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
 	}

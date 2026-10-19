@@ -139,7 +139,7 @@ func (f *variantFixture) get(t *testing.T, target string, hdr ...string) *httpte
 	return rec
 }
 
-var variantPartRE = regexp.MustCompile(`/library/parts/(8[0-9]{15})/[0-9]+/file\.mkv`)
+var variantPartRE = regexp.MustCompile(`/library/parts/(9[0-9]{15})/[0-9]+/file\.mkv`)
 
 func TestDetailRendersPlayVersionMedia(t *testing.T) {
 	f, _ := newVariantPlaybackFixture(t)

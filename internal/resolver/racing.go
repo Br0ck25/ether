@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -50,7 +51,7 @@ func (s *Service) optimisticCheck(r core.Release, nzb []byte) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !ok || err != nil {
+		if (!ok && err == nil) || permanentFailure(err) {
 			_ = s.MarkBad(ctx, r.ID, "optimistic background health check failed")
 		}
 	}()
@@ -83,6 +84,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 		width = min(max(race, 1), 4)
 	}
 	limit := min(len(cands), maxHealthAttempts)
+	var transient error
 	for base := 0; base < limit; base += width {
 		count := min(width, limit-base)
 		workCtx, cancel := context.WithCancel(ctx)
@@ -143,7 +145,11 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			} else {
 				ct.Reason = "health: unhealthy"
 			}
-			s.recordReputation(ctx, cands[v.index].rel.Indexer, false)
+			if v.err != nil && !permanentFailure(v.err) {
+				transient = errors.Join(transient, v.err)
+			} else {
+				s.recordReputation(ctx, cands[v.index].rel.Indexer, false)
+			}
 		}
 		cancel()
 		wg.Wait()
@@ -151,7 +157,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			return winner, nzb, nil
 		}
 	}
-	return -1, nil, nil
+	return -1, nil, transient
 }
 
 // compatibilityScore puts bandwidth-fit direct play ahead of a large source
@@ -183,4 +189,8 @@ func compatibilityScore(r core.Release, c core.ClientCaps, t *core.Title) (float
 		score += 5
 	}
 	return score, strings.Join(notes, "; ")
+}
+
+func permanentFailure(err error) bool {
+	return errors.Is(err, core.ErrArticleMissing) || errors.Is(err, core.ErrArticleCorrupt) || errors.Is(err, core.ErrReleaseRejected)
 }

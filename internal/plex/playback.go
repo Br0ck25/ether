@@ -232,6 +232,9 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 			p.opts.MaxBitrateKbps = limit
 		}
 	}
+	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
+		return t, nil, core.Decision{}, core.ErrUnauthorized
+	}
 	ps, err := s.preparePlayback(ctx, pr, p)
 	if err != nil {
 		return t, nil, core.Decision{}, err
@@ -259,6 +262,9 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 		}
 		dec.Reason = "Direct stream preserves playback across source changes."
 	}
+	if v := ps.Info.Video(); v != nil {
+		s.log.Debug("playback media decision", "key", p.key, "client", pr.ClientID, "device", pr.Device, "model", pr.Model, "platformVersion", pr.PlatformVersion, "video", v.Codec, "videoProfile", v.Profile, "height", v.Height, "bitDepth", v.BitDepth, "transfer", v.ColorTransfer, "dvProfile", v.DolbyVisionProfile, "dvLevel", v.DolbyVisionLevel, "dvCompatibility", v.DolbyVisionCompatibilityID, "kind", dec.Kind, "outputContainer", dec.Container, "videoCopy", dec.VideoCopy, "audioCopy", dec.AudioCopy, "hdrCap", p.caps.HDR10, "dvCap", p.caps.DolbyVision, "profileExtra", pr.ProfileExtra)
+	}
 	s.transcodes.put(&transcodeEntry{
 		id: p.sessionID, playID: ps.ID, userID: pr.User.ID, clientID: pr.ClientID, key: p.key,
 		decision: dec, info: ps.Info, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
@@ -273,6 +279,9 @@ func onDemandSession(ps *core.PlaySession) bool {
 // handleDecision is /video/:/transcode/universal/decision.
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	if s.handleLiveTVPlayback(w, r) {
+		return
+	}
+	if s.handleExtraPlayback(w, r) {
 		return
 	}
 	ctx := r.Context()
@@ -454,13 +463,17 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		part.Stream = kept
 		return m
 	}
-	// Remux or transcode into HLS (mpegts).
+	// Describe the actual HLS segment container so native MDE does not see
+	// HEVC paired with the MPEG-TS container it cannot use.
 	m.SetTranscodeOrder()
 	part.SetTranscodeOrder()
 	m.AspectRatio = 0
 	m.Protocol = p.protocol
 	m.Container = "mpegts"
-	part.Container = "mpegts"
+	if dec.Container == transcode.ContainerFMP4 {
+		m.Container = "mp4"
+	}
+	part.Container = m.Container
 	part.Protocol = p.protocol
 	part.Decision = "transcode"
 	part.Key = ""
@@ -566,6 +579,9 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	if s.handleLiveTVPlayback(w, r) {
 		return
 	}
+	if s.handleExtraPlayback(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	if s.d.Transcoder == nil || s.d.Playback == nil {
@@ -575,6 +591,10 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	p, err := s.parsePlayRequest(r)
 	if err != nil {
 		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
+	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
+		writeHTTPError(w, http.StatusForbidden)
 		return
 	}
 	entry, ok := s.transcodes.get(p.sessionID)
@@ -648,7 +668,9 @@ func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, ses
 			line += fmt.Sprintf(",FRAME-RATE=%.3f", v.FrameRate)
 		}
 	}
-	body := "#EXTM3U\n" + line + "\nsession/" + sessionID + "/base/index.m3u8\n"
+	line += transcode.HLSVariantAttributes(info, dec)
+	entry, _ := s.transcodes.get(sessionID)
+	body := "#EXTM3U\n" + line + "\n" + streamGrantURL("session/"+sessionID+"/base/index.m3u8", entry.streamToken) + "\n"
 	h := w.Header()
 	h.Set("Content-Type", "application/vnd.apple.mpegurl")
 	h.Set("Cache-Control", "no-cache")
@@ -678,7 +700,7 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 		name = rest[i+1:]
 	}
 	if strings.HasSuffix(name, ".m3u8") {
-		hs.ServePlaylist(w, r)
+		s.serveStreamManifest(w, r, id, hs.ServePlaylist)
 		return
 	}
 	n, ok := segmentNumber(name)
@@ -713,7 +735,9 @@ func segmentNumber(name string) (int, bool) {
 
 func (s *Server) handleTranscodePing(w http.ResponseWriter, r *http.Request) {
 	if id := sanitizeSessionID(r.URL.Query().Get("session")); id != "" {
-		s.transcodes.touch(id, s.now())
+		if e, ok := s.transcodes.get(id); ok && e.userID == FromContext(r.Context()).User.ID {
+			s.transcodes.touch(id, s.now())
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -734,7 +758,11 @@ func (s *Server) handleTranscodeStop(w http.ResponseWriter, r *http.Request) {
 // handleTranscodeSessions is /transcode/sessions.
 func (s *Server) handleTranscodeSessions(w http.ResponseWriter, r *http.Request) {
 	mc := &model.MediaContainer{}
+	u := FromContext(r.Context()).User
 	for _, e := range s.sessions.list() {
+		if !u.IsOwner && e.user.ID != u.ID {
+			continue
+		}
 		if e.transcodeID == "" {
 			continue
 		}
@@ -791,6 +819,9 @@ func transcodeSessionModel(te *transcodeEntry) model.TranscodeSess {
 // support through Playback.ServeRange. A variant Part id names a specific
 // release of the title ("Play Version" direct play).
 func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
+	if s.handleExtraPart(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	id, err := strconv.ParseInt(chi.URLParam(r, "part"), 10, 64)

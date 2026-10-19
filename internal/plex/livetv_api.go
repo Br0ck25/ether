@@ -581,9 +581,17 @@ func (s *Server) liveSubscriptionFor(info livetv.SessionInfo) liveSubscription {
 // The native tune payload is source analysis, not a fabricated library item.
 // In particular a live UUID must not be put into the numeric ratingKey field.
 type liveTuneVideo struct {
-	Live    bool          `plex:"live"`
-	Genuine bool          `plex:"genuineMediaAnalysis"`
-	Media   []model.Media `plex:"Media"`
+	Live    bool            `plex:"live"`
+	Genuine bool            `plex:"genuineMediaAnalysis"`
+	Media   []liveTuneMedia `plex:"Media"`
+}
+
+type liveTuneMedia struct {
+	UUID string         `plex:"uuid"`
+	Part []liveTunePart `plex:"Part"`
+}
+type liveTunePart struct {
+	Stream []model.Stream `plex:"Stream"`
 }
 
 func (liveTuneVideo) XMLElementName() string { return "Video" }
@@ -599,19 +607,18 @@ func (s *Server) writeLiveSubscription(w http.ResponseWriter, r *http.Request, i
 	// Plex Web additionally needs its subscription/operation bootstrap.
 	if pr := FromContext(r.Context()); strings.Contains(strings.ToLower(pr.Product), "apple") || strings.EqualFold(pr.Platform, "tvos") || strings.EqualFold(pr.Platform, "ios") {
 		w.Header().Del("X-Plex-Activity")
-		md := s.liveSessionMetadata(info)
-		for i := range md.Media {
-			for j := range md.Media[i].Part {
-				part := &md.Media[i].Part[j]
-				part.Decision = ""
-				if pr.Token != "" {
-					q := url.Values{}
-					q.Set("X-Plex-Token", pr.Token)
-					part.Key += "?" + q.Encode()
+		// The native contract is an analysis result identified by UUID. The
+		// client constructs the live-session MDE request from that UUID; a
+		// fabricated HLS transport/Part key changes its interpretation.
+		var streams []model.Stream
+		if info.MediaInfo != nil {
+			for _, st := range s.buildStreams(0, *info.MediaInfo, selection{}, nil) {
+				if st.StreamType == 1 || st.StreamType == 2 {
+					streams = append(streams, st)
 				}
 			}
 		}
-		s.write(w, r, &liveTuneContainer{Size: 1, Metadata: []liveTuneVideo{{Live: true, Genuine: info.MediaInfo != nil, Media: md.Media}}})
+		s.write(w, r, &liveTuneContainer{Size: 1, Metadata: []liveTuneVideo{{Live: true, Genuine: info.MediaInfo != nil, Media: []liveTuneMedia{{UUID: info.ID, Part: []liveTunePart{{Stream: streams}}}}}}})
 		return
 	}
 

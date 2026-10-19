@@ -50,6 +50,8 @@ type Options struct {
 	DialTimeout time.Duration
 	// CommandTimeout bounds one command, including reading an article body.
 	CommandTimeout time.Duration
+	// IdleReadTimeout bounds stalled command/body reads; default 5 seconds.
+	IdleReadTimeout time.Duration
 	// MinIdle keeps this many primary connections warm after use; negative disables.
 	MinIdle int
 	// IdleTimeout closes excess connections unused for this long.
@@ -524,6 +526,10 @@ func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(*pool) 
 				break attempts
 			default:
 				lastErr = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+				var ne net.Error
+				if errors.As(err, &ne) && ne.Timeout() {
+					break attempts
+				}
 				f.log.Debug("usenet: transient error; retrying", "provider", providerLabel(p.cfg), "msgid", id, "attempt", attempt+1, "err", err)
 			}
 		}
@@ -630,6 +636,7 @@ func (f *Fetcher) CheckBody(ctx context.Context, messageID string, groups []stri
 			}
 			return p.failed(err, reused, ctx)
 		}
+		p.brk.success()
 		return nil
 	})
 }

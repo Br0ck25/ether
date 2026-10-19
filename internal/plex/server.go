@@ -85,10 +85,14 @@ type Deps struct {
 	Transcoder   core.Transcoder
 	// Variants lists distinct release versions for "Play Version" detail
 	// pages (optional: without it, detail pages stay single-Media).
-	Variants         core.VariantResolver
+	Variants core.VariantResolver
+	// Downloads remuxes resolved sources to temp MP4s for the Download
+	// Queue API; nil disables downloads (allowSync stays "0").
+	Downloads        core.DownloadRemuxer
 	TrackPreferences TrackPreferences
 	Markers          MarkerProvider
 	Subtitles        SubtitleSource
+	Extras           ExtrasProvider
 
 	// Config returns the current settings snapshot.
 	Config func() config.Config
@@ -128,9 +132,11 @@ type Server struct {
 	streams          *streamRegistry
 	variantIDs       *variantIDRegistry
 	renderedVariants *renderedVariants
+	downloads        *downloadStore
 	queues           *playQueueStore
 	sessions         *sessionTracker
 	transcodes       *transcodeTable
+	extraPlay        *extraPlayStore
 	selections       *selectionStore
 	notifier         *notifier
 	facets           *facetCache
@@ -179,9 +185,11 @@ func NewServer(d Deps) *Server {
 		streams:          newStreamRegistry(),
 		variantIDs:       newVariantIDRegistry(d.DB),
 		renderedVariants: newRenderedVariants(),
+		downloads:        newDownloadStore(),
 		queues:           newPlayQueueStore(),
 		sessions:         newSessionTracker(),
 		transcodes:       newTranscodeTable(),
+		extraPlay:        newExtraPlayStore(),
 		selections:       newSelectionStore(),
 		notifier:         newNotifier(),
 		facets:           newFacetCache(),
@@ -207,6 +215,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.router.Se
 // Close stops background goroutines and disconnects notification clients.
 func (s *Server) Close() error {
 	s.once.Do(func() {
+		s.releaseAllDownloads()
 		s.cancel()
 		s.notifier.close()
 		s.wg.Wait()
@@ -340,9 +349,11 @@ func (s *Server) janitor() {
 			return
 		case <-t.C:
 			now := s.now()
+			s.expireDownloads(now)
 			s.queues.expire(now, 6*time.Hour)
 			s.renderedVariants.expire(now, renderedVariantsTTL)
 			s.transcodes.expire(now, 2*time.Hour)
+			s.extraPlay.expire(now, 2*time.Hour)
 			for _, e := range s.sessions.expire(now, 2*time.Minute) {
 				s.notifyPlaying(e, "stopped")
 			}

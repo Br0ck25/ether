@@ -1,13 +1,47 @@
 import { Drawer } from "./components/Drawer";
 import {
-  AppShell, Button, ConfirmRoot, Popover, PromptRoot, Spinner, ThemeProvider, ThemeToggle, Toaster, UiLinkProvider,
-  type LinkRender, type SidebarNavGroup,
+  AppShell,
+  Button,
+  ConfirmRoot,
+  Popover,
+  PromptRoot,
+  Spinner,
+  ThemeProvider,
+  ThemeToggle,
+  Toaster,
+  UiLinkProvider,
+  type LinkRender,
+  type SidebarNavGroup,
 } from "@braedonsaunders/appkit-ui";
 import {
-  Activity, Gauge, LayoutTemplate, Layers, LogOut, ScrollText, Settings as SettingsIcon, Sparkles, Users,
+  Activity,
+  Gauge,
+  LayoutTemplate,
+  Layers,
+  LogOut,
+  ScrollText,
+  Settings as SettingsIcon,
+  Sparkles,
+  Users,
 } from "lucide-react";
-import { forwardRef, lazy, Suspense, useCallback, useEffect, useState, type AnchorHTMLAttributes } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  forwardRef,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useState,
+  type AnchorHTMLAttributes,
+} from "react";
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import { AppProvider, useApp } from "./app-context";
 import { Brand, BrandSplash, EtherMark } from "./components/brand";
 import { ErrorPanel } from "./components/feedback";
@@ -37,15 +71,18 @@ const Safety = lazy(() => import("./pages/Safety"));
 const Traces = lazy(() => import("./pages/Traces"));
 
 /** react-router links for every AppKit navigation primitive. */
-const RouterAnchor = forwardRef<HTMLAnchorElement, AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }>(
-  function RouterAnchor({ href, ...rest }, ref) {
-    if (/^(https?:)?\/\//.test(href)) return <a ref={ref} href={href} {...rest} />;
-    return <Link ref={ref} to={href} {...rest} />;
-  },
-);
+const RouterAnchor = forwardRef<
+  HTMLAnchorElement,
+  AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }
+>(function RouterAnchor({ href, ...rest }, ref) {
+  if (/^(https?:)?\/\//.test(href)) return <a ref={ref} href={href} {...rest} />;
+  return <Link ref={ref} to={href} {...rest} />;
+});
 
 const linkRender: LinkRender = ({ href, children, className, title, ariaCurrent, role }) => (
-  <Link to={href} className={className} title={title} aria-current={ariaCurrent} role={role}>{children}</Link>
+  <Link to={href} className={className} title={title} aria-current={ariaCurrent} role={role}>
+    {children}
+  </Link>
 );
 
 function navigation(setupComplete: boolean): SidebarNavGroup[] {
@@ -66,36 +103,88 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
     { href: "/logs", label: "Logs", icon: <ScrollText size={18} /> },
     { href: "/traces", label: "Resolver traces", icon: <Activity size={18} /> },
   ];
-  if (!setupComplete) items.unshift({ href: "/setup", label: "Finish setup", icon: <Sparkles size={18} />, mobile: true });
-  return [{label:"Library",items:items.filter(item=>["/setup","/","/collections","/designer","/viewers","/discovery","/livetv","/metadata"].includes(item.href))},{label:"Playback & access",items:items.filter(item=>["/playback","/streams","/safety"].includes(item.href))},{label:"Server",items:items.filter(item=>["/insights","/adoption","/settings","/logs","/traces"].includes(item.href))}];
+  if (!setupComplete)
+    items.unshift({
+      href: "/setup",
+      label: "Finish setup",
+      icon: <Sparkles size={18} />,
+      mobile: true,
+    });
+  return [
+    {
+      label: "Library",
+      items: items.filter((item) =>
+        [
+          "/setup",
+          "/",
+          "/collections",
+          "/designer",
+          "/viewers",
+          "/discovery",
+          "/livetv",
+          "/metadata",
+        ].includes(item.href),
+      ),
+    },
+    {
+      label: "Playback & access",
+      items: items.filter((item) => ["/playback", "/streams", "/safety"].includes(item.href)),
+    },
+    {
+      label: "Server",
+      items: items.filter((item) =>
+        ["/insights", "/adoption", "/settings", "/logs", "/traces"].includes(item.href),
+      ),
+    },
+  ];
 }
 
 function HealthIndicator() {
   const { health, overall, dashboard, dashboardError } = useApp();
   const [open, setOpen] = useState(false);
-  const label = overall === "ok" || overall === "off" ? "All systems normal" : overall === "unknown" ? "Checking…" : LEVEL_LABEL[overall];
+  const label =
+    overall === "ok" || overall === "off"
+      ? "All systems normal"
+      : overall === "unknown"
+        ? "Checking…"
+        : LEVEL_LABEL[overall];
   return (
     <Popover
       open={open}
       onOpenChange={setOpen}
       trigger={
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-label={`Server health: ${label}`}
-          className="inline-flex h-9 items-center gap-2 rounded-md px-2.5 text-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-label={`Server health: ${label}`}
+          className="inline-flex h-9 items-center gap-2 rounded-md px-2.5 text-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
           <StatusDot level={overall === "off" ? "ok" : overall} pulse />
           <span className="hidden md:inline">{label}</span>
         </button>
       }
     >
       <div className="w-80 p-1">
-        <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">Server health</p>
-        {dashboardError && !dashboard ? <p className="px-2 pb-2 text-sm text-danger">Status is unavailable right now.</p> : null}
+        <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+          Server health
+        </p>
+        {dashboardError && !dashboard ? (
+          <p className="px-2 pb-2 text-sm text-danger">Status is unavailable right now.</p>
+        ) : null}
         <ul className="space-y-0.5">
           {health.map((h) => (
             <li key={h.id}>
-              <Link to={`/settings/${h.settings}`} onClick={() => setOpen(false)} className="flex items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surface-hover">
+              <Link
+                to={`/settings/${h.settings}`}
+                onClick={() => setOpen(false)}
+                className="flex items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surface-hover"
+              >
                 <StatusDot level={h.level} className="mt-1.5" />
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center justify-between gap-2 text-sm font-medium text-fg">{h.label}<LevelBadge level={h.level} /></span>
+                  <span className="flex items-center justify-between gap-2 text-sm font-medium text-fg">
+                    {h.label}
+                    <LevelBadge level={h.level} />
+                  </span>
                   <span className="block truncate text-xs text-fg-muted">{h.summary}</span>
                 </span>
               </Link>
@@ -113,9 +202,25 @@ function versionLabel(v: string): string {
 }
 
 /** A fresh editor per new-collection draft (each navigation carries its own draft id). */
-function CollectionDrawer({fresh=false}:{fresh?:boolean}) {
-  const navigate=useNavigate();
-  return <><div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col"><CollectionsGallery/></div><Drawer open onClose={()=>navigate("/collections")} title="Collection Studio" size="2xl" initialFullscreen bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0">{fresh?<NewCollection/>:<CollectionEditor/>}</Drawer></>;
+function CollectionDrawer({ fresh = false }: { fresh?: boolean }) {
+  const navigate = useNavigate();
+  return (
+    <>
+      <div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col">
+        <CollectionsGallery />
+      </div>
+      <Drawer
+        open
+        onClose={() => navigate("/collections")}
+        title="Collection Studio"
+        size="2xl"
+        initialFullscreen
+        bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0"
+      >
+        {fresh ? <NewCollection /> : <CollectionEditor />}
+      </Drawer>
+    </>
+  );
 }
 
 function NewCollection() {
@@ -124,7 +229,11 @@ function NewCollection() {
 }
 
 function PageFallback() {
-  return <div className="grid flex-1 place-items-center p-10"><Spinner size={22} label="Loading" /></div>;
+  return (
+    <div className="grid flex-1 place-items-center p-10">
+      <Spinner size={22} label="Loading" />
+    </div>
+  );
 }
 
 function Shell() {
@@ -137,26 +246,55 @@ function Shell() {
       pathname={location.pathname}
       navigationMode="sidebar"
       linkRender={linkRender}
-      brand={<Link to="/" aria-label="Ether home" className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"><Brand serverName={boot.serverName} /></Link>}
-      headerMiddle={<span className="hidden truncate text-sm text-fg-muted lg:block">{boot.serverName}<span className="text-fg-subtle"> · {versionLabel(boot.version)}</span></span>}
+      brand={
+        <Link
+          to="/"
+          aria-label="Ether home"
+          className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <Brand serverName={boot.serverName} />
+        </Link>
+      }
+      headerMiddle={
+        <span className="hidden truncate text-sm text-fg-muted lg:block">
+          {boot.serverName}
+          <span className="text-fg-subtle"> · {versionLabel(boot.version)}</span>
+        </span>
+      }
       header={
         <>
           <HealthIndicator />
           <ThemeToggle collapsed />
           {remoteSession ? (
-            <Button variant="ghost" size="sm" onClick={() => { setToken(""); window.location.reload(); }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setToken("");
+                window.location.reload();
+              }}
+            >
               <LogOut size={15} /> <span className="hidden sm:inline">Sign out</span>
             </Button>
           ) : null}
         </>
       }
-      sidebarFooter={<p className="px-1 text-xs text-fg-subtle">Ether {versionLabel(boot.version)}</p>}
-      sidebarCollapsedFooter={<div className="flex justify-center"><EtherMark size={20} /></div>}
+      sidebarFooter={
+        <p className="px-1 text-xs text-fg-subtle">Ether {versionLabel(boot.version)}</p>
+      }
+      sidebarCollapsedFooter={
+        <div className="flex justify-center">
+          <EtherMark size={20} />
+        </div>
+      }
       mobileTabCount={4}
     >
       <Suspense fallback={<PageFallback />}>
         <Routes>
-          <Route path="/" element={boot.setupComplete ? <Home /> : <Navigate to="/setup" replace />} />
+          <Route
+            path="/"
+            element={boot.setupComplete ? <Home /> : <Navigate to="/setup" replace />}
+          />
           <Route path="/setup" element={<Setup />} />
           <Route path="/collections" element={<CollectionsGallery />} />
           <Route path="/collections/new" element={<CollectionDrawer fresh />} />
@@ -189,23 +327,46 @@ function Gate({ onReady }: { onReady: () => void }) {
   const [unlocked, setUnlocked] = useState(false);
 
   const loadBoot = useCallback(async () => {
-    try { setBoot(await api.bootstrap()); setError(null); }
-    catch (e) { setError(e); }
+    try {
+      setBoot(await api.bootstrap());
+      setError(null);
+    } catch (e) {
+      setError(e);
+    }
   }, []);
-  useEffect(() => { void loadBoot(); }, [loadBoot]);
-  useEffect(() => { if (boot || error) onReady(); }, [boot, error, onReady]);
+  useEffect(() => {
+    void loadBoot();
+  }, [loadBoot]);
+  useEffect(() => {
+    if (boot || error) onReady();
+  }, [boot, error, onReady]);
 
   if (!boot) {
     return (
       <main className="grid min-h-screen place-items-center bg-bg-subtle p-4">
-        {error ? <div className="w-full max-w-md"><ErrorPanel error={error} onRetry={() => void loadBoot()} /></div> : (
-          <div className="flex flex-col items-center gap-3 text-sm text-fg-muted"><EtherMark size={40} motion="loop" /><span role="status">Connecting to Ether…</span></div>
+        {error ? (
+          <div className="w-full max-w-md">
+            <ErrorPanel error={error} onRetry={() => void loadBoot()} />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-3 text-sm text-fg-muted">
+            <EtherMark size={40} motion="loop" />
+            <span role="status">Connecting to Ether…</span>
+          </div>
         )}
       </main>
     );
   }
   if (boot.authRequired && !boot.authenticated && !unlocked) {
-    return <Login boot={boot} onReady={() => { setUnlocked(true); void loadBoot(); }} />;
+    return (
+      <Login
+        boot={boot}
+        onReady={() => {
+          setUnlocked(true);
+          void loadBoot();
+        }}
+      />
+    );
   }
   return (
     <AppProvider boot={boot} reloadBoot={loadBoot}>

@@ -7,7 +7,11 @@ import { afterEach, vi } from "vitest";
 const dom = (globalThis as { jsdom?: { window: Window } }).jsdom;
 if (dom) {
   for (const key of ["localStorage", "sessionStorage"] as const) {
-    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value: dom.window[key] });
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value: dom.window[key],
+    });
   }
 }
 
@@ -17,8 +21,13 @@ if (!window.matchMedia) {
     writable: true,
     value: (query: string) => ({
       matches: query.includes("min-width"), // render the desktop layout in tests
-      media: query, onchange: null,
-      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
     }),
   });
 }
@@ -27,10 +36,14 @@ class NoopObserver {
   observe() {}
   unobserve() {}
   disconnect() {}
-  takeRecords() { return []; }
+  takeRecords() {
+    return [];
+  }
 }
-if (!("ResizeObserver" in window)) Object.defineProperty(window, "ResizeObserver", { writable: true, value: NoopObserver });
-if (!("IntersectionObserver" in window)) Object.defineProperty(window, "IntersectionObserver", { writable: true, value: NoopObserver });
+if (!("ResizeObserver" in window))
+  Object.defineProperty(window, "ResizeObserver", { writable: true, value: NoopObserver });
+if (!("IntersectionObserver" in window))
+  Object.defineProperty(window, "IntersectionObserver", { writable: true, value: NoopObserver });
 if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {};
 if (!Element.prototype.scrollBy) Element.prototype.scrollBy = () => {};
 if (!window.scrollTo) window.scrollTo = () => {};

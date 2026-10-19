@@ -113,7 +113,8 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		pr := FromContext(r.Context())
 		s.log.Debug("request", "method", r.Method, "path", r.URL.Path, "status", sr.status,
 			"dur", time.Since(start).Round(time.Millisecond), "product", pr.Product, "client", pr.ClientID,
-			"pageStart", pr.Start, "pageSize", pr.Size, "paged", pr.HasPage, "format", pr.Format, "includeChildren", r.URL.Query().Get("includeChildren"))
+			"pageStart", pr.Start, "pageSize", pr.Size, "paged", pr.HasPage, "format", pr.Format, "includeChildren", r.URL.Query().Get("includeChildren"),
+			"model", pr.Model, "device", pr.Device, "platformVersion", pr.PlatformVersion, "peer", pr.RemoteIP.String())
 	})
 }
 
@@ -134,11 +135,15 @@ var publicPaths = map[string]bool{
 // PMS's 401 body.
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if publicPaths[trimSlash(r.URL.Path)] || s.liveSessionPath(r.URL.Path) {
+		if publicPaths[trimSlash(r.URL.Path)] {
 			next.ServeHTTP(w, r)
 			return
 		}
 		pr := FromContext(r.Context())
+		if pr.Token == "" && s.authenticateStreamGrant(r, pr) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if pr.Token == "" || s.d.Auth == nil {
 			writeHTTPError(w, http.StatusUnauthorized)
 			return
@@ -148,6 +153,17 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		case err == nil && u != nil:
 			if policy, ok := s.d.AccessPolicy.(interface{ UserPolicy(*core.User) *core.User }); ok {
 				u = policy.UserPolicy(u)
+			}
+			if id := transcodeSessionID(r.URL.Path); id != "" {
+				e, ok := s.transcodes.get(id)
+				if !ok {
+					writeHTTPError(w, http.StatusNotFound)
+					return
+				}
+				if e.userID != u.ID {
+					writeHTTPError(w, http.StatusForbidden)
+					return
+				}
 			}
 			pr.User = u
 			next.ServeHTTP(w, r)
@@ -160,24 +176,6 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeHTTPError(w, http.StatusServiceUnavailable)
 		}
 	})
-}
-
-// liveSessionPath reports a segment/manifest URL inside a running transcode
-// session. Players fetch these from the relative URLs in an MPD or media
-// playlist, which carry no X-Plex-Token; like PMS, the unguessable session
-// id (issued after an authenticated start) authorizes them.
-func (s *Server) liveSessionPath(path string) bool {
-	const prefix = "/video/:/transcode/universal/session/"
-	rest, ok := strings.CutPrefix(path, prefix)
-	if !ok || s.d.Transcoder == nil {
-		return false
-	}
-	id, _, ok := strings.Cut(rest, "/")
-	if !ok || id == "" {
-		return false
-	}
-	_, live := s.d.Transcoder.Session(id)
-	return live
 }
 
 // ownerOnly restricts a handler to the server owner.
@@ -211,6 +209,12 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, v any) {
 
 func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request, status int, v any) {
 	pr := FromContext(r.Context())
+	// allowSync on library containers follows the viewer's download
+	// permission; containers that don't carry the attribute keep not
+	// carrying it.
+	if mc, ok := v.(*model.MediaContainer); ok && mc.AllowSync != nil {
+		*mc.AllowSync = s.downloadsAllowed(pr.User)
+	}
 	body, err := model.Marshal(v, pr.Format)
 	if err != nil {
 		s.log.Error("encode response", "path", r.URL.Path, "err", err)

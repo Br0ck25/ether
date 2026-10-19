@@ -51,8 +51,8 @@ CREATE UNIQUE INDEX variants_ids_pair ON variants_ids(rating_key, release_id);`)
 }
 
 const (
-	variantIDBase  = 8_000_000_000_000_000
-	variantIDSpace = 999_999_999_999_999 // ids stay in [8.000...e15, 8.999...e15)
+	variantIDBase  = 9_000_000_000_000_000
+	variantIDSpace = 7_199_254_740_990 // ids stay below 2^53
 
 	maxVariantIDs       = 200_000
 	renderedVariantsTTL = 30 * time.Minute
