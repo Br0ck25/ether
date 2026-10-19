@@ -365,6 +365,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	m.mu.Lock()
 	adapt := adaptiveFromConfig(m.cfg)
 	m.mu.Unlock()
+	rungs := buildRungs(req.Info, d, adapt)
 
 	// HLS playlists start at the offset; a DASH MPD always spans the whole
 	// title and the first run starts at the offset's segment.
@@ -379,7 +380,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		if total > 0 && startSeg >= total {
 			startSeg = total - 1
 		}
-		reps = dashReps(req.Info, d)
+		reps = dashRepsLadder(req.Info, d, rungs)
 		if len(reps) == 0 {
 			return nil, errors.New("transcode: StartHLS: no video or audio stream for DASH")
 		}
@@ -404,6 +405,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 			snap:       d.VideoCopy && len(req.Info.Keyframes) > 0,
 		})
 		total = plan.Total()
+		tracks = len(rungs) // one segment track per rung
 	}
 	id := req.SessionID
 	if id == "" {
@@ -463,6 +465,8 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		changed:     make(chan struct{}),
 		plan:        plan,
 		adapt:       adapt,
+		rungs:       rungs,
+		initFiles:   make([]string, tracks),
 		seekRampSeg: -1,
 		segSizes:    map[int]int64{},
 		governorOn:  adapt.Governor && proto == core.ProtocolHLS && d.VideoCopy && v != nil,

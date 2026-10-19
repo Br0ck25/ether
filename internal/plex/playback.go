@@ -585,12 +585,12 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	}
 	if existing, ok := s.d.Transcoder.Session(p.sessionID); ok && existing != nil {
 		if entry.started && entry.offset == p.offset {
-			s.writeMasterPlaylist(w, r, p.sessionID, ps.Info, dec)
+			s.writeMasterPlaylist(w, r, p.sessionID, existing, ps.Info, dec)
 			return
 		}
 		s.d.Transcoder.Stop(p.sessionID)
 	}
-	_, err = s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
+	hs, err := s.d.Transcoder.StartHLS(context.WithoutCancel(ctx), core.HLSRequest{
 		SessionID:   p.sessionID,
 		InputURL:    s.d.Playback.InputURL(ps.ID),
 		Info:        ps.Info,
@@ -604,10 +604,46 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	}
 	entry.decision, entry.offset, entry.started, entry.updatedAt = dec, p.offset, true, s.now()
 	s.transcodes.put(entry)
-	s.writeMasterPlaylist(w, r, p.sessionID, ps.Info, dec)
+	s.writeMasterPlaylist(w, r, p.sessionID, hs, ps.Info, dec)
 }
 
-func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, sessionID string, info core.MediaInfo, dec core.Decision) {
+func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, sessionID string, hs core.HLSSession, info core.MediaInfo, dec core.Decision) {
+	// A ladder-capable session advertises every rung; the client's native
+	// ABR (AVPlayer, hls.js) steps between them and the session starts a
+	// rung's encoder lazily on its first segment request. The primary
+	// rung keeps the historic "base" URI.
+	if ls, ok := hs.(core.HLSLadderSession); ok {
+		if rungs := ls.Rungs(); len(rungs) > 1 {
+			var b strings.Builder
+			b.WriteString("#EXTM3U\n")
+			for _, rg := range rungs {
+				line := fmt.Sprintf("#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=%d", rg.Bandwidth)
+				if rg.AverageBandwidth > 0 {
+					line += fmt.Sprintf(",AVERAGE-BANDWIDTH=%d", rg.AverageBandwidth)
+				}
+				if rg.Width > 0 && rg.Height > 0 {
+					line += fmt.Sprintf(",RESOLUTION=%dx%d", rg.Width, rg.Height)
+				}
+				if rg.Codecs != "" {
+					line += fmt.Sprintf(",CODECS=%q", rg.Codecs)
+				}
+				if rg.FrameRate > 0 {
+					line += fmt.Sprintf(",FRAME-RATE=%.3f", rg.FrameRate)
+				}
+				b.WriteString(line + "\nsession/" + sessionID + "/" + rg.ID + "/index.m3u8\n")
+			}
+			body := b.String()
+			h := w.Header()
+			h.Set("Content-Type", "application/vnd.apple.mpegurl")
+			h.Set("Cache-Control", "no-cache")
+			h.Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(http.StatusOK)
+			if r.Method != http.MethodHead {
+				_, _ = io.WriteString(w, body)
+			}
+			return
+		}
+	}
 	bw := info.BitrateKbps
 	if !dec.VideoCopy && dec.BitrateKbps > 0 {
 		bw = dec.BitrateKbps
@@ -654,6 +690,29 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 	name := rest
 	if i := strings.LastIndexByte(rest, '/'); i >= 0 {
 		name = rest[i+1:]
+	}
+	// ABR ladder: session/{id}/{rung}/index.m3u8 and .../{rung}/{seg}.ts.
+	// The primary rung is "base"; sessions without a ladder fall through
+	// to the historic single-rung handling.
+	if ls, isLadder := hs.(core.HLSLadderSession); isLadder {
+		if rungID, _, found := strings.Cut(rest, "/"); found {
+			for _, rg := range ls.Rungs() {
+				if rg.ID != rungID {
+					continue
+				}
+				if strings.HasSuffix(name, ".m3u8") {
+					ls.ServeRungPlaylist(w, r, rungID)
+					return
+				}
+				n, ok := segmentNumber(name)
+				if !ok {
+					writeHTTPError(w, http.StatusNotFound)
+					return
+				}
+				ls.ServeRungSegment(w, r, rungID, n)
+				return
+			}
+		}
 	}
 	if strings.HasSuffix(name, ".m3u8") {
 		hs.ServePlaylist(w, r)

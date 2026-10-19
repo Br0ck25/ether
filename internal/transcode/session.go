@@ -71,7 +71,9 @@ type Session struct {
 	// snapshot, the ABR ladder and measured delivery goodput.
 	plan        *Timeline
 	adapt       adaptiveSettings
-	wantTrack   int // track the encoder should be producing (rung/rep)
+	rungs       []rung
+	initFiles   []string // per HLS track: init path relative to dir
+	wantTrack   int      // track the encoder should be producing (rung/rep)
 	goodput     goodputEstimator
 	segSizes    map[int]int64 // primary-track segment sizes (spike governor)
 	governorOn  bool          // plan may change ahead of the player
@@ -172,14 +174,25 @@ func (s *Session) segName(n int) string { return s.m.opts.segmentURI(n, s.contai
 // segPath is the file of segment n of the first track.
 func (s *Session) segPath(n int) string { return s.trackSegPath(0, n) }
 
-// runDirLocked is where the wanted track's ffmpeg run writes segments.
-func (s *Session) runDirLocked() string { return s.dir }
+// runDirLocked is where the wanted track's ffmpeg run writes segments:
+// the session dir for the primary rung, a rung subdir for other rungs
+// (segment N has different bytes per rung).
+func (s *Session) runDirLocked() string {
+	if s.isDASH() || s.wantTrack <= 0 || s.wantTrack >= len(s.rungs) {
+		return s.dir
+	}
+	return filepath.Join(s.dir, "rung-"+s.rungs[s.wantTrack].id)
+}
 
 func (s *Session) trackSegPath(t, n int) string {
 	if s.isDASH() {
 		return filepath.Join(s.dir, fmt.Sprintf("seg-%d-%05d.m4s", t, n))
 	}
-	return filepath.Join(s.dir, segmentFile(n, segmentExt(s.container)))
+	name := segmentFile(n, segmentExt(s.container))
+	if t > 0 && t < len(s.rungs) {
+		return filepath.Join(s.dir, "rung-"+s.rungs[t].id, name)
+	}
+	return filepath.Join(s.dir, name)
 }
 
 func (s *Session) segStart(n int) time.Duration {
@@ -257,6 +270,9 @@ func (s *Session) renderPlaylistLocked(t int) []byte {
 	}
 	// Unknown duration: list the contiguous completed prefix.
 	done := s.done[0]
+	if t >= 0 && t < len(s.done) {
+		done = s.done[t]
+	}
 	limit := 0
 	for done[limit] {
 		limit++
@@ -341,8 +357,19 @@ func (s *Session) runPlanLocked(seg int) runPlan {
 	return rp
 }
 
-// trackDecisionLocked is the steady decision of track t (rung t).
+// trackDecisionLocked is the steady decision of track t: an HLS rung's
+// own decision, or for DASH the decision of the rung behind video
+// track t.
 func (s *Session) trackDecisionLocked(t int) core.Decision {
+	if s.isDASH() {
+		if r := rungForDashTrack(t); r >= 0 && r < len(s.rungs) {
+			return s.rungs[r].decision
+		}
+		return s.decision
+	}
+	if t >= 0 && t < len(s.rungs) {
+		return s.rungs[t].decision
+	}
 	return s.decision
 }
 
@@ -382,6 +409,16 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			return
 		}
 		s.lastReq = n
+		// The encoder follows the most recently requested encode track
+		// (HLS rung, or DASH video representation; an audio request never
+		// switches the video rung).
+		if s.isDASH() {
+			if t != s.audioTrackLocked() {
+				s.wantTrack = t
+			}
+		} else {
+			s.wantTrack = t
+		}
 		s.throttleLocked()
 		done := s.done[t]
 		// HLS only: ffmpeg's segmenter may cut slivers past the playlist's
@@ -455,6 +492,9 @@ func (s *Session) needsRestartLocked(n int) bool {
 	if r == nil || r.finished || r.stopped {
 		return true
 	}
+	if r.track != s.wantTrack {
+		return true // the client switched rungs: re-encode from n there
+	}
 	if n < r.startSeg || n < r.next() {
 		// Behind the run's start, or already passed by it (pruned).
 		return true
@@ -493,7 +533,10 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			http.Error(w, "init segment missing", http.StatusInternalServerError)
 			return
 		}
-		if (s.cur == nil || s.cur.finished || s.cur.stopped) && !restarted {
+		if !s.isDASH() {
+			s.wantTrack = t
+		}
+		if (s.cur == nil || s.cur.finished || s.cur.stopped || (!s.isDASH() && s.cur.track != t)) && !restarted {
 			restarted = true
 			start := s.lastReq
 			if start < 0 {
@@ -563,12 +606,19 @@ func (s *Session) serveCounted(w http.ResponseWriter, r *http.Request, name stri
 	s.goodput.add(cw.bytes, time.Since(start))
 }
 
-// initFileLocked is the current init segment file of track t ("" none).
+// initFileLocked is the current init segment file of track t, relative
+// to the session dir ("" none).
 func (s *Session) initFileLocked(t int) string {
 	if s.isDASH() {
 		return s.dash.inits[t]
 	}
-	return s.initFile
+	if t >= 0 && t < len(s.initFiles) && s.initFiles[t] != "" {
+		return s.initFiles[t]
+	}
+	if t == 0 {
+		return s.initFile
+	}
+	return ""
 }
 
 func (s *Session) setSegmentHeaders(w http.ResponseWriter) {
@@ -737,7 +787,20 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
 			return fmt.Errorf("transcode: run dir: %w", err)
 		}
-		dr = newDASHRun(spec.Dir, len(s.done), s.base, s.segDur, s.total, seg)
+		// The muxer produces video (the wanted rung) then audio; map
+		// those to their session tracks.
+		var mapping []int
+		if s.info.Video() != nil {
+			mapping = append(mapping, s.wantTrack)
+		}
+		if findStream(s.info, spec.Decision.AudioStream, "audio") != nil {
+			at := s.audioTrackLocked()
+			if at < 0 {
+				at = len(mapping)
+			}
+			mapping = append(mapping, at)
+		}
+		dr = newDASHRun(spec.Dir, mapping, s.base, s.segDur, s.total, seg)
 	}
 	r := &run{
 		seq:      s.runSeq,
@@ -867,9 +930,17 @@ func (s *Session) poll(r *run, playlist string) {
 			_ = os.Remove(s.trackSegPath(t, n))
 			continue
 		}
-		if s.container == ContainerFMP4 && s.initFile != r.spec.InitName && t == 0 {
-			if _, err := os.Stat(filepath.Join(s.dir, r.spec.InitName)); err == nil {
-				s.initFile = r.spec.InitName
+		if s.container == ContainerFMP4 {
+			if _, err := os.Stat(filepath.Join(r.spec.Dir, r.spec.InitName)); err == nil {
+				if rel, err := filepath.Rel(s.dir, filepath.Join(r.spec.Dir, r.spec.InitName)); err == nil {
+					for len(s.initFiles) <= t {
+						s.initFiles = append(s.initFiles, "")
+					}
+					s.initFiles[t] = rel
+					if t == 0 {
+						s.initFile = rel
+					}
+				}
 			}
 		}
 		r.produced++
@@ -1036,6 +1107,21 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	}
 	if next.Kind != s.decision.Kind || next.VideoCopy != s.decision.VideoCopy || next.AudioCopy != s.decision.AudioCopy {
 		s.log.Info("failover changes decision", "from", s.decision.Kind, "to", next.Kind, "reason", next.Reason)
+	}
+	// Keep the ladder's track layout; adapt every rung like the primary.
+	if len(s.rungs) > 0 {
+		s.rungs[0].decision = next
+		for i := 1; i < len(s.rungs); i++ {
+			old := s.rungs[i].decision
+			nd := adaptDecision(old, s.info, info, s.container)
+			if s.isDASH() {
+				nd = dashDecision(info, nd)
+			}
+			nd.VideoCopy = false
+			nd.Kind = core.DecisionTranscode
+			nd.MaxHeight, nd.BitrateKbps = old.MaxHeight, old.BitrateKbps
+			s.rungs[i].decision = nd
+		}
 	}
 	s.input = inputURL
 	s.info = info
