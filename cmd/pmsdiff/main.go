@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -36,6 +37,8 @@ func run(args []string) error {
 	out := f.String("out", "testdata/pms", "output fixture directory")
 	client := f.String("client", "all", "web|ios|appletv|all")
 	format := f.String("format", "text", "text|json")
+	summary := f.Bool("summary", false, "print per-endpoint missing/extra/type differences and a count table")
+	values := f.Bool("values", false, "include informational value differences")
 	timeout := f.Duration("timeout", 90*time.Second, "per-request timeout")
 	concurrency := f.Int("concurrency", 2, "maximum concurrent requests")
 	if e := f.Parse(args[1:]); e != nil {
@@ -78,9 +81,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	emit(report, *format)
-	if len(report.Differences) > 0 {
-		return fmt.Errorf("report contains %d errors or blocking differences", len(report.Differences))
+	emit(os.Stdout, report, *format, *summary, *values)
+	if n := report.Blocking(); n > 0 {
+		return fmt.Errorf("report contains %d errors or blocking differences", n)
 	}
 	return nil
 }
@@ -157,6 +160,9 @@ func compare(dir, base, token, sel string, timeout time.Duration, concurrency in
 	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	defer cancel()
 	out := pmsconform.Report{}
+	for _, req := range pmsconform.Corpus() {
+		out.Endpoints = append(out.Endpoints, req.Path)
+	}
 	for _, profile := range profiles(sel) {
 		refIDs, e := loadDiscovery(dir, profile)
 		if e != nil {
@@ -186,6 +192,7 @@ func compare(dir, base, token, sel string, timeout time.Duration, concurrency in
 					a, e := pmsconform.LoadFixture(filepath.Join(dir, profile, name+".json"))
 					if e != nil {
 						d := errorDifference(profile, j.req, fmt.Errorf("load fixture: %w", e))
+						d.Format = formatName(j.json)
 						fmt.Fprintf(os.Stderr, "ERROR %s: %v\n", d.Path, d.Reference)
 						results <- result{[]pmsconform.Difference{d}}
 						continue
@@ -193,11 +200,12 @@ func compare(dir, base, token, sel string, timeout time.Duration, concurrency in
 					b, e := pmsconform.Fetch(ctx, client, base, token, j.req, profile, targetIDs.Values, j.json)
 					if e != nil {
 						d := errorDifference(profile, j.req, e)
+						d.Format = formatName(j.json)
 						fmt.Fprintf(os.Stderr, "ERROR %s: %v\n", d.Path, d.Reference)
 						results <- result{[]pmsconform.Difference{d}}
 						continue
 					}
-					r := pmsconform.Compare(a, b)
+					r := pmsconform.Compare(a, b).WithRequest(profile, formatName(j.json), j.req.Path)
 					results <- result{r.Differences}
 				}
 			}()
@@ -226,30 +234,38 @@ func fixtureName(profile, path string, jsonMode bool) string {
 	n := strings.NewReplacer("/", "_", ":", "", "?", "_", "=", "-").Replace(profile + "_" + ext + path)
 	return filepath.Base(n)
 }
+func formatName(jsonMode bool) string {
+	if jsonMode {
+		return "json"
+	}
+	return "xml"
+}
 func errorDifference(profile string, req pmsconform.Request, e error) pmsconform.Difference {
-	return pmsconform.Difference{Path: profile + " " + req.Method + " " + req.Path, Kind: "request_error", Reference: string(pmsconform.Redact([]byte(e.Error()))), Blocking: true}
+	return pmsconform.Difference{Client: profile, Endpoint: req.Path, Path: profile + " " + req.Method + " " + req.Path, Kind: pmsconform.KindRequestError, Reference: string(pmsconform.Redact([]byte(e.Error()))), Blocking: true}
 }
 func mergeReports(a, b pmsconform.Report) pmsconform.Report {
 	a.Differences = append(a.Differences, b.Differences...)
 	a.Discovery = append(a.Discovery, b.Discovery...)
 	return a
 }
-func emit(r pmsconform.Report, format string) {
+func emit(w io.Writer, r pmsconform.Report, format string, summary, values bool) {
 	if format == "json" {
-		b, _ := json.MarshalIndent(r, "", "  ")
-		fmt.Println(string(b))
+		var v any = r
+		if summary {
+			v = struct {
+				Discovery []string                     `json:"discovery,omitempty"`
+				Endpoints []pmsconform.EndpointSummary `json:"endpoints"`
+			}{r.Discovery, pmsconform.Summarize(r)}
+		}
+		b, _ := json.MarshalIndent(v, "", "  ")
+		fmt.Fprintln(w, string(b))
 		return
 	}
-	for _, x := range r.Discovery {
-		fmt.Printf("INFO: %s\n", x)
-	}
-	if len(r.Differences) == 0 {
-		fmt.Println("No errors or structural differences.")
+	if summary {
+		pmsconform.WriteSummary(w, r, values)
 		return
 	}
-	for _, d := range r.Differences {
-		fmt.Printf("BLOCK %s: %s (%v)\n", d.Path, d.Kind, d.Reference)
-	}
+	pmsconform.WriteText(w, r, values)
 }
 func writeManifest(dir string, r pmsconform.Report) error {
 	if e := os.MkdirAll(dir, 0755); e != nil {
