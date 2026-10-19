@@ -206,8 +206,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger:  log.With("component", "llm"),
 	})
 	a.recommend = recommend.New(recommend.Options{
-		Catalog: a.catalog, State: a.state, Collections: a.collections,
-		Trakt: a.trakt, LLM: a.llm, Events: a.state,
+		Catalog: a.catalog, State: a.state, LLM: a.llm,
 		Logger: log.With("component", "recommend"),
 	})
 	a.closers = append(a.closers, a.recommend.Close)
@@ -223,6 +222,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("personalization: %w", err)
 	}
 	a.recommend.SetScorer(a.personalize)
+	a.recommend.SetHomeSource(a.personalize)
 	a.collections.SetScorer(a.personalize) // "personal" collection sort
 	a.closers = append(a.closers, a.personalize.Close)
 	a.subtitles = subtitles.New(subtitles.Options{
@@ -265,9 +265,10 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 
 	a.trackprefs = trackprefs.New(a.db, trackprefs.Options{ShowName: func(ctx context.Context, id int64) string {
-		var name string
-		_ = a.db.QueryRowContext(ctx, `SELECT title FROM catalog_titles WHERE key=?`, int64(core.ShowKey(id))).Scan(&name)
-		return name
+		if title, err := a.catalog.CachedTitle(ctx, core.ShowKey(id)); err == nil {
+			return title.Title
+		}
+		return ""
 	}})
 	markerFFmpeg := cfg.Transcode.FFmpegPath
 	if a.transcoder != nil {

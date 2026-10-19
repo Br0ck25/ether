@@ -92,6 +92,7 @@ type Event struct {
 	State     string  // raw timeline state for EventProgress: playing, paused, stopped
 	Completed bool
 	At        time.Time
+	Imported  bool // reviewed history import; never an active playback timeline
 }
 
 // Options tune a State. Now is injectable for tests.

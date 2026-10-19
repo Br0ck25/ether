@@ -17,10 +17,17 @@ export function loadTitle(key: string): Promise<TitleDetail | null> {
 export function useTitle(key: string | undefined): TitleDetail | null {
   const [t, setT] = useState<TitleDetail | null>(null);
   useEffect(() => {
-    if (!key) { setT(null); return; }
+    if (!key) {
+      setT(null);
+      return;
+    }
     let live = true;
-    void loadTitle(key).then((v) => { if (live) setT(v); });
-    return () => { live = false; };
+    void loadTitle(key).then((v) => {
+      if (live) setT(v);
+    });
+    return () => {
+      live = false;
+    };
   }, [key]);
   return t;
 }

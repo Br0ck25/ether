@@ -22,7 +22,7 @@ import (
 //	personalize_plays             plays observed from watch-state events,
 //	                              attributed to the row they came from.
 //	personalize_overrides         owner corrections to a viewer's taste.
-//	personalize_layout            the owner's Home Designer rules (JSON).
+//	personalize_layout            consumed legacy rules (migration only).
 //
 // Impressions are compacted on write: repeated serves of the same row on
 // the same day bump a counter instead of adding rows, so a client that
@@ -531,16 +531,6 @@ func (s *sqlStore) layout(ctx context.Context) ([]core.LayoutRule, error) {
 		rules = []core.LayoutRule{}
 	}
 	return rules, nil
-}
-
-func (s *sqlStore) setLayout(ctx context.Context, rules []core.LayoutRule, now time.Time) error {
-	raw, err := json.Marshal(rules)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO personalize_layout (id, rules, updated_at) VALUES (1, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET rules = excluded.rules, updated_at = excluded.updated_at`, string(raw), ms(now))
-	return err
 }
 
 // ---- retention -------------------------------------------------------------------

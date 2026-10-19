@@ -432,3 +432,9 @@ func (s *Service) Handler() http.Handler {
 	})
 	return m
 }
+
+// PreferredFile returns a complete local source and its probe facts without
+// opening the file. This is the same selection policy used by playback.
+func (s *Service) PreferredFile(ctx context.Context, key core.RatingKey) (File, error) {
+	return s.preferred(ctx, key)
+}

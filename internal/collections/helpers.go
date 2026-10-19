@@ -77,28 +77,14 @@ func (s *Service) Facets(ctx context.Context, t core.MediaType, facet string) ([
 }
 
 func (s *Service) languageFacet(ctx context.Context, t core.MediaType) ([]core.FacetValue, error) {
-	typeCond := "type IN ('movie','show')"
-	var args []any
-	if t == core.TypeMovie || t == core.TypeShow {
-		typeCond = "type=?"
-		args = append(args, string(t))
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT language, COUNT(*) FROM catalog_titles WHERE browsable=1 AND `+typeCond+
-		` AND language<>'' GROUP BY language ORDER BY COUNT(*) DESC, language ASC LIMIT 200`, args...)
+	vals, err := s.cat.Facet(ctx, t, "language")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []core.FacetValue{}
-	for rows.Next() {
-		var v core.FacetValue
-		if err := rows.Scan(&v.Key, &v.Count); err != nil {
-			return nil, err
-		}
-		v.Title = languageName(v.Key)
-		out = append(out, v)
+	for i := range vals {
+		vals[i].Title = languageName(vals[i].Key)
 	}
-	return out, rows.Err()
+	return vals, nil
 }
 
 func languageName(code string) string {

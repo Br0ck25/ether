@@ -1,5 +1,67 @@
 import { Button, Badge, Spinner, toast } from "@braedonsaunders/appkit-ui";
 import { useEffect, useState } from "react";
 import { apiFetch, errorMessage } from "../lib/api";
-type Data={steps:{name:string;state:string;detail:string;action:string}[];compatibilityVersion:string;latestPublicVersion:string};
-export function RemoteDiagnostics(){const[d,setData]=useState<Data|null>(null);const[busy,setBusy]=useState(false);const load=()=>apiFetch<Data>("/safety/diagnostics/").then(setData);useEffect(()=>{void load().catch(e=>toast.error(errorMessage(e)))},[]);return <section className="space-y-4 rounded-xl border border-border bg-surface p-5"><h2 className="text-lg font-semibold">Remote access & security</h2><p className="text-sm text-fg-muted">These checks explain server discovery, account access, forwarding, and secure connections. External reachability uses Plex’s own connectivity result.</p><Button variant="outline" disabled={busy} onClick={()=>{setBusy(true);void apiFetch("/safety/diagnostics/refresh",{method:"POST",body:"{}"}).then(()=>load()).then(()=>toast.success("Remote checks scheduled")).catch(e=>toast.error(errorMessage(e))).finally(()=>setBusy(false))}}>Refresh checks</Button>{!d?<Spinner label="Loading diagnostics"/>:d.steps.map(step=><div key={step.name} className="space-y-1 border-t border-border pt-3"><div className="flex items-center justify-between"><h3 className="font-medium">{step.name}</h3><Badge variant={step.state==="ok"?"success":step.state==="unknown"?"secondary":"warning"}>{step.state==="ok"?"Ready":step.state==="unknown"?"Not verified":"Check settings"}</Badge></div><p className="text-sm text-fg-muted">{step.detail}</p>{step.state!=="ok"&&<p className="text-sm">{step.action}</p>}</div>)}</section>}
+type Data = {
+  steps: { name: string; state: string; detail: string; action: string }[];
+  compatibilityVersion: string;
+  latestPublicVersion: string;
+};
+export function RemoteDiagnostics() {
+  const [d, setData] = useState<Data | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = () => apiFetch<Data>("/safety/diagnostics/").then(setData);
+  useEffect(() => {
+    void load().catch((e) => toast.error(errorMessage(e)));
+  }, []);
+  return (
+    <section className="space-y-4 rounded-xl border border-border bg-surface p-5">
+      <h2 className="text-lg font-semibold">Remote access & security</h2>
+      <p className="text-sm text-fg-muted">
+        These checks explain server discovery, account access, forwarding, and secure connections.
+        External reachability uses Plex’s own connectivity result.
+      </p>
+      <Button
+        variant="outline"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          void apiFetch("/safety/diagnostics/refresh", { method: "POST", body: "{}" })
+            .then(() => load())
+            .then(() => toast.success("Remote checks scheduled"))
+            .catch((e) => toast.error(errorMessage(e)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        Refresh checks
+      </Button>
+      {!d ? (
+        <Spinner label="Loading diagnostics" />
+      ) : (
+        d.steps.map((step) => (
+          <div key={step.name} className="space-y-1 border-t border-border pt-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium">{step.name}</h3>
+              <Badge
+                variant={
+                  step.state === "ok"
+                    ? "success"
+                    : step.state === "unknown"
+                      ? "secondary"
+                      : "warning"
+                }
+              >
+                {step.state === "ok"
+                  ? "Ready"
+                  : step.state === "unknown"
+                    ? "Not verified"
+                    : "Check settings"}
+              </Badge>
+            </div>
+            <p className="text-sm text-fg-muted">{step.detail}</p>
+            {step.state !== "ok" && <p className="text-sm">{step.action}</p>}
+          </div>
+        ))
+      )}
+    </section>
+  );
+}

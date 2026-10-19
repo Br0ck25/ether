@@ -23,6 +23,12 @@ viewer to preview their Home and make personal exceptions. **Collections** lets
 you build and edit themed lists. Recommendations improve as viewers watch and
 rate titles.
 
+A collection can mix movies and TV shows in one Home row. In its editor, choose
+**Contains → Both**, add sources or individual titles, and enable its Home row
+or place it in Home Designer. Each item opens its own movie or show page.
+Viewer access and age limits still apply; Movies and TV library pages keep their
+respective types.
+
 Movies appear from their theatrical release date. Shows, seasons and episodes
 appear from their air dates. Items with no known release date stay hidden.
 
@@ -53,3 +59,19 @@ Use **Activity & notifications** for playback activity and alerts. **Logs** show
 newest entries first. If playback fails, check provider and indexer connectivity,
 quality limits and the client's supported formats. Share redacted logs when
 reporting an issue.
+
+## Owner sign-in and playback access
+
+After setup, sign in with the Plex account that owns Ether, including when you
+open the owner UI on localhost. Viewers access shared libraries through their
+own Plex accounts. Refreshing Plex sharing removes revoked viewers' access;
+stream links stop working when the viewer is inactive or the session ends.
+
+## Source interruptions
+
+Ether tries other providers before changing a release. Copy-only HLS or DASH
+can restart on another release at the current media time. Direct-play MKV and MP4
+have stricter replacement limits because the player retains the original file's
+headers. Provider outages and timeouts are retriable and do not permanently mark
+a release bad. Different cuts of a title can still skip or repeat a short section
+when Ether maps the playback timestamp.

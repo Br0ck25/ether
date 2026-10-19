@@ -43,12 +43,23 @@ func (a *App) overlayFacts(ctx context.Context, u *core.User, t *core.Title) ove
 		f.LastChance = expiry
 	}
 	if t.Type == core.TypeShow && u != nil {
-		var fresh, season int
-		// Only locally mirrored, already released episodes: poster rendering never
-		// fetches a season tree or triggers a catalogue crawl.
-		_ = a.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(CASE WHEN t.episode=1 THEN 1 ELSE 0 END),0),COUNT(*) FROM catalog_titles t LEFT JOIN state_watch w ON w.rating_key=t.key AND w.user_id=? WHERE t.show_key=? AND t.type='episode' AND t.adult=0 AND t.released_ts BETWEEN ? AND ? AND COALESCE(w.view_count,0)=0`, u.ID, int64(t.Key), time.Now().Add(-30*24*time.Hour).Unix(), time.Now().Unix()).Scan(&season, &fresh)
-		f.NewEpisode = fresh > 0
-		f.NewSeason = season > 0
+		episodes, err := a.catalog.RecentEpisodes(ctx, t.Key, time.Now().Add(-30*24*time.Hour))
+		if err == nil {
+			keys := make([]core.RatingKey, len(episodes))
+			for i, ep := range episodes {
+				keys[i] = ep.Key
+			}
+			if watched, err := a.state.GetMany(ctx, u.ID, keys); err == nil {
+				for _, ep := range episodes {
+					if watched[ep.Key].ViewCount == 0 {
+						f.NewEpisode = true
+						if ep.Episode == 1 {
+							f.NewSeason = true
+						}
+					}
+				}
+			}
+		}
 	}
 	for _, s := range a.playback.Sessions() {
 		if s.Key == t.Key {
