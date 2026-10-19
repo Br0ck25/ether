@@ -2,10 +2,15 @@ module github.com/ether-media/ether
 
 go 1.27.2
 
-require modernc.org/sqlite v1.60.1
+require (
+	fyne.io/systray v1.12.2
+	github.com/kardianos/service v1.3.0
+	modernc.org/sqlite v1.60.1
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

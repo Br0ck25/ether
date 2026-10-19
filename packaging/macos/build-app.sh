@@ -1,0 +1,83 @@
+#!/bin/sh
+# build-app.sh — assemble Ether.app (menu-bar tray + server + ffmpeg).
+#
+# Layout (design doc §Packaging):
+#   Ether.app/Contents/Info.plist            (LSUIElement menu-bar app)
+#   Ether.app/Contents/MacOS/ether-tray       (the app; CGO systray build)
+#   Ether.app/Contents/Resources/ether        (server, universal CGO_FREE)
+#   Ether.app/Contents/Resources/ffmpeg, ffprobe (universal, via lipo)
+#   Ether.app/Contents/Resources/dev.ether-media.ether.plist (server agent template)
+#   Ether.app/Contents/Resources/Ether.icns   (if present in packaging/macos/)
+#
+# Usage: VERSION=1.2.0 [SIGN_IDENTITY="Developer ID Application: ..."] packaging/macos/build-app.sh [outdir]
+# Signing/notarisation happen only when SIGN_IDENTITY is set (CI). Unsigned
+# local builds run with a right-click > Open the first time.
+set -eu
+
+# shellcheck disable=SC1007
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+VERSION=${VERSION:-dev}
+BUILD=${BUILD:-1}
+OUT=${1:-"$ROOT/dist/macos"}
+APP="$OUT/Ether.app"
+CONTENTS="$APP/Contents"
+MACOS="$CONTENTS/MacOS"
+RES="$CONTENTS/Resources"
+
+cd "$ROOT"
+mkdir -p "$MACOS" "$RES" "$ROOT/dist/tmp-mac"
+
+LDFLAGS="-s -w \
+  -X github.com/ether-media/ether/internal/updater.Version=$VERSION \
+  -X github.com/ether-media/ether/internal/updater.Commit=${COMMIT:-} \
+  -X github.com/ether-media/ether/internal/updater.PublicKeyB64=${ETHER_UPDATE_PUBLIC_KEY:-} \
+  -X github.com/ether-media/ether/internal/tmdb.BundledAPIKey=${ETHER_TMDB_KEY:-}"
+
+echo "==> building server (universal, CGO_ENABLED=0)"
+for arch in amd64 arm64; do
+  CGO_ENABLED=0 GOOS=darwin GOARCH=$arch go build -trimpath -ldflags "$LDFLAGS" \
+    -o "dist/tmp-mac/ether-$arch" ./cmd/ether
+done
+lipo -create -output "$RES/ether" dist/tmp-mac/ether-amd64 dist/tmp-mac/ether-arm64
+
+echo "==> building tray (universal, CGO_ENABLED=1 — needs a Mac)"
+for arch in amd64 arm64; do
+  goarch=$arch
+  if [ "$arch" = "amd64" ]; then ccarch=x86_64; else ccarch=arm64; fi
+  CGO_ENABLED=1 GOOS=darwin GOARCH=$goarch \
+    CC="clang -arch $ccarch" \
+    go build -trimpath -ldflags "$LDFLAGS" -o "dist/tmp-mac/ether-tray-$arch" ./cmd/ether-tray
+done
+lipo -create -output "$MACOS/ether-tray" dist/tmp-mac/ether-tray-amd64 dist/tmp-mac/ether-tray-arm64
+
+echo "==> staging ffmpeg (universal)"
+scripts/fetch-ffmpeg.sh darwin-amd64 darwin-arm64
+for tool in ffmpeg ffprobe; do
+  lipo -create -output "$RES/$tool" \
+    "dist/ffmpeg/darwin-amd64/$tool" "dist/ffmpeg/darwin-arm64/$tool"
+  chmod +x "$RES/$tool"
+done
+
+echo "==> bundle metadata"
+sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" \
+  packaging/macos/Info.plist > "$CONTENTS/Info.plist"
+cp packaging/macos/dev.ether-media.ether.plist "$RES/"
+cp LICENSE THIRD_PARTY_NOTICES.md "$RES/"
+[ -f packaging/macos/Ether.icns ] && cp packaging/macos/Ether.icns "$RES/"
+chmod +x "$MACOS/ether-tray" "$RES/ether"
+rm -rf dist/tmp-mac
+
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  echo "==> codesigning ($SIGN_IDENTITY)"
+  # Sign nested binaries first, then the bundle. Hardened runtime +
+  # timestamp are required for notarisation.
+  for bin in "$RES/ether" "$RES/ffmpeg" "$RES/ffprobe" "$MACOS/ether-tray"; do
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$bin"
+  done
+  codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+  codesign --verify --deep --strict "$APP"
+else
+  echo "==> SIGN_IDENTITY unset: leaving Ether.app unsigned (dev build)"
+fi
+
+echo "==> built $APP"

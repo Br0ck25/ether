@@ -1,0 +1,230 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ether-media/ether/internal/config"
+	"github.com/ether-media/ether/internal/service"
+	"github.com/ether-media/ether/internal/updater"
+)
+
+func boolp(b bool) *bool { return &b }
+
+func testServer(t *testing.T, withAPI bool) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/identity", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<MediaContainer size="0" machineIdentifier="abc123" friendlyName="Living Room" version="1.2.3" platform="Ether"/>`)
+	})
+	if withAPI {
+		mux.HandleFunc("/ether/api/status", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, `{"version":"1.2.4","setupComplete":true,"activeStreams":2,"somethingNew":true}`)
+		})
+	}
+	s := httptest.NewServer(mux)
+	t.Cleanup(s.Close)
+	return s
+}
+
+func TestPollParsesIdentityAndAPI(t *testing.T) {
+	s := testServer(t, true)
+	st, err := NewStatusClient(s.URL, s.Client()).Poll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Running || st.MachineID != "abc123" || st.FriendlyName != "Living Room" {
+		t.Fatalf("st=%+v", st)
+	}
+	if st.Version != "1.2.4" { // API version wins over identity
+		t.Errorf("version=%q", st.Version)
+	}
+	if st.SetupComplete == nil || !*st.SetupComplete || st.Streams != 2 {
+		t.Errorf("setup/streams: %+v", st)
+	}
+}
+
+func TestPollIdentityOnly(t *testing.T) {
+	s := testServer(t, false)
+	st, err := NewStatusClient(s.URL, s.Client()).Poll(context.Background())
+	if err != nil || !st.Running || st.Version != "1.2.3" || st.SetupComplete != nil {
+		t.Fatalf("st=%+v err=%v", st, err)
+	}
+}
+
+func TestPollServerDown(t *testing.T) {
+	s := httptest.NewServer(http.NotFoundHandler())
+	url := s.URL
+	s.Close()
+	st, err := NewStatusClient(url, http.DefaultClient).Poll(context.Background())
+	if err == nil || st.Running {
+		t.Fatalf("st=%+v err=%v", st, err)
+	}
+}
+
+func TestStatusLine(t *testing.T) {
+	if got := statusLine(Status{}); got != "Ether: not running" {
+		t.Errorf("down: %q", got)
+	}
+	got := statusLine(Status{Running: true, FriendlyName: "Den", Version: "1.0.0", SetupComplete: boolp(false)})
+	if got != "Ether: running (Den) · v1.0.0 · setup needed" {
+		t.Errorf("up: %q", got)
+	}
+	got = statusLine(Status{Running: true, FriendlyName: "Ether"})
+	if got != "Ether: running" {
+		t.Errorf("default name: %q", got)
+	}
+}
+
+func TestAutostartDarwinAndLinux(t *testing.T) {
+	for goos, marker := range map[string]string{
+		"darwin": "dev.ether-media.ether-tray",
+		"linux":  "[Desktop Entry]",
+	} {
+		home := t.TempDir()
+		a := &Autostart{GOOS: goos, HomeDir: home, ExecPath: "/opt/Ether/ether-tray"}
+		if a.Enabled() {
+			t.Fatalf("%s: enabled before install", goos)
+		}
+		if err := a.Enable(); err != nil {
+			t.Fatalf("%s enable: %v", goos, err)
+		}
+		if !a.Enabled() {
+			t.Fatalf("%s: not enabled after Enable", goos)
+		}
+		// File contents must reference the executable.
+		var path string
+		if goos == "darwin" {
+			path = a.launchAgentPath()
+		} else {
+			path = a.desktopPath()
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), marker) || !strings.Contains(string(b), "/opt/Ether/ether-tray") {
+			t.Errorf("%s content:\n%s", goos, b)
+		}
+		if err := a.Disable(); err != nil || a.Enabled() {
+			t.Fatalf("%s disable: %v enabled=%v", goos, err, a.Enabled())
+		}
+		if err := a.Disable(); err != nil { // idempotent
+			t.Fatalf("%s disable again: %v", goos, err)
+		}
+	}
+}
+
+func TestAutostartWindowsCommands(t *testing.T) {
+	var calls [][]string
+	a := &Autostart{
+		GOOS: "windows", ExecPath: `C:\Program Files\Ether\ether-tray.exe`,
+		Run: func(name string, args ...string) error {
+			calls = append(calls, append([]string{name}, args...))
+			return nil
+		},
+		QueryRunValue: func() (string, bool) { return "", len(calls) > 0 },
+	}
+	if a.Enabled() {
+		t.Fatal("enabled before add")
+	}
+	if err := a.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Enabled() {
+		t.Fatal("not enabled after add")
+	}
+	joined := strings.Join(calls[0], " ")
+	if !strings.Contains(joined, "reg add") || !strings.Contains(joined, "EtherTray") || !strings.Contains(joined, "ether-tray.exe") {
+		t.Errorf("add call: %s", joined)
+	}
+	if err := a.Disable(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(calls[1], " "), "reg delete") {
+		t.Errorf("delete call: %v", calls[1])
+	}
+}
+
+func TestOpenCommand(t *testing.T) {
+	for goos, want := range map[string]string{"darwin": "open", "windows": "rundll32", "linux": "xdg-open"} {
+		name, args := openCommand(goos, "http://x/")
+		if name != want || args[len(args)-1] != "http://x/" {
+			t.Errorf("%s: %s %v", goos, name, args)
+		}
+	}
+}
+
+type fakeSvc struct{ actions []string }
+
+func (f *fakeSvc) Start() error   { f.actions = append(f.actions, "start"); return nil }
+func (f *fakeSvc) Stop() error    { f.actions = append(f.actions, "stop"); return nil }
+func (f *fakeSvc) Restart() error { f.actions = append(f.actions, "restart"); return nil }
+func (f *fakeSvc) Status() (service.Status, error) {
+	return service.StatusRunning, nil
+}
+
+type fakeUpdates struct {
+	upd     *updater.Update
+	applied int
+}
+
+func (f *fakeUpdates) Check(context.Context) (*updater.Update, error) { return f.upd, nil }
+func (f *fakeUpdates) Apply(context.Context, *updater.Update, updater.ApplyOptions) (string, error) {
+	f.applied++
+	return "/tmp/ether-new", nil
+}
+
+func TestCheckUpdatesPromptVsAuto(t *testing.T) {
+	upd := &updater.Update{
+		Manifest: &updater.Manifest{Version: "2.0.0"},
+		Artifact: &updater.Artifact{Kind: updater.KindBinary},
+	}
+	// Prompt mode: no apply.
+	fu := &fakeUpdates{upd: upd}
+	a := &app{updates: fu, cfg: config.Updates{AutoUpdate: false}, svc: &fakeSvc{}, dataDir: t.TempDir()}
+	got, applied, err := a.checkUpdates(context.Background(), false)
+	if err != nil || got != upd || applied != "" || fu.applied != 0 {
+		t.Fatalf("prompt: upd=%v applied=%q applies=%d err=%v", got, applied, fu.applied, err)
+	}
+	// Auto mode: applies and restarts.
+	svc := &fakeSvc{}
+	a = &app{updates: fu, cfg: config.Updates{AutoUpdate: true}, svc: svc, dataDir: t.TempDir()}
+	_, applied, err = a.checkUpdates(context.Background(), false)
+	if err != nil || applied == "" || fu.applied != 1 {
+		t.Fatalf("auto: applied=%q applies=%d err=%v", applied, fu.applied, err)
+	}
+	if len(svc.actions) != 1 || svc.actions[0] != "restart" {
+		t.Errorf("expected restart after auto-apply, got %v", svc.actions)
+	}
+}
+
+func TestServiceActionAndIconsEmbedded(t *testing.T) {
+	svc := &fakeSvc{}
+	a := &app{svc: svc}
+	for _, act := range []string{"start", "stop", "restart"} {
+		if err := a.serviceAction(act); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Join(svc.actions, ",") != "start,stop,restart" {
+		t.Errorf("actions=%v", svc.actions)
+	}
+	if err := a.serviceAction("bogus"); err == nil {
+		t.Error("bogus action should fail")
+	}
+	for name, b := range map[string][]byte{"template": iconTemplate, "png": iconPNG, "off": iconOffPNG, "ico": iconICO} {
+		if len(b) == 0 {
+			t.Errorf("embedded icon %s empty", name)
+		}
+	}
+	if p := serverExecutable(); p != "" && !filepath.IsAbs(p) {
+		t.Errorf("serverExecutable should be absolute or empty, got %q", p)
+	}
+}

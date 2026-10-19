@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        if: runner.os != 'Windows'
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "::error::gofmt needed:"; echo "$out"; exit 1; fi
+      - name: Build (CGO_ENABLED=0 — the shipped configuration)
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./...
+      - name: Vet
+        env:
+          CGO_ENABLED: "0"
+        run: go vet ./...
+      - name: Vet tray with CGO (macOS systray build)
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "1"
+        run: go vet ./cmd/ether-tray/
+      - name: Test (race)
+        # -race needs CGO; the code under test is identical to the CGO=0
+        # build except the macOS tray GUI file, which is excluded here on
+        # macOS by CGO_ENABLED=0 for the test step below instead.
+        if: runner.os != 'macOS'
+        run: go test -race ./...
+      - name: Test (macOS, headless tray)
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
+      - name: Cross-compile matrix
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go build ./cmd/ether ./cmd/ether-tray ./internal/...
+          done
+
+  web:
+    name: Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build web UI (when present)
+        run: |
+          if [ -f web/package.json ]; then
+            corepack enable || true
+            cd web
+            npm ci
+            npm run build
+            npm run lint --if-present
+            npm test --if-present
+          else
+            echo "web/ not present yet — skipping (owned by the admin-UI work package)"
+          fi
+
+  packaging:
+    name: Packaging checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Shellcheck scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh packaging/linux/*.sh packaging/macos/*.sh
+      - name: Goreleaser config check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+      - name: Validate ffmpeg lock JSON
+        run: python3 -m json.tool packaging/ffmpeg.lock.json > /dev/null
+      - name: Validate plists
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          for p in ["packaging/macos/Info.plist", "packaging/macos/dev.ether-media.ether.plist"]:
+              plistlib.load(open(p, "rb"))
+              print("ok", p)
+          PY
+      - name: Docker image builds (host ffmpeg staged)
+        run: |
+          scripts/fetch-ffmpeg.sh linux-amd64
+          docker build -t ether:ci .
