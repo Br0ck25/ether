@@ -103,6 +103,12 @@ type RegistrarOptions struct {
 	CertInterval         time.Duration // certificate expiry check (1w, observed when not near expiry)
 	ReachabilityInterval time.Duration // remote self-test (1h, observed)
 
+	// PeerURIs, when set (clustered servers), returns the other live
+	// nodes' connection URIs in publication order. PublishNow appends them,
+	// de-duplicated, after this node's own URIs so plex.tv lists the union.
+	// It is called on every publish and must not block on the network.
+	PeerURIs func() []string
+
 	// PublishPlexDirect also publishes the https plex.direct URIs. Off by
 	// default: PMS publishes plain http URIs and plex.tv synthesises the
 	// plex.direct https variants for clients asking with includeHttps=1.
@@ -124,6 +130,9 @@ type Registrar struct {
 	runMu  sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	addrMu      sync.Mutex // serialises address refreshes
+	addrRefresh time.Time  // last refreshAddresses
 
 	mu        sync.Mutex
 	st        Status
@@ -268,6 +277,18 @@ func (r *Registrar) Trigger() {
 	r.forcePub = true
 	r.next[taskAddress] = time.Time{}
 	r.next[taskMapping] = time.Time{}
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// RequestPublish asks the running loop to publish connections now without
+// re-checking addresses (e.g. after cluster membership changed).
+func (r *Registrar) RequestPublish() {
+	r.mu.Lock()
+	r.forcePub = true
 	r.mu.Unlock()
 	select {
 	case r.wake <- struct{}{}:
@@ -421,6 +442,9 @@ func publicPort(cfg config.Config) int {
 }
 
 func (r *Registrar) refreshAddresses(ctx context.Context, cfg config.Config) {
+	r.addrMu.Lock()
+	defer r.addrMu.Unlock()
+	r.addrRefresh = r.o.Now()
 	var lan []string
 	if ips, err := r.o.LAN(); err == nil {
 		for _, ip := range ips {
@@ -504,6 +528,51 @@ func publishable(cs []remote.Connection, includePlexDirect bool) []string {
 	return out
 }
 
+// publishSet is this node's connections and the URIs it publishes from
+// them.
+func (r *Registrar) publishSet(cfg config.Config) ([]remote.Connection, []string) {
+	conns := r.connections(cfg)
+	uris := publishable(conns, r.o.PublishPlexDirect)
+	if !cfg.Plex.RemoteAccess {
+		// Only LAN and custom URLs when remote access is off.
+		var lanOnly []string
+		for _, c := range conns {
+			if (c.Local || c.Custom) && slices.Contains(uris, c.URI) {
+				lanOnly = append(lanOnly, c.URI)
+			}
+		}
+		uris = lanOnly
+	}
+	return conns, uris
+}
+
+// NodeURIs returns the URIs this node would publish for itself, refreshing
+// its LAN/WAN addresses first when they are older than AddressInterval
+// (the loop keeps them fresh while it runs). A clustered node heartbeats
+// these so the leader can publish the union.
+func (r *Registrar) NodeURIs(ctx context.Context) []string {
+	cfg := r.o.Config.Get()
+	r.addrMu.Lock()
+	stale := r.addrRefresh.IsZero() || r.o.Now().Sub(r.addrRefresh) >= r.o.AddressInterval
+	r.addrMu.Unlock()
+	if stale {
+		r.refreshAddresses(ctx, cfg)
+	}
+	_, uris := r.publishSet(cfg)
+	return uris
+}
+
+// mergeURIs appends extra to own, skipping duplicates.
+func mergeURIs(own, extra []string) []string {
+	out := slices.Clone(own)
+	for _, u := range extra {
+		if u != "" && !slices.Contains(out, u) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 // PublishNow publishes the current connections to plex.tv and verifies the
 // server appears in the resources list.
 func (r *Registrar) PublishNow(ctx context.Context) error {
@@ -517,17 +586,9 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	if !haveAddrs {
 		r.refreshAddresses(ctx, cfg)
 	}
-	conns := r.connections(cfg)
-	uris := publishable(conns, r.o.PublishPlexDirect)
-	if !cfg.Plex.RemoteAccess {
-		// Only LAN and custom URLs when remote access is off.
-		var lanOnly []string
-		for _, c := range conns {
-			if (c.Local || c.Custom) && slices.Contains(uris, c.URI) {
-				lanOnly = append(lanOnly, c.URI)
-			}
-		}
-		uris = lanOnly
+	conns, uris := r.publishSet(cfg)
+	if r.o.PeerURIs != nil {
+		uris = mergeURIs(uris, r.o.PeerURIs())
 	}
 	now := r.o.Now()
 	flags := &PublishFlags{HTTPSRequired: cfg.Plex.SecureConnections == "required"}
