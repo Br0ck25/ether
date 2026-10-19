@@ -65,7 +65,7 @@ func (s *Service) AddFolder(ctx context.Context, path string) error {
 	if !st.IsDir() {
 		return errors.New("folder must be a directory")
 	}
-	_, e = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO localmedia_folders(path) VALUES(?)`, p)
+	_, e = s.db.ExecContext(ctx, `INSERT INTO localmedia_folders(path) VALUES(?) ON CONFLICT DO NOTHING`, p)
 	return e
 }
 func (s *Service) Folders(ctx context.Context) ([]string, error) {
