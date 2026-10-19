@@ -240,11 +240,20 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if (p.mde || requiresRemux) && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
 		dec.Kind = core.DecisionRemux
 		dec.VideoCopy, dec.AudioCopy = true, true
-		dec.Container = transcode.ContainerMPEGTS
+		videoCodec, audioCodec := "", ""
+		if v := ps.Info.Video(); v != nil {
+			videoCodec = v.Codec
+		}
+		for _, st := range ps.Info.Streams {
+			if st.Type == "audio" && st.Index == dec.AudioStream {
+				audioCodec = st.Codec
+				break
+			}
+		}
 		if p.protocol == core.ProtocolDASH {
 			dec.Container = transcode.ContainerFMP4
-		} else if v := ps.Info.Video(); v != nil && (v.Codec == "hevc" || v.Codec == "av1" || v.Codec == "vp9") {
-			dec.Container = transcode.ContainerFMP4
+		} else {
+			dec.Container = transcode.HLSContainer(p.caps, videoCodec, audioCodec)
 		}
 		dec.Reason = "Direct stream preserves playback across source changes."
 	}
@@ -458,6 +467,8 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 	m.Container = "mpegts"
 	if dec.Container == transcode.ContainerFMP4 {
 		m.Container = "mp4"
+	} else if dec.Container == transcode.ContainerMatroska {
+		m.Container = "mkv"
 	}
 	part.Container = m.Container
 	part.Protocol = p.protocol

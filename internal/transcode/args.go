@@ -36,6 +36,9 @@ type runSpec struct {
 
 // segmentExt is the segment file extension for a decision's container.
 func segmentExt(container string) string {
+	if container == ContainerMatroska {
+		return "mkv"
+	}
 	if container == ContainerFMP4 {
 		return "m4s"
 	}
@@ -218,6 +221,9 @@ func hlsMuxArgs(s runSpec) []string {
 		segDur = DefaultSegmentDuration
 	}
 	container := s.Decision.Container
+	if container == ContainerMatroska {
+		return matroskaHLSMuxArgs(s, segDur)
+	}
 	if container != ContainerFMP4 {
 		container = ContainerMPEGTS
 	}

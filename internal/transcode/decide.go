@@ -9,8 +9,9 @@ import (
 
 // HLS segment containers reported in core.Decision.Container.
 const (
-	ContainerMPEGTS = "mpegts"
-	ContainerFMP4   = "fmp4"
+	ContainerMPEGTS   = "mpegts"
+	ContainerFMP4     = "fmp4"
+	ContainerMatroska = "mkv"
 )
 
 // Policy is the server-side input to Decide that is not per request.
@@ -478,7 +479,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 			d.VideoCodec = v.Codec
 			d.MaxHeight = v.Height
 		}
-		d.Container = segmentContainer(d.VideoCodec, audioCodec)
+		d.Container = HLSContainer(caps, d.VideoCodec, audioCodec)
 		d.BitrateKbps = info.BitrateKbps
 		if !audioCopy && a != nil {
 			d.BitrateKbps = info.BitrateKbps - copiedAudioKbps(a) + audioKbps
@@ -587,7 +588,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	d.VideoCodec = codec
 	d.MaxHeight = height
 	d.BitrateKbps = videoKbps + audioKbps
-	d.Container = segmentContainer(codec, audioCodec)
+	d.Container = HLSContainer(caps, codec, audioCodec)
 
 	parts := []string{"transcode"}
 	if len(why) > 0 {
