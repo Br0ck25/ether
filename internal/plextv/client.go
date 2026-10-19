@@ -28,6 +28,8 @@ import (
 const (
 	// DefaultBaseURL is plex.tv's API host.
 	DefaultBaseURL = "https://plex.tv"
+	// DefaultServersURL is the PMS account API host observed in current PMS traffic.
+	DefaultServersURL = "https://servers.plex.tv"
 	// DefaultAuthAppURL is the hosted sign-in page PIN codes are approved on.
 	DefaultAuthAppURL = "https://app.plex.tv/auth"
 	// DefaultServerVersion is the PMS version Ether reports towards plex.tv
@@ -177,6 +179,13 @@ func (c *Client) Identity() Identity { return c.id }
 // BaseURL returns the plex.tv base URL.
 func (c *Client) BaseURL() string { return c.base.String() }
 
+func (c *Client) serversHost() string {
+	if c.base.String() == DefaultBaseURL {
+		return DefaultServersURL
+	}
+	return ""
+}
+
 // APIError is a non-2xx plex.tv response.
 type APIError struct {
 	Method     string
@@ -215,6 +224,7 @@ func (e *APIError) Is(target error) bool {
 type request struct {
 	method      string
 	path        string
+	host        string // optional service host override (e.g. servers.plex.tv)
 	query       url.Values
 	token       string
 	tokenQuery  string // also send the token as this query parameter (legacy endpoints)
@@ -269,7 +279,14 @@ func (c *Client) do(ctx context.Context, r request) (*response, error) {
 
 func (c *Client) once(ctx context.Context, r request) (*response, error) {
 	u := *c.base
-	u.Path = strings.TrimRight(c.base.Path, "/") + r.path
+	if r.host != "" {
+		host, err := url.Parse(r.host)
+		if err != nil || host.Scheme == "" || host.Host == "" {
+			return nil, fmt.Errorf("plex.tv: invalid service host")
+		}
+		u.Scheme, u.Host = host.Scheme, host.Host
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + r.path
 	q := url.Values{}
 	for k, v := range r.query {
 		q[k] = v

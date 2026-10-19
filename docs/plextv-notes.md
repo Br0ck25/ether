@@ -86,6 +86,39 @@ account token. The result is reported as `Method = "owner-token"`.
 
 ## 4. Publishing connections
 
+### New direct PMS observations (PMS 1.43.4, Windows; 2026-10-18/19)
+
+The owner's filtered DEBUG log shows the current account service host is
+`servers.plex.tv`. At startup and then once per minute in the captured run,
+PMS issues `GET /api/v2/server/access_tokens`, then `/api/v2/server/users`,
+then `/api/v2/server/users/subscriptions`; `users/services` is cached, and
+`GET /media/providers` also runs about once a minute. This supersedes the
+XML `access_tokens.xml` call as the current primary behaviour. The same
+trace includes per-user `/api/v2/server/users/{id}/view_state_sync` reads;
+IDs and all token/query values are deliberately omitted here. These are
+observations from one server/session, not guaranteed protocol intervals.
+
+After `POST /servers.xml` receives 201, PMS sends
+`PUT /api/servers/{machineIdentifier}/connectivity` and receives 200. The
+request includes a token query parameter and an `asyncIdentifier`; values
+are per-request and are not reproduced. Registration logs report the
+mapped public port (32401 in this capture), not the internal listener port
+(32400). PMS then obtains the public address from `v4.plex.tv/pms/:/ip`.
+The log confirms these endpoints and ordering, but not the exact
+connectivity query/body schema. Ether still does not implement this PUT.
+
+The captured self-check is an HTTPS GET to the dashed public address under
+`plex.direct`, on port **32401**, at `/identity`, returning 200. The exact
+address and certificate hash are redacted. PMS logs that the certificate
+is not nearing expiry and says it will check again in a week. This verifies
+the weekly idle check and public mapped port for this installation; renewal
+threshold behavior remains unspecified.
+
+The capture also contains `POST notifications.plex.tv/api/v1/notifications`
+(201), scrobble `/state` traffic, and PMS-generated per-user view-state
+syncs. Ether's current integration does not reproduce the notification and
+cloud view-state-sync subsystems; they are outside the stable Auth contract.
+
 From a PMS debug log (**confirmed**: endpoints, methods and statuses):
 
 ```
@@ -359,7 +392,10 @@ gdm.Start(ctx); defer gdm.Stop()
 
 ## Sources
 
-- PMS debug log with MyPlex, devices PUT, servers.xml and access_tokens
+- Owner-approved filtered PMS 1.43.4 DEBUG log at the private local
+  thread-storage path supplied for this task (reviewed locally; no raw log,
+  identifiers, tokens, addresses or hashes are copied into this repository).
+- Older PMS debug log with MyPlex, devices PUT, servers.xml and access_tokens
   calls: https://gist.github.com/keithah/645bad865984f296053e054a630eb8ef
 - Plex forum, certificate flow and 429 rate limiting:
   - https://forums.plex.tv/t/plex-certificate-missing-csr-request-returns-429/942171
