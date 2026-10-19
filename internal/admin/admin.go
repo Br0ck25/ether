@@ -142,6 +142,18 @@ type Deps struct {
 
 	// DiskUsage overrides free-space reporting (tests). Nil → OS statfs.
 	DiskUsage func(path string) (total, free int64, err error)
+
+	// ---- Collections work package: Collection Studio, catalogue helpers,
+	// image proxy (collections_api.go, catalog_api.go). ----
+
+	// Collections backs /api/collections*. Nil → 501.
+	Collections CollectionStudio
+	// CatalogHelper backs /api/catalog/*. Nil → 501.
+	CatalogHelper CatalogHelper
+	// Images backs the TMDB image proxy at /api/image. Nil → 501.
+	Images ImageProxy
+
+	// ---- end Collections work package ----
 }
 
 // Handler is the admin HTTP handler. Use NewHandler when you need access
@@ -249,6 +261,8 @@ func (h *Handler) routes() *http.ServeMux {
 
 	api("GET /api/logs", h.handleLogs)
 	api("DELETE /api/logs", h.handleClearLogs)
+
+	h.collectionRoutes(mux, api)
 
 	mux.HandleFunc("/api/", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such API endpoint")

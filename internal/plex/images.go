@@ -311,6 +311,9 @@ func (s *Server) serveItemImage(w http.ResponseWriter, r *http.Request, key core
 	if element == "composite" || element == "squareArt" {
 		element = "thumb"
 	}
+	if s.serveCollectionArtwork(w, r, key, element, width) {
+		return
+	}
 	path, defWidth, err := s.artPath(r.Context(), key, element)
 	if err != nil || path == "" {
 		writeHTTPError(w, http.StatusNotFound)

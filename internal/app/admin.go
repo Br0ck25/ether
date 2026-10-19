@@ -76,6 +76,9 @@ func (a *App) buildAdmin() http.Handler {
 		},
 		ResolverTraces: func(context.Context) (any, error) { return a.resolver.Traces(), nil },
 		Users:          a.users,
+		Collections:    a.collections,
+		CatalogHelper:  a.collections,
+		Images:         a.images,
 	})
 }
 

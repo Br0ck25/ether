@@ -1,110 +1,156 @@
-// Package collections implements core.Collections: TMDB franchise
-// collections, live trending/list collections, and owner/user smart
-// collections persisted as core.Filter+sort and evaluated via Catalog.Browse.
+// Package collections is Ether's collection engine. It implements
+// core.Collections (what Plex sees in the Collections tab), core.CollectionRows
+// (owner collections offered to the personalization engine as Home and
+// section rows) and the Collection Studio behind the owner UI.
+//
+// A collection is a core.CollectionSpec: candidates gathered from sources
+// (the catalogue, TMDB lists, collections, discover, keywords, companies,
+// networks, people and streaming services, public Trakt, Letterboxd and
+// MDBList lists, hand-picked titles), filtered by rules, sorted, limited,
+// optionally rotated, and published with generated artwork. External titles
+// join the browsable catalogue so every member is playable. Specs refresh
+// on a schedule in the background, or live on request.
+//
+// TMDB franchises (the catalogue's TMDB collections with two or more
+// titles) are listed alongside, as before.
 package collections
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
-	"strings"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/artwork"
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/store"
 )
 
-func init() {
-	store.Register("collections", 1, `
-CREATE TABLE collections_smart (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  summary TEXT NOT NULL DEFAULT '',
-  type TEXT NOT NULL DEFAULT '',
-  filter_json TEXT NOT NULL DEFAULT '{}',
-  sort TEXT NOT NULL DEFAULT 'popularity',
-  owner_user_id INTEGER NOT NULL DEFAULT 0,
-  poster TEXT NOT NULL DEFAULT '',
-  backdrop TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX collections_smart_owner ON collections_smart(owner_user_id, type);
-`)
+var (
+	_ core.Collections    = (*Service)(nil)
+	_ core.CollectionRows = (*Service)(nil)
+)
+
+// TitleUpserter adds titles to the catalogue mirror; *catalog.Catalog
+// satisfies it. Collection members found outside the catalogue are joined
+// to the browsable set through it.
+type TitleUpserter interface {
+	UpsertTitle(ctx context.Context, t core.Title, browsable bool) error
 }
 
-// Builtin (live) collection payload ids live far above any AUTOINCREMENT smart id.
-const builtinBase int64 = 900_000
-
-type builtin struct {
-	id    int64 // payload under SmartKey
-	slug  string
-	title string
-	list  string // catalog.List name
-	typ   core.MediaType
-	kind  string
-}
-
-var builtins = []builtin{
-	{builtinBase + 1, "trending-week-movie", "Trending Movies This Week", "trending_week", core.TypeMovie, "trending"},
-	{builtinBase + 2, "trending-week-show", "Trending Shows This Week", "trending_week", core.TypeShow, "trending"},
-	{builtinBase + 3, "trending-day-movie", "Trending Movies Today", "trending_day", core.TypeMovie, "trending"},
-	{builtinBase + 4, "trending-day-show", "Trending Shows Today", "trending_day", core.TypeShow, "trending"},
-	{builtinBase + 5, "top-rated-movie", "Top Rated Movies", "top_rated", core.TypeMovie, "trending"},
-	{builtinBase + 6, "top-rated-show", "Top Rated Shows", "top_rated", core.TypeShow, "trending"},
-	{builtinBase + 7, "popular-movie", "Popular Movies", "popular", core.TypeMovie, "trending"},
-	{builtinBase + 8, "popular-show", "Popular Shows", "popular", core.TypeShow, "trending"},
-	{builtinBase + 9, "now-playing-movie", "Now Playing", "now_playing", core.TypeMovie, "trending"},
-	{builtinBase + 10, "upcoming-movie", "Upcoming Movies", "upcoming", core.TypeMovie, "trending"},
-	{builtinBase + 11, "airing-today-show", "Airing Today", "airing_today", core.TypeShow, "trending"},
-	{builtinBase + 12, "on-the-air-show", "On The Air", "on_the_air", core.TypeShow, "trending"},
-	{builtinBase + 13, "new-releases-movie", "New Releases", "now_playing", core.TypeMovie, "trending"},
-}
-
-func builtinByKey(key core.RatingKey) (builtin, bool) {
-	if key.Kind() != core.KindSmart {
-		return builtin{}, false
-	}
-	id := key.TMDB() // payload for non-season/episode kinds
-	for _, b := range builtins {
-		if b.id == id {
-			return b, true
-		}
-	}
-	return builtin{}, false
-}
-
-// BuiltinKey returns the SmartKey for a builtin slug (e.g. "trending-week-movie"), or 0.
-func BuiltinKey(slug string) core.RatingKey {
-	for _, b := range builtins {
-		if b.slug == slug {
-			return core.SmartKey(b.id)
-		}
-	}
-	return 0
-}
-
-var _ core.Collections = (*Service)(nil)
-
-// Service implements core.Collections.
+// Service is the collection engine.
 type Service struct {
-	db  *sql.DB
-	cat core.Catalog
-	log *slog.Logger
-	now func() time.Time
+	db       *sql.DB
+	cat      core.Catalog
+	log      *slog.Logger
+	now      func() time.Time
+	upserter TitleUpserter
+	api      *tmdbAPI
+	names    *nameResolver
+	idx      *index
+	web      *webClient
+	bases    ExternalBases
+	depsMu   sync.RWMutex
+	state    core.State
+	auth     core.Auth
+	chat     Chatter
+	scorer   atomic.Pointer[scorerBox]
+	art      *artwork.Renderer
+	images   *artwork.Images
+	catCfg   func() config.Catalog
+	traktCfg func() config.Trakt
+
+	liveTTL     time.Duration
+	tick        time.Duration
+	buildBudget time.Duration
+
+	mu       sync.Mutex
+	members  map[int64]*memberSet
+	flights  map[int64]*buildFlight
+	personal map[string]personalEntry
+
+	// settings captured from options before New finishes.
+	opts options
+}
+
+type scorerBox struct{ s core.PersonalScorer }
+
+type options struct {
+	tmdb       TMDB
+	httpClient *http.Client
+	userAgent  string
+	indexTTL   time.Duration
+	bases      *ExternalBases
+	noSeed     bool
 }
 
 // Option customises a Service.
 type Option func(*Service)
 
+// WithNow sets the clock (tests).
 func WithNow(fn func() time.Time) Option { return func(s *Service) { s.now = fn } }
 
-// New creates the collections service and seeds default smart collections
-// when no server-wide smart collection exists yet.
+// WithTMDB enables TMDB-backed sources, lookups and rule pushdown.
+func WithTMDB(c TMDB) Option { return func(s *Service) { s.opts.tmdb = c } }
+
+// WithState enables per-user rules (watched, in progress).
+func WithState(st core.State) Option { return func(s *Service) { s.SetState(st) } }
+
+// WithAuth lets previews evaluate per-user rules as the owner.
+func WithAuth(a core.Auth) Option { return func(s *Service) { s.SetAuth(a) } }
+
+// WithScorer sets the personal scorer used by the "personal" sort.
+func WithScorer(sc core.PersonalScorer) Option {
+	return func(s *Service) { s.scorer.Store(&scorerBox{sc}) }
+}
+
+// WithLLM enables the natural-language collection generator.
+func WithLLM(c Chatter) Option { return func(s *Service) { s.SetLLM(c) } }
+
+// WithArtwork enables generated collection posters.
+func WithArtwork(r *artwork.Renderer, im *artwork.Images) Option {
+	return func(s *Service) { s.art, s.images = r, im }
+}
+
+// WithCatalogConfig supplies the catalogue settings (region for streaming
+// services, whether unreleased titles are shown).
+func WithCatalogConfig(fn func() config.Catalog) Option { return func(s *Service) { s.catCfg = fn } }
+
+// WithTraktConfig supplies the Trakt client id used to read public lists.
+func WithTraktConfig(fn func() config.Trakt) Option { return func(s *Service) { s.traktCfg = fn } }
+
+// WithHTTPClient sets the client for Letterboxd, MDBList and Trakt.
+func WithHTTPClient(c *http.Client) Option { return func(s *Service) { s.opts.httpClient = c } }
+
+// WithUserAgent identifies Ether to list sites.
+func WithUserAgent(ua string) Option { return func(s *Service) { s.opts.userAgent = ua } }
+
+// WithExternalBases points external list fetches at other origins (tests).
+func WithExternalBases(b ExternalBases) Option { return func(s *Service) { s.opts.bases = &b } }
+
+// WithIndexTTL sets how often the catalogue index checks for changes
+// (default 2m; 0 checks on every use).
+func WithIndexTTL(d time.Duration) Option { return func(s *Service) { s.opts.indexTTL = d } }
+
+// WithLiveTTL sets how long a live collection's evaluation is reused
+// (default 2m).
+func WithLiveTTL(d time.Duration) Option { return func(s *Service) { s.liveTTL = d } }
+
+// WithSchedulerTick sets how often Run looks for collections due a refresh.
+func WithSchedulerTick(d time.Duration) Option { return func(s *Service) { s.tick = d } }
+
+// WithoutDefaults skips seeding the starter collections (tests).
+func WithoutDefaults() Option { return func(s *Service) { s.opts.noSeed = true } }
+
+// New creates the collection engine, migrating v1 smart collections and
+// seeding built-ins and starter collections.
 func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Service, error) {
 	if db == nil {
 		return nil, fmt.Errorf("collections: nil *sql.DB")
@@ -115,145 +161,572 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Service{db: db, cat: cat, log: log, now: time.Now}
+	s := &Service{db: db, cat: cat, log: log, now: time.Now,
+		liveTTL: 2 * time.Minute, tick: time.Minute, buildBudget: 20 * time.Second,
+		members: map[int64]*memberSet{}, flights: map[int64]*buildFlight{}, personal: map[string]personalEntry{},
+		opts: options{indexTTL: 2 * time.Minute}}
 	for _, fn := range opts {
 		fn(s)
 	}
-	if err := s.seedDefaults(context.Background()); err != nil {
-		return nil, fmt.Errorf("collections: seed: %w", err)
+	if u, ok := cat.(TitleUpserter); ok {
+		s.upserter = u
+	}
+	s.api = newTMDBAPI(s.opts.tmdb, s.now)
+	s.names = newNameResolver(db, s.api, s.now)
+	s.idx = newIndex(db, s.now, s.opts.indexTTL)
+	ua := s.opts.userAgent
+	if ua == "" {
+		ua = "Ether (+https://github.com/braedonsaunders/ether)"
+	}
+	s.web = newWebClient(s.opts.httpClient, ua, s.now)
+	s.bases = defaultBases()
+	if s.opts.bases != nil {
+		s.bases = *s.opts.bases
+	}
+	ctx := context.Background()
+	if err := s.migrateLegacy(ctx); err != nil {
+		return nil, fmt.Errorf("collections: migrate: %w", err)
+	}
+	if err := s.seedBuiltins(ctx); err != nil {
+		return nil, fmt.Errorf("collections: built-ins: %w", err)
+	}
+	if !s.opts.noSeed {
+		if err := s.seedDefaults(ctx); err != nil {
+			return nil, fmt.Errorf("collections: seed: %w", err)
+		}
 	}
 	return s, nil
 }
 
-func (s *Service) seedDefaults(ctx context.Context) error {
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM collections_smart WHERE owner_user_id=0`).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return nil
-	}
-	for _, d := range defaultSmart() {
-		if _, err := s.createSmart(ctx, d); err != nil {
-			return err
-		}
+// SetScorer installs (or replaces) the personal scorer after construction,
+// for when the personalization engine is built after the collections.
+func (s *Service) SetScorer(sc core.PersonalScorer) { s.scorer.Store(&scorerBox{sc}) }
+
+// SetState installs watch state for per-user rules (watched, in progress).
+func (s *Service) SetState(st core.State) {
+	s.depsMu.Lock()
+	s.state = st
+	s.depsMu.Unlock()
+}
+
+// SetAuth lets previews apply per-user rules as the owner.
+func (s *Service) SetAuth(a core.Auth) {
+	s.depsMu.Lock()
+	s.auth = a
+	s.depsMu.Unlock()
+}
+
+// SetLLM installs the model the collection generator drafts with.
+func (s *Service) SetLLM(c Chatter) {
+	s.depsMu.Lock()
+	s.chat = c
+	s.depsMu.Unlock()
+}
+
+func (s *Service) stateDep() core.State {
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.state
+}
+
+func (s *Service) authDep() core.Auth {
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.auth
+}
+
+func (s *Service) chatDep() Chatter {
+	s.depsMu.RLock()
+	defer s.depsMu.RUnlock()
+	return s.chat
+}
+
+func (s *Service) personalScorer() core.PersonalScorer {
+	if b := s.scorer.Load(); b != nil {
+		return b.s
 	}
 	return nil
 }
 
-func defaultSmart() []core.Collection {
-	return []core.Collection{
-		{Title: "80s Sci-Fi Under 2 Hours", Kind: "smart", Type: core.TypeMovie, Sort: core.SortPopularity,
-			Filter: &core.Filter{Type: core.TypeMovie, Genres: []string{"Science Fiction"}, YearFrom: 1980, YearTo: 1989, MaxRuntime: 2 * time.Hour}},
-		{Title: "Critically Acclaimed Movies", Kind: "smart", Type: core.TypeMovie, Sort: core.SortRating,
-			Filter: &core.Filter{Type: core.TypeMovie, MinRating: 8.0}},
-		{Title: "Critically Acclaimed Shows", Kind: "smart", Type: core.TypeShow, Sort: core.SortRating,
-			Filter: &core.Filter{Type: core.TypeShow, MinRating: 8.0}},
-		{Title: "Recently Released Movies", Kind: "smart", Type: core.TypeMovie, Sort: core.SortReleased,
-			Filter: &core.Filter{Type: core.TypeMovie, YearFrom: time.Now().Year() - 1}},
-		{Title: "Recently Released Shows", Kind: "smart", Type: core.TypeShow, Sort: core.SortReleased,
-			Filter: &core.Filter{Type: core.TypeShow, YearFrom: time.Now().Year() - 1}},
-	}
+// ---------------------------------------------------------------------------
+// Members: built, cached and served per user.
+
+// memberSet is a collection's built members plus what serving needs.
+type memberSet struct {
+	keys      []core.RatingKey
+	personal  []*rule
+	personalX []*rule
+	spec      core.CollectionSpec
+	builtAt   time.Time
+	hash      string
+	loadedAt  time.Time
 }
 
-func maxRating(user *core.User) string {
-	if user == nil {
-		return ""
-	}
-	return user.MaxContentRating
+type buildFlight struct {
+	done chan struct{}
+	ms   *memberSet
+	err  error
 }
 
-// stricterRating returns whichever of a/b has the lower rank (empty = unrestricted).
-func stricterRating(a, b string) string {
-	if a == "" {
-		return b
-	}
-	if b == "" {
-		return a
-	}
-	if catalog.RatingRank(b) < catalog.RatingRank(a) && catalog.RatingRank(b) > 0 {
-		return b
-	}
-	return a
+// ErrBuiltIn is returned when deleting a built-in collection.
+var ErrBuiltIn = errors.New("built-in collections can be disabled but not deleted")
+
+// conflictError marks errors the API reports as 409.
+type conflictError struct{ error }
+
+func (conflictError) Conflict() bool { return true }
+
+func (s *Service) cached(id int64) *memberSet {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.members[id]
 }
 
-func filterByUserRating(items []core.Title, user *core.User) []core.Title {
-	max := maxRating(user)
-	if max == "" {
-		return items
-	}
-	out := make([]core.Title, 0, len(items))
-	for _, t := range items {
-		if !catalog.RatingExceeds(t.ContentRating, max) {
-			out = append(out, t)
+func (s *Service) invalidate(id int64) {
+	s.mu.Lock()
+	delete(s.members, id)
+	for k := range s.personal {
+		if pe := s.personal[k]; pe.id == id {
+			delete(s.personal, k)
 		}
 	}
-	return out
+	s.mu.Unlock()
 }
 
-func pageOf(items []core.Title, offset, limit int) core.Page {
-	total := len(items)
-	if offset < 0 {
-		offset = 0
+// membersFor returns a row's members, building when it never was built,
+// was edited, or (live) the cached evaluation expired.
+func (s *Service) membersFor(ctx context.Context, row *specRow, wait bool) (*memberSet, error) {
+	ms := s.cached(row.id)
+	fresh := ms != nil && ms.builtAt.Equal(row.lastBuilt) && row.buildHash != ""
+	if row.spec.Refresh == RefreshLive {
+		fresh = ms != nil && s.now().Sub(ms.loadedAt) < s.liveTTL
 	}
-	if limit <= 0 {
-		limit = 50
+	if fresh {
+		return ms, nil
 	}
-	if offset > total {
-		return core.Page{Items: []core.Title{}, Total: total}
-	}
-	end := offset + limit
-	if end > total {
-		end = total
-	}
-	return core.Page{Items: items[offset:end], Total: total}
-}
-
-// List returns franchise + live + smart collections visible to user.
-func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) ([]core.Collection, error) {
-	var out []core.Collection
-	// Live collections.
-	for _, b := range builtins {
-		if t != "" && b.typ != t {
-			continue
+	if row.spec.Refresh != RefreshLive && !row.lastBuilt.IsZero() && row.buildHash != "" {
+		keys, err := s.loadMembers(ctx, row.id)
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, core.Collection{Key: core.SmartKey(b.id), Title: b.title, Kind: b.kind, Type: b.typ})
+		ms := s.newMemberSet(row.spec, keys, row.lastBuilt, row.buildHash)
+		s.mu.Lock()
+		s.members[row.id] = ms
+		s.mu.Unlock()
+		return ms, nil
 	}
-	// Smart (server-wide + this user's).
-	smart, err := s.listSmart(ctx, user, t)
+	if !wait {
+		go func() {
+			bctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_, _ = s.build(bctx, row)
+		}()
+		if ms != nil {
+			return ms, nil // stale while revalidating
+		}
+		return nil, errNotBuilt
+	}
+	built, err := s.build(ctx, row)
+	if err != nil && ms != nil {
+		s.log.Debug("collections: refresh failed; serving the previous build", "id", row.id, "err", err)
+		return ms, nil
+	}
+	return built, err
+}
+
+var errNotBuilt = errors.New("collection not built yet")
+
+func (s *Service) newMemberSet(sp core.CollectionSpec, keys []core.RatingKey, builtAt time.Time, hash string) *memberSet {
+	ms := &memberSet{keys: keys, spec: sp, builtAt: builtAt, hash: hash, loadedAt: s.now()}
+	if rs, err := compileRules(sp.Rules); err == nil {
+		splitPersonal(rs, &ms.personal)
+	}
+	if xs, err := compileRules(sp.Exclude); err == nil {
+		splitPersonal(xs, &ms.personalX)
+	}
+	return ms
+}
+
+// build evaluates a row and persists the result. Concurrent builds of the
+// same row share one evaluation.
+func (s *Service) build(ctx context.Context, row *specRow) (*memberSet, error) {
+	s.mu.Lock()
+	if f := s.flights[row.id]; f != nil {
+		s.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.ms, f.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	f := &buildFlight{done: make(chan struct{})}
+	s.flights[row.id] = f
+	s.mu.Unlock()
+
+	// The evaluation is shared, so it must not die with the first caller.
+	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	ms, err := s.buildNow(bctx, row)
+	cancel()
+
+	s.mu.Lock()
+	delete(s.flights, row.id)
+	if err == nil {
+		s.members[row.id] = ms
+	}
+	f.ms, f.err = ms, err
+	s.mu.Unlock()
+	close(f.done)
+	return ms, err
+}
+
+func (s *Service) buildNow(ctx context.Context, row *specRow) (*memberSet, error) {
+	started := time.Now()
+	res, err := s.evaluate(ctx, row.spec, evalOptions{seed: row.publicID()})
 	if err != nil {
 		return nil, err
 	}
-	out = append(out, smart...)
-	// Franchises (movies only).
+	// Remember what labels resolved to, so the Studio shows real ids.
+	if !row.builtin && resolvedChanged(row.spec, res.resolved) {
+		if js, err := specJSON(res.resolved); err == nil {
+			_, _ = s.db.ExecContext(ctx, `UPDATE collections_specs SET spec_json=? WHERE id=?`, js, row.id)
+		}
+	}
+	at := s.now().UTC().Truncate(time.Second)
+	if err := s.saveBuild(ctx, row.id, res.keys, res.itemCount(), res.warnings, res.hash, at); err != nil {
+		return nil, err
+	}
+	s.log.Debug("collections: built", "id", row.publicID(), "name", row.spec.Name, "items", res.itemCount(),
+		"warnings", len(res.warnings), "took", time.Since(started).Round(time.Millisecond))
+	ms := &memberSet{keys: res.keys, personal: res.personal, personalX: res.personalX, spec: row.spec,
+		builtAt: at, hash: res.hash, loadedAt: s.now()}
+	row.lastBuilt, row.buildHash, row.itemCount, row.warnings = at, res.hash, res.itemCount(), res.warnings
+	return ms, nil
+}
+
+func resolvedChanged(a, b core.CollectionSpec) bool {
+	if len(a.Sources) != len(b.Sources) {
+		return false
+	}
+	for i := range a.Sources {
+		if a.Sources[i].ID != b.Sources[i].ID || a.Sources[i].Label != b.Sources[i].Label {
+			return true
+		}
+	}
+	return false
+}
+
+// personalEntry caches a user's personal ordering of a collection.
+type personalEntry struct {
+	id   int64
+	hash string
+	keys []core.RatingKey
+	at   time.Time
+}
+
+// serve returns the members a user sees: content-rating and personal
+// rules applied, personal order, limit, rotation.
+func (s *Service) serve(ctx context.Context, row *specRow, user *core.User, wait bool) ([]core.RatingKey, error) {
+	ms, err := s.membersFor(ctx, row, wait)
+	if err != nil {
+		return nil, err
+	}
+	snap := s.idx.current()
+	if snap == nil {
+		if snap, err = s.idx.get(ctx); err != nil {
+			return nil, err
+		}
+	}
+	keys := s.filterForUser(ctx, ms.keys, ms.personal, ms.personalX, user, snap)
+	sp := ms.spec
+	if sp.Sort == "personal" && user != nil {
+		keys = s.personalOrder(ctx, row.id, ms.hash, user, keys)
+	}
+	if sp.Limit > 0 && len(keys) > sp.Limit {
+		keys = keys[:sp.Limit]
+	}
+	if sp.Rotate != nil && sp.Rotate.Size > 0 {
+		keys = rotate(keys, sp.Rotate.Size, sp.Rotate.Every, row.publicID(), s.now())
+	}
+	return keys, nil
+}
+
+const personalTTL = 10 * time.Minute
+
+// personalOrder re-ranks members by the user's taste model.
+func (s *Service) personalOrder(ctx context.Context, id int64, hash string, user *core.User, keys []core.RatingKey) []core.RatingKey {
+	sc := s.personalScorer()
+	if sc == nil || len(keys) < 2 {
+		return keys
+	}
+	ck := fmt.Sprintf("%d|%d", id, user.ID)
+	s.mu.Lock()
+	if pe, ok := s.personal[ck]; ok && pe.hash == hash && s.now().Sub(pe.at) < personalTTL && len(pe.keys) == len(keys) {
+		s.mu.Unlock()
+		return pe.keys
+	}
+	s.mu.Unlock()
+	const maxScored = 500
+	head := keys
+	if len(head) > maxScored {
+		head = keys[:maxScored]
+	}
+	titles, err := loadTitles(ctx, s.db, head)
+	if err != nil {
+		return keys
+	}
+	scores, err := sc.ScoreTitles(ctx, user, titles)
+	if err != nil || len(scores) == 0 {
+		return keys
+	}
+	pos := make(map[core.RatingKey]int, len(head))
+	for i, k := range head {
+		pos[k] = i
+	}
+	ranked := append([]core.RatingKey(nil), head...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		si, sj := scores[ranked[i]], scores[ranked[j]]
+		if si != sj {
+			return si > sj
+		}
+		return pos[ranked[i]] < pos[ranked[j]]
+	})
+	out := append(ranked, keys[len(head):]...)
+	s.mu.Lock()
+	if len(s.personal) > 2000 {
+		s.personal = map[string]personalEntry{}
+	}
+	s.personal[ck] = personalEntry{id: id, hash: hash, keys: out, at: s.now()}
+	s.mu.Unlock()
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// core.Collections
+
+// visible reports whether a user may see a collection at all.
+func visible(row *specRow, user *core.User) bool {
+	if !row.enabled {
+		return false
+	}
+	if row.owner != 0 {
+		return user != nil && user.ID == row.owner
+	}
+	return row.spec.Targets.Users.Includes(user)
+}
+
+func typeMatches(sp core.CollectionSpec, t core.MediaType) bool {
+	switch t {
+	case "":
+		return true
+	case core.TypeMovie:
+		return sp.MediaType == MediaMovie || sp.MediaType == MediaMixed
+	case core.TypeShow:
+		return sp.MediaType == MediaShow || sp.MediaType == MediaMixed
+	}
+	return false
+}
+
+func (s *Service) collectionFor(ctx context.Context, row *specRow, user *core.User, t core.MediaType, keys []core.RatingKey) core.Collection {
+	c := core.Collection{Key: row.key(), Title: row.spec.Name, Summary: row.spec.Description, Kind: "smart",
+		OwnerUserID: row.owner, ChildCount: len(keys)}
+	if row.builtin {
+		c.Kind = "trending"
+	}
+	switch row.spec.MediaType {
+	case MediaMovie:
+		c.Type = core.TypeMovie
+	case MediaShow:
+		c.Type = core.TypeShow
+	default:
+		c.Type = t
+	}
+	if snap := s.idx.current(); snap != nil {
+		for _, k := range keys {
+			e := snap.entries[k]
+			if e == nil {
+				continue
+			}
+			if c.Type == "" {
+				c.Type = e.typ
+			}
+			if c.PosterPath == "" && e.poster != "" {
+				c.PosterPath = e.poster
+			}
+			if c.BackdropPath == "" && e.backdrop != "" {
+				c.BackdropPath = e.backdrop
+			}
+			if c.PosterPath != "" && c.BackdropPath != "" {
+				break
+			}
+		}
+	}
+	if c.Type == "" {
+		c.Type = core.TypeMovie
+	}
+	c.UpdatedAt = row.lastBuilt
+	if row.updatedAt.After(c.UpdatedAt) {
+		c.UpdatedAt = row.updatedAt
+	}
+	return c
+}
+
+// List returns the collections a user sees in a section's Collections tab:
+// owner collections targeted at them, built-ins, and TMDB franchises.
+func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) ([]core.Collection, error) {
+	rows, err := s.loadRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []core.Collection{}
+	deadline := time.Now().Add(2 * time.Second)
+	// Built-ins first, as Plex has always listed them.
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].builtin && !rows[j].builtin })
+	for _, row := range rows {
+		if !visible(row, user) || !row.spec.Targets.CollectionsTab || !typeMatches(row.spec, t) {
+			continue
+		}
+		wait := row.spec.Refresh == RefreshLive || time.Now().Before(deadline)
+		bctx, cancel := context.WithDeadline(ctx, deadline.Add(3*time.Second))
+		keys, err := s.serve(bctx, row, user, wait)
+		cancel()
+		if err != nil {
+			if !errors.Is(err, errNotBuilt) {
+				s.log.Debug("collections: list", "id", row.publicID(), "err", err)
+			}
+			continue
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		out = append(out, s.collectionFor(ctx, row, user, t, keys))
+	}
 	if t == "" || t == core.TypeMovie {
-		fr, err := s.listFranchises(ctx)
+		fr, err := s.listFranchises(ctx, user)
 		if err == nil {
 			out = append(out, fr...)
 		} else {
 			s.log.Debug("collections: franchise list unavailable", "err", err)
 		}
 	}
-	// Child counts (best effort).
-	for i := range out {
-		if out[i].ChildCount > 0 {
-			continue
-		}
-		if page, err := s.Items(ctx, user, out[i].Key, 0, 1); err == nil {
-			out[i].ChildCount = page.Total
-			if len(page.Items) > 0 && out[i].PosterPath == "" {
-				out[i].PosterPath = page.Items[0].PosterPath
-				out[i].BackdropPath = page.Items[0].BackdropPath
-			}
-		}
-	}
-	if out == nil {
-		out = []core.Collection{}
-	}
 	return out, nil
 }
 
-func (s *Service) listFranchises(ctx context.Context) ([]core.Collection, error) {
+// Get returns one collection by key.
+func (s *Service) Get(ctx context.Context, user *core.User, key core.RatingKey) (*core.Collection, error) {
+	switch key.Kind() {
+	case core.KindCollection:
+		return s.getFranchise(ctx, user, key)
+	case core.KindSmart:
+		row, err := s.rowByKey(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		if !visible(row, user) {
+			return nil, core.ErrNotFound
+		}
+		keys, err := s.serve(ctx, row, user, true)
+		if err != nil {
+			return nil, err
+		}
+		c := s.collectionFor(ctx, row, user, "", keys)
+		return &c, nil
+	}
+	return nil, core.ErrNotFound
+}
+
+// Items returns a page of a collection's titles as the user sees them.
+func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey, offset, limit int) (core.Page, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	switch key.Kind() {
+	case core.KindCollection:
+		return s.franchiseItems(ctx, user, key, offset, limit)
+	case core.KindSmart:
+		row, err := s.rowByKey(ctx, key)
+		if err != nil {
+			return core.Page{}, err
+		}
+		if !visible(row, user) {
+			return core.Page{}, core.ErrNotFound
+		}
+		keys, err := s.serve(ctx, row, user, true)
+		if err != nil {
+			return core.Page{}, err
+		}
+		total := len(keys)
+		if offset >= total {
+			return core.Page{Items: []core.Title{}, Total: total}, nil
+		}
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		items, err := loadTitles(ctx, s.db, keys[offset:end])
+		if err != nil {
+			return core.Page{}, err
+		}
+		return core.Page{Items: items, Total: total}, nil
+	}
+	return core.Page{}, core.ErrNotFound
+}
+
+// CreateSmart persists a v1-style smart collection (core.Filter) as a spec.
+// OwnerUserID 0 = server-wide; otherwise only that user sees it.
+func (s *Service) CreateSmart(ctx context.Context, c core.Collection) (*core.Collection, error) {
+	if c.Title == "" {
+		return nil, fmt.Errorf("collections: smart collection needs a title")
+	}
+	if c.Filter == nil {
+		return nil, fmt.Errorf("collections: smart collection needs a filter")
+	}
+	sp := specFromLegacy(c)
+	if err := Validate(&sp); err != nil {
+		return nil, err
+	}
+	row, err := s.insertRow(ctx, sp, c.OwnerUserID)
+	if err != nil {
+		return nil, err
+	}
+	out := c
+	out.Key = row.key()
+	out.Kind = "smart"
+	if out.Type == "" {
+		out.Type = c.Filter.Type
+	}
+	if out.Sort == "" {
+		out.Sort = core.SortPopularity
+	}
+	f := *c.Filter
+	out.Filter = &f
+	return &out, nil
+}
+
+// DeleteSmart removes an owner or user collection. Built-ins and
+// franchises cannot be deleted.
+func (s *Service) DeleteSmart(ctx context.Context, key core.RatingKey) error {
+	row, err := s.rowByKey(ctx, key)
+	if err != nil {
+		return err
+	}
+	if row.builtin {
+		return core.ErrNotFound
+	}
+	if err := s.deleteRow(ctx, row.id); err != nil {
+		return err
+	}
+	s.invalidate(row.id)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Franchises (TMDB collections in the catalogue)
+
+func (s *Service) listFranchises(ctx context.Context, user *core.User) ([]core.Collection, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT t.collection_id,
 		       COALESCE(NULLIF(MAX(t.collection_name),''), MAX(cc.name), ''),
@@ -283,240 +756,95 @@ func (s *Service) listFranchises(ctx context.Context) ([]core.Collection, error)
 		out = append(out, core.Collection{Key: core.CollectionKey(id), Title: name, Summary: summary,
 			Kind: "franchise", Type: core.TypeMovie, PosterPath: poster, BackdropPath: backdrop, ChildCount: n})
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if user != nil && user.MaxContentRating != "" {
+		// Child counts must reflect what this user may watch.
+		for i := range out {
+			if p, err := s.franchiseItems(ctx, user, out[i].Key, 0, 1); err == nil {
+				out[i].ChildCount = p.Total
+			}
+		}
+		kept := out[:0]
+		for _, c := range out {
+			if c.ChildCount > 0 {
+				kept = append(kept, c)
+			}
+		}
+		out = kept
+	}
+	return out, nil
 }
 
-func (s *Service) listSmart(ctx context.Context, user *core.User, t core.MediaType) ([]core.Collection, error) {
-	q := `SELECT id,title,summary,type,filter_json,sort,owner_user_id,poster,backdrop FROM collections_smart WHERE (owner_user_id=0 OR owner_user_id=?)`
-	args := []any{userID(user)}
-	if t != "" {
-		q += ` AND (type=? OR type='')`
-		args = append(args, string(t))
-	}
-	q += ` ORDER BY owner_user_id ASC, title ASC`
-	rows, err := s.db.QueryContext(ctx, q, args...)
+func (s *Service) getFranchise(ctx context.Context, user *core.User, key core.RatingKey) (*core.Collection, error) {
+	name, items, err := s.cat.Collection(ctx, key.TMDB())
 	if err != nil {
+		fr, ferr := s.listFranchises(ctx, nil)
+		if ferr == nil {
+			for _, c := range fr {
+				if c.Key == key {
+					c := c
+					return &c, nil
+				}
+			}
+		}
 		return nil, err
 	}
-	defer rows.Close()
-	var out []core.Collection
-	for rows.Next() {
-		coll, err := scanSmart(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *coll)
+	allowed := filterTitlesByRating(items, user)
+	c := &core.Collection{Key: key, Title: name, Kind: "franchise", Type: core.TypeMovie, ChildCount: len(allowed)}
+	var poster, backdrop, summary string
+	_ = s.db.QueryRowContext(ctx, `SELECT poster, backdrop, summary FROM catalog_collections WHERE tmdb_id=?`, key.TMDB()).Scan(&poster, &backdrop, &summary)
+	c.PosterPath, c.BackdropPath, c.Summary = poster, backdrop, summary
+	if c.PosterPath == "" && len(items) > 0 {
+		c.PosterPath = items[0].PosterPath
 	}
-	return out, rows.Err()
-}
-
-func userID(u *core.User) int64 {
-	if u == nil {
-		return 0
-	}
-	return u.ID
-}
-
-func scanSmart(s interface{ Scan(...any) error }) (*core.Collection, error) {
-	var id, owner int64
-	var title, summary, typ, filterJSON, sortOrder, poster, backdrop string
-	if err := s.Scan(&id, &title, &summary, &typ, &filterJSON, &sortOrder, &owner, &poster, &backdrop); err != nil {
-		return nil, err
-	}
-	c := &core.Collection{Key: core.SmartKey(id), Title: title, Summary: summary, Kind: "smart",
-		Type: core.MediaType(typ), Sort: core.SortOrder(sortOrder), OwnerUserID: owner,
-		PosterPath: poster, BackdropPath: backdrop}
-	var f core.Filter
-	if filterJSON != "" {
-		if err := json.Unmarshal([]byte(filterJSON), &f); err != nil {
-			return nil, fmt.Errorf("collections: smart %d filter: %w", id, err)
-		}
-		c.Filter = &f
-	}
-	if c.Sort == "" {
-		c.Sort = core.SortPopularity
+	if c.BackdropPath == "" && len(items) > 0 {
+		c.BackdropPath = items[0].BackdropPath
 	}
 	return c, nil
 }
 
-func (s *Service) getSmart(ctx context.Context, id int64) (*core.Collection, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,title,summary,type,filter_json,sort,owner_user_id,poster,backdrop FROM collections_smart WHERE id=?`, id)
-	c, err := scanSmart(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, core.ErrNotFound
-	}
-	return c, err
-}
-
-// Get returns one collection by key, enforcing smart-collection ownership.
-func (s *Service) Get(ctx context.Context, user *core.User, key core.RatingKey) (*core.Collection, error) {
-	switch key.Kind() {
-	case core.KindCollection:
-		id := key.TMDB()
-		name, items, err := s.cat.Collection(ctx, id)
-		if err != nil {
-			// Fall back to a shell from the mirror so the key still resolves.
-			for _, fr := range mustFranchises(ctx, s) {
-				if fr.Key == key {
-					c := fr
-					return &c, nil
-				}
-			}
-			return nil, err
-		}
-		c := &core.Collection{Key: key, Title: name, Kind: "franchise", Type: core.TypeMovie,
-			ChildCount: len(filterByUserRating(items, user))}
-		if len(items) > 0 {
-			c.PosterPath = items[0].PosterPath
-			c.BackdropPath = items[0].BackdropPath
-		}
-		return c, nil
-	case core.KindSmart:
-		if b, ok := builtinByKey(key); ok {
-			c := &core.Collection{Key: key, Title: b.title, Kind: b.kind, Type: b.typ}
-			if page, err := s.Items(ctx, user, key, 0, 1); err == nil {
-				c.ChildCount = page.Total
-				if len(page.Items) > 0 {
-					c.PosterPath = page.Items[0].PosterPath
-					c.BackdropPath = page.Items[0].BackdropPath
-				}
-			}
-			return c, nil
-		}
-		c, err := s.getSmart(ctx, key.TMDB())
-		if err != nil {
-			return nil, err
-		}
-		if c.OwnerUserID != 0 && c.OwnerUserID != userID(user) {
-			return nil, core.ErrNotFound
-		}
-		if page, err := s.Items(ctx, user, key, 0, 1); err == nil {
-			c.ChildCount = page.Total
-		}
-		return c, nil
-	default:
-		return nil, core.ErrNotFound
-	}
-}
-
-func mustFranchises(ctx context.Context, s *Service) []core.Collection {
-	fr, _ := s.listFranchises(ctx)
-	return fr
-}
-
-// Items returns a page of a collection's titles with per-user rating limits applied.
-func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey, offset, limit int) (core.Page, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	switch key.Kind() {
-	case core.KindCollection:
-		_, items, err := s.cat.Collection(ctx, key.TMDB())
-		if err != nil {
-			return core.Page{}, err
-		}
-		items = filterByUserRating(items, user)
-		sort.Slice(items, func(i, j int) bool { return items[i].Released.Before(items[j].Released) })
-		return pageOf(items, offset, limit), nil
-	case core.KindSmart:
-		if b, ok := builtinByKey(key); ok {
-			// Fetch enough to cover the page (plus headroom for rating filtering).
-			want := offset + limit
-			if maxRating(user) != "" {
-				want = want*2 + 10
-			}
-			items, err := s.cat.List(ctx, b.list, b.typ, want)
-			if err != nil {
-				return core.Page{}, err
-			}
-			items = filterByUserRating(items, user)
-			return pageOf(items, offset, limit), nil
-		}
-		c, err := s.getSmart(ctx, key.TMDB())
-		if err != nil {
-			return core.Page{}, err
-		}
-		if c.OwnerUserID != 0 && c.OwnerUserID != userID(user) {
-			return core.Page{}, core.ErrNotFound
-		}
-		f := core.Filter{}
-		if c.Filter != nil {
-			f = *c.Filter
-		}
-		if f.Type == "" {
-			f.Type = c.Type
-		}
-		f.MaxContentRating = stricterRating(f.MaxContentRating, maxRating(user))
-		sortOrder := c.Sort
-		if sortOrder == "" {
-			sortOrder = core.SortPopularity
-		}
-		desc := sortOrder != core.SortTitle // popularity/rating/released/added read high-first
-		return s.cat.Browse(ctx, core.BrowseQuery{Filter: f, Sort: sortOrder, Desc: desc, Offset: offset, Limit: limit})
-	default:
-		return core.Page{}, core.ErrNotFound
-	}
-}
-
-// CreateSmart persists a smart collection. OwnerUserID 0 = server-wide.
-func (s *Service) CreateSmart(ctx context.Context, c core.Collection) (*core.Collection, error) {
-	return s.createSmart(ctx, c)
-}
-
-func (s *Service) createSmart(ctx context.Context, c core.Collection) (*core.Collection, error) {
-	if strings.TrimSpace(c.Title) == "" {
-		return nil, fmt.Errorf("collections: smart collection needs a title")
-	}
-	if c.Filter == nil {
-		return nil, fmt.Errorf("collections: smart collection needs a filter")
-	}
-	fj, err := json.Marshal(c.Filter)
+func (s *Service) franchiseItems(ctx context.Context, user *core.User, key core.RatingKey, offset, limit int) (core.Page, error) {
+	_, items, err := s.cat.Collection(ctx, key.TMDB())
 	if err != nil {
-		return nil, err
+		return core.Page{}, err
 	}
-	sortOrder := c.Sort
-	if sortOrder == "" {
-		sortOrder = core.SortPopularity
+	items = filterTitlesByRating(items, user)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Released.Before(items[j].Released) })
+	total := len(items)
+	if offset >= total {
+		return core.Page{Items: []core.Title{}, Total: total}, nil
 	}
-	typ := c.Type
-	if typ == "" {
-		typ = c.Filter.Type
+	end := offset + limit
+	if end > total {
+		end = total
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO collections_smart(title,summary,type,filter_json,sort,owner_user_id,poster,backdrop,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		c.Title, c.Summary, string(typ), string(fj), string(sortOrder), c.OwnerUserID, c.PosterPath, c.BackdropPath, s.now().Unix())
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-	out := c
-	out.Key = core.SmartKey(id)
-	out.Kind = "smart"
-	out.Type = typ
-	out.Sort = sortOrder
-	// Copy filter so callers can't mutate stored state via the pointer.
-	f := *c.Filter
-	out.Filter = &f
-	return &out, nil
+	return core.Page{Items: items[offset:end], Total: total}, nil
 }
 
-// DeleteSmart removes a persisted smart collection. Builtins/franchises cannot be deleted.
-func (s *Service) DeleteSmart(ctx context.Context, key core.RatingKey) error {
-	if key.Kind() != core.KindSmart {
-		return core.ErrNotFound
+func filterTitlesByRating(items []core.Title, user *core.User) []core.Title {
+	if user == nil || user.MaxContentRating == "" {
+		return items
 	}
-	if _, ok := builtinByKey(key); ok {
-		return core.ErrNotFound
+	out := make([]core.Title, 0, len(items))
+	for _, t := range items {
+		if !ratingExceeds(t.ContentRating, user.MaxContentRating) {
+			out = append(out, t)
+		}
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM collections_smart WHERE id=?`, key.TMDB())
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return core.ErrNotFound
-	}
-	return nil
+	return out
 }
+
+// BuiltinKey returns the rating key of a built-in collection by slug
+// (e.g. "trending-week-movie"), or 0.
+func BuiltinKey(slug string) core.RatingKey {
+	for _, b := range builtins {
+		if b.slug == slug {
+			return core.SmartKey(b.id)
+		}
+	}
+	return 0
+}
+
+func idString(id int64) string { return strconv.FormatInt(id, 10) }

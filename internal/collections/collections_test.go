@@ -47,7 +47,7 @@ func setup(t *testing.T) (*collections.Service, *catalog.Catalog) {
 			t.Fatal(err)
 		}
 	}
-	svc, err := collections.New(db, cat, slog.Default())
+	svc, err := collections.New(db, cat, slog.Default(), collections.WithIndexTTL(0), collections.WithLiveTTL(0))
 	if err != nil {
 		t.Fatal(err)
 	}

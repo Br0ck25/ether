@@ -337,3 +337,23 @@ func ParseDate(s string) time.Time {
 	}
 	return t
 }
+
+// GetJSON performs a rate-limited, cached GET of any TMDB v3 path (for
+// example "/search/keyword") and decodes the JSON body into out. It lets
+// callers reach endpoints this package has no typed helper for.
+func (c *Client) GetJSON(ctx context.Context, path string, q url.Values, out any) error {
+	if q == nil {
+		q = url.Values{}
+	} else {
+		q = cloneValues(q)
+	}
+	return c.getJSON(ctx, path, q, out)
+}
+
+func cloneValues(q url.Values) url.Values {
+	out := make(url.Values, len(q))
+	for k, v := range q {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
+}
