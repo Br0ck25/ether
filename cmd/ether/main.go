@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -71,6 +72,10 @@ func main() {
 		fatal(err)
 	}
 	if err := svc.Run(); err != nil {
+		if errors.Is(err, service.ErrRestartRequested) {
+			fmt.Fprintln(os.Stderr, "ether: restart requested")
+			os.Exit(service.ExitCodeRestart)
+		}
 		fatal(err)
 	}
 }

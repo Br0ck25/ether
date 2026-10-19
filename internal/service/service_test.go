@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -112,18 +113,114 @@ func TestProgramStartStopCancelsRun(t *testing.T) {
 	}
 }
 
+// exitRecorder captures program.exit calls.
+type exitRecorder struct {
+	ch chan int
+}
+
+func newExitRecorder() *exitRecorder { return &exitRecorder{ch: make(chan int, 1)} }
+func (e *exitRecorder) exit(code int)  { e.ch <- code }
+func (e *exitRecorder) wait(t *testing.T) int {
+	t.Helper()
+	select {
+	case code := <-e.ch:
+		return code
+	case <-time.After(5 * time.Second):
+		t.Fatal("program did not exit")
+		return -1
+	}
+}
+
 func TestProgramPropagatesRunError(t *testing.T) {
 	boom := errors.New("boom")
-	p := &program{stopTimeout: time.Second, run: func(context.Context) error { return boom }}
+	rec := newExitRecorder()
+	p := &program{stopTimeout: time.Second, exit: rec.exit, run: func(context.Context) error { return boom }}
 	if err := p.Start(nil); err != nil {
 		t.Fatal(err)
 	}
 	<-p.done
-	if err := p.Stop(nil); err != nil {
-		t.Fatal(err)
+	if code := rec.wait(t); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
 	}
 	if !errors.Is(p.result(), boom) {
 		t.Fatalf("result = %v, want boom", p.result())
+	}
+}
+
+func TestProgramUnrequestedReturnExits(t *testing.T) {
+	cases := []struct {
+		name string
+		run  RunFunc
+		want int
+	}{
+		{"nil error", func(context.Context) error { return nil }, 1},
+		{"restart", func(context.Context) error { return fmt.Errorf("updated: %w", ErrRestartRequested) }, ExitCodeRestart},
+		{"panic", func(context.Context) error { panic("kaboom") }, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := newExitRecorder()
+			p := &program{stopTimeout: time.Second, exit: rec.exit, run: tc.run}
+			if err := p.Start(nil); err != nil {
+				t.Fatal(err)
+			}
+			if code := rec.wait(t); code != tc.want {
+				t.Fatalf("exit code = %d, want %d", code, tc.want)
+			}
+			<-p.done
+		})
+	}
+}
+
+func TestProgramRequestedStopDoesNotExit(t *testing.T) {
+	rec := newExitRecorder()
+	p := &program{stopTimeout: time.Second, exit: rec.exit, run: func(ctx context.Context) error {
+		<-ctx.Done()
+		return errors.New("shutdown error")
+	}}
+	if err := p.Start(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Shutdown(nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-rec.ch:
+		t.Fatalf("requested stop exited the process with %d", code)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestConfigRestartPolicy(t *testing.T) {
+	cfg, err := Options{Executable: "/opt/ether/ether"}.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"Restart":                "always",
+		"KeepAlive":              true,
+		"DelayedAutoStart":       true,
+		"OnFailure":              "restart",
+		"OnFailureDelayDuration": "5s",
+		"OnFailureResetPeriod":   86400,
+	}
+	for k, v := range want {
+		if cfg.Option[k] != v {
+			t.Errorf("Option[%q] = %v, want %v", k, cfg.Option[k], v)
+		}
+	}
+}
+
+func TestInstallAppliesPostInstall(t *testing.T) {
+	be := &fakeBackend{}
+	svc := testService(t, nil, be)
+	var got string
+	svc.postInstall = func(name string) error { got = name; return errors.New("ignored") }
+	if err := svc.Install(); err != nil {
+		t.Fatalf("Install = %v (post-install failure must only warn)", err)
+	}
+	if got != "ether" {
+		t.Fatalf("postInstall name = %q", got)
 	}
 }
 
