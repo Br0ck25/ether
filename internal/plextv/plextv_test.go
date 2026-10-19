@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"net"
 	"net/http"
@@ -136,6 +138,41 @@ func TestUserUnauthorized(t *testing.T) {
 	}
 }
 
+func TestLiveXMLAccountAndSubscriptionShapes(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.userXML = `<user id="42" uuid="owner-uuid" username="owner" title="The Owner" email="owner@example.invalid" friendlyName="Owner" home="1" homeAdmin="1"><subscription active="1" status="Active" plan="lifetime"><features><feature id="remoteWatchPass"/></features></subscription></user>`
+	f.usersXML = `<users><user id="42" uuid="owner-uuid" username="owner" title="The Owner" email="owner@example.invalid" friendlyName="Owner"><providers/></user></users>`
+	c := newServerClient(t, f)
+	a, err := c.User(context.Background(), "server-token-42")
+	if err != nil || a.ID != 42 || !a.Subscription.Active || a.Subscription.Plan != "lifetime" || !a.HomeAdmin {
+		t.Fatalf("account=%+v err=%v", a, err)
+	}
+	users, err := c.Users(context.Background(), "server-token-42")
+	if err != nil || len(users) != 1 || users[0].PlexID != 42 || users[0].Username != "owner" {
+		t.Fatalf("users=%+v err=%v", users, err)
+	}
+	subs, err := c.UserSubscriptions(context.Background(), "server-token-42")
+	if err != nil || len(subs) != 1 || subs[0].PlexPassKnown {
+		t.Fatalf("subscriptions=%+v err=%v", subs, err)
+	}
+	services, err := c.UserServices(context.Background(), "server-token-42")
+	if err != nil || len(services) != 1 || services[0].Identifier != "example" {
+		t.Fatalf("services=%+v err=%v", services, err)
+	}
+}
+
+func TestAccessTokensObservedDeviceTokenShape(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.accessXML = `<tokens><token type="device" token="device-token" tokenDisabled="0" owned="1" createdAt="2026-01-02 03:04:05 UTC"/></tokens>`
+	c := newServerClient(t, f)
+	tokens, err := c.AccessTokens(context.Background(), "server-token-42")
+	if err != nil || len(tokens) != 1 || tokens[0].Token != "device-token" || !tokens[0].Owned || tokens[0].PlexID != 0 {
+		t.Fatalf("tokens=%+v err=%v", tokens, err)
+	}
+}
+
 func TestClaimExchange(t *testing.T) {
 	f := newFakePlexTV(t, testMachineID)
 	f.addUser("user-token", owner())
@@ -212,12 +249,25 @@ func TestPublishAndResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := c.RegisterServer(ctx, "server-token-42", ServerRegistration{Name: "Ether", Address: "203.0.113.7", Port: 32400,
-		Version: "1.42", LocalAddresses: []string{"192.168.1.5"}, MappingState: "mapped"}); err != nil {
+		PrivateAddress: "192.168.1.5", PrivatePort: 32400, Version: "1.42", LocalAddresses: []string{"192.168.1.5"}, MappingState: "mapped"}); err != nil {
 		t.Fatal(err)
 	}
-	reg, _ := url.ParseQuery(f.registered[0])
-	if reg.Get("address") != "203.0.113.7" || reg.Get("port") != "32400" || reg.Get("machineIdentifier") != testMachineID || reg.Get("localAddresses") != "192.168.1.5" {
-		t.Fatal(reg)
+	var reg struct {
+		XMLName           xml.Name `xml:"Server"`
+		Name              string   `xml:"name,attr"`
+		Address           string   `xml:"address,attr"`
+		Port              int      `xml:"port,attr"`
+		Version           string   `xml:"version,attr"`
+		MachineIdentifier string   `xml:"machineIdentifier,attr"`
+		LocalAddresses    string   `xml:"localAddresses,attr"`
+		PrivateAddress    string   `xml:"privateAddress,attr"`
+	}
+	if err := xml.Unmarshal([]byte(f.registered[0]), &reg); err != nil || reg.Name != "Ether" || reg.Address != "203.0.113.7" || reg.Port != 32400 || reg.Version != "1.42" || reg.MachineIdentifier != testMachineID || reg.LocalAddresses != "192.168.1.5" || reg.PrivateAddress != "" {
+		t.Fatalf("registration=%+v err=%v", reg, err)
+	}
+	asyncID, err := c.ReportConnectivity(ctx, "server-token-42")
+	if err != nil || len(asyncID) != 36 || f.connectivity != 1 {
+		t.Fatalf("connectivity id=%q requests=%d err=%v", asyncID, f.connectivity, err)
 	}
 	res, err := c.FindServer(ctx, "server-token-42", strings.ToUpper(testMachineID))
 	if err != nil {
@@ -232,15 +282,23 @@ func TestPublishAndResources(t *testing.T) {
 	}
 }
 
+func TestResourcesNumericBooleanFlags(t *testing.T) {
+	var r Resource
+	err := json.Unmarshal([]byte(`{"clientIdentifier":"fixture","publicAddressMatches":1,"owned":1,"connections":[{"protocol":"https","address":"127.0.0.1","port":32401,"uri":"https://example.invalid","local":1,"relay":0,"IPv6":0}]}`), &r)
+	if err != nil || !r.PublicAddressMatches || !r.Owned || len(r.Connections) != 1 || !r.Connections[0].Local || r.Connections[0].Relay || r.Connections[0].IPv6 {
+		t.Fatalf("resource=%+v err=%v", r, err)
+	}
+}
+
 const accessTokensXML = `<?xml version="1.0" encoding="UTF-8"?>
-<access_tokens>
-  <access_token token="owner-access" owned="1" username="owner" title="The Owner" id="42"/>
-  <access_token token="friend-a" owned="0" username="alice" title="Alice" id="100" home="0" all_libraries="0">
+<tokens>
+  <token token="owner-access" owned="1" username="owner" title="The Owner" id="42"/>
+  <token token="friend-a" owned="0" username="alice" title="Alice" id="100" home="0" all_libraries="0">
     <sections><section key="1"/><section key="/library/sections/2"/></sections>
-  </access_token>
-  <access_token token="friend-b" owned="0" username="bob" id="101" all_libraries="1"/>
-  <access_token owned="0" username="notoken" id="102"/>
-</access_tokens>`
+  </token>
+  <token token="friend-b" owned="0" username="bob" id="101" all_libraries="1"/>
+  <token owned="0" username="notoken" id="102"/>
+</tokens>`
 
 const usersXML = `<?xml version="1.0" encoding="UTF-8"?>
 <MediaContainer friendlyName="myPlex" identifier="com.plexapp.plugins.myplex" machineIdentifier="x" totalSize="2" size="2">
@@ -285,7 +343,7 @@ func TestFriendsAccessTokens(t *testing.T) {
 	if b.Title != "Bob B" || !b.Home || !b.Restricted || !b.AllLibs {
 		t.Fatalf("%+v", b)
 	}
-	if f.count("GET /servers/") != 2 {
+	if f.count("GET /api/v2/server/access_tokens") != 2 {
 		t.Fatalf("expected one retry, requests %d", f.count("GET /servers/"))
 	}
 }
@@ -479,6 +537,30 @@ func TestCertManagerCustom(t *testing.T) {
 	}
 }
 
+func TestCertManagerRetriesClientErrorsSoonerThanRateLimits(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.mu.Lock()
+	f.csrStatus = http.StatusUnprocessableEntity
+	f.mu.Unlock()
+	c := newServerClient(t, f)
+	now := time.Now()
+	m, err := NewCertManager(CertManagerOptions{Dir: t.TempDir(), Client: c,
+		Now: func() time.Time { return now }, ClientErrorRetryAfter: 2 * time.Minute,
+		Request: CertRequest{PollInterval: time.Millisecond, Timeout: time.Second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Ensure(context.Background(), "server-token-42", nil, false)
+	if err == nil || info.RetryAfter != 2*time.Minute || !info.NextAttempt.Equal(info.LastAttempt.Add(2*time.Minute)) {
+		t.Fatalf("client error retry state=%+v err=%v", info, err)
+	}
+	requests := f.count("PUT /api/v2/devices/")
+	if _, err := m.Ensure(context.Background(), "server-token-42", nil, false); err == nil || f.count("PUT /api/v2/devices/") != requests {
+		t.Fatal("expected 4xx request to be deferred")
+	}
+}
+
 func TestGenerateSelfSigned(t *testing.T) {
 	b, err := GenerateSelfSigned([]string{"192.168.1.5", "ether.lan", "192.168.1.5"}, "ABC", 0)
 	if err != nil {
@@ -606,6 +688,7 @@ func TestRegistrar(t *testing.T) {
 	cfg := testConfig()
 	cfg.Plex.RemoteAccess = true
 	cfg.Plex.UseUPnP = true
+	cfg.Plex.PublicPort = 32401
 	cfg.Plex.CustomURLs = []string{"https://plex.example.com"}
 	store := &memConfig{cfg: cfg}
 	users := &fakeUsers{}
@@ -661,12 +744,18 @@ func TestRegistrar(t *testing.T) {
 	if !st.Claimed || st.LastPublishError != "" || !st.Listed || !st.PlexPass {
 		t.Fatalf("%+v", st)
 	}
+	r.mu.Lock()
+	r.st.PlexPass = false
+	r.mu.Unlock()
+	if err := r.RefreshOwner(ctx); err != nil || !r.Status().PlexPass {
+		t.Fatalf("owner subscription refresh status=%+v err=%v", r.Status(), err)
+	}
 	// plex.direct certificate obtained after claiming; http URIs published
 	// (LAN, WAN from the UPnP mapping, custom).
 	if st.Cert.SelfSigned || st.Cert.Hash != fakeHash || store.Get().Plex.CertHash != fakeHash {
 		t.Fatalf("cert %+v", st.Cert)
 	}
-	want := "http://192.168.1.5:32400,http://203.0.113.7:32400,https://plex.example.com"
+	want := "http://192.168.1.5:32400,http://203.0.113.7:32401,https://plex.example.com"
 	if strings.Join(st.PublishedURIs, ",") != want {
 		t.Fatalf("published %v", st.PublishedURIs)
 	}
@@ -681,6 +770,12 @@ func TestRegistrar(t *testing.T) {
 	}
 	if st.Reachability == nil || st.Reachability.Reachable || len(st.Reachability.Results) == 0 {
 		t.Fatalf("reachability %+v", st.Reachability)
+	}
+	if st.Reachability.Results[0].URI != "https://203-0-113-7."+fakeHash+".plex.direct:32401" {
+		t.Fatalf("reachability should probe mapped public port: %+v", st.Reachability.Results)
+	}
+	if f.connectivity == 0 {
+		t.Fatal("connectivity report not sent")
 	}
 	if len(f.registered) == 0 || st.Friends != 2 || len(users.friends) != 3 {
 		t.Fatalf("registered=%d friends=%d synced=%d", len(f.registered), st.Friends, len(users.friends))

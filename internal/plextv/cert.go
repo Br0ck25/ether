@@ -64,9 +64,12 @@ var plexDirectRe = regexp.MustCompile(`(?i)\*\.([0-9a-z]+)\.plex\.direct`)
 func (c *Client) CertificateSubject(ctx context.Context, serverToken string) (cn, hash string, err error) {
 	resp, err := c.do(ctx, request{
 		method: http.MethodGet,
+		host:   c.serversHost(),
 		path:   "/api/v2/devices/" + url.PathEscape(c.id.ClientIdentifier) + "/certificate/subject",
 		token:  serverToken,
-		accept: "application/json, application/xml;q=0.9, text/plain;q=0.8",
+		// The endpoint returns an XML <certificate> document. Requesting JSON
+		// gets Plex's 406 code 1006 response (verified against the reference).
+		accept: "application/xml",
 	})
 	if err != nil {
 		var ae *APIError
@@ -129,6 +132,7 @@ func (c *Client) RequestPlexDirectCertificate(ctx context.Context, serverToken s
 	devPath := "/api/v2/devices/" + url.PathEscape(c.id.ClientIdentifier) + "/certificate"
 	if _, err := c.do(ctx, request{
 		method:      http.MethodPut,
+		host:        c.serversHost(),
 		path:        devPath + "/csr",
 		query:       url.Values{"reason": {req.Reason}, "invalidIn": {strconv.Itoa(req.InvalidIn)}},
 		token:       serverToken,
@@ -145,6 +149,7 @@ func (c *Client) RequestPlexDirectCertificate(ctx context.Context, serverToken s
 	for {
 		resp, err := c.once(dctx, request{
 			method:   http.MethodGet,
+			host:     c.serversHost(),
 			path:     devPath + "/download",
 			token:    serverToken,
 			accept:   "application/x-pem-file, application/json;q=0.9, */*;q=0.8",

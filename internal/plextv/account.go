@@ -1,6 +1,7 @@
 package plextv
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -177,12 +178,30 @@ func (c *Client) User(ctx context.Context, token string) (*Account, error) {
 	if token == "" {
 		return nil, &APIError{Method: http.MethodGet, Path: "/api/v2/user", Status: http.StatusUnauthorized, Message: "no token"}
 	}
-	resp, err := c.do(ctx, request{method: http.MethodGet, path: "/api/v2/user", token: token})
+	resp, err := c.do(ctx, request{method: http.MethodGet, host: c.serversHost(), path: "/api/v2/user",
+		query: url.Values{"includeSubscriptions": {"1"}, "includeProviders": {"1"}}, token: token})
 	if err != nil {
 		return nil, err
 	}
 	var a Account
-	if err := json.Unmarshal(resp.body, &a); err != nil {
+	if bytes.HasPrefix(bytes.TrimSpace(resp.body), []byte("<")) {
+		n, err := parseXMLNode(resp.body)
+		if err != nil {
+			return nil, fmt.Errorf("plextv: decode user: %w", err)
+		}
+		a.ID, a.UUID, a.Username, a.Title = n.intAttr("id"), n.attr("uuid"), n.attr("username"), n.attr("title")
+		a.FriendlyName, a.Email, a.Thumb = n.attr("friendlyName"), n.attr("email"), n.attr("thumb")
+		a.AuthToken = n.attr("authToken")
+		a.Home, a.HomeAdmin, a.Restricted = n.boolAttr("home"), n.boolAttr("homeAdmin"), n.boolAttr("restricted")
+		if sub := n.find("subscription"); sub != nil {
+			a.Subscription = Subscription{Active: sub.boolAttr("active") || strings.EqualFold(sub.attr("status"), "active"), Status: sub.attr("status"), Plan: sub.attr("plan")}
+			for _, f := range sub.findAll("feature") {
+				if id := f.attr("id"); id != "" {
+					a.Subscription.Features = append(a.Subscription.Features, id)
+				}
+			}
+		}
+	} else if err := json.Unmarshal(resp.body, &a); err != nil {
 		return nil, fmt.Errorf("plextv: decode user: %w", err)
 	}
 	if a.ID == 0 {
