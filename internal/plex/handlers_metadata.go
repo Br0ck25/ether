@@ -116,6 +116,10 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 					warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
 				}
 			}
+			if len(keys) == 1 {
+				// Live session intent (#32): a single-item detail open.
+				s.recordDetailIntent(ctx, pr, t)
+			}
 			if len(keys) == 1 && s.d.PlexGUID != nil && (t.Type == core.TypeMovie || t.Type == core.TypeShow) {
 				matchCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 				_, _ = s.d.PlexGUID.Resolve(matchCtx, t.Key)
@@ -142,6 +146,8 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 	items := s.renderTitles(ctx, pr, ts, renderOpts{detail: true, media: true})
 	s.applyLeafCounts(ctx, pr, items, ts)
 	md := items[0]
+	// Per-viewer decision header (#31); detail pages only, never lists.
+	s.decorateDetail(ctx, pr, t, &md)
 	if children && (t.Type == core.TypeShow || t.Type == core.TypeSeason) {
 		if kids, err := s.metadataChildren(ctx, pr, t.Key); err == nil {
 			rendered := s.renderTitles(ctx, pr, kids, renderOpts{media: true})
