@@ -1,0 +1,114 @@
+// Package resolver implements core.Resolver: it turns a catalogue
+// title plus client capabilities into a health-checked release.
+package resolver
+
+import (
+	"strings"
+
+	"github.com/ether-media/ether/internal/config"
+	"github.com/ether-media/ether/internal/core"
+)
+
+// defaultProfile is used when config has no usable profiles at all.
+func defaultProfile() core.QualityProfile {
+	return core.QualityProfile{
+		Name:             "default",
+		MaxHeight:        1080,
+		MinHeight:        720,
+		PreferredSources: []core.Source{core.SourceWEBDL, core.SourceBluRay, core.SourceWEBRip, core.SourceHDTV},
+		PreferredCodecs:  []string{"h264", "hevc"},
+		PreferredAudio:   []string{"eac3", "ac3", "aac"},
+		MinSizeMBPerMin:  5,
+		MaxSizeMBPerMin:  150,
+	}
+}
+
+// SelectProfile picks the quality profile for a client and clamps it
+// to what the client can direct-play. Playback uses it for
+// pre-resolution estimates; the resolver uses it for ranking.
+//
+// Selection order: remote clients get q.Remote (when set); otherwise
+// the first rule whose non-empty matchers all match; otherwise
+// q.Default; otherwise the first profile. Clamping: MaxHeight is
+// capped at caps.MaxHeight, HDR/DV are only allowed when the client
+// supports them, and preferred codecs the client cannot decode are
+// dropped.
+func SelectProfile(q config.Quality, caps core.ClientCaps, user *core.User) core.QualityProfile {
+	byName := map[string]core.QualityProfile{}
+	for _, p := range q.Profiles {
+		byName[p.Name] = p
+	}
+	var prof core.QualityProfile
+	found := false
+	pick := func(name string) bool {
+		if name == "" {
+			return false
+		}
+		if p, ok := byName[name]; ok {
+			prof, found = p, true
+			return true
+		}
+		return false
+	}
+	switch {
+	case caps.Remote && pick(q.Remote):
+	default:
+		for _, rule := range q.Rules {
+			if ruleMatches(rule, caps, user) && pick(rule.Profile) {
+				break
+			}
+		}
+		if !found {
+			pick(q.Default)
+		}
+	}
+	if !found {
+		if len(q.Profiles) > 0 {
+			prof = q.Profiles[0]
+		} else {
+			prof = defaultProfile()
+		}
+	}
+	// Deep-copy slices so callers cannot mutate config.
+	prof.PreferredSources = append([]core.Source(nil), prof.PreferredSources...)
+	prof.PreferredCodecs = append([]string(nil), prof.PreferredCodecs...)
+	prof.PreferredAudio = append([]string(nil), prof.PreferredAudio...)
+	prof.PreferredLanguages = append([]string(nil), prof.PreferredLanguages...)
+
+	// Clamp to client capabilities.
+	if caps.MaxHeight > 0 && (prof.MaxHeight == 0 || prof.MaxHeight > caps.MaxHeight) {
+		prof.MaxHeight = caps.MaxHeight
+	}
+	if prof.MinHeight > prof.MaxHeight && prof.MaxHeight > 0 {
+		prof.MinHeight = prof.MaxHeight
+	}
+	prof.AllowHDR = prof.AllowHDR && caps.HDR10
+	prof.AllowDolbyVision = prof.AllowDolbyVision && caps.DolbyVision
+	if len(caps.VideoCodecs) > 0 {
+		kept := prof.PreferredCodecs[:0:0]
+		for _, c := range prof.PreferredCodecs {
+			if caps.SupportsVideo(c) {
+				kept = append(kept, c)
+			}
+		}
+		prof.PreferredCodecs = kept
+	}
+	return prof
+}
+
+func ruleMatches(rule config.QualityRule, caps core.ClientCaps, user *core.User) bool {
+	if rule.Product != "" && !strings.Contains(strings.ToLower(caps.Product), strings.ToLower(rule.Product)) {
+		return false
+	}
+	if rule.Platform != "" && !strings.Contains(strings.ToLower(caps.Platform), strings.ToLower(rule.Platform)) {
+		return false
+	}
+	if rule.UserID != 0 {
+		if user == nil || user.ID != rule.UserID {
+			return false
+		}
+	}
+	// A rule with no matchers at all would match everything; require
+	// at least one matcher to avoid surprises from empty config rows.
+	return rule.Product != "" || rule.Platform != "" || rule.UserID != 0
+}
