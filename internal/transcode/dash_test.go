@@ -566,10 +566,12 @@ func TestDASHPruneAndClose(t *testing.T) {
 	s.mu.Lock()
 	runDir := s.cur.dash.dir
 	s.mu.Unlock()
-	entries, _ := os.ReadDir(runDir)
-	if len(entries) > 30 {
-		t.Errorf("%d files left in the run directory", len(entries))
-	}
+	// Deletions the OS refuses at first (Windows sharing violations) are
+	// retried on later polls, so allow the directory to drain.
+	waitFor(t, "consumed chunks to be deleted", func() bool {
+		entries, _ := os.ReadDir(runDir)
+		return len(entries) <= 30
+	})
 	p := fr.lastProc()
 	m.Stop("prune")
 	if !p.wasKilled() {
