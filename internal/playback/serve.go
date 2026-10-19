@@ -33,6 +33,7 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 	}
 	s.touch(m.now())
 	s.markDirectPlay()
+	w = newStallWriter(w, m.opts.WriteStallTimeout)
 	s.mu.Lock()
 	rep := representation{
 		size:        s.virtual.Size,

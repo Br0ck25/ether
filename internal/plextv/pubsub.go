@@ -92,6 +92,11 @@ type PresenceOptions struct {
 	// StreamURL builds the stream URL for a host (tests use http).
 	StreamURL              func(host string, ownerID int64, machineID, token string) string
 	MinBackoff, MaxBackoff time.Duration
+	// IdleTimeout reconnects when the stream delivers no bytes for this long
+	// (default 5m). Pubsub sends ": -1" keep-alive comments, so silence
+	// means a half-open connection (NAT timeout, sleep/wake) that would
+	// otherwise block the reader forever and leave the server offline.
+	IdleTimeout time.Duration
 }
 
 // PresenceStatus is reported in the registrar status.
@@ -130,6 +135,9 @@ func NewPresence(o PresenceOptions) *Presence {
 	}
 	if o.MaxBackoff <= 0 {
 		o.MaxBackoff = 2 * time.Minute
+	}
+	if o.IdleTimeout <= 0 {
+		o.IdleTimeout = 5 * time.Minute
 	}
 	return &Presence{o: o}
 }
@@ -202,7 +210,16 @@ func (p *Presence) fail(err error) {
 	p.set(func(s *PresenceStatus) { s.Connected, s.LastError = false, msg })
 }
 
+// errPubsubIdle reports a stream dropped by the idle watchdog.
+var errPubsubIdle = errors.New("no data or keep-alive within the idle timeout")
+
 func (p *Presence) stream(ctx context.Context, host string, owner int64, machine, token string) error {
+	// The idle watchdog cancels the request when no line (event or
+	// keep-alive comment) arrives within IdleTimeout.
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	watchdog := time.AfterFunc(p.o.IdleTimeout, func() { cancel(errPubsubIdle) })
+	defer watchdog.Stop()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.o.StreamURL(host, owner, machine, token), nil)
 	if err != nil {
 		return err
@@ -225,6 +242,7 @@ func (p *Presence) stream(ctx context.Context, host string, owner int64, machine
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	var data strings.Builder
 	for sc.Scan() {
+		watchdog.Reset(p.o.IdleTimeout)
 		line := sc.Text()
 		switch {
 		case line == "":
@@ -241,6 +259,9 @@ func (p *Presence) stream(ctx context.Context, host string, owner int64, machine
 	}
 	if data.Len() > 0 {
 		p.dispatch(data.String())
+	}
+	if errors.Is(context.Cause(ctx), errPubsubIdle) {
+		return fmt.Errorf("pubsub %s: %w", host, errPubsubIdle)
 	}
 	if err := sc.Err(); err != nil {
 		return fmt.Errorf("pubsub %s: %w", host, err)

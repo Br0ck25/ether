@@ -175,6 +175,7 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != "HEAD" {
+			armWriteDeadline(w)
 			w.Write(rewritten)
 		}
 		return
@@ -185,8 +186,18 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		}
 	}
 	w.Header().Set("Cache-Control", "private, max-age=10")
+	armWriteDeadline(w)
 	w.WriteHeader(res.StatusCode)
 	if r.Method != "HEAD" {
 		_, _ = w.Write(body)
 	}
+}
+
+// resourceWriteTimeout bounds writing one buffered upstream object (up to
+// 64 MiB held in memory) to the client. Servers have no WriteTimeout, so
+// without it a client that stops reading would pin the buffer forever.
+const resourceWriteTimeout = 5 * time.Minute
+
+func armWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(resourceWriteTimeout))
 }

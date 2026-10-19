@@ -43,14 +43,15 @@ func (s *Service) loadPersisted(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT release_id FROM resolver_bad`)
+	rows, err := s.db.QueryContext(ctx, `SELECT release_id, created_at FROM resolver_bad WHERE created_at>=?`, s.now().Add(-badRetention).Unix())
 	if err == nil {
 		defer rows.Close()
 		s.mu.Lock()
 		for rows.Next() {
 			var id string
-			if rows.Scan(&id) == nil {
-				s.bad[id] = ""
+			var at int64
+			if rows.Scan(&id, &at) == nil {
+				s.bad[id] = time.Unix(at, 0)
 			}
 		}
 		s.mu.Unlock()
@@ -77,7 +78,7 @@ func (s *Service) persistBad(ctx context.Context, id, reason string) error {
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO resolver_bad(release_id, reason, created_at) VALUES (?,?,?)
-		 ON CONFLICT(release_id) DO UPDATE SET reason=excluded.reason`,
+		 ON CONFLICT(release_id) DO UPDATE SET reason=excluded.reason, created_at=excluded.created_at`,
 		id, reason, s.now().Unix())
 	return err
 }
@@ -112,8 +113,10 @@ type availEntry struct {
 }
 
 func (s *Service) setAvailability(ctx context.Context, key int64, available bool, ttl time.Duration) {
-	exp := s.now().Add(ttl)
+	now := s.now()
+	exp := now.Add(ttl)
 	s.mu.Lock()
+	boundMap(s.avail, maxAvailEntries, func(e availEntry) bool { return now.After(e.expires) })
 	s.avail[key] = availEntry{available: available, expires: exp}
 	s.mu.Unlock()
 	if s.db != nil {
@@ -148,7 +151,9 @@ func (s *Service) getAvailability(ctx context.Context, key int64) (availEntry, b
 			if s.now().After(e.expires) {
 				return availEntry{}, false
 			}
+			now := s.now()
 			s.mu.Lock()
+			boundMap(s.avail, maxAvailEntries, func(e availEntry) bool { return now.After(e.expires) })
 			s.avail[key] = e
 			s.mu.Unlock()
 			return e, true

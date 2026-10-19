@@ -356,6 +356,16 @@ func (c *Cache) Usage() (used, budget int64) {
 	return c.used, c.budget
 }
 
+// ReleaseBytes reports how many bytes of a release are currently cached.
+func (c *Cache) ReleaseBytes(releaseID string) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if r := c.rels[releaseID]; r != nil {
+		return r.bytes
+	}
+	return 0
+}
+
 // SetBudget changes the budget (<=0 = unlimited) and evicts immediately if
 // the cache is now over it.
 func (c *Cache) SetBudget(budget int64) {

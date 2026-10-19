@@ -1,0 +1,81 @@
+package app
+
+import (
+	"context"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/store"
+)
+
+// dbMaintenanceInterval is how often derived data is pruned, the SQLite WAL
+// truncated and the planner statistics refreshed. The first pass waits
+// dbMaintenanceDelay so it never competes with startup work.
+const (
+	dbMaintenanceInterval = 24 * time.Hour
+	dbMaintenanceDelay    = 15 * time.Minute
+)
+
+// pruner deletes expired or out-of-retention derived rows for one component
+// and reports how many rows it removed.
+type pruner struct {
+	name  string
+	prune func(context.Context) (int64, error)
+}
+
+// pruners lists every component with a retention policy. User data (plays,
+// watch state, history, playlists, catalogue titles) is never pruned.
+func (a *App) pruners() []pruner {
+	var ps []pruner
+	add := func(name string, ok bool, fn func(context.Context) (int64, error)) {
+		if ok {
+			ps = append(ps, pruner{name, fn})
+		}
+	}
+	add("markers", a.markers != nil, func(ctx context.Context) (int64, error) { return a.markers.Prune(ctx) })
+	add("resolver", a.resolver != nil, func(ctx context.Context) (int64, error) { return a.resolver.Prune(ctx) })
+	add("newznab", a.indexers != nil, func(ctx context.Context) (int64, error) { return a.indexers.Prune(ctx) })
+	add("stats", a.stats != nil, func(ctx context.Context) (int64, error) { return a.stats.Prune(ctx) })
+	add("ratings", a.ratings != nil, func(ctx context.Context) (int64, error) { return a.ratings.Prune(ctx) })
+	add("collections", a.collections != nil, func(ctx context.Context) (int64, error) { return a.collections.Prune(ctx) })
+	return ps
+}
+
+// runPruners runs every component prune, logging (not failing on) errors.
+func (a *App) runPruners(ctx context.Context) {
+	for _, p := range a.pruners() {
+		n, err := p.prune(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			a.log.Warn("prune", "component", p.name, "err", err)
+		} else if n > 0 {
+			a.log.Info("pruned stale rows", "component", p.name, "rows", n)
+		}
+	}
+}
+
+// maintainDB prunes derived data and runs store.Maintain daily until ctx
+// ends.
+func (a *App) maintainDB(ctx context.Context) {
+	timer := time.NewTimer(dbMaintenanceDelay)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		start := time.Now()
+		a.runPruners(ctx)
+		if err := store.Maintain(ctx, a.db); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			a.log.Warn("database maintenance", "err", err)
+		} else {
+			a.log.Debug("database maintenance done", "took", time.Since(start))
+		}
+		timer.Reset(dbMaintenanceInterval)
+	}
+}

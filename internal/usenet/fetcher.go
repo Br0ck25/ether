@@ -38,6 +38,8 @@ const (
 	DefaultBackoffMax       = 2 * time.Minute
 	DefaultFailThreshold    = 2
 	DefaultLimitCooloff     = 5 * time.Minute
+	DefaultAuthRetryMin     = 15 * time.Minute
+	DefaultAuthRetryMax     = 6 * time.Hour
 )
 
 // Options tune the fetcher. Zero values take the defaults above.
@@ -71,6 +73,11 @@ type Options struct {
 	BackoffMin    time.Duration
 	BackoffMax    time.Duration
 	FailThreshold int
+	// AuthRetryMin/Max: a provider that rejected the credentials (481/482)
+	// is re-probed with one login after AuthRetryMin, doubling per failed
+	// probe up to AuthRetryMax, so transient auth outages self-heal.
+	AuthRetryMin time.Duration
+	AuthRetryMax time.Duration
 	// LimitCooloff: when a server refuses connections beyond some number
 	// while others work, the pool shrinks to that number for this long.
 	LimitCooloff time.Duration
@@ -132,6 +139,12 @@ func (o *Options) withDefaults() {
 	}
 	if o.LimitCooloff <= 0 {
 		o.LimitCooloff = DefaultLimitCooloff
+	}
+	if o.AuthRetryMin <= 0 {
+		o.AuthRetryMin = DefaultAuthRetryMin
+	}
+	if o.AuthRetryMax < o.AuthRetryMin {
+		o.AuthRetryMax = max(DefaultAuthRetryMax, o.AuthRetryMin)
 	}
 	if o.MaxArticleSize <= 0 {
 		o.MaxArticleSize = yenc.DefaultMaxSize
