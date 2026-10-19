@@ -401,14 +401,19 @@ func (f *Fetcher) StatMany(ctx context.Context, messageIDs []string) (map[string
 		// global absence. Preserve uncertainty after all provider attempts.
 	}
 	if len(unresolved) > 0 && firstErr != nil {
-		return result, firstErr
+		return byCallerID(messageIDs, ids, result), firstErr
 	}
-	for _, id := range ids {
-		if _, ok := result[id]; !ok {
-			result[id] = false
-		}
+	return byCallerID(messageIDs, ids, result), nil
+}
+
+// byCallerID re-keys results from normalized "<id>" form to the message-ids
+// exactly as the caller passed them (NZBs carry them without brackets).
+func byCallerID(callerIDs, normalized []string, result map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(callerIDs))
+	for i, id := range callerIDs {
+		out[id] = result[normalized[i]]
 	}
-	return result, nil
+	return out
 }
 
 // Warm dials, negotiates TLS, and authenticates idle connections before a

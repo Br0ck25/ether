@@ -589,7 +589,7 @@ func TestStatManyPipelinesAndFallsBackToBlockProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got["<primary@x>"] || !got["<block@x>"] || got["<gone@x>"] || !got["<taken@x>"] {
+	if !got["primary@x"] || !got["block@x"] || got["gone@x"] || !got["taken@x"] {
 		t.Fatalf("results %v", got)
 	}
 	stats := f.Stats()
@@ -608,7 +608,7 @@ func TestPooledStatManyThenBodyAndTimeoutRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := f.StatMany(context.Background(), []string{"present@x", "missing@x"})
-	if err != nil || !got["<present@x>"] || got["<missing@x>"] {
+	if err != nil || !got["present@x"] || got["missing@x"] {
 		t.Fatalf("STAT result=%v err=%v", got, err)
 	}
 	body, _, err := f.BodyPart(context.Background(), "present@x", nil, core.PriorityLive)
@@ -1021,5 +1021,24 @@ func TestTakedown451FallsThrough(t *testing.T) {
 	only := newFetcher(t, []config.UsenetProvider{p1}, Options{})
 	if _, err := only.Body(context.Background(), "gone@x", nil, core.PriorityLive); !errors.Is(err, core.ErrArticleMissing) {
 		t.Fatalf("err = %v, want ErrArticleMissing", err)
+	}
+}
+
+// NZBs carry message-ids without angle brackets; StatMany must answer under
+// the ids exactly as given, or every lookup misses and healthy releases are
+// rejected.
+func TestStatManyKeysByCallerID(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, s, "here@x", []byte("alpha"))
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 2)}, Options{})
+	got, err := f.StatMany(context.Background(), []string{"here@x", "<here@x>", "gone@x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got["here@x"] || !got["<here@x>"] || got["gone@x"] {
+		t.Fatalf("got %v", got)
+	}
+	if _, ok := got["gone@x"]; !ok {
+		t.Fatal("missing ids must be reported as false, not absent")
 	}
 }
