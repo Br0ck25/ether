@@ -330,12 +330,23 @@ func (e *Engine) prefetchRange(ctx context.Context, rel *release, p *plan, relea
 		go func(j job) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if _, err := e.segment(ctx, rel, j.pf, j.i, core.PriorityPrefetch, fo); err != nil {
+			seg, err := e.segment(ctx, rel, j.pf, j.i, core.PriorityPrefetch, fo)
+			if err != nil {
 				mu.Lock()
 				if first == nil {
 					first = err
 				}
 				mu.Unlock()
+				return
+			}
+			// A segment served from the hot buffer or a flight another
+			// reader started may not be on disk yet; prefetch exists to put
+			// it there, so finish that before reporting success.
+			global := j.pf.segBase + j.i
+			if fo.noHot && hc != nil && !hc.Has(releaseID, global) {
+				if perr := e.cache.Put(releaseID, global, encodeSegment(seg)); perr != nil {
+					e.log.Debug("prefetch cache put failed", "release", releaseID, "segment", global, "err", perr)
+				}
 			}
 		}(j)
 	}

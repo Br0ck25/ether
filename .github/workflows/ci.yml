@@ -65,18 +65,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build web UI (when present)
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: web
+        run: pnpm typecheck
+      - name: Test
+        working-directory: web
+        run: pnpm test
+      - name: Build
+        working-directory: web
+        run: pnpm build
+      - name: Embedded UI is up to date
         run: |
-          if [ -f web/package.json ]; then
-            corepack enable || true
-            cd web
-            npm ci
-            npm run build
-            npm run lint --if-present
-            npm test --if-present
-          else
-            echo "web/ not present yet — skipping (owned by the admin-UI work package)"
-          fi
+          # internal/admin/dist is committed so `go build` works without Node;
+          # it must match a fresh build of web/.
+          git status --porcelain internal/admin/dist
+          test -z "$(git status --porcelain internal/admin/dist)" || {
+            echo "::error::internal/admin/dist is stale: run 'pnpm build' in web/ and commit the result"; exit 1; }
 
   packaging:
     name: Packaging checks

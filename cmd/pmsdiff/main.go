@@ -276,12 +276,7 @@ func compare(dir, base, token, sel, only string, timeout time.Duration, concurre
 	return out, nil
 }
 func fixtureName(profile, path string, jsonMode bool) string {
-	ext := "xml"
-	if jsonMode {
-		ext = "json"
-	}
-	n := strings.NewReplacer("/", "_", ":", "", "?", "_", "=", "-").Replace(profile + "_" + ext + path)
-	return filepath.Base(n)
+	return pmsconform.FixtureName(profile, path, jsonMode)
 }
 func formatName(jsonMode bool) string {
 	if jsonMode {

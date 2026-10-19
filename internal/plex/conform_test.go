@@ -64,11 +64,7 @@ var pmsOnlyRE = regexp.MustCompile(`(@|/)(chapterSource|contentRatingAge|primary
 var etherOnlyRE = regexp.MustCompile(`(Writer(\[\])?/@?thumb|Video/Rating|Metadata\[\]/Rating)$`)
 
 func pmsFixtureName(profile, path string, jsonMode bool) string {
-	ext := "xml"
-	if jsonMode {
-		ext = "json"
-	}
-	return strings.NewReplacer("/", "_", ":", "", "?", "_", "=", "-").Replace(profile+"_"+ext+path) + ".json"
+	return pmsconform.FixtureName(profile, path, jsonMode) + ".json"
 }
 
 func TestDecisionConformsToPMS(t *testing.T) {
