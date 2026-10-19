@@ -35,6 +35,7 @@ type Config struct {
 	Markers       Markers       `json:"markers"`
 	Personalize   Personalize   `json:"personalize"`
 	Extras        Extras        `json:"extras"`
+	Debrid        Debrid        `json:"debrid"`
 	SetupComplete bool          `json:"setupComplete"`
 }
 
@@ -118,7 +119,13 @@ type Indexer struct {
 	// Categories override; empty uses Newznab defaults (2000 movies, 5000 TV).
 	MovieCategories []int `json:"movieCategories"`
 	TVCategories    []int `json:"tvCategories"`
+	// Protocol is "usenet" (Newznab, the default when empty) or "torrent"
+	// (Torznab; results stream through a debrid provider).
+	Protocol string `json:"protocol,omitempty"`
 }
+
+// IsTorrent reports whether the indexer is a Torznab (torrent) indexer.
+func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
 
 type Cache struct {
 	Dir         string `json:"dir"`

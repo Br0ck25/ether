@@ -54,6 +54,18 @@ type Release struct {
 	Category int         `json:"category,omitempty"`
 	Info     ReleaseInfo `json:"info"`
 	Score    float64     `json:"score"`
+
+	// Torrent releases (additive). Protocol is "" for Usenet and
+	// ProtocolTorrent for Torznab results; torrents are streamed through
+	// an owner-configured debrid service (internal/debrid).
+	Protocol  string `json:"protocol,omitempty"`
+	InfoHash  string `json:"infoHash,omitempty"` // lower-case hex BitTorrent v1 info hash
+	MagnetURL string `json:"magnetUrl,omitempty"`
+	Seeders   int    `json:"seeders,omitempty"`
+	Peers     int    `json:"peers,omitempty"`
+	// Target narrows a multi-file release (a season pack) to the wanted
+	// episode; set by the resolver on candidates before fetching.
+	Target *ReleaseTarget `json:"target,omitempty"`
 }
 
 // Resolution is the resolver's answer for a title and client: the winning
