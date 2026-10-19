@@ -142,6 +142,7 @@ type ClientCaps struct {
 	VideoCodecs    []string            `json:"videoCodecs"`              // h264, hevc, av1, vp9
 	AudioCodecs    []string            `json:"audioCodecs"`              // aac, ac3, eac3, truehd, dts, opus, flac
 	Containers     []string            `json:"containers"`               // mp4, mkv, mpegts
+	HLSContainers  []string            `json:"hlsContainers,omitempty"`  // explicit segmented output targets; distinct from direct-play containers
 	MaxBitrateKbps int                 `json:"maxBitrateKbps"`           // 0 = unlimited
 	SubtitleCodecs []string            `json:"subtitleCodecs,omitempty"` // native image/text subtitle rendering
 	DVProfiles     []int               `json:"dvProfiles,omitempty"`     // explicit Dolby Vision profiles; empty uses product defaults

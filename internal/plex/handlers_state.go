@@ -42,6 +42,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	offset := msParam(q.Get("time"))
 	duration := msParam(q.Get("duration"))
 	user := pr.User
+	s.log.Debug("playback timeline", "user", user.ID, "client", pr.ClientID, "key", key, "state", state, "position", offset, "duration", duration)
 
 	if s.d.State != nil {
 		if err := s.d.State.Progress(ctx, user.ID, key, offset, duration, state); err != nil {
