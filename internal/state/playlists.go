@@ -101,12 +101,9 @@ func (s *State) Create(ctx context.Context, userID int64, title string, items []
 		return nil, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `INSERT INTO state_playlists(user_id, title, smart, updated_at) VALUES(?,?,0,?)`, userID, title, now.UnixNano())
-	if err != nil {
-		return nil, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
+	var id int64
+	if err := tx.QueryRowContext(ctx, `INSERT INTO state_playlists(user_id, title, smart, updated_at) VALUES(?,?,0,?) RETURNING id`,
+		userID, title, now.UnixNano()).Scan(&id); err != nil {
 		return nil, err
 	}
 	for i, k := range items {
@@ -120,16 +117,12 @@ func (s *State) Create(ctx context.Context, userID int64, title string, items []
 	return s.loadPlaylist(ctx, userID, id)
 }
 
+// rewriteItems reads, mutates and rewrites a playlist's items in one
+// transaction. Touching the playlist row first takes its row lock, so a
+// concurrent rewrite on another node waits and then reads the committed list
+// instead of overwriting it with a stale one.
 func (s *State) rewriteItems(ctx context.Context, userID int64, key core.RatingKey, mutate func([]core.RatingKey) ([]core.RatingKey, error)) error {
 	id, err := playlistID(key)
-	if err != nil {
-		return err
-	}
-	p, err := s.loadPlaylist(ctx, userID, id)
-	if err != nil {
-		return err
-	}
-	items, err := mutate(append([]core.RatingKey(nil), p.Items...))
 	if err != nil {
 		return err
 	}
@@ -139,6 +132,23 @@ func (s *State) rewriteItems(ctx context.Context, userID int64, key core.RatingK
 		return err
 	}
 	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE state_playlists SET updated_at=? WHERE id=? AND user_id=?`, now.UnixNano(), id, userID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return core.ErrNotFound
+	}
+	cur, err := playlistItemsTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	items, err := mutate(cur)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM state_playlist_items WHERE playlist_id=?`, id); err != nil {
 		return err
 	}
@@ -147,10 +157,24 @@ func (s *State) rewriteItems(ctx context.Context, userID int64, key core.RatingK
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE state_playlists SET updated_at=? WHERE id=?`, now.UnixNano(), id); err != nil {
-		return err
-	}
 	return tx.Commit()
+}
+
+func playlistItemsTx(ctx context.Context, tx *sql.Tx, id int64) ([]core.RatingKey, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT rating_key FROM state_playlist_items WHERE playlist_id=? ORDER BY position`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []core.RatingKey
+	for rows.Next() {
+		var k int64
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out = append(out, core.RatingKey(k))
+	}
+	return out, rows.Err()
 }
 
 // Add appends items to a playlist.
