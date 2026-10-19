@@ -221,35 +221,53 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 	q := r.URL.Query()
 	count := countParam(r, 12)
 	sections := parseSectionList(q.Get("contentDirectoryID"))
+	hc := s.hubContext(pr, 0)
 	mc := hubContainer()
-	if q.Get("excludeContinueWatching") != "1" {
-		mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, s.continueHub(ctx, pr, cwHome, Section{}, count), hubCtx{}))
-	}
+	served := map[string]core.Hub{} // rendered rows by identifier, for impressions
+	var hubs []core.Hub
 	if s.d.Recommender != nil {
-		hubs, err := s.d.Recommender.HomeHubs(ctx, pr.User, count)
-		if err != nil {
+		var err error
+		if hubs, err = s.recommendHome(ctx, pr, hc, count); err != nil {
 			s.log.Warn("home hubs", "err", err)
 		}
-		seen := map[string]bool{}
-		for _, h := range mc.Hub {
-			seen[h.HubIdentifier] = true
+	}
+	// The front end owns Continue Watching (PMS's shape, with watch state).
+	// A recommender ranks it by returning a "home.continue" hub where it
+	// belongs; without one it goes first.
+	cw := q.Get("excludeContinueWatching") != "1"
+	placeCW := func() {
+		if !cw {
+			return
 		}
-		for _, h := range hubs {
-			if promotedOnly && !h.Promoted {
-				continue
-			}
-			if !s.hubInSections(h, sections) {
-				continue
-			}
-			// The front end owns Continue Watching (PMS's shape, with watch
-			// state); drop a recommender row that repeats a hub we built.
-			rendered := s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{})
-			if seen[rendered.HubIdentifier] {
-				continue
-			}
-			seen[rendered.HubIdentifier] = true
-			mc.Hub = append(mc.Hub, rendered)
+		cw = false
+		spec := s.continueHub(ctx, pr, cwHome, Section{}, count)
+		mh := s.renderHub(ctx, pr, spec, hubCtx{})
+		mc.Hub = append(mc.Hub, mh)
+		served[mh.HubIdentifier] = spec.Hub
+	}
+	if !containsHub(hubs, "home.continue") {
+		placeCW()
+	}
+	seen := map[string]bool{"home.continue": true}
+	for _, h := range hubs {
+		if h.ID == "home.continue" {
+			placeCW()
+			continue
 		}
+		if promotedOnly && !h.Promoted {
+			continue
+		}
+		if !s.hubInSections(h, sections) {
+			continue
+		}
+		// Drop a recommender row that repeats a hub we built.
+		rendered := s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{})
+		if seen[rendered.HubIdentifier] {
+			continue
+		}
+		seen[rendered.HubIdentifier] = true
+		mc.Hub = append(mc.Hub, rendered)
+		served[rendered.HubIdentifier] = h
 	}
 	if len(sections) == 0 {
 		if h, ok := s.playlistsHub(ctx, pr, count); ok {
@@ -261,6 +279,63 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 	}
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
+	s.recordImpressions(pr, hc, mc.Hub, served)
+}
+
+func containsHub(hubs []core.Hub, id string) bool {
+	for _, h := range hubs {
+		if h.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// hubContext is the personalization context of a hubs request: the
+// device class from the client's X-Plex-* headers, and the daypart and
+// weekend flag in server local time.
+func (s *Server) hubContext(pr *Request, section int) core.HubContext {
+	hc := core.NewHubContext(s.now().Local(), pr.Product, pr.Platform, pr.Device)
+	hc.SectionID = section
+	hc.ClientID = pr.ClientID
+	return hc
+}
+
+// recommendHome asks for Home rows, with the request context when the
+// recommender adapts to it.
+func (s *Server) recommendHome(ctx context.Context, pr *Request, hc core.HubContext, count int) ([]core.Hub, error) {
+	if cr, ok := s.d.Recommender.(core.ContextualRecommender); ok {
+		return cr.HomeHubsFor(ctx, pr.User, hc, count)
+	}
+	return s.d.Recommender.HomeHubs(ctx, pr.User, count)
+}
+
+// recommendSection asks for a library section's rows.
+func (s *Server) recommendSection(ctx context.Context, pr *Request, t core.MediaType, hc core.HubContext, count int) ([]core.Hub, error) {
+	if cr, ok := s.d.Recommender.(core.ContextualRecommender); ok {
+		return cr.SectionHubsFor(ctx, pr.User, t, hc, count)
+	}
+	return s.d.Recommender.SectionHubs(ctx, pr.User, t, count)
+}
+
+// recordImpressions hands the rows actually written, in response order, to
+// the recommender's impression sink when it has one. Sinks record
+// asynchronously; this never delays the response, which is already sent.
+func (s *Server) recordImpressions(pr *Request, hc core.HubContext, written []model.Hub, served map[string]core.Hub) {
+	sink, ok := s.d.Recommender.(core.ImpressionSink)
+	if !ok || pr.User == nil || len(written) == 0 {
+		return
+	}
+	out := make([]core.Hub, 0, len(written))
+	for _, mh := range written {
+		if h, ok := served[mh.HubIdentifier]; ok {
+			h.Items = s.filterAllowed(pr.User, h.Items)
+			out = append(out, h)
+		}
+	}
+	if len(out) > 0 {
+		sink.RecordImpressions(pr.User, hc, out)
+	}
 }
 
 // playlistsHub is PMS's "Recent Playlists" Home row (home.playlists): the
@@ -373,23 +448,31 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 	mc.LibrarySectionTitle = sec.Title
 	mc.LibrarySectionUUID = sec.UUID
 	hc := hubCtx{section: sec.ID}
-	mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, s.continueHub(ctx, pr, cwSection, sec, count), hc))
+	pc := s.hubContext(pr, sec.ID)
+	served := map[string]core.Hub{}
+	add := func(hs hubSpec) {
+		mh := s.renderHub(ctx, pr, hs, hc)
+		mc.Hub = append(mc.Hub, mh)
+		served[mh.HubIdentifier] = hs.Hub
+	}
+	add(s.continueHub(ctx, pr, cwSection, sec, count))
 	if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
-		mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, ra, hc))
+		add(ra)
 	} else {
 		s.log.Warn("recently added hub", "section", sec.ID, "err", err)
 	}
 	if s.d.Recommender != nil {
-		hubs, err := s.d.Recommender.SectionHubs(ctx, pr.User, sec.Type, count)
+		hubs, err := s.recommendSection(ctx, pr, sec.Type, pc, count)
 		if err != nil {
 			s.log.Warn("section hubs", "section", sec.ID, "err", err)
 		}
 		for _, h := range hubs {
-			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hc))
+			add(hubSpec{Hub: h})
 		}
 	}
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
+	s.recordImpressions(pr, pc, mc.Hub, served)
 }
 
 // handleHubItems is /hubs/items?identifier=...: one hub with more items.
@@ -462,7 +545,7 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 			}
 		}
 	}
-	if hubs, err := s.d.Recommender.HomeHubs(ctx, pr.User, count); err == nil {
+	if hubs, err := s.recommendHome(ctx, pr, s.hubContext(pr, 0), count); err == nil {
 		for _, h := range hubs {
 			if h.ID == id {
 				return hubSpec{Hub: h}, true
@@ -473,7 +556,7 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 		if len(sections) > 0 && !containsInt(sections, sec.ID) {
 			continue
 		}
-		if hubs, err := s.d.Recommender.SectionHubs(ctx, pr.User, sec.Type, count); err == nil {
+		if hubs, err := s.recommendSection(ctx, pr, sec.Type, s.hubContext(pr, sec.ID), count); err == nil {
 			for _, h := range hubs {
 				if h.ID == id {
 					return hubSpec{Hub: h}, true
