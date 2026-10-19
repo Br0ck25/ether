@@ -1,0 +1,30 @@
+{
+  "status": 200,
+  "headers": {
+    "Cache-Control": [
+      "no-cache"
+    ],
+    "Connection": [
+      "Keep-Alive"
+    ],
+    "Content-Type": [
+      "text/xml;charset=utf-8"
+    ],
+    "Date": [
+      "Mon, 19 Oct 2026 [REDACTED_IP] GMT"
+    ],
+    "Keep-Alive": [
+      "timeout=20"
+    ],
+    "X-Plex-Content-Compressed-Length": [
+      "433"
+    ],
+    "X-Plex-Content-Original-Length": [
+      "895"
+    ],
+    "X-Plex-Protocol": [
+      "1.0"
+    ]
+  },
+  "body": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPE1lZGlhQ29udGFpbmVyIHNpemU9IjIiIGFsbG93U3luYz0iMCIgdGl0bGUxPSJQbGV4IExpYnJhcnkiPgo8RGlyZWN0b3J5IGFsbG93U3luYz0iMSIgZmlsdGVycz0iMSIgcmVmcmVzaGluZz0iMCIga2V5PSIxIiB0eXBlPSJtb3ZpZSIgdGl0bGU9Ik1vdmllcyIgYWdlbnQ9InR2LnBsZXguYWdlbnRzLm1vdmllIiBzY2FubmVyPSJQbGV4IE1vdmllIiBsYW5ndWFnZT0iZW4tVVMiIHV1aWQ9ImQzMDVhMzg0LWI1YjctNDhhNS04ZDA4LWJlY2I1NDI0MGIyMSIgdXBkYXRlZEF0PSIxNzkyMzAzNjAxIiBjcmVhdGVkQXQ9IjE1MDA3Njc1NjIiIHNjYW5uZWRBdD0iMTc5MjMwMzU0NiIgY29udGVudD0iMSIgZGlyZWN0b3J5PSIxIiBjb250ZW50Q2hhbmdlZEF0PSI4OTkxMDAwMSIgaGlkZGVuPSIwIj4KPExvY2F0aW9uIGlkPSI1IiBwYXRoPSJaOlxNb3ZpZXMiPjwvTG9jYXRpb24+CjwvRGlyZWN0b3J5Pgo8RGlyZWN0b3J5IGFsbG93U3luYz0iMSIgZmlsdGVycz0iMSIgcmVmcmVzaGluZz0iMCIga2V5PSIyIiB0eXBlPSJzaG93IiB0aXRsZT0iVFYgU2hvd3MiIGFnZW50PSJ0di5wbGV4LmFnZW50cy5zZXJpZXMiIHNjYW5uZXI9IlBsZXggVFYgU2VyaWVzIiBsYW5ndWFnZT0iZW4tVVMiIHV1aWQ9ImNmZDZlNTcyLTFkZjItNGRhNS1iYTk1LWE3OTJkZmU1MjYwNCIgdXBkYXRlZEF0PSIxNzkyMzc3NjEyIiBjcmVhdGVkQXQ9IjE1MDA3Njc1NzMiIHNjYW5uZWRBdD0iMTc5MjMwMzY1OCIgY29udGVudD0iMSIgZGlyZWN0b3J5PSIxIiBjb250ZW50Q2hhbmdlZEF0PSI4OTkyMzgxOCIgaGlkZGVuPSIwIj4KPExvY2F0aW9uIGlkPSI2IiBwYXRoPSJaOlxUViBTaG93cyI+PC9Mb2NhdGlvbj4KPC9EaXJlY3Rvcnk+CjwvTWVkaWFDb250YWluZXI+Cg=="
+}

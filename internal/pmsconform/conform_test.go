@@ -2,6 +2,7 @@ package pmsconform
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -45,6 +46,55 @@ func TestRedact(t *testing.T) {
 	for _, v := range []string{"secret", "machine\"", "alice@example.com", "192.168.1.4"} {
 		if strings.Contains(s, v) {
 			t.Errorf("unredacted %q in %s", v, s)
+		}
+	}
+}
+
+func TestTrimBodyAndPreserveRedactedJSON(t *testing.T) {
+	var items strings.Builder
+	items.WriteString(`<MediaContainer>`)
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&items, `<Video ratingKey="%d"/>`, i)
+	}
+	items.WriteString(`</MediaContainer>`)
+	b, trimmed := TrimBody([]byte(items.String()))
+	if !trimmed {
+		t.Fatal("expected XML listing to be trimmed")
+	}
+	n := len(strings.Split(string(b), "<Video ")) - 1
+	if n != 50 {
+		t.Fatalf("trimmed XML has %d entries", n)
+	}
+	var jsonItems strings.Builder
+	jsonItems.WriteString(`{"MediaContainer":{"Metadata":[`)
+	for i := 0; i < 60; i++ {
+		if i > 0 {
+			jsonItems.WriteByte(',')
+		}
+		fmt.Fprintf(&jsonItems, `{"ratingKey":%d}`, i)
+	}
+	jsonItems.WriteString(`]}}`)
+	jsonBody, jsonTrimmed := TrimBody([]byte(jsonItems.String()))
+	if !jsonTrimmed {
+		t.Fatal("expected JSON listing to be trimmed")
+	}
+	var jsonDoc map[string]any
+	if e := json.Unmarshal(jsonBody, &jsonDoc); e != nil {
+		t.Fatal(e)
+	}
+	got := jsonDoc["MediaContainer"].(map[string]any)["Metadata"].([]any)
+	if len(got) != 50 {
+		t.Fatalf("trimmed JSON has %d entries", len(got))
+	}
+	secret := `{"machineIdentifier":"machine-secret","friendlyName":"secret server","username":"alice","X-Plex-Token":"token-secret","email":"alice@example.com","address":"192.168.1.30"}`
+	redacted := Redact([]byte(secret))
+	var parsed map[string]any
+	if e := json.Unmarshal(redacted, &parsed); e != nil {
+		t.Fatalf("redaction broke JSON: %s (%v)", redacted, e)
+	}
+	for _, s := range []string{"machine-secret", "secret server", "alice", "token-secret", "alice@example.com", "192.168.1.30"} {
+		if strings.Contains(string(redacted), s) {
+			t.Errorf("leaked %q in %s", s, redacted)
 		}
 	}
 }
