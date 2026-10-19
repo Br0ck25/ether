@@ -254,6 +254,13 @@ func (m *Manager) startIndexFill(g *generation) {
 		}
 		g.setIndex(points)
 		s := g.sess
+		if m.resume != nil {
+			ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+			if err := m.resume.saveIndex(ctx, s.ident.userID, s.ident.key, g.releaseID(), keyframesOf(points)); err != nil {
+				m.log.Warn("save resume keyframe index failed", "key", s.ident.key, "err", err)
+			}
+			cancel()
+		}
 		s.mu.Lock()
 		if s.virtualGen == g {
 			s.virtual.Points = points
@@ -653,6 +660,12 @@ func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
 	}
 	if err := m.resume.save(ctx, rec, g.res.NZB); err != nil {
 		m.log.Warn("save resume record failed", "err", err)
+		return
+	}
+	if points := g.infoSnapshot().Keyframes; len(points) > 0 {
+		if err := m.resume.saveIndex(ctx, s.ident.userID, s.ident.key, g.releaseID(), points); err != nil {
+			m.log.Warn("save resume keyframe index failed", "key", s.ident.key, "err", err)
+		}
 	}
 }
 
@@ -670,7 +683,12 @@ func (m *Manager) ResumePoint(ctx context.Context, userID int64, key core.Rating
 	if err != nil {
 		return nil, err
 	}
-	return rec.point(nzb), nil
+	point := rec.point(nzb)
+	point.Keyframes, err = m.resume.loadIndex(ctx, userID, key, rec.releaseID)
+	if err != nil {
+		return nil, err
+	}
+	return point, nil
 }
 
 // Remember stores a resolution for a title the user has not played yet

@@ -181,7 +181,7 @@ type Manager struct {
 	externalGroups map[string]externalGroup
 	lastCaps       map[int64]core.ClientCaps
 	warm           map[identity]*warmEntry
-	warmRequests   map[int64][]time.Time
+	warmRequests   map[warmBudgetKey][]time.Time
 
 	pinMu        sync.Mutex
 	livePins     map[string]int
@@ -210,6 +210,11 @@ var (
 type flightKey struct {
 	id     identity
 	prefer string
+}
+
+type warmBudgetKey struct {
+	userID int64
+	reason string
 }
 
 // hasFlightLocked reports whether any Prepare for id is in flight.
@@ -272,7 +277,7 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 		flights:  map[flightKey]*flight{},
 		pending:  map[int64]int{},
 		lastCaps: map[int64]core.ClientCaps{},
-		warm:     map[identity]*warmEntry{}, warmRequests: map[int64][]time.Time{},
+		warm:     map[identity]*warmEntry{}, warmRequests: map[warmBudgetKey][]time.Time{},
 		livePins:     map[string]int{},
 		progressPins: map[string]bool{},
 		pinKick:      make(chan struct{}, 1),
@@ -576,6 +581,14 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		m.mu.Unlock()
 		m.dropGeneration(g)
 		return nil, errors.New("playback: shutting down")
+	}
+	// Distinct picked-release flights can race to register the same
+	// user/client/title. Keep the first completed session and discard the
+	// losing source instead of overwriting byIdent and leaking a live stream.
+	if existing := m.byIdent[id]; existing != nil {
+		m.mu.Unlock()
+		m.dropGeneration(g)
+		return existing, nil
 	}
 	var replaced []string
 	for _, o := range m.sessions {

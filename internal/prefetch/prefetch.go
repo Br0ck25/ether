@@ -532,7 +532,8 @@ func (p *Prefetcher) warmPass(ctx context.Context) error {
 			if rp.Size <= 0 || dur <= 0 {
 				continue
 			}
-			start, length := WarmWindow(st.ViewOffset, dur, rp.Size, p.opts.WarmBehind, ahead)
+			tm := playback.TimeMap{Size: rp.Size, Duration: dur, Points: resumeIndexPoints(rp.Keyframes)}
+			start, length := WarmWindowFor(st.ViewOffset, tm, p.opts.WarmBehind, ahead)
 			if length <= 0 {
 				continue
 			}
@@ -554,12 +555,27 @@ func (p *Prefetcher) warmPass(ctx context.Context) error {
 // before the offset mapped from viewOffset (constant-bitrate mapping) and
 // ahead bytes after it, clamped to the file.
 func WarmWindow(viewOffset, duration time.Duration, size, behind, ahead int64) (start, length int64) {
-	off := playback.TimeMap{Size: size, Duration: duration}.OffsetAt(viewOffset)
+	return WarmWindowFor(viewOffset, playback.TimeMap{Size: size, Duration: duration}, behind, ahead)
+}
+
+func WarmWindowFor(viewOffset time.Duration, tm playback.TimeMap, behind, ahead int64) (start, length int64) {
+	off := tm.OffsetAt(viewOffset)
 	start = off - behind
 	if start < 0 {
 		start = 0
 	}
-	return start, clampLen(start, off-start+ahead, size)
+	return start, clampLen(start, off-start+ahead, tm.Size)
+}
+
+func resumeIndexPoints(points []core.KeyframePoint) []playback.IndexPoint {
+	if len(points) == 0 {
+		return nil
+	}
+	out := make([]playback.IndexPoint, len(points))
+	for i, p := range points {
+		out[i] = playback.IndexPoint{Offset: p.Offset, Time: p.Time}
+	}
+	return out
 }
 
 // prune forgets dedupe entries that no longer suppress anything.

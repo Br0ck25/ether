@@ -124,14 +124,18 @@ func (g *generation) setIndex(points []IndexPoint) {
 func (g *generation) infoSnapshot() core.MediaInfo {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.info
+	info := g.info
+	info.Keyframes = append([]core.KeyframePoint(nil), g.info.Keyframes...)
+	return info
 }
 
 // timeMapSnapshot copies the generation's TimeMap under its lock.
 func (g *generation) timeMapSnapshot() TimeMap {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.tmap
+	tm := g.tmap
+	tm.Points = append([]IndexPoint(nil), g.tmap.Points...)
+	return tm
 }
 
 func (g *generation) releaseID() string {
