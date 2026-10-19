@@ -1,0 +1,91 @@
+package core
+
+import (
+	"context"
+	"net/http"
+	"time"
+)
+
+// ---------------------------------------------------------------------------
+// Transcoder (internal/transcode)
+
+type HLSRequest struct {
+	SessionID   string
+	InputURL    string // ffmpeg input; Ether serves sources on loopback HTTP with range support
+	Info        MediaInfo
+	Decision    Decision
+	StartOffset time.Duration
+	// SegmentDuration defaults to 4s when zero.
+	SegmentDuration time.Duration
+}
+
+// HLSSession is one running ffmpeg remux or transcode producing HLS.
+type HLSSession interface {
+	ID() string
+	// ServePlaylist writes the media playlist (index.m3u8).
+	ServePlaylist(w http.ResponseWriter, r *http.Request)
+	// ServeSegment writes segment n, waiting for ffmpeg to produce it and
+	// restarting ffmpeg at the right offset when a seek jumps ahead.
+	ServeSegment(w http.ResponseWriter, r *http.Request, n int)
+	// SwapInput restarts the session on a new input at the given position
+	// (mid-stream failover). Segment numbering continues.
+	SwapInput(ctx context.Context, inputURL string, info MediaInfo, at time.Duration) error
+	LastAccess() time.Time
+	Close() error
+}
+
+type Transcoder interface {
+	Probe(ctx context.Context, inputURL string) (*MediaInfo, error)
+	Decide(info MediaInfo, caps ClientCaps, opts DecideOptions) Decision
+	StartHLS(ctx context.Context, req HLSRequest) (HLSSession, error)
+	Session(id string) (HLSSession, bool)
+	Stop(id string)
+	HWAccel() HWAccel
+}
+
+// DecideOptions are per-request choices from the Plex decision request.
+type DecideOptions struct {
+	DirectPlay     bool // client allows direct play
+	DirectStream   bool // client allows remux
+	MaxBitrateKbps int  // client-requested cap (maxVideoBitrate)
+	MaxHeight      int  // from videoResolution
+	AudioStream    int  // selected stream index, -1 default
+	SubtitleStream int  // -1 none
+	BurnSubtitles  bool
+}
+
+// ---------------------------------------------------------------------------
+// Playback orchestration (internal/playback)
+
+// PlaySession binds a user, a title and a client to a resolved, open source.
+type PlaySession struct {
+	ID         string
+	UserID     int64
+	ClientID   string
+	Key        RatingKey
+	Resolution *Resolution
+	Source     MediaSource // swaps on failover; read through Playback.Source
+	Info       MediaInfo
+	StartedAt  time.Time
+}
+
+type Playback interface {
+	// Estimate is the virtual media info shown before a title is resolved.
+	Estimate(ctx context.Context, t *Title, caps ClientCaps) MediaInfo
+	// Prepare resolves and opens a source for the user and client, enforcing
+	// stream limits. Reuses an existing session for the same user/client/key.
+	Prepare(ctx context.Context, user *User, key RatingKey, caps ClientCaps) (*PlaySession, error)
+	Session(id string) (*PlaySession, bool)
+	// SessionFor finds the live session of a client for a title.
+	SessionFor(userID int64, clientID string, key RatingKey) (*PlaySession, bool)
+	// ServeRange serves the session's current source with HTTP range
+	// support, failing over to the next release when articles are missing.
+	ServeRange(w http.ResponseWriter, r *http.Request, sessionID string)
+	// InputURL is a loopback URL ffmpeg can read the session's source from.
+	InputURL(sessionID string) string
+	// Failover swaps the session to the next candidate release, keeping the
+	// timestamp. Returns the new media info.
+	Failover(ctx context.Context, sessionID string, at time.Duration) (*PlaySession, error)
+	Stop(sessionID string)
+	Sessions() []*PlaySession
+}

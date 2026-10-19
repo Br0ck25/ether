@@ -1,0 +1,7 @@
+/dist/
+/bin/
+node_modules/
+*.db
+*.db-*
+.DS_Store
+/.claude/worktrees/

@@ -1,0 +1,83 @@
+package core
+
+import "time"
+
+// Source is the release source parsed from a release name.
+type Source string
+
+const (
+	SourceUnknown Source = ""
+	SourceCam     Source = "cam"     // CAM, TS, TC, HDCAM, telesync
+	SourceScreener Source = "screener"
+	SourceDVD     Source = "dvd"
+	SourceHDTV    Source = "hdtv"
+	SourceWEBRip  Source = "webrip"
+	SourceWEBDL   Source = "webdl"
+	SourceBluRay  Source = "bluray"
+	SourceRemux   Source = "remux"
+)
+
+// ReleaseInfo is what can be parsed from a release name.
+type ReleaseInfo struct {
+	Title       string   `json:"title"`
+	Year        int      `json:"year,omitempty"`
+	Seasons     []int    `json:"seasons,omitempty"`
+	Episodes    []int    `json:"episodes,omitempty"`
+	FullSeason  bool     `json:"fullSeason,omitempty"`
+	Height      int      `json:"height,omitempty"` // 480, 720, 1080, 2160
+	Source      Source   `json:"source,omitempty"`
+	VideoCodec  string   `json:"videoCodec,omitempty"` // h264, hevc, av1
+	HDR10       bool     `json:"hdr10,omitempty"`
+	DolbyVision bool     `json:"dolbyVision,omitempty"`
+	AudioCodec  string   `json:"audioCodec,omitempty"` // aac, ac3, eac3, truehd, dts, dtshd
+	Atmos       bool     `json:"atmos,omitempty"`
+	Channels    string   `json:"channels,omitempty"` // "5.1"
+	Group       string   `json:"group,omitempty"`
+	Languages   []string `json:"languages,omitempty"`
+	Proper      bool     `json:"proper,omitempty"`
+	Repack      bool     `json:"repack,omitempty"`
+	Container   string   `json:"container,omitempty"`
+}
+
+// Release is an indexer search result for a title.
+type Release struct {
+	ID        string      `json:"id"`        // stable: sha1(indexer + guid)
+	GUID      string      `json:"guid"`      // indexer guid
+	Indexer   string      `json:"indexer"`   // indexer name
+	Name      string      `json:"name"`      // release name
+	NZBURL    string      `json:"nzbUrl"`
+	Size      int64       `json:"size"`
+	PubDate   time.Time   `json:"pubDate"`
+	Grabs     int         `json:"grabs,omitempty"`
+	Password  bool        `json:"password,omitempty"` // indexer flagged passworded
+	Category  int         `json:"category,omitempty"`
+	Info      ReleaseInfo `json:"info"`
+	Score     float64     `json:"score"`
+}
+
+// Resolution is the resolver's answer for a title and client: the winning
+// release, already health-checked, plus fallbacks for mid-stream failover.
+type Resolution struct {
+	Title      RatingKey `json:"title"`
+	Release    Release   `json:"release"`
+	NZB        []byte    `json:"-"`
+	Alternates []Release `json:"alternates"` // next candidates, best first
+	ResolvedAt time.Time `json:"resolvedAt"`
+}
+
+// QualityProfile is an owner-editable rule set ranking releases for a class
+// of client.
+type QualityProfile struct {
+	Name            string   `json:"name"`
+	MaxHeight       int      `json:"maxHeight"`       // cap, e.g. 1080
+	MinHeight       int      `json:"minHeight"`       // floor, e.g. 720
+	AllowHDR        bool     `json:"allowHdr"`        // only applied when the client also supports it
+	AllowDolbyVision bool    `json:"allowDolbyVision"`
+	PreferredSources []Source `json:"preferredSources"` // best first
+	PreferredCodecs  []string `json:"preferredCodecs"`  // best first; codecs the client can't play are dropped anyway
+	PreferredAudio   []string `json:"preferredAudio"`
+	MinSizeMBPerMin  float64  `json:"minSizeMbPerMin"` // size sanity, per minute of runtime
+	MaxSizeMBPerMin  float64  `json:"maxSizeMbPerMin"`
+	PreferredLanguages []string `json:"preferredLanguages"`
+	AllowCam         bool     `json:"allowCam"` // also gated by the owner's global cam setting
+}
