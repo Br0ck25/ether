@@ -3,9 +3,10 @@
 Measured 2026-10-19 against NZBgeek and the owner's configured Usenet providers
 with `cmd/ether-livebench`. Credentials were read via `-ref` and were not
 printed or stored in this repository. The persistent benchmark directory was
-reused with `-data`. Budget counters in that directory recorded 2 indexer API
-hits and 16 NZB grabs at the end of measurement; repeated runs used cached
-search results and saved NZBs. No DOGnzb requests were made.
+reused with `-data`. Budget counters in that directory recorded 3 indexer API
+hits and 16 NZB grabs at the end of measurement. One run used `-fresh-search`
+to refresh stale Matrix search results; subsequent runs reused cached results
+and saved NZBs. No DOGnzb requests were made.
 
 | Run | Profile / cache state | Resolve | Open | First 4 MiB | Seek | Probe | Outcome |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
@@ -16,6 +17,10 @@ search results and saved NZBs. No DOGnzb requests were made.
 | NNTP batching, Plex Web retry | cached search/NZBs | 14.70 s | — | — | — | — | No acceptable healthy candidate |
 | NNTP batching, Apple TV retry | cached search/NZBs | 42.75 s | — | — | — | — | No acceptable healthy candidate |
 | Pooled STAT/BODY trace after warm cap | Plex Web, cached search/NZBs | 20.238 s | — | — | — | — | No acceptable healthy candidate; best completed health check 5.65 s |
+| Main reference reported by owner | Plex Web, cold | 7.47 s | — | 0.41 s | 0.41 s | — | Playable |
+| 451 fallback, cached results | Plex Web, cached | 11.832 s | — | — | — | — | No healthy candidate; startup warm 1.077 s |
+| 451 fallback, refreshed search | Plex Web, fresh search/cached NZBs | 9.569 s | — | — | — | — | No healthy candidate; startup warm 6.103 s |
+| 451 fallback, cached Apple TV profile | 4K profile, cached search/NZBs | 41.717 s | — | — | — | — | No healthy candidate; startup warm 9.384 s |
 
 The earlier warm measurement met the target but predates the latest NNTP work.
 The latest cached Apple TV attempt completed its two leading health checks but
@@ -27,15 +32,17 @@ availability failure path that correctly rejects those releases, and means
 the ≤6 s cold / ≤4 s warm goals have not been demonstrated with the current
 live results.
 
-The protocol trace now records each command and raw status line with a
-connection ID. In the reproduced failure, each logged `451 0 <message-id>`
-followed a `BODY <same-message-id>` on that connection; it did not appear as
-an unread `223` STAT reply. The offline pooled regression test verifies that a
-successful `StatMany` is followed by BODY on the same connection, and that a
-timed-out partial STAT pipeline is discarded before a later BODY. The live
-trace has not established the cause of the provider's 451s; the regression
-remains unresolved until a healthy cached candidate can be played and the
-same provider/account behavior is compared against current main.
+The protocol trace records commands and raw status lines with connection IDs.
+The main fix maps provider takedown 451s to article-unavailable so BODY and
+single STAT can fall through to the next provider; this branch applies the
+same rule to pipelined `StatMany`. The offline pooled regression test verifies
+mixed results, secondary-provider fallback for a 451, BODY reuse on a pooled
+connection, and discarding a timed-out partial pipeline. In the latest live
+trace, GigaNews returned 451 for several sampled articles and Frugal returned
+430 for those same IDs, so those cached releases were unavailable on both
+configured providers. Other body requests returned 222, but no complete
+candidate passed health validation. A successful live time-to-playable result
+and a warm measurement are therefore still outstanding.
 
 The detailed trace showed 1 ms cached search. In the slow Plex Web run the
 health STAT wall time was 5.18 s for 12 spread samples; the largest provider

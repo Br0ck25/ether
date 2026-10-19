@@ -52,6 +52,7 @@ func main() {
 	data := flag.String("data", "", "persistent benchmark data directory (keeps search/NZB caches)")
 	trace := flag.Bool("trace", false, "print coarse phase timing breakdown")
 	retry := flag.Bool("retry", false, "bypass a persisted unavailable result while reusing cached indexer results")
+	freshSearch := flag.Bool("fresh-search", false, "bypass cached indexer results (counts against the configured indexer budget)")
 	flag.Parse()
 	logLevel := slog.LevelWarn
 	if *trace {
@@ -93,7 +94,11 @@ func main() {
 	cache, err := segcache.Open(filepath.Join(dir, "cache"), 2<<30, log)
 	must(err)
 	eng := stream.New(fetcher, cache, stream.OptionsFromConfig(cfg), log)
-	idx := newznab.NewManager(db, cfg.Indexers, newznab.Options{Logger: log, NZBDir: filepath.Join(dir, "nzb")})
+	newznabOptions := newznab.Options{Logger: log, NZBDir: filepath.Join(dir, "nzb")}
+	if *freshSearch {
+		newznabOptions.SearchCacheTTL = -1
+	}
+	idx := newznab.NewManager(db, cfg.Indexers, newznabOptions)
 	res := resolver.New(idx, eng, db, cfg, resolver.Options{Logger: log})
 	warmStart := time.Now()
 	if err := fetcher.Warm(ctx, 4); err != nil {
