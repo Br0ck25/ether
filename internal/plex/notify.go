@@ -250,6 +250,10 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sseWriteTimeout bounds one Server-Sent Events write. Pings go out every
+// 10s, so a healthy client never comes close.
+const sseWriteTimeout = 2 * time.Minute
+
 // handleEventSource serves /:/eventsource/notifications (Server-Sent Events).
 func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
@@ -263,11 +267,17 @@ func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.notifier.unsubscribe(sub)
+	// No server WriteTimeout covers this long-lived response; arm a deadline
+	// before each write so a client that stops reading errors out instead
+	// of parking this goroutine and its subscription forever.
+	rc := http.NewResponseController(w)
+	arm := func() { _ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout)) }
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	h.Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	arm()
 	fmt.Fprint(w, "retry: 5000\n\n")
 	fl.Flush()
 	ping := time.NewTicker(10 * time.Second)
@@ -282,6 +292,7 @@ func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 			if s.activeViewer(r.Context(), sub.userID) == nil {
 				return
 			}
+			arm()
 			if _, err := fmt.Fprint(w, "event: ping\ndata: {}\n\n"); err != nil {
 				return
 			}
@@ -290,6 +301,7 @@ func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 			if s.activeViewer(r.Context(), sub.userID) == nil {
 				return
 			}
+			arm()
 			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.typ, msg.data); err != nil {
 				return
 			}
