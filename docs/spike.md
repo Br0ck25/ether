@@ -48,7 +48,7 @@ pmsdiff record --server http://<pms-host>:32400 --token '<token>' --out testdata
 pmsdiff compare --reference testdata/pms --target http://localhost:32400 --token '<ether-token>' --client all --format text
 ```
 
-Use `--format json` for machine-readable reports. `--client web|ios|appletv` narrows the probe set. A nonzero exit status means the report contains blocking differences. Re-run against the same reference after changes so server-specific behavior remains comparable.
+Use `--format json` for machine-readable reports. `--client web|ios|appletv` narrows the probe set. `--timeout 90s` sets the per-request deadline (default 90 seconds), and `--concurrency 2` sets the maximum parallel requests (default 2). Individual request failures are logged and included in the report while remaining probes continue. Recorded fixtures include a manifest describing first-50-item listing trims. A nonzero exit status means the report contains request errors or blocking differences. Re-run against the same reference after changes so server-specific behavior remains comparable.
 
 ## Collecting diagnostics
 
