@@ -94,7 +94,7 @@ var kinds = []kindInfo{
 		prior: 0.06, slug: "trending", context: "trending"},
 	{kind: KindPopularServer, title: "Popular on This Server", description: "What other viewers on this server watched most in the last 30 days.",
 		prior: 0.07, slug: "popular.server", context: "popular.server"},
-	{kind: KindNewReleases, title: "New Releases", description: "The newest released titles in the catalogue.",
+	{kind: KindNewReleases, title: "New & Noteworthy", description: "The newest released titles in the catalogue.",
 		prior: 0.05, slug: "newreleases", context: "recentlyreleased"},
 	{kind: KindTopRated, title: "Top Rated", description: "TMDB's top rated titles.",
 		prior: 0.045, slug: "toprated", context: "toprated"},

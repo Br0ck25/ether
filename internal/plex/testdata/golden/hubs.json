@@ -99,7 +99,7 @@
       },
       {
         "hubKey": "/library/metadata/1000000000000550,1000000000000348",
-        "key": "/hubs/items?identifier=trending.week.movie",
+        "key": "/hubs/items/trending.week.movie",
         "title": "Trending This Week",
         "type": "movie",
         "hubIdentifier": "trending.week.movie",

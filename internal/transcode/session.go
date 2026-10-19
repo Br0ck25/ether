@@ -457,7 +457,7 @@ func (s *Session) serveFile(w http.ResponseWriter, r *http.Request, path string,
 // suspended (Windows) it stops ffmpeg instead and restarts it at the next
 // missing segment in time.
 func (s *Session) throttleLocked() {
-	if s.m.opts.maxAhead <= 0 {
+	if s.m.opts.maxAhead <= 0 || s.info.Duration <= 0 {
 		return
 	}
 	limit := s.aheadLimit()

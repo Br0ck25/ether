@@ -390,3 +390,29 @@ func (sl *slotter) flush(eof bool) []slotOut {
 	}
 	return out
 }
+
+// Live manifests advertise only completed segments, with a bounded rewind window.
+func renderLiveMPD(start, now time.Time, segDur time.Duration, last int, initURL, mediaURL string, reps []dashRep) []byte {
+	if segDur <= 0 {
+		segDur = DefaultDASHSegmentDuration
+	}
+	first := max(0, last-int(120*time.Second/segDur)+1)
+	var b bytes.Buffer
+	fmt.Fprintf(&b, `<?xml version="1.0" encoding="utf-8"?><MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic" profiles="urn:mpeg:dash:profile:isoff-live:2011" availabilityStartTime="%s" publishTime="%s" minimumUpdatePeriod="PT2S" timeShiftBufferDepth="PT120S" suggestedPresentationDelay="PT8S" minBufferTime="PT4S"><Period id="0" start="PT0S">`, start.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano))
+	for _, r := range reps {
+		fmt.Fprintf(&b, `<AdaptationSet segmentAlignment="true" contentType="%s"><SegmentTemplate timescale="1000" initialization="%s" media="%s" startNumber="%d"><SegmentTimeline>`, r.Kind, html.EscapeString(initURL), html.EscapeString(mediaURL), first)
+		if last >= 0 {
+			fmt.Fprintf(&b, `<S t="%d" d="%d" r="%d"/>`, int64(first)*segDur.Milliseconds(), segDur.Milliseconds(), last-first)
+		}
+		fmt.Fprintf(&b, `</SegmentTimeline></SegmentTemplate><Representation id="%d" mimeType="%s" codecs="%s" bandwidth="%d"`, r.ID, r.mimeType(), html.EscapeString(r.Codecs), r.Bandwidth)
+		if r.Width > 0 {
+			fmt.Fprintf(&b, ` width="%d" height="%d"`, r.Width, r.Height)
+		}
+		if r.SampleRate > 0 {
+			fmt.Fprintf(&b, ` audioSamplingRate="%d"`, r.SampleRate)
+		}
+		b.WriteString(`/></AdaptationSet>`)
+	}
+	b.WriteString(`</Period></MPD>`)
+	return b.Bytes()
+}

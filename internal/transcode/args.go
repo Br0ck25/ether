@@ -147,6 +147,13 @@ func buildCodecArgs(s runSpec) []string {
 	if v != nil {
 		if d.VideoCopy {
 			args = append(args, "-c:v", "copy")
+			if container == ContainerFMP4 && v.Codec != "hevc" {
+				tag := "0"
+				if v.Codec == "h264" {
+					tag = "avc1"
+				}
+				args = append(args, "-tag:v", tag)
+			}
 			if v.Codec == "hevc" && container == ContainerFMP4 {
 				args = append(args, "-tag:v", "hvc1")
 			}
@@ -163,6 +170,13 @@ func buildCodecArgs(s runSpec) []string {
 	if a != nil {
 		if d.AudioCopy {
 			args = append(args, "-c:a", "copy")
+			if container == ContainerFMP4 {
+				tag := "0"
+				if a.Codec == "aac" {
+					tag = "mp4a"
+				}
+				args = append(args, "-tag:a", tag)
+			}
 		} else {
 			codec := d.AudioCodec
 			if codec == "" {

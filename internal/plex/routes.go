@@ -86,6 +86,7 @@ func (s *Server) routes() chi.Router {
 	get("/hubs/home/onDeck", s.handleOnDeck)
 	get("/hubs/home/recentlyAdded", s.handleRecentlyAdded)
 	get("/hubs/items", s.handleHubItems)
+	get("/hubs/items/{identifier}", s.handleHubItems)
 	get("/hubs/search", s.handleHubSearch)
 	get("/hubs/search/voice", s.handleHubSearch)
 	get("/hubs/sections/{section}", s.handleSectionHubs)

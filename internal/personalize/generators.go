@@ -844,7 +844,7 @@ func (b *builder) genNewReleases() []*candRow {
 	items := b.rank(recent, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
 		return 0.4*recency(t, b.now) + 0.35*popularity(t) + 0.1*quality(t) + 0.15*fit, "New " + releasedPhrase(t.Released, b.now)
 	})
-	r := newRow(KindNewReleases, "newreleases", "New Releases", "Notable releases of the last few months, newest and most talked-about first.", capItems(items, 40))
+	r := newRow(KindNewReleases, "newreleases", "New & Noteworthy", "Notable releases of the last few months, newest and most talked-about first.", capItems(items, 40))
 	r.minItems = 5
 	return []*candRow{r}
 }

@@ -524,8 +524,10 @@ func TestDASHValidationAndLimits(t *testing.T) {
 	m := newTestManager(t, fr, config.Transcode{MaxTranscodes: 1})
 	ctx := context.Background()
 	req := dashRequest(t, "x", 0)
-	if _, err := m.StartHLS(ctx, req); err == nil {
-		t.Error("DASH without a duration accepted")
+	if hs, err := m.StartHLS(ctx, req); err != nil {
+		t.Fatalf("live DASH rejected: %v", err)
+	} else {
+		hs.Close()
 	}
 	req = dashRequest(t, "x", time.Minute)
 	req.Protocol = "smooth"
@@ -614,5 +616,19 @@ func TestDASHConcurrentRequests(t *testing.T) {
 	close(errs)
 	for e := range errs {
 		t.Error(e)
+	}
+}
+
+func TestLiveMPDOnlyAdvertisesCompletedWindow(t *testing.T) {
+	start := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	init, media := PlexDASHURLs("live")
+	b := string(renderLiveMPD(start, start.Add(time.Hour), 4*time.Second, 100, init, media, []dashRep{{ID: 0, Kind: "video", Codecs: "avc1.640028", Bandwidth: 4000000}}))
+	for _, want := range []string{`type="dynamic"`, `startNumber="71"`, `<S t="284000" d="4000" r="29"/>`, `minimumUpdatePeriod="PT2S"`} {
+		if !strings.Contains(b, want) {
+			t.Fatalf("missing %s in %s", want, b)
+		}
+	}
+	if strings.Contains(b, "mediaPresentationDuration") {
+		t.Fatal("live stream has an invented end")
 	}
 }

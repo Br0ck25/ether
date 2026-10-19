@@ -368,9 +368,6 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	tracks := 1
 	var reps []dashRep
 	if proto == core.ProtocolDASH {
-		if req.Info.Duration <= 0 {
-			return nil, errors.New("transcode: StartHLS: DASH needs the media duration")
-		}
 		base = 0
 		startSeg = int(offset / segDur)
 		total = dashSegmentCount(req.Info.Duration, segDur)

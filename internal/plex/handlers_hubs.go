@@ -42,13 +42,18 @@ func hubItemsKey(h core.Hub, hc hubCtx) string {
 	if h.Key != 0 {
 		return "/library/collections/" + h.Key.String() + "/children"
 	}
-	k := "/hubs/items?identifier=" + url.QueryEscape(h.ID)
+	k := "/hubs/items/" + url.PathEscape(h.ID)
+	q := url.Values{}
 	if hc.section > 0 {
-		k += "&contentDirectoryID=" + strconv.Itoa(hc.section)
+		q.Set("contentDirectoryID", strconv.Itoa(hc.section))
 	}
 	if hc.related != 0 {
-		k += "&metadataID=" + hc.related.String()
+		q.Set("metadataID", hc.related.String())
 	}
+	if len(q) > 0 {
+		k += "?" + q.Encode()
+	}
+
 	return k
 }
 
@@ -499,6 +504,7 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 		sectionName = "shows"
 	}
 	mc.Hub = s.finalizeHomeRows(ctx, pr, pc, sectionName, mc.Hub)
+	s.log.Debug("section hubs rendered", "section", sec.ID, "user", pr.User.ID, "count", count, "rows", len(mc.Hub))
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
 	s.recordImpressions(pr, pc, mc.Hub, served)
@@ -509,7 +515,10 @@ func (s *Server) handleHubItems(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	q := r.URL.Query()
-	id := q.Get("identifier")
+	id := chi.URLParam(r, "identifier")
+	if id == "" {
+		id = q.Get("identifier")
+	}
 	count := countParam(r, 50)
 	if pr.HasPage && pr.Size > 0 {
 		count = min(pr.Size, 200)
@@ -524,9 +533,9 @@ func (s *Server) handleHubItems(w http.ResponseWriter, r *http.Request) {
 		if k, err := core.ParseRatingKey(q.Get("metadataID")); err == nil {
 			hc.related = k
 		}
-		mc.Hub = []model.Hub{s.renderHub(ctx, pr, hs, hc)}
+		mc.Metadata = s.renderHub(ctx, pr, hs, hc).Metadata
 	}
-	mc.Size = len(mc.Hub)
+	mc.Size = len(mc.Metadata)
 	s.write(w, r, mc)
 }
 

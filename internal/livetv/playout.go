@@ -38,6 +38,7 @@ type session struct {
 	nextSequence    int64
 	discontinuities int64
 	relay           core.HLSSession
+	dash            core.DASHSession
 	mu              sync.Mutex
 	info            SessionInfo
 	user            core.User
@@ -57,10 +58,14 @@ func (ss *session) close(s *Service) {
 	ss.closed = true
 	tracks := ss.tracks
 	relay := ss.relay
+	dash := ss.dash
 	reserved := ss.reserved
 	ss.mu.Unlock()
 	if relay != nil {
 		relay.Close()
+	}
+	if dash != nil {
+		dash.Close()
 	}
 	for _, t := range tracks {
 		s.stopTrack(t)

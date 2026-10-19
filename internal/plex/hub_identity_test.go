@@ -1,0 +1,40 @@
+package plex
+
+import (
+	"encoding/json"
+	"net/url"
+	"testing"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plex/model"
+)
+
+func TestRecommendationShelvesHaveDistinctFetchPaths(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Recommender = &fakeRecommender{section: map[core.MediaType][]core.Hub{core.TypeMovie: {
+		{ID: "movie.trending", Title: "Trending", Type: core.TypeMovie, Items: []core.Title{fightClub}},
+		{ID: "movie.popular", Title: "Popular", Type: core.TypeMovie, Items: []core.Title{fightClub}},
+		{ID: "movie.because.1", Title: "Because You Watched", Type: core.TypeMovie, Items: []core.Title{fightClub}},
+	}}}
+	var body struct{ MediaContainer model.MediaContainer }
+	rec := f.request(t, "GET", "/hubs/sections/1", map[string]string{"Accept": "application/json"})
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]bool{}
+	for _, h := range body.MediaContainer.Hub {
+		u, _ := url.Parse(h.Key)
+		if paths[u.Path] {
+			t.Fatalf("shelves collapse to one client entity: %s", u.Path)
+		}
+		paths[u.Path] = true
+		if h.Title == "Trending" || h.Title == "Popular" || h.Title == "Because You Watched" {
+			item := f.request(t, "GET", h.Key, map[string]string{"Accept": "application/json"})
+			var fetched struct{ MediaContainer model.MediaContainer }
+			if err := json.Unmarshal(item.Body.Bytes(), &fetched); err != nil || len(fetched.MediaContainer.Metadata) != 1 || fetched.MediaContainer.Metadata[0].RatingKey != fightClub.Key.String() || len(fetched.MediaContainer.Hub) != 0 {
+				t.Fatalf("shelf fetch failed: %s %s", h.Key, item.Body.String())
+			}
+		}
+	}
+}
