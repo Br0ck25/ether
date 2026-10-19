@@ -309,7 +309,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("plex front end: %w", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/ether/", a.buildAdmin())
+	mux.Handle("/ether/", lanOnly(a.buildAdmin()))
 	mux.HandleFunc("/ether", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ether/", http.StatusFound)
 	})
