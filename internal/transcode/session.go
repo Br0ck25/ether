@@ -450,8 +450,23 @@ func (s *Session) maybeGovernLocked() {
 		}
 		s.plan.SetClamp(n, clamp)
 		s.playlist = nil
+		// Stop the active primary copy run at the new boundary. The run's
+		// normal chaining path starts a clamp encode there; discard any copy
+		// files already written at or beyond it so they cannot win a request
+		// race before the replacement is complete.
+		if r := s.cur; r != nil && r.track == 0 && r.mode == ModeCopy &&
+			(r.planEnd < 0 || n < r.planEnd) {
+			r.planEnd = n
+			for produced := range s.done[0] {
+				if produced >= n {
+					delete(s.done[0], produced)
+					_ = os.Remove(s.trackSegPath(0, produced))
+				}
+			}
+		}
 		s.log.Info("governed VBR spike", "segment", n, "sourceKbps", kbps,
 			"goodputKbps", goodput, "clampKbps", clamp)
+		break // one clamp run at a time; re-evaluate after it completes
 	}
 }
 
