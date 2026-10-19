@@ -61,6 +61,14 @@ func Defaults(dataDir string) Config {
 			MaxTranscodes:        2,
 			RemoteMaxBitrateKbps: 8000,
 		},
+		Downloads: Downloads{
+			Enabled:              true,
+			MaxConcurrent:        2,
+			MaxConcurrentPerUser: 1,
+			DiskBudgetBytes:      20 << 30,
+			Expiry:               Duration(24 * time.Hour),
+			MaxHeight:            1080,
+		},
 		Updates: Updates{Channel: "stable", AutoUpdate: false},
 	}
 }
