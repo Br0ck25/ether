@@ -259,7 +259,7 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 		expr  string
 		dst   *[]Bucket
 		order string
-	}{{`strftime('%Y-%m-%d',started,'unixepoch')`, &out.Daily, "1"}, {`strftime('%H',started,'unixepoch')`, &out.Hourly, "1"}, {`platform`, &out.Platforms, "2 DESC"}, {`title`, &out.Titles, "2 DESC"}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC"}}
+	}{{store.UnixDay(store.DialectOf(s.db), "started"), &out.Daily, "1"}, {store.UnixHour(store.DialectOf(s.db), "started"), &out.Hourly, "1"}, {`platform`, &out.Platforms, "2 DESC"}, {`title`, &out.Titles, "2 DESC"}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC"}}
 	for _, g := range groups {
 		*g.dst = []Bucket{}
 		rows, err := s.db.QueryContext(ctx, `SELECT `+g.expr+`,COUNT(*),COALESCE(SUM(watched_ms),0),COALESCE(SUM(bytes),0)`+where+` GROUP BY 1 ORDER BY `+g.order+` LIMIT 366`, args...)
