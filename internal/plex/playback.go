@@ -241,7 +241,9 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 		dec.Kind = core.DecisionRemux
 		dec.VideoCopy, dec.AudioCopy = true, true
 		dec.Container = transcode.ContainerMPEGTS
-		if v := ps.Info.Video(); v != nil && (v.Codec == "hevc" || v.Codec == "av1" || v.Codec == "vp9") {
+		if p.protocol == core.ProtocolDASH {
+			dec.Container = transcode.ContainerFMP4
+		} else if v := ps.Info.Video(); v != nil && (v.Codec == "hevc" || v.Codec == "av1" || v.Codec == "vp9") {
 			dec.Container = transcode.ContainerFMP4
 		}
 		dec.Reason = "Direct stream preserves playback across source changes."
