@@ -62,6 +62,11 @@ type playRequest struct {
 	audioSel  int // stream position, -1 = default
 	subSel    int // stream position, -1 = none/default
 	subSet    bool
+	// mediaIndex is the "Play Version" position the viewer picked
+	// (0 = Auto / not sent); partReleaseID names the release directly
+	// when the request addressed a variant's Part key.
+	mediaIndex    int
+	partReleaseID string
 	// mde: the client runs its own media decision engine (hasMDE=1, sent
 	// by current Plex Web, iOS and Apple TV apps).
 	mde bool
@@ -77,12 +82,29 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 	if key == 0 {
 		key = keyFromPath(q.Get("ratingKey"))
 	}
+	// A "Play Version" pick may address the chosen Part key directly.
+	var partReleaseID string
+	if key == 0 {
+		for _, v := range []string{q.Get("path"), q.Get("key")} {
+			if partID, ok := partIDFromPath(v); ok {
+				if k, rel, found := s.partTitle(partID); found {
+					key, partReleaseID = k, rel
+					break
+				}
+			}
+		}
+	}
 	if key == 0 || !isPlayableKey(key) {
 		return playRequest{}, fmt.Errorf("no playable item in request")
 	}
 	caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
 	applyDecisionQuery(&caps, q)
-	p := playRequest{key: key, caps: caps, audioSel: -1, subSel: -1, protocol: q.Get("protocol"), mde: q.Get("hasMDE") == "1"}
+	p := playRequest{key: key, caps: caps, audioSel: -1, subSel: -1, protocol: q.Get("protocol"), mde: q.Get("hasMDE") == "1", partReleaseID: partReleaseID}
+	// "Play Version" selection: position in the rendered Media list.
+	// partIndex is always 0 (one Part per Media) and ignored.
+	if n, err := strconv.Atoi(q.Get("mediaIndex")); err == nil && n > 0 {
+		p.mediaIndex = n
+	}
 	if p.protocol == "" {
 		p.protocol = "hls"
 	}
@@ -210,7 +232,7 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 			p.opts.MaxBitrateKbps = limit
 		}
 	}
-	ps, err := s.d.Playback.Prepare(ctx, pr.User, p.key, p.caps)
+	ps, err := s.preparePlayback(ctx, pr, p)
 	if err != nil {
 		return t, nil, core.Decision{}, err
 	}
@@ -766,13 +788,18 @@ func transcodeSessionModel(te *transcodeEntry) model.TranscodeSess {
 // Direct play
 
 // handlePart serves /library/parts/{part}/{changestamp}/{file} with Range
-// support through Playback.ServeRange.
+// support through Playback.ServeRange. A variant Part id names a specific
+// release of the title ("Play Version" direct play).
 func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	id, err := strconv.ParseInt(chi.URLParam(r, "part"), 10, 64)
-	key := core.RatingKey(id)
-	if err != nil || !key.Valid() || !isPlayableKey(key) || s.d.Playback == nil {
+	if err != nil || s.d.Playback == nil {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
+	key, releaseID, found := s.partTitle(id)
+	if !found {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
@@ -788,6 +815,10 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
+	// A live session on a different release does not satisfy a variant part.
+	if ok && ps != nil && releaseID != "" && (ps.Resolution == nil || ps.Resolution.Release.ID != releaseID) {
+		ok = false
+	}
 	if !ok || ps == nil {
 		t, err := s.d.Catalog.Get(ctx, key)
 		if err == nil && !s.titleVisible(pr.User, t) {
@@ -798,7 +829,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
-		ps, err = s.d.Playback.Prepare(ctx, pr.User, key, caps)
+		ps, err = s.prepareForRelease(ctx, pr.User, key, caps, releaseID)
 		if err != nil {
 			s.log.Info("direct play failed", "key", key, "err", err)
 			s.writeErr(w, r, err)
@@ -818,6 +849,10 @@ func (s *Server) handlePartSelect(w http.ResponseWriter, r *http.Request) {
 	if err != nil || pr.User == nil {
 		writeHTTPError(w, http.StatusNotFound)
 		return
+	}
+	// Stream selections are per title, even when addressed at a variant part.
+	if k, _, found := s.partTitle(id); found {
+		id = int64(k)
 	}
 	q := r.URL.Query()
 	s.selections.update(pr.User.ID, id, func(sel *selection) {
