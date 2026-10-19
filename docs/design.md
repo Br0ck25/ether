@@ -86,7 +86,11 @@ or administration, and are removed when the session ends.
 
 Playback selects releases according to viewer policy, device capabilities,
 quality preferences and source health. Provider priorities and backfill remain
-owner-controlled. Source selection must distinguish unavailable articles or
+owner-controlled. The owner can search a title's releases ranked as playback
+ranks them, pin a release to a movie or episode (tried first, overriding
+profile policy but not codec or failover limits, and kept with its failing
+state when it breaks), block and unblock releases, and review a bounded
+persistent history of resolution decisions. Owner blocks never expire. Source selection must distinguish unavailable articles or
 invalid media from a temporary provider outage. Timeouts, network errors and
 missing configuration do not permanently blacklist releases or hide titles for a
 long cooling-off period.
