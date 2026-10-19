@@ -1,0 +1,289 @@
+package transcode
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ether-media/ether/internal/core"
+)
+
+func testFeatures() features {
+	return features{
+		encoders: parseEncoders([]byte(sampleEncoders)),
+		filters:  parseFilters([]byte(sampleFilters)),
+		hwaccels: map[string]bool{"videotoolbox": true},
+	}
+}
+
+func baseSpec(info core.MediaInfo, d core.Decision) runSpec {
+	return runSpec{
+		Input:    "http://127.0.0.1:32400/ether/source/1",
+		Info:     info,
+		Decision: d,
+		Start:    200 * time.Second,
+		SegDur:   4 * time.Second,
+		StartSeg: 50,
+		Dir:      "/tmp/sess",
+		Playlist: "run-3.m3u8",
+		InitName: "init-3.mp4",
+		Accel:    core.HWAccel{Name: AccelNone},
+		Features: testFeatures(),
+	}
+}
+
+func joined(args []string) string { return strings.Join(args, " ") }
+
+func mustContain(t *testing.T, args []string, parts ...string) {
+	t.Helper()
+	s := joined(args)
+	for _, p := range parts {
+		if !strings.Contains(s, p) {
+			t.Errorf("args missing %q\n%s", p, s)
+		}
+	}
+}
+
+func mustNotContain(t *testing.T, args []string, parts ...string) {
+	t.Helper()
+	s := joined(args)
+	for _, p := range parts {
+		if strings.Contains(s, p) {
+			t.Errorf("args unexpectedly contain %q\n%s", p, s)
+		}
+	}
+}
+
+// inputIndex returns the position of "-i".
+func inputIndex(args []string) int {
+	for i, a := range args {
+		if a == "-i" {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestBuildArgsRemuxTS(t *testing.T) {
+	info := mustParse(t, "mkv_truehd_atmos.json")
+	d := Decide(info, appleTV, allow(), Policy{})
+	args := buildArgs(baseSpec(info, d))
+	mustContain(t, args,
+		"-reconnect 1", "-rw_timeout",
+		"-start_at_zero -copyts -ss 200.000 -i http://127.0.0.1:32400/ether/source/1",
+		"-map 0:0 -map 0:1",
+		"-c:v copy",
+		"-c:a eac3 -ac 6 -ar 48000 -b:a 640k",
+		"-f hls -hls_time 4.000 -hls_list_size 0 -hls_playlist_type event -hls_flags temp_file -start_number 50",
+		"-hls_segment_type mpegts",
+		"-hls_segment_filename "+filepath.Join("/tmp/sess", "%05d.ts"),
+		"-fflags +genpts",
+		"-progress pipe:1",
+	)
+	mustNotContain(t, args, "-force_key_frames", "libx264", "-hwaccel", "hvc1", "-filter_complex")
+	if args[len(args)-1] != filepath.Join("/tmp/sess", "run-3.m3u8") {
+		t.Errorf("playlist must be last: %v", args[len(args)-1])
+	}
+	// -ss must be an input option.
+	if i := inputIndex(args); i < 0 || argValue(args[:i], "-ss") != "200.000" {
+		t.Errorf("-ss not before -i: %s", joined(args))
+	}
+}
+
+func TestBuildArgsRemuxHEVCfMP4(t *testing.T) {
+	info := mustParse(t, "mkv_hevc_hdr10.json")
+	d := Decide(info, iOS, allow(), Policy{})
+	s := baseSpec(info, d)
+	s.Start, s.StartSeg = 0, 0
+	args := buildArgs(s)
+	mustContain(t, args, "-c:v copy -tag:v hvc1", "-c:a copy", "-hls_segment_type fmp4 -hls_fmp4_init_filename init-3.mp4",
+		filepath.Join("/tmp/sess", "%05d.m4s"), "-start_number 0")
+	mustNotContain(t, args, "-ss ")
+}
+
+func TestBuildArgsRemuxDolbyVisionKeepsConfig(t *testing.T) {
+	info := mustParse(t, "mkv_dv_p8.json")
+	d := Decide(info, iOS, allow(), Policy{})
+	if d.Kind != core.DecisionRemux {
+		t.Fatalf("decision %+v", d)
+	}
+	mustContain(t, buildArgs(baseSpec(info, d)), "-strict unofficial", "-tag:v hvc1")
+}
+
+func TestBuildArgsTranscodeCPUToneMap(t *testing.T) {
+	info := mustParse(t, "mkv_hevc_hdr10.json")
+	d := Decide(info, plexWeb, allow(), Policy{})
+	args := buildArgs(baseSpec(info, d))
+	graph := argValue(args, "-filter_complex")
+	for _, want := range []string{"[0:0]", "zscale=t=linear:npl=100", "tonemap=tonemap=hable", "scale=1920:1080", "format=yuv420p", "[vout]"} {
+		if !strings.Contains(graph, want) {
+			t.Errorf("graph %q missing %q", graph, want)
+		}
+	}
+	// tone-map before scale
+	if strings.Index(graph, "tonemap") > strings.Index(graph, "scale=1920") {
+		t.Errorf("tone-map should precede scaling: %s", graph)
+	}
+	mustContain(t, args, "-map [vout]", "-c:v libx264", "-preset veryfast", "-force_key_frames expr:gte(t,n_forced*4.000)",
+		"-color_trc bt709", "-c:a aac -ac 2", "-hls_segment_type mpegts")
+	mustNotContain(t, args, "-hwaccel", "-fflags +genpts")
+	vb := argValue(args, "-maxrate")
+	if vb == "" || vb == "0k" {
+		t.Errorf("no maxrate: %s", joined(args))
+	}
+}
+
+func TestBuildArgsToneMapWithoutZscale(t *testing.T) {
+	info := mustParse(t, "mkv_hevc_hdr10.json")
+	d := Decide(info, plexWeb, allow(), Policy{})
+	s := baseSpec(info, d)
+	s.Features.filters = map[string]bool{"scale": true, "overlay": true}
+	graph := argValue(buildArgs(s), "-filter_complex")
+	if strings.Contains(graph, "zscale") || !strings.Contains(graph, "setparams") {
+		t.Errorf("fallback graph %q", graph)
+	}
+}
+
+func TestBuildArgsVideoToolbox(t *testing.T) {
+	info := mustParse(t, "mkv_hevc_hdr10.json")
+	d := Decide(info, plexWeb, allow(), Policy{})
+	s := baseSpec(info, d)
+	s.Accel = core.HWAccel{Name: AccelVideoToolbox, Encoders: []string{"h264_videotoolbox", "hevc_videotoolbox"}}
+	if !s.usesHW() {
+		t.Fatal("usesHW false")
+	}
+	args := buildArgs(s)
+	mustContain(t, args, "-hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld", "-c:v h264_videotoolbox", "-b:v",
+		"scale_vt=w=1920:h=1080:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709")
+	mustNotContain(t, args, "zscale", "libx264", "-color_trc")
+	// No tone-map needed: plain hw decode, software frames.
+	mp4 := mustParse(t, "mp4_h264_aac.json")
+	o := allow()
+	o.MaxHeight = 720
+	d = Decide(mp4, appleTV, o, Policy{})
+	s = baseSpec(mp4, d)
+	s.Accel = core.HWAccel{Name: AccelVideoToolbox, Encoders: []string{"h264_videotoolbox"}}
+	args = buildArgs(s)
+	mustContain(t, args, "-hwaccel videotoolbox -start_at_zero", "scale=1280:720,format=yuv420p", "-c:v h264_videotoolbox")
+}
+
+func TestBuildArgsVAAPI(t *testing.T) {
+	info := mustParse(t, "mkv_hevc_hdr10.json")
+	d := Decide(info, plexWeb, allow(), Policy{})
+	s := baseSpec(info, d)
+	s.Accel = core.HWAccel{Name: AccelVAAPI, Encoders: []string{"h264_vaapi"}, Device: "/dev/dri/renderD129"}
+	args := buildArgs(s)
+	mustContain(t, args, "-hwaccel vaapi -hwaccel_device /dev/dri/renderD129 -hwaccel_output_format vaapi",
+		"tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709,scale_vaapi=w=1920:h=1080:format=nv12", "-c:v h264_vaapi", "-rc_mode VBR")
+	// Burn-in forces the software path with an upload at the end.
+	pgs := mustParse(t, "mkv_pgs.json")
+	o := allow()
+	o.SubtitleStream = 2
+	d = Decide(pgs, appleTV, o, Policy{})
+	s = baseSpec(pgs, d)
+	s.Accel = core.HWAccel{Name: AccelVAAPI, Encoders: []string{"h264_vaapi"}, Device: "/dev/dri/renderD128"}
+	args = buildArgs(s)
+	mustContain(t, args, "-vaapi_device /dev/dri/renderD128", "format=nv12,hwupload[vout]", "overlay")
+}
+
+func TestBuildArgsNVENCAndQSV(t *testing.T) {
+	mp4 := mustParse(t, "mp4_h264_aac.json")
+	o := allow()
+	o.DirectPlay, o.DirectStream = false, false
+	d := Decide(mp4, appleTV, o, Policy{})
+	s := baseSpec(mp4, d)
+	s.Accel = core.HWAccel{Name: AccelNVENC, Encoders: []string{"h264_nvenc"}}
+	mustContain(t, buildArgs(s), "-hwaccel cuda", "-c:v h264_nvenc", "-forced-idr 1", "-rc vbr")
+	s.Accel = core.HWAccel{Name: AccelQSV, Encoders: []string{"h264_qsv"}}
+	mustContain(t, buildArgs(s), "-c:v h264_qsv", "format=nv12", "-look_ahead 0")
+	// HEVC requested but only an h264 hw encoder: hevc goes to libx265.
+	d.VideoCodec = "hevc"
+	s.Decision = d
+	if s.usesHW() {
+		t.Error("hevc should not use the h264-only QSV encoder")
+	}
+	mustContain(t, buildArgs(s), "-c:v libx265", "-tag:v hvc1")
+}
+
+func TestBuildArgsKeepHDR(t *testing.T) {
+	info := mustParse(t, "mkv_hevc_hdr10.json")
+	d := Decide(info, withRemote(appleTV), allow(), Policy{RemoteMaxBitrateKbps: 8000, HEVCEncoder: true})
+	if d.VideoCodec != "hevc" || d.ToneMap {
+		t.Fatalf("decision %+v", d)
+	}
+	args := buildArgs(baseSpec(info, d))
+	mustContain(t, args, "-c:v libx265", "hdr10-opt=1", "transfer=smpte2084", "-color_trc smpte2084", "format=yuv420p10le",
+		"-tag:v hvc1", "-hls_segment_type fmp4")
+	mustNotContain(t, args, "tonemap")
+}
+
+func TestBuildArgsBurnPGS(t *testing.T) {
+	pgs := mustParse(t, "mkv_pgs.json")
+	o := allow()
+	o.SubtitleStream = 2
+	d := Decide(pgs, appleTV, o, Policy{})
+	graph := argValue(buildArgs(baseSpec(pgs, d)), "-filter_complex")
+	want := "[0:0]null[base];[0:2]scale=1920:800[sub];[base][sub]overlay=eof_action=pass,format=yuv420p[vout]"
+	if graph != want {
+		t.Errorf("graph\n got %s\nwant %s", graph, want)
+	}
+}
+
+func TestBuildArgsBurnTextSubtitle(t *testing.T) {
+	pgs := mustParse(t, "mkv_pgs.json")
+	o := allow()
+	o.SubtitleStream = 5
+	o.BurnSubtitles = true
+	d := Decide(pgs, appleTV, o, Policy{})
+	s := baseSpec(pgs, d)
+	graph := argValue(buildArgs(s), "-filter_complex")
+	// 4th subtitle stream (si=3); URL colons escaped twice.
+	if !strings.Contains(graph, `subtitles=filename=http\\://127.0.0.1\\:32400/ether/source/1:si=3`) {
+		t.Errorf("graph %s", graph)
+	}
+	// Without libass the subtitle is not burned.
+	s.Features.filters = map[string]bool{"scale": true}
+	graph = argValue(buildArgs(s), "-filter_complex")
+	if strings.Contains(graph, "subtitles") || !strings.HasSuffix(graph, "format=yuv420p[vout]") {
+		t.Errorf("no-libass graph %s", graph)
+	}
+}
+
+func TestEscapeFilterValue(t *testing.T) {
+	got := escapeFilterValue(`a:b'c,d[e]`)
+	want := `a\\:b\\\'c\,d\[e\]` // per ffmpeg-filters "Notes on filtergraph escaping"
+	if got != want {
+		t.Errorf("got %s want %s", got, want)
+	}
+}
+
+func TestOutputSize(t *testing.T) {
+	cases := []struct{ w, h, max, ww, wh int }{
+		{3840, 2160, 1080, 1920, 1080},
+		{3840, 1608, 1080, 2578, 1080},
+		{1920, 1080, 0, 1920, 1080},
+		{1920, 1080, 2160, 1920, 1080},
+		{1921, 1081, 720, 1278, 720},
+		{0, 0, 720, 1280, 720},
+	}
+	for _, c := range cases {
+		w, h := outputSize(c.w, c.h, c.max)
+		if w != c.ww || h != c.wh {
+			t.Errorf("outputSize(%d,%d,%d) = %dx%d, want %dx%d", c.w, c.h, c.max, w, h, c.ww, c.wh)
+		}
+	}
+}
+
+func TestSubtitleArgs(t *testing.T) {
+	args := subtitleArgs("http://h/x", 4)
+	mustContain(t, args, "-i http://h/x -map 0:4 -c:s webvtt -f webvtt pipe:1")
+}
+
+func TestVideoBitrate(t *testing.T) {
+	mp4 := mustParse(t, "mp4_h264_aac.json")
+	d := core.Decision{Kind: core.DecisionTranscode, AudioStream: 1, AudioCopy: true, BitrateKbps: 4192, VideoCodec: "h264", MaxHeight: 720}
+	if got := videoBitrate(mp4, d); got != 4000 {
+		t.Errorf("videoBitrate = %d", got)
+	}
+}
