@@ -11,7 +11,7 @@ import (
 
 	"fyne.io/systray"
 
-	"github.com/ether-media/ether/internal/updater"
+	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 func main() {

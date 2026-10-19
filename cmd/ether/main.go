@@ -15,10 +15,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ether-media/ether/internal/app"
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/service"
-	"github.com/ether-media/ether/internal/updater"
+	"github.com/braedonsaunders/ether/internal/app"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/service"
+	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 func main() {

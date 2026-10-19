@@ -11,7 +11,7 @@ Ether.app/Contents/
   MacOS/ether-tray                 tray (universal, CGO)
   Resources/ether                  server (universal, CGO_ENABLED=0)
   Resources/ffmpeg, Resources/ffprobe
-  Resources/dev.ether-media.ether.plist   LaunchAgent template for the server
+  Resources/io.github.braedonsaunders.ether.plist   LaunchAgent template for the server
 ```
 
 How the server starts at login: on first run the tray installs the

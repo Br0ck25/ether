@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/ether-media/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 // Problem kinds reported by TestProvider.

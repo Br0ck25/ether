@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/pmsconform"
+	"github.com/braedonsaunders/ether/internal/pmsconform"
 )
 
 func TestFilterReport(t *testing.T) {

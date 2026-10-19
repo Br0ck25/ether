@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // acquireAsync starts an Acquire and returns a channel that receives its

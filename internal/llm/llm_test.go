@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 type fakeCatalog struct{ byTitle map[string][]core.Title }

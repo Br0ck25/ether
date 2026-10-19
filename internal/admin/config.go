@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/ether-media/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 // configSections maps URL section names to JSON field names on Config.

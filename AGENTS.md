@@ -26,7 +26,7 @@ Server, backed by a TMDB catalogue and on-demand Usenet streaming. Read
 
 ## Rules
 
-- Go 1.27, module `github.com/ether-media/ether`. Logging: `log/slog`. Routing: `github.com/go-chi/chi/v5`. Tests: stdlib `testing` + `net/http/httptest` (no testify).
+- Go 1.27, module `github.com/braedonsaunders/ether`. Logging: `log/slog`. Routing: `github.com/go-chi/chi/v5`. Tests: stdlib `testing` + `net/http/httptest` (no testify).
 - Pure Go only (CGO_ENABLED=0 must build) so we can cross-compile installers. No FUSE.
 - Stay inside the packages you own. If you need a change to `internal/core` or `internal/config`, make it additive and minimal and mention it in your report.
 - Every package gets real unit tests that run offline: use fakes/httptest servers, never live services. `go build ./... && go vet ./... && go test ./...` must pass before you commit.

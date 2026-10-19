@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 // Message is one chat message.

@@ -15,8 +15,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plex/model"
 )
 
 // Decision codes. PMS documents the classes (1xxx ok, 2xxx general error,

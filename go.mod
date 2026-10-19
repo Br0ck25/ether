@@ -1,4 +1,4 @@
-module github.com/ether-media/ether
+module github.com/braedonsaunders/ether
 
 go 1.27.2
 

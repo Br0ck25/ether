@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // Browse queries the browsable mirror entirely in SQL.

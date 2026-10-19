@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 const fakeNZB = `<?xml version="1.0"?><nzb><file poster="a" date="1" subject="x"><groups><group>alt.binaries.test</group></groups><segments><segment bytes="10" number="1">m1@test</segment></segments></file></nzb>`

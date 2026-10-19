@@ -4,14 +4,14 @@
   LaunchAgent for the Ether *server*. build-app.sh ships this template inside
   Ether.app/Contents/Resources; the tray (or `ether service install`, which
   renders the same thing via internal/service) installs it as
-  ~/Library/LaunchAgents/dev.ether-media.ether.plist with __APP_CONTENTS__
+  ~/Library/LaunchAgents/io.github.braedonsaunders.ether.plist with __APP_CONTENTS__
   replaced by the Ether.app/Contents path, then `launchctl bootstrap`s it.
   KeepAlive mirrors PMS: the server runs while the user is logged in.
 -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>dev.ether-media.ether</string>
+	<string>io.github.braedonsaunders.ether</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>__APP_CONTENTS__/Resources/ether</string>

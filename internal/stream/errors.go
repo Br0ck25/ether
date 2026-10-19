@@ -3,8 +3,8 @@ package stream
 import (
 	"errors"
 
-	"github.com/ether-media/ether/internal/archive"
-	"github.com/ether-media/ether/internal/nzb"
+	"github.com/braedonsaunders/ether/internal/archive"
+	"github.com/braedonsaunders/ether/internal/nzb"
 )
 
 // Typed errors returned by Open, Prefetch and Check. They are re-exported

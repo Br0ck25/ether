@@ -6,8 +6,8 @@ import (
 	"io"
 	"testing"
 
-	"github.com/ether-media/ether/internal/archive"
-	"github.com/ether-media/ether/internal/archive/archivetest"
+	"github.com/braedonsaunders/ether/internal/archive"
+	"github.com/braedonsaunders/ether/internal/archive/archivetest"
 )
 
 func payload(n int, seed byte) []byte {

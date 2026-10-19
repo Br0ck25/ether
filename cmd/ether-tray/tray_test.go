@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/service"
-	"github.com/ether-media/ether/internal/updater"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/service"
+	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 func boolp(b bool) *bool { return &b }
@@ -84,7 +84,7 @@ func TestStatusLine(t *testing.T) {
 
 func TestAutostartDarwinAndLinux(t *testing.T) {
 	for goos, marker := range map[string]string{
-		"darwin": "dev.ether-media.ether-tray",
+		"darwin": "io.github.braedonsaunders.ether-tray",
 		"linux":  "[Desktop Entry]",
 	} {
 		home := t.TempDir()

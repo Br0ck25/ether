@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // Check implements core.HealthChecker. It parses the NZB, inspects the

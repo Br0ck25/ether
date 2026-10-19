@@ -1,6 +1,6 @@
 package admin
 
-import "github.com/ether-media/ether/internal/config"
+import "github.com/braedonsaunders/ether/internal/config"
 
 func redact(s string) string {
 	if s == "" {

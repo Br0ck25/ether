@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/state"
 )
 
 // Signal is one piece of taste evidence: a title the user interacted with

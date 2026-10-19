@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // Hardware accelerator names, as used in config.Transcode.HWAccel and

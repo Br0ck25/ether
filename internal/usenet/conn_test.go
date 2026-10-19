@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/usenet/nntptest"
-	"github.com/ether-media/ether/internal/yenc"
+	"github.com/braedonsaunders/ether/internal/usenet/nntptest"
+	"github.com/braedonsaunders/ether/internal/yenc"
 )
 
 func randData(seed int64, n int) []byte {

@@ -34,8 +34,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/yenc"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/yenc"
 )
 
 // Options configure a Server. All of them except TLS can also be changed

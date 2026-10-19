@@ -1,6 +1,6 @@
 [Unit]
 Description=Ether media server
-Documentation=https://github.com/ether-media/ether
+Documentation=https://github.com/braedonsaunders/ether
 After=network-online.target
 Wants=network-online.target
 

@@ -8,13 +8,13 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/ether-media/ether/internal/admin"
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/llm"
-	"github.com/ether-media/ether/internal/newznab"
-	"github.com/ether-media/ether/internal/plextv"
-	"github.com/ether-media/ether/internal/tmdb"
-	"github.com/ether-media/ether/internal/usenet"
+	"github.com/braedonsaunders/ether/internal/admin"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/llm"
+	"github.com/braedonsaunders/ether/internal/newznab"
+	"github.com/braedonsaunders/ether/internal/plextv"
+	"github.com/braedonsaunders/ether/internal/tmdb"
+	"github.com/braedonsaunders/ether/internal/usenet"
 )
 
 func (a *App) buildAdmin() http.Handler {

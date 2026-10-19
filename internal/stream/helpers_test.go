@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // fakeFetcher is an in-memory core.ArticleFetcher. Articles are stored

@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	at "github.com/ether-media/ether/internal/archive/archivetest"
+	at "github.com/braedonsaunders/ether/internal/archive/archivetest"
 )
 
 // exerciseMembers reads a little from every streamable member; it must never

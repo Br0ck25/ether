@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	at "github.com/ether-media/ether/internal/archive/archivetest"
+	at "github.com/braedonsaunders/ether/internal/archive/archivetest"
 )
 
 // Fixtures in testdata/7z are produced by testdata/gen7z.sh with 7zz.

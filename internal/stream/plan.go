@@ -6,8 +6,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/ether-media/ether/internal/archive"
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/archive"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 type planKind string

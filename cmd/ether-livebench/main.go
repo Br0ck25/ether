@@ -20,15 +20,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/newznab"
-	"github.com/ether-media/ether/internal/resolver"
-	"github.com/ether-media/ether/internal/segcache"
-	"github.com/ether-media/ether/internal/store"
-	"github.com/ether-media/ether/internal/stream"
-	"github.com/ether-media/ether/internal/transcode"
-	"github.com/ether-media/ether/internal/usenet"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/newznab"
+	"github.com/braedonsaunders/ether/internal/resolver"
+	"github.com/braedonsaunders/ether/internal/segcache"
+	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/stream"
+	"github.com/braedonsaunders/ether/internal/transcode"
+	"github.com/braedonsaunders/ether/internal/usenet"
 )
 
 type ref struct {

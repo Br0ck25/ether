@@ -4,7 +4,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/ether-media/ether/internal/nzb"
+	"github.com/braedonsaunders/ether/internal/nzb"
 )
 
 // postedFile is one file of the NZB with its byte-offset index: which

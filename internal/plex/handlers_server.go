@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plex/model"
 )
 
 const (

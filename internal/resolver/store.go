@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/ether-media/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 func init() {

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ether-media/ether/internal/archive/archivetest"
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/archive/archivetest"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // postVolumes posts archive volumes under names produced by name(i).

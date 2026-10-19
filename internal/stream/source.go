@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // maxCursors is how many independent sequential readers a source tracks

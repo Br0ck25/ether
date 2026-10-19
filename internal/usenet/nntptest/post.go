@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ether-media/ether/internal/yenc"
+	"github.com/braedonsaunders/ether/internal/yenc"
 )
 
 // PostOptions control Post. The zero value is valid.

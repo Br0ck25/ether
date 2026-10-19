@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // Configuration fetches /configuration (cached for ImageURL too).

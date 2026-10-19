@@ -101,7 +101,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import plistlib
-          for p in ["packaging/macos/Info.plist", "packaging/macos/dev.ether-media.ether.plist"]:
+          for p in ["packaging/macos/Info.plist", "packaging/macos/io.github.braedonsaunders.ether.plist"]:
               plistlib.load(open(p, "rb"))
               print("ok", p)
           PY

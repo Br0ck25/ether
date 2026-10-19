@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/tmdb"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/tmdb"
 )
 
 // SyncProgress describes a running or last-finished catalogue sync.

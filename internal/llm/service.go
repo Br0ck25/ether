@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // Service turns model suggestions into catalogue titles and Home hubs.

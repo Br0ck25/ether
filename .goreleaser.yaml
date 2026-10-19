@@ -28,15 +28,15 @@ builds:
     flags: [-trimpath]
     ldflags:
       - -s -w
-      - -X github.com/ether-media/ether/internal/updater.Version={{ .Version }}
-      - -X github.com/ether-media/ether/internal/updater.Commit={{ .Commit }}
-      - -X github.com/ether-media/ether/internal/updater.Date={{ .Date }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Version={{ .Version }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Commit={{ .Commit }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Date={{ .Date }}
       # Injected from CI secrets (see release.yml). Empty in dev/snapshot
       # builds, which then refuse to self-update — by design.
-      - -X github.com/ether-media/ether/internal/updater.PublicKeyB64={{ envOrDefault "ETHER_UPDATE_PUBLIC_KEY" "" }}
+      - -X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64={{ envOrDefault "ETHER_UPDATE_PUBLIC_KEY" "" }}
       # Bundled TMDB API key. The tmdb package exposes this variable name;
       # -X is silently ignored while the symbol does not exist.
-      - -X github.com/ether-media/ether/internal/tmdb.BundledAPIKey={{ envOrDefault "ETHER_TMDB_KEY" "" }}
+      - -X github.com/braedonsaunders/ether/internal/tmdb.BundledAPIKey={{ envOrDefault "ETHER_TMDB_KEY" "" }}
 
   # Tray for the platforms where fyne.io/systray is pure Go. The macOS
   # tray needs CGO and is built natively by packaging/macos/build-app.sh.
@@ -50,9 +50,9 @@ builds:
     flags: [-trimpath]
     ldflags:
       - -s -w
-      - -X github.com/ether-media/ether/internal/updater.Version={{ .Version }}
-      - -X github.com/ether-media/ether/internal/updater.Commit={{ .Commit }}
-      - -X github.com/ether-media/ether/internal/updater.PublicKeyB64={{ envOrDefault "ETHER_UPDATE_PUBLIC_KEY" "" }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Version={{ .Version }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Commit={{ .Commit }}
+      - -X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64={{ envOrDefault "ETHER_UPDATE_PUBLIC_KEY" "" }}
 
 universal_binaries:
   - ids: [ether]
@@ -87,7 +87,7 @@ nfpms:
   - id: ether-linux
     package_name: ether
     ids: [ether, ether-tray]
-    homepage: https://github.com/ether-media/ether
+    homepage: https://github.com/braedonsaunders/ether
     maintainer: Ether contributors
     description: |
       Ether media server — presents to Plex apps as a Plex Media Server,
@@ -126,8 +126,8 @@ dockers:
     goos: linux
     goarch: amd64
     image_templates:
-      - ghcr.io/ether-media/ether:{{ .Version }}-amd64
-      - ghcr.io/ether-media/ether:latest-amd64
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-amd64
+      - ghcr.io/braedonsaunders/ether:latest-amd64
     extra_files:
       - LICENSE
       - THIRD_PARTY_NOTICES.md
@@ -136,7 +136,7 @@ dockers:
     build_flag_templates:
       - --label=org.opencontainers.image.title=Ether
       - --label=org.opencontainers.image.description=Ether media server (Plex-compatible front end, TMDB catalogue, Usenet streaming)
-      - --label=org.opencontainers.image.source=https://github.com/ether-media/ether
+      - --label=org.opencontainers.image.source=https://github.com/braedonsaunders/ether
       - --label=org.opencontainers.image.version={{ .Version }}
       - --label=org.opencontainers.image.licenses=GPL-3.0
   - ids: [ether]
@@ -144,8 +144,8 @@ dockers:
     goos: linux
     goarch: arm64
     image_templates:
-      - ghcr.io/ether-media/ether:{{ .Version }}-arm64
-      - ghcr.io/ether-media/ether:latest-arm64
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-arm64
+      - ghcr.io/braedonsaunders/ether:latest-arm64
     extra_files:
       - LICENSE
       - THIRD_PARTY_NOTICES.md
@@ -157,18 +157,18 @@ dockers:
       - --label=org.opencontainers.image.licenses=GPL-3.0
 
 docker_manifests:
-  - name_template: ghcr.io/ether-media/ether:{{ .Version }}
+  - name_template: ghcr.io/braedonsaunders/ether:{{ .Version }}
     image_templates:
-      - ghcr.io/ether-media/ether:{{ .Version }}-amd64
-      - ghcr.io/ether-media/ether:{{ .Version }}-arm64
-  - name_template: ghcr.io/ether-media/ether:latest
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-amd64
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-arm64
+  - name_template: ghcr.io/braedonsaunders/ether:latest
     image_templates:
-      - ghcr.io/ether-media/ether:latest-amd64
-      - ghcr.io/ether-media/ether:latest-arm64
+      - ghcr.io/braedonsaunders/ether:latest-amd64
+      - ghcr.io/braedonsaunders/ether:latest-arm64
 
 release:
   github:
-    owner: ether-media
+    owner: braedonsaunders
     name: ether
   draft: true # the workflow attaches the DMG/installer/signed manifests, then publishes
   name_template: "Ether {{ .Version }}"

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ether-media/ether/internal/admin"
-	"github.com/ether-media/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/admin"
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 // The server machine itself needs no sign-in, but only when the browser

@@ -5,7 +5,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 const numPriorities = 3

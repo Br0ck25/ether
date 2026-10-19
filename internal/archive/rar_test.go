@@ -7,7 +7,7 @@ import (
 	"io"
 	"testing"
 
-	at "github.com/ether-media/ether/internal/archive/archivetest"
+	at "github.com/braedonsaunders/ether/internal/archive/archivetest"
 )
 
 func buildRAR(t testing.TB, opts at.RAROptions, files []at.RARFile) [][]byte {

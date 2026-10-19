@@ -5,7 +5,7 @@
 # `network_mode: host` and uncomment the ports mapping.
 services:
   ether:
-    image: ghcr.io/ether-media/ether:latest
+    image: ghcr.io/braedonsaunders/ether:latest
     container_name: ether
     restart: unless-stopped
     network_mode: host

@@ -34,7 +34,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/updater"
+	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 func main() {
@@ -83,7 +83,7 @@ func cmdKeygen(args []string) error {
 	if *out == "" {
 		fmt.Print(text)
 		fmt.Fprintln(os.Stderr, "keep the private key secret; embed the public key with:")
-		fmt.Fprintf(os.Stderr, "  -ldflags \"-X github.com/ether-media/ether/internal/updater.PublicKeyB64=%s\"\n", updater.EncodeKey(pub))
+		fmt.Fprintf(os.Stderr, "  -ldflags \"-X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64=%s\"\n", updater.EncodeKey(pub))
 		return nil
 	}
 	return os.WriteFile(*out, []byte(text), 0o600)

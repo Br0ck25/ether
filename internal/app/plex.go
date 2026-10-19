@@ -6,11 +6,11 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/plex"
-	"github.com/ether-media/ether/internal/plextv"
-	"github.com/ether-media/ether/internal/spike"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plex"
+	"github.com/braedonsaunders/ether/internal/plextv"
+	"github.com/braedonsaunders/ether/internal/spike"
 )
 
 // buildPlex assembles the PMS-compatible front end. In spike mode the

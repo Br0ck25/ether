@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // pinLive protects a release served by a live session. Pins are

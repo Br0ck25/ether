@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ether-media/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 // FieldError is one validation problem, addressed by dotted field path.

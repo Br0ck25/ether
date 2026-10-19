@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/nzb"
-	"github.com/ether-media/ether/internal/segcache"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/nzb"
+	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
 func TestFileIndexEstimatesAndCorrections(t *testing.T) {

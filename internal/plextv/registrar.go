@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/remote"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/remote"
 )
 
 // ConfigStore is the part of *config.Store the registrar uses.

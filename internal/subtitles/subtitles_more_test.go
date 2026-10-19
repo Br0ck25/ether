@@ -17,8 +17,8 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // osFake is a configurable OpenSubtitles fake.

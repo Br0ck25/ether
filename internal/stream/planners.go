@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ether-media/ether/internal/archive"
-	"github.com/ether-media/ether/internal/nzb"
+	"github.com/braedonsaunders/ether/internal/archive"
+	"github.com/braedonsaunders/ether/internal/nzb"
 )
 
 // planPlain maps a posted video file directly.

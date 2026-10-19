@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ether-media/ether/internal/yenc"
+	"github.com/braedonsaunders/ether/internal/yenc"
 )
 
 // Default timeouts for a single connection.

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 // fakeRunner stands in for ffmpeg/ffprobe. Run answers the startup

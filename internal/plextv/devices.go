@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // PublishConnections publishes the server's connection URIs on its plex.tv

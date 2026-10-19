@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // flight is one in-progress segment fetch that concurrent requests join.

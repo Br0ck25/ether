@@ -16,9 +16,9 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/service"
-	"github.com/ether-media/ether/internal/updater"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/service"
+	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 // Tray icons (regenerate: go run scripts/generate-tray-icons.go cmd/ether-tray/assets).

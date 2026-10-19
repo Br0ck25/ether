@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 // DefaultFeedBase is where release manifests live when config has no
 // override: <base>/<channel>.json (+ optional <channel>.json.sig).
-const DefaultFeedBase = "https://github.com/ether-media/ether/releases/latest/download"
+const DefaultFeedBase = "https://github.com/braedonsaunders/ether/releases/latest/download"
 
 // Options configures a Client. Zero values fall back to build defaults.
 type Options struct {

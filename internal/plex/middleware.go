@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plex/model"
 )
 
 const corsAllowHeaders = "Accept, Accept-Language, Content-Type, Range, X-Plex-Token, X-Plex-Client-Identifier, X-Plex-Product, " +

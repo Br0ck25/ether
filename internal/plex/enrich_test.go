@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/plex/model"
-	"github.com/ether-media/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 func TestPlaylistsHomeHub(t *testing.T) {

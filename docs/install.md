@@ -30,7 +30,7 @@ from an elevated prompt, or from the tray menu.
    Applications, and launch it. Ether appears as a menu-bar icon (no
    Dock icon).
 2. On first launch the tray installs a per-user LaunchAgent
-   (`~/Library/LaunchAgents/dev.ether-media.ether.plist`) that runs the
+   (`~/Library/LaunchAgents/io.github.braedonsaunders.ether.plist`) that runs the
    server (`Ether.app/Contents/Resources/ether`) while you are logged in.
 3. Data lives in `~/Library/Application Support/Ether`, logs in
    `~/Library/Logs/Ether`.
@@ -69,7 +69,7 @@ or plain Docker:
 docker run -d --name ether --restart unless-stopped \
   --network host \
   -v /path/to/config:/config -v /path/to/cache:/cache \
-  ghcr.io/ether-media/ether:latest
+  ghcr.io/braedonsaunders/ether:latest
 ```
 
 **Host networking is recommended.** Plex apps discover servers on the

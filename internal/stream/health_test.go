@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/nzb"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/nzb"
 )
 
 func TestHealthSampleSpread(t *testing.T) {

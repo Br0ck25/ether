@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // PIN is a plex.tv sign-in PIN (POST /api/v2/pins).

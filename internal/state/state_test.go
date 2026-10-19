@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 func newTestState(t *testing.T) (*State, *time.Time) {

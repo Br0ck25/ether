@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // ffprobeJSON is the subset of `ffprobe -print_format json -show_format

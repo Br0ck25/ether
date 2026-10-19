@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 var fixedNow = time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)

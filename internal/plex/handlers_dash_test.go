@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // fakeDASH is a DASH session that echoes what was asked of it.

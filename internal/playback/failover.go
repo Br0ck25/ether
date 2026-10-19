@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // errSourceBroken marks a release whose articles went missing while it was

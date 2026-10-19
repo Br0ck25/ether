@@ -10,7 +10,7 @@ import (
 )
 
 // Autostart manages "launch the tray at login":
-//   - macOS:   ~/Library/LaunchAgents/dev.ether-media.ether-tray.plist
+//   - macOS:   ~/Library/LaunchAgents/io.github.braedonsaunders.ether-tray.plist
 //   - Linux:   ~/.config/autostart/ether-tray.desktop
 //   - Windows: HKCU\...\Run registry value "EtherTray" (via reg.exe)
 type Autostart struct {
@@ -44,7 +44,7 @@ const windowsRunKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
 
 // launchAgentPath / desktopPath are the per-user autostart files.
 func (a *Autostart) launchAgentPath() string {
-	return filepath.Join(a.HomeDir, "Library", "LaunchAgents", "dev.ether-media.ether-tray.plist")
+	return filepath.Join(a.HomeDir, "Library", "LaunchAgents", "io.github.braedonsaunders.ether-tray.plist")
 }
 
 func (a *Autostart) desktopPath() string {
@@ -58,7 +58,7 @@ func (a *Autostart) LaunchAgentPlist() string {
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>dev.ether-media.ether-tray</string>
+	<string>io.github.braedonsaunders.ether-tray</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>%s</string>

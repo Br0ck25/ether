@@ -52,8 +52,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/state"
 )
 
 // TraktSource is the optional Trakt dependency (internal/trakt.Client).

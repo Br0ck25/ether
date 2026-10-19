@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/playback"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/playback"
 )
 
 type fakeCatalog struct {

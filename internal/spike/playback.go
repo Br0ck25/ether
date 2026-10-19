@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // localSource is a core.MediaSource over a local file.

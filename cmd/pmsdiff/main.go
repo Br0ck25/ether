@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ether-media/ether/internal/pmsconform"
+	"github.com/braedonsaunders/ether/internal/pmsconform"
 )
 
 func main() {

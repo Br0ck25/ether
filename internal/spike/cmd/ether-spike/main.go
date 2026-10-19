@@ -22,9 +22,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ether-media/ether/internal/config"
-	"github.com/ether-media/ether/internal/plex"
-	"github.com/ether-media/ether/internal/spike"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/plex"
+	"github.com/braedonsaunders/ether/internal/spike"
 )
 
 type fileList []string

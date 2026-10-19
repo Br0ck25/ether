@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/core"
-	"github.com/ether-media/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/state"
 )
 
 type fakeTrakt struct {

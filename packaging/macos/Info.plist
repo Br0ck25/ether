@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>ether-tray</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.ether-media.ether</string>
+	<string>io.github.braedonsaunders.ether</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ether-media/ether/internal/yenc"
+	"github.com/braedonsaunders/ether/internal/yenc"
 )
 
 func dial(t *testing.T, s *Server) *textproto.Conn {
