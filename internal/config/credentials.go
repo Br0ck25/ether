@@ -62,6 +62,12 @@ func secretField(k string) bool {
 	}
 	return false
 }
+
+// secretChild covers secrets whose key is only sensitive in context, such as
+// the database connection URL (which embeds a password).
+func secretChild(parent, k string) bool {
+	return strings.EqualFold(parent, "database") && strings.EqualFold(k, "url")
+}
 func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 	var root any
 	if err := json.Unmarshal(data, &root); err != nil {
@@ -75,12 +81,12 @@ func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var walk func(any) error
-	walk = func(v any) error {
+	var walk func(any, string) error
+	walk = func(v any, parent string) error {
 		switch x := v.(type) {
 		case map[string]any:
 			for k, value := range x {
-				if text, ok := value.(string); ok && text != "" && secretField(k) {
+				if text, ok := value.(string); ok && text != "" && (secretField(k) || secretChild(parent, k)) {
 					if seal {
 						nonce := make([]byte, aead.NonceSize())
 						if _, err := rand.Read(nonce); err != nil {
@@ -99,20 +105,20 @@ func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 						}
 						x[k] = string(plain)
 					}
-				} else if err := walk(value); err != nil {
+				} else if err := walk(value, k); err != nil {
 					return err
 				}
 			}
 		case []any:
 			for _, value := range x {
-				if err := walk(value); err != nil {
+				if err := walk(value, parent); err != nil {
 					return err
 				}
 			}
 		}
 		return nil
 	}
-	if err := walk(root); err != nil {
+	if err := walk(root, ""); err != nil {
 		return nil, err
 	}
 	return json.MarshalIndent(root, "", "  ")

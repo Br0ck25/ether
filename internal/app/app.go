@@ -169,8 +169,16 @@ func New(ctx context.Context, opts Options) (*App, error) {
 			}
 		}
 	}
-	if a.db, err = store.Open(ctx, opts.DataDir); err != nil {
+	dbCfg := cfg.Database.Effective(os.Getenv)
+	var dialect store.Dialect
+	if a.db, dialect, err = store.OpenWith(ctx, store.Options{
+		DataDir: opts.DataDir, Driver: dbCfg.Driver, URL: dbCfg.URL,
+		Logger: a.log.With("component", "store"),
+	}); err != nil {
 		return nil, fmt.Errorf("database: %w", err)
+	}
+	if dialect == store.Postgres {
+		a.log.Info("database: using PostgreSQL", "url", dbCfg.Redacted().URL)
 	}
 	a.closers = append(a.closers, func() { a.db.Close() })
 	if err := a.build(ctx, cfg); err != nil {

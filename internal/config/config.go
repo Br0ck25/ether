@@ -32,7 +32,9 @@ type Config struct {
 	Updates       Updates       `json:"updates"`
 	Spike         Spike         `json:"spike"`
 	Markers       Markers       `json:"markers"`
-	SetupComplete bool          `json:"setupComplete"`
+	// Database is node-local storage selection (SQLite or PostgreSQL).
+	Database      Database `json:"database"`
+	SetupComplete bool     `json:"setupComplete"`
 }
 
 type Server struct {
