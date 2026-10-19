@@ -179,7 +179,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// Usenet, cache, stream engine.
 	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet")})
 	a.closers = append(a.closers, func() { a.fetcher.Close() })
-	if a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log.With("component", "segcache")); err != nil {
+	if a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log); err != nil {
 		return fmt.Errorf("segment cache: %w", err)
 	}
 	a.closers = append(a.closers, func() { a.cache.Close() })
@@ -195,7 +195,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.resolver = resolver.New(a.indexers, a.engine, a.db, cfg, resolver.Options{Logger: log.With("component", "resolver")})
 
 	// Transcoder. A missing ffmpeg is not fatal: direct play still works.
-	a.transcoder, err = transcode.New(cfg.Transcode, log.With("component", "transcode"))
+	a.transcoder, err = transcode.New(cfg.Transcode, log)
 	if err != nil {
 		log.Warn("transcoder unavailable; only direct play will work", "err", err)
 		a.transcoder = nil
@@ -220,7 +220,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		},
 		FetchNZB: a.indexers.FetchNZB,
 		DB:       a.db,
-		Logger:   log.With("component", "playback"),
+		Logger:   log,
 	}, cfg, playback.Options{DataDir: dataDir})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)
