@@ -163,6 +163,17 @@ type HealthTrace struct {
 	Plan    time.Duration `json:"plan"`
 	STAT    time.Duration `json:"stat"`
 	Samples int           `json:"samples"`
+	// BODY probe results: the mid-file segments verified with a real
+	// BODY (yEnc header) read, since STAT 223 does not prove a BODY
+	// would not be taken down (451).
+	Body       time.Duration `json:"body"`
+	BodyProbes int           `json:"bodyProbes"`
+	BodyOK     int           `json:"bodyOk"`
+	// FailFast is set when the check bailed out on the first confirmed
+	// missing article instead of waiting for every sample; FailReason
+	// says which probe decided it.
+	FailFast   bool   `json:"failFast"`
+	FailReason string `json:"failReason,omitempty"`
 }
 
 // HealthTimings returns timing for the most recent Check call.
