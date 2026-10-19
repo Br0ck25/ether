@@ -188,7 +188,7 @@ transcode limit, the public port/host and UPnP for its port forward,
 custom certificate file paths and the database URL. Everything else
 (providers, indexers, metadata keys, policies, the server identity and
 plex.tv sign-in, update channel) is shared: change it on any node and
-the others follow within seconds. A node's `config.json` keeps a copy of
+the others follow (within 30 seconds at most). A node's `config.json` keeps a copy of
 the shared settings, which is replaced from the database at every start.
 Local media folders are shared, so mount them at the same path on every
 node.
