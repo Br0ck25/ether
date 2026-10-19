@@ -44,6 +44,17 @@ type Options struct {
 	HTTPClient *http.Client
 	TTL        time.Duration
 	Now        func() time.Time
+
+	// Aligner, when set, shifts TheIntroDB markers from the reference
+	// runtime they were submitted against into the played release's
+	// timeline (dialogue-based, no video downloaded).
+	Aligner core.TimelineAligner
+	// AlignTimeout bounds one marker-shifting alignment (default 10s);
+	// on failure the unshifted markers are kept.
+	AlignTimeout time.Duration
+	// Dialogue supplies already-available subtitle cue times for the
+	// played release (cached sidecars), used for stinger detection.
+	Dialogue func(ctx context.Context, key core.RatingKey, info core.MediaInfo) ([]DialogueCue, bool)
 }
 type Service struct {
 	o       Options
@@ -134,7 +145,41 @@ func (s *Service) Put(ctx context.Context, key core.RatingKey, d time.Duration, 
 	_, err = s.o.DB.ExecContext(ctx, `INSERT INTO markers_cache VALUES(?,?,?,?) ON CONFLICT(rating_key,runtime_ms) DO UPDATE SET ranges=excluded.ranges,expires_at=excluded.expires_at`, int64(key), d.Milliseconds(), string(b), s.o.Now().Add(s.o.TTL).Unix())
 	return err
 }
+
+// Markers returns the skip ranges for one probed release: chapter and
+// remote markers (shifted into this release's timeline when they were
+// submitted against a different cut), with stinger scenes cut out of the
+// credits ranges.
 func (s *Service) Markers(ctx context.Context, key core.RatingKey, info core.MediaInfo) ([]Marker, error) {
+	out, err := s.rawMarkers(ctx, key, info)
+	return s.applyStingers(ctx, key, info, out), err
+}
+
+// applyStingers detects mid-/post-credits scenes (chapters first, then
+// resumed dialogue from already-available subtitle text) and cuts them
+// out of the credits markers.
+func (s *Service) applyStingers(ctx context.Context, key core.RatingKey, info core.MediaInfo, out []Marker) []Marker {
+	if len(out) == 0 || info.Duration <= 0 {
+		return out
+	}
+	stingers := StingersFromChapters(info)
+	if s.o.Dialogue != nil {
+		creditsStart, hasCredits := time.Duration(0), false
+		for _, m := range out {
+			if m.Type == "credits" && (!hasCredits || time.Duration(m.StartMS)*time.Millisecond < creditsStart) {
+				creditsStart, hasCredits = time.Duration(m.StartMS)*time.Millisecond, true
+			}
+		}
+		if hasCredits {
+			if cues, ok := s.o.Dialogue(ctx, key, info); ok {
+				stingers = append(stingers, StingersFromDialogue(cues, creditsStart, info.Duration)...)
+			}
+		}
+	}
+	return ApplyStingers(out, stingers, info.Duration)
+}
+
+func (s *Service) rawMarkers(ctx context.Context, key core.RatingKey, info core.MediaInfo) ([]Marker, error) {
 	if info.Estimated {
 		return nil, nil
 	}
@@ -153,10 +198,11 @@ func (s *Service) Markers(ctx context.Context, key core.RatingKey, info core.Med
 	if !enabled || info.Duration <= 0 || (key.Kind() != core.KindEpisode && key.Kind() != core.KindMovie) {
 		return out, nil
 	}
-	remote, err := s.fetch(ctx, key, info.Duration, apiKey)
+	remote, refDuration, err := s.fetch(ctx, key, info.Duration, apiKey)
 	if err != nil {
 		return out, err
 	}
+	remote = s.shiftToPlayed(ctx, key, remote, refDuration, info.Duration)
 	if s.o.DB != nil {
 		if err = s.Put(ctx, key, info.Duration, remote); err != nil {
 			return merge(out, remote), err
@@ -178,15 +224,20 @@ func merge(a, b []Marker) []Marker {
 	}
 	return a
 }
-func (s *Service) fetch(ctx context.Context, key core.RatingKey, d time.Duration, apiKey string) ([]Marker, error) {
-	q := url.Values{"tmdb_id": {strconv.FormatInt(key.TMDB(), 10)}, "duration_ms": {strconv.FormatInt(d.Milliseconds(), 10)}, "merge_unknown": {"false"}}
+
+// fetch reads TheIntroDB markers. The second result is the reference
+// runtime the returned timestamps were submitted against
+// (group_duration_ms, present with details=true), or 0 when the API does
+// not say; markers are validated against it when known.
+func (s *Service) fetch(ctx context.Context, key core.RatingKey, d time.Duration, apiKey string) ([]Marker, time.Duration, error) {
+	q := url.Values{"tmdb_id": {strconv.FormatInt(key.TMDB(), 10)}, "duration_ms": {strconv.FormatInt(d.Milliseconds(), 10)}, "merge_unknown": {"false"}, "details": {"true"}}
 	if key.Kind() == core.KindEpisode {
 		q.Set("season", strconv.Itoa(key.Season()))
 		q.Set("episode", strconv.Itoa(key.Episode()))
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.o.BaseURL, "/")+"/media?"+q.Encode(), nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Ether/1")
@@ -195,18 +246,26 @@ func (s *Service) fetch(ctx context.Context, key core.RatingKey, d time.Duration
 	}
 	resp, err := s.o.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == 404 {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("theintrodb: HTTP %d", resp.StatusCode)
+		return nil, 0, fmt.Errorf("theintrodb: HTTP %d", resp.StatusCode)
 	}
 	var body map[string]json.RawMessage
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	ref := d
+	for _, field := range []string{"group_duration_ms", "groupDurationMs"} {
+		var ms *int64
+		if raw := body[field]; len(raw) > 0 && json.Unmarshal(raw, &ms) == nil && ms != nil && *ms > 0 {
+			ref = time.Duration(*ms) * time.Millisecond
+			break
+		}
 	}
 	var out []Marker
 	for _, kind := range []string{"intro", "credits", "recap"} {
@@ -219,21 +278,78 @@ func (s *Service) fetch(ctx context.Context, key core.RatingKey, d time.Duration
 			End   *int64 `json:"end_ms"`
 		}
 		if err = json.Unmarshal(raw, &ranges); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		for _, r := range ranges {
-			start, end := int64(0), d.Milliseconds()
+			start, end := int64(0), ref.Milliseconds()
 			if r.Start != nil {
 				start = *r.Start
 			}
 			if r.End != nil {
 				end = *r.End
 			}
-			m := Marker{Type: kind, StartMS: start, EndMS: end, Final: kind == "credits" && end == d.Milliseconds(), Source: "theintrodb"}
-			if valid(m, d) {
+			m := Marker{Type: kind, StartMS: start, EndMS: end, Final: kind == "credits" && end == ref.Milliseconds(), Source: "theintrodb"}
+			if valid(m, ref) {
 				out = append(out, m)
 			}
 		}
 	}
-	return out, nil
+	if ref == d {
+		ref = 0 // no distinct reference runtime reported
+	}
+	return out, ref, nil
+}
+
+// shiftToPlayed maps remote markers from their reference runtime into the
+// played release's timeline via dialogue alignment. When the runtimes
+// agree, no aligner is configured, or alignment is not confident, the
+// markers are kept as-is (validated against the played runtime, exactly
+// the previous behaviour).
+func (s *Service) shiftToPlayed(ctx context.Context, key core.RatingKey, remote []Marker, ref, played time.Duration) []Marker {
+	clamp := func(in []Marker) []Marker {
+		out := in[:0]
+		for _, m := range in {
+			if valid(m, played) {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	if len(remote) == 0 || ref <= 0 || s.o.Aligner == nil {
+		return clamp(remote)
+	}
+	if diff := ref - played; diff < 1500*time.Millisecond && diff > -1500*time.Millisecond {
+		return clamp(remote)
+	}
+	timeout := s.o.AlignTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req := core.AlignRequest{Key: key, FromDuration: ref, ToDuration: played}
+	shifted := make([]Marker, 0, len(remote))
+	for _, m := range remote {
+		start, ok := s.o.Aligner.AlignTime(ctx, req, time.Duration(m.StartMS)*time.Millisecond)
+		if !ok {
+			return clamp(remote)
+		}
+		end := played // a marker running to the reference tail runs to ours
+		if m.EndMS < ref.Milliseconds()-500 {
+			mapped, ok := s.o.Aligner.AlignTime(ctx, req, time.Duration(m.EndMS)*time.Millisecond)
+			if !ok {
+				return clamp(remote)
+			}
+			end = mapped
+		}
+		nm := Marker{Type: m.Type, StartMS: start.Milliseconds(), EndMS: end.Milliseconds(),
+			Final: m.Type == "credits" && end >= played-1500*time.Millisecond, Source: m.Source + "+aligned"}
+		if valid(nm, played) {
+			shifted = append(shifted, nm)
+		}
+	}
+	if len(shifted) == 0 {
+		return clamp(remote)
+	}
+	return shifted
 }
