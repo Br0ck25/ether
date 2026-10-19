@@ -98,6 +98,7 @@ func liveRelayInfo(source core.MediaInfo, dec core.Decision) core.MediaInfo {
 			stream.Codec = dec.AudioCodec
 			stream.CodecString, stream.Profile, stream.ChannelLayout = "", "", ""
 			stream.Level, stream.BitrateKbps = 0, 0
+			stream.SampleRate = 48000 // matches the live audio encoder
 			if stream.Channels <= 0 {
 				stream.Channels = 2
 			}

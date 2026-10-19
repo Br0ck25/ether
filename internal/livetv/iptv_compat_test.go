@@ -46,7 +46,7 @@ func TestIPTVHLSChecksDecoderCompatibilityBeforePassthrough(t *testing.T) {
 			defer up.Close()
 			tc := &compatibilityTranscoder{info: core.MediaInfo{Container: "hls", Duration: time.Hour, BitrateKbps: 5000, Streams: []core.StreamInfo{
 				{Index: 3, Type: "video", Codec: tt.video, CodecString: "source-video", Width: 1280, Height: 720, FrameRate: 59.94},
-				{Index: 5, Type: "audio", Codec: tt.audio, CodecString: "source-audio", Channels: 2, Default: true, SampleRate: 48000},
+				{Index: 5, Type: "audio", Codec: tt.audio, CodecString: "source-audio", Channels: 2, Default: true, SampleRate: 44100},
 				{Index: 7, Type: "audio", Codec: "aac", Channels: 6},
 			}}}
 			s := testService(t, Options{HTTPClient: up.Client(), Transcoder: tc})
@@ -79,6 +79,9 @@ func TestIPTVHLSChecksDecoderCompatibilityBeforePassthrough(t *testing.T) {
 				media := snapshot.MediaInfo
 				if media.Duration != 0 || media.Container != "mpegts" || len(media.Streams) != 2 || media.Streams[0].Index != 0 || media.Streams[1].Index != 1 || media.Streams[0].Codec != "h264" || media.Streams[1].Codec != "aac" || media.Streams[1].Channels != 2 || media.Streams[1].CodecString != "" {
 					t.Fatalf("tune describes source rather than output: %+v", media)
+				}
+				if media.Streams[1].SampleRate != 48000 {
+					t.Fatalf("audio analysis retained source sample rate: %d", media.Streams[1].SampleRate)
 				}
 			}
 			if tc.info.Duration != time.Hour || tc.info.Streams[0].Index != 3 || tc.info.Streams[1].Codec != tt.audio {
