@@ -229,7 +229,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.cache.Protect(a.protectedReleases)
 
 	// plex.tv, users, certificates, LAN discovery.
-	if a.plextv, err = plextv.New(plextv.Options{Identity: plextv.ServerIdentity(cfg, a.opts.Version)}); err != nil {
+	if a.plextv, err = plextv.New(plextv.Options{Identity: plextv.ServerIdentity(cfg, "")}); err != nil {
 		return fmt.Errorf("plex.tv client: %w", err)
 	}
 	if a.users, err = auth.New(context.Background(), a.db, auth.Options{
@@ -255,7 +255,6 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	if a.registrar, err = plextv.NewRegistrar(plextv.RegistrarOptions{
 		Config:  a.cfg,
 		Client:  a.plextv,
-		Version: a.opts.Version,
 		Users:   a.users,
 		Certs:   a.certs,
 		Logger:  log.With("component", "registrar"),
