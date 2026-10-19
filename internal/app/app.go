@@ -123,6 +123,7 @@ type App struct {
 	invites           *invites.Service
 	safety            *safety.Service
 	cleanHome         *cleanHomeStatus
+	updates           *updateState
 	plexServer        *plex.Server
 	handler           http.Handler
 	closers           []func()
@@ -144,6 +145,9 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	}
 	a.log = slog.New(admin.TeeHandler(base.Handler(), a.logs))
 	slog.SetDefault(a.log)
+	if err := a.confirmUpdateStartup(); err != nil {
+		return nil, err
+	}
 
 	var err error
 	if a.cfg, err = config.Open(opts.DataDir); err != nil {
@@ -173,6 +177,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		a.Close()
 		return nil, err
 	}
+	a.initUpdates()
 	return a, nil
 }
 
@@ -464,6 +469,7 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() {
 		a.localmedia.Watch(ctx, time.Minute, func(err error) { a.log.Warn("local library scan", "err", err) })
 	})
+	background.start(func() { a.runUpdates(ctx, cancel) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)
@@ -499,7 +505,10 @@ func (a *App) Run(ctx context.Context) error {
 	_ = srv.Shutdown(shutdown)
 	a.registrar.Stop()
 	a.gdm.Stop()
-	return runErr
+	if runErr != nil {
+		return runErr
+	}
+	return a.runResult()
 }
 
 func (a *App) housekeeping(ctx context.Context) {

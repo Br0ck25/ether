@@ -217,7 +217,13 @@ function defaultConfig(): EtherConfig {
     trakt: { enabled: false, clientId: "", clientSecret: "" },
     openSubtitles: { enabled: false, apiKey: "", username: "", password: "" },
     llm: { enabled: true, baseUrl: "http://localhost:11434/v1", apiKey: "", model: "llama3" },
-    updates: { channel: "stable", autoUpdate: true, feedUrl: "" },
+    updates: {
+      channel: "stable",
+      autoUpdate: true,
+      feedUrl: "",
+      maintenanceStart: "03:00",
+      maintenanceEnd: "06:00",
+    },
     spike: { enabled: false, localFiles: null },
     setupComplete: true,
   };
@@ -1224,6 +1230,39 @@ export function createFakeServer(opts: FakeOptions = {}) {
     };
   }
 
+  let updateRequested = false;
+  let updateForced = false;
+  function updateStatus() {
+    return {
+      enabled: true,
+      current: "0.2.0",
+      available: {
+        version: "0.3.0",
+        kind: "binary",
+        notesUrl: "https://example.invalid/notes",
+        staged: true,
+      },
+      capability: "self-apply",
+      state: updateForced
+        ? "applying"
+        : updateRequested
+          ? "waiting-for-idle"
+          : "waiting-for-window",
+      autoUpdate: state.config.updates.autoUpdate,
+      requested: updateRequested,
+      force: updateForced,
+      lastCheck: new Date(Date.now() - 3600_000).toISOString(),
+      window: {
+        start: state.config.updates.maintenanceStart ?? "03:00",
+        end: state.config.updates.maintenanceEnd ?? "06:00",
+        open: false,
+      },
+      activeSessions: 1,
+      quietPeriodSeconds: 600,
+      confirming: false,
+    };
+  }
+
   // ---- Router ------------------------------------------------------------------------
 
   async function handle(method: string, url: URL, body: unknown): Promise<Response> {
@@ -1280,6 +1319,12 @@ export function createFakeServer(opts: FakeOptions = {}) {
           usedBytes: 0.8e12,
           cacheBudgetBytes: state.config.cache.budgetBytes,
         });
+      case "GET /updates":
+        return json(updateStatus());
+      case "POST /updates/apply":
+        updateRequested = true;
+        updateForced = Boolean((body as { force?: boolean } | null)?.force);
+        return json(updateStatus(), 202);
       case "GET /users":
         return json({ users: state.users });
       case "GET /logs": {

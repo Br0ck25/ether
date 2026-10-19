@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"fyne.io/systray"
@@ -37,8 +38,8 @@ type tray struct {
 	statusItem *systray.MenuItem
 	updateItem *systray.MenuItem
 	loginItem  *systray.MenuItem
+	mu         sync.Mutex
 	pendingUpd *updater.Update
-	pendingVer string
 }
 
 func newTray(a *app) *tray { return &tray{a: a} }
@@ -148,68 +149,52 @@ func (t *tray) refreshStatus() {
 	systray.SetTooltip(statusLine(st))
 }
 
-// updateLoop checks the feed at startup (after a short settle) and daily.
-// Prompt vs auto follows the owner's config: auto applies immediately,
-// prompt surfaces a clickable "Update to vX" menu item.
+// updateLoop checks the feed at startup (after a short settle) and daily,
+// surfacing a clickable "Update available" item. The tray never installs
+// the server binary; the server's update manager does that at a safe moment.
 func (t *tray) updateLoop() {
 	if t.a.updates == nil {
 		return
 	}
 	if uc, ok := t.a.updates.(*updater.Client); ok {
-		uc.Poll(t.ctx, 24*time.Hour, time.Minute, func(ctx context.Context, upd *updater.Update) {
-			t.offerUpdate(ctx, upd)
+		uc.Poll(t.ctx, 24*time.Hour, time.Minute, func(_ context.Context, upd *updater.Update) {
+			t.showUpdate(upd)
 		})
 		return
 	}
 	// Injected checker (tests): single startup check.
-	upd, _, err := t.a.checkUpdates(t.ctx, false)
-	if err == nil && upd != nil {
+	if upd, err := t.a.checkUpdates(t.ctx); err == nil && upd != nil {
 		t.showUpdate(upd)
 	}
 }
 
-func (t *tray) offerUpdate(ctx context.Context, upd *updater.Update) {
-	if updater.ShouldAutoApply(t.a.cfg) {
-		_, _, err := t.a.checkUpdates(ctx, true)
-		if err != nil {
-			t.a.log.Warn("tray: auto-update failed", "err", err)
-			t.showUpdate(upd)
-			return
-		}
-		t.updateItem.SetTitle("Updated to v" + upd.Version() + " — restarting…")
-		return
-	}
-	t.showUpdate(upd)
-}
-
 func (t *tray) showUpdate(upd *updater.Update) {
+	t.mu.Lock()
 	t.pendingUpd = upd
-	t.pendingVer = upd.Version()
-	t.updateItem.SetTitle("Update to v" + upd.Version() + "…")
+	t.mu.Unlock()
+	t.updateItem.SetTitle("Update available: v" + upd.Version() + "…")
 	t.updateItem.Enable()
 }
 
 func (t *tray) onUpdateClicked() {
 	ctx, cancel := context.WithTimeout(t.ctx, 10*time.Minute)
 	defer cancel()
-	if t.pendingUpd != nil {
-		// Owner clicked the offer: that's the prompt's "yes".
-		t.updateItem.SetTitle("Updating to v" + t.pendingVer + "…")
-		t.updateItem.Disable()
-		_, applied, err := t.a.checkUpdates(ctx, true)
-		t.pendingUpd = nil
-		if err != nil {
-			t.a.log.Warn("tray: update failed", "err", err)
-			t.updateItem.SetTitle("Update failed — check for updates")
-		} else {
-			_ = applied
-			t.updateItem.SetTitle("Check for updates")
+	t.mu.Lock()
+	upd := t.pendingUpd
+	t.mu.Unlock()
+	if upd != nil {
+		// Installer download (macOS) or the web UI's update page.
+		launched, err := t.a.openUpdate(ctx, upd)
+		switch {
+		case err != nil:
+			t.a.log.Warn("tray: open update", "err", err)
+			t.updateItem.SetTitle("Update v" + upd.Version() + " — open Ether to install")
+		case launched:
+			t.updateItem.SetTitle("Installer for v" + upd.Version() + " opened")
 		}
-		t.updateItem.Enable()
-		t.refreshStatus()
 		return
 	}
-	upd, _, err := t.a.checkUpdates(ctx, false)
+	upd, err := t.a.checkUpdates(ctx)
 	switch {
 	case err != nil:
 		t.a.log.Warn("tray: update check failed", "err", err)

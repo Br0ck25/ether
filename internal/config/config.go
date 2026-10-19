@@ -192,6 +192,11 @@ type Updates struct {
 	Channel    string `json:"channel"` // "stable", "beta"
 	AutoUpdate bool   `json:"autoUpdate"`
 	FeedURL    string `json:"feedUrl"`
+	// MaintenanceStart/End bound the local-time window ("HH:MM") in which
+	// a downloaded update may be installed automatically. The window may
+	// wrap midnight; equal values mean "any time".
+	MaintenanceStart string `json:"maintenanceStart"`
+	MaintenanceEnd   string `json:"maintenanceEnd"`
 }
 
 // Spike serves local files as a library so the Plex front end can be

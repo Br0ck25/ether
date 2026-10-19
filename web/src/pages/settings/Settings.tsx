@@ -45,6 +45,7 @@ import {
   PlexStatus,
   QualitySection,
   TranscodeStatus,
+  UpdatesStatus,
   UsenetSection,
   UsersSection,
   type RunTest,
@@ -483,6 +484,7 @@ export default function Settings() {
           />
         ) : null}
         {section.id === "transcode" ? <TranscodeStatus status={sections.hwaccel} /> : null}
+        {section.id === "updates" ? <UpdatesStatus /> : null}
         <EditPanel
           key={section.id}
           title={section.label}
