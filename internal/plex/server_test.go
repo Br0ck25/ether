@@ -686,3 +686,24 @@ func TestTerminate(t *testing.T) {
 		t.Fatalf("termination: %s", rec.Body.String())
 	}
 }
+
+// dash.js and hls.js fetch segments from the manifest's relative URLs with
+// no token; a live session id authorizes them, anything else stays 401.
+func TestTranscodeSessionPathsAuthorizedBySession(t *testing.T) {
+	f := newFixture()
+	if _, err := f.trans.StartHLS(context.Background(), core.HLSRequest{SessionID: "live-sess"}); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{
+		"/video/:/transcode/universal/session/live-sess/0/header":  true,
+		"/video/:/transcode/universal/session/live-sess/1/12.m4s":  true,
+		"/video/:/transcode/universal/session/other-sess/0/header": false,
+		"/library/sections": false,
+	} {
+		rec := httptest.NewRecorder()
+		f.srv.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if got := rec.Code != http.StatusUnauthorized; got != want {
+			t.Errorf("%s: status %d, authorized=%v want %v", path, rec.Code, got, want)
+		}
+	}
+}
