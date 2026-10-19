@@ -2,6 +2,7 @@ package stream
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/braedonsaunders/ether/internal/archive"
 	"github.com/braedonsaunders/ether/internal/nzb"
@@ -30,6 +31,10 @@ var (
 	// ErrIncomplete: the NZB itself lacks segments or volumes of the main
 	// file. It wraps core.ErrArticleMissing (see incompleteError).
 	ErrIncomplete = errors.New("stream: release is incomplete")
+	// ErrPar2Mismatch: the content does not match the checksums in the
+	// release's own PAR2 index (a wrong or damaged upload that yEnc CRCs
+	// cannot catch). It wraps ErrCorrupt, so it is a rejection.
+	ErrPar2Mismatch = fmt.Errorf("stream: content does not match the release's par2 checksums: %w", archive.ErrCorrupt)
 	// ErrClosed is returned by ReadAt after Close.
 	ErrClosed = errors.New("stream: source closed")
 )

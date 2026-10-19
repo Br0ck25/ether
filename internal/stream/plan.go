@@ -101,6 +101,10 @@ type plan struct {
 	pending  map[int]chan struct{}
 	exactErr error
 	exact    chan struct{} // non-nil while an exact rebuild runs
+
+	// PAR2 verification verdict of the first volume (see verifyPar2).
+	par2Done bool
+	par2Err  error
 }
 
 func newPlan(rel *release, kind planKind, name string, size int64, vols []*postedFile, info []volInfo, verified []bool) *plan {
