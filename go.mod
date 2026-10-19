@@ -5,6 +5,7 @@ go 1.27.2
 require (
 	fyne.io/systray v1.12.2
 	github.com/kardianos/service v1.3.0
+	golang.org/x/text v0.42.0
 	modernc.org/sqlite v1.60.1
 )
 
