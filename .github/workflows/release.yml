@@ -75,6 +75,8 @@ jobs:
   macos:
     name: macOS Ether.app + DMG
     runs-on: macos-latest
+    env:
+      HAS_MACOS_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
     needs: goreleaser
     steps:
       - uses: actions/checkout@v4
@@ -82,7 +84,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Import Developer ID certificate
-        if: ${{ secrets.MACOS_CERT_P12 != '' }}
+        if: env.HAS_MACOS_CERT == 'true'
         env:
           CERT_B64: ${{ secrets.MACOS_CERT_P12 }}
           CERT_PW: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -119,6 +121,8 @@ jobs:
   windows:
     name: Windows installer (NSIS)
     runs-on: windows-latest
+    env:
+      HAS_WINDOWS_CERT: ${{ secrets.WINDOWS_CERT_PFX_B64 != '' }}
     needs: goreleaser
     steps:
       - uses: actions/checkout@v4
@@ -128,7 +132,7 @@ jobs:
       - name: Install NSIS
         run: choco install nsis -y --no-progress
       - name: Decode code-signing cert
-        if: ${{ secrets.WINDOWS_CERT_PFX_B64 != '' }}
+        if: env.HAS_WINDOWS_CERT == 'true'
         shell: pwsh
         env:
           CERT_B64: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
@@ -161,6 +165,8 @@ jobs:
   update-feed:
     name: Signed update manifests + publish
     runs-on: ubuntu-latest
+    env:
+      HAS_UPDATE_KEY: ${{ secrets.ETHER_UPDATE_PRIVATE_KEY != '' }}
     needs: [goreleaser, macos, windows]
     steps:
       - uses: actions/checkout@v4
@@ -172,7 +178,7 @@ jobs:
         with:
           path: artifacts
       - name: Build + sign channel manifest
-        if: ${{ secrets.ETHER_UPDATE_PRIVATE_KEY != '' }}
+        if: env.HAS_UPDATE_KEY == 'true'
         env:
           ETHER_UPDATE_PRIVATE_KEY: ${{ secrets.ETHER_UPDATE_PRIVATE_KEY }}
           ETHER_UPDATE_PUBLIC_KEY: ${{ secrets.ETHER_UPDATE_PUBLIC_KEY }}
