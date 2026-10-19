@@ -1,9 +1,10 @@
 # Live time-to-playable benchmark
 
 Measured 2026-10-19 against NZBgeek and the owner's configured Usenet providers
-with `cmd/ether-livebench`. Credentials were read via `-ref` and were not
-printed or stored in this repository. The persistent benchmark directory was
-reused with `-data`. Budget counters in that directory recorded 3 indexer API
+with `cmd/ether-livebench`. The credential file was supplied via `-ref` and is
+not stored in this repository; protocol tracing redacts AUTHINFO credentials.
+The persistent benchmark directory was reused with `-data`. Budget counters
+in that directory recorded 3 indexer API
 hits and 16 NZB grabs at the end of measurement. One run used `-fresh-search`
 to refresh stale Matrix search results; subsequent runs reused cached results
 and saved NZBs. No DOGnzb requests were made.
