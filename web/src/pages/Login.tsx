@@ -66,8 +66,8 @@ export default function Login({ boot, onReady }: { boot: Bootstrap; onReady: () 
       <Card className="reveal w-full max-w-sm p-7 shadow-lg">
         <div className="mb-6 flex flex-col items-center text-center">
           <EtherLogo className="w-48" />
-          <h1 className="mt-4 text-xl font-semibold text-fg">{boot.serverName || "Ether"}</h1>
-          <p className="mt-1 text-sm text-fg-muted">
+          <h1 className="sr-only">{boot.serverName || "Ether"}</h1>
+          <p className="mt-4 text-sm text-fg-muted">
             Sign in with the Plex account that owns this server.
           </p>
         </div>
