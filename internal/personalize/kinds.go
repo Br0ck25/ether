@@ -58,7 +58,7 @@ type kindInfo struct {
 }
 
 var kinds = []kindInfo{
-	{kind: KindContinue, title: "Continue Watching", description: "Titles the viewer is part-way through (built by Plex; the engine only ranks it).",
+	{kind: KindContinue, title: "Continue Watching", description: "Titles the viewer is part-way through (built by Plex; the engine only ranks it — it can be pinned or buried, not hidden).",
 		prior: 0.30, slug: "continue", context: "continue", source: core.RowSourcePlex},
 	{kind: KindUpNext, title: "Up Next", description: "The next episode of shows the viewer recently finished an episode of.",
 		prior: 0.22, slug: "ondeck", context: "ondeck"},

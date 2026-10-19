@@ -71,6 +71,11 @@ func (a *assembly) run() []core.HomeRow {
 		}
 		rr := &rankedRow{c: c, items: items, hubID: a.hubID(c)}
 		rr.d = plan.decide(rr.hubID, c.kind)
+		if c.source == core.RowSourcePlex {
+			// The front end always shows its own rows; layout rules can
+			// move them (pin, bury) but not remove them.
+			rr.d.hidden = false
+		}
 		rr.score, rr.strength = a.rowScore(c, items)
 		if rr.d.boost {
 			rr.score *= 1.5

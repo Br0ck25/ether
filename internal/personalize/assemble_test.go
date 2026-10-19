@@ -361,3 +361,28 @@ func TestAssemblyContextShapesRows(t *testing.T) {
 		}
 	}
 }
+
+func TestLayoutCannotHidePlexRows(t *testing.T) {
+	cat := newFakeCatalog(testNow)
+	var keys []core.RatingKey
+	for j := 0; j < 6; j++ {
+		keys = append(keys, movieKey(2, j))
+	}
+	cw := testRow(KindContinue, "continue", nil)
+	cw.keepOrder, cw.homeOnly, cw.minItems, cw.source = true, true, 0, core.RowSourcePlex
+	m := emptyModel(cw, testRow(KindTrending, "trending", items(cat, keys...)))
+	rows := run(m, func(a *assembly) {
+		a.cw = items(cat, movieKey(1, 1))
+		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindContinue, Action: "hide"}}}}
+	})
+	if r := rowByKind(rows, KindContinue); r == nil || r.Hidden {
+		t.Fatalf("Continue Watching hidden: %+v", r)
+	}
+	rows = run(m, func(a *assembly) {
+		a.cw = items(cat, movieKey(1, 1))
+		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindContinue, Action: "bury"}}}}
+	})
+	if rows[len(rows)-1].Kind != KindContinue {
+		t.Fatalf("buried Continue Watching not last: %v", kindsOf(rows))
+	}
+}
