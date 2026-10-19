@@ -12,6 +12,10 @@ import (
 type HLSRequest struct {
 	SessionID   string
 	InputURL    string // ffmpeg input; Ether serves sources on loopback HTTP with range support
+	// InputHeaders are optional HTTP headers ffmpeg must send when reading
+	// InputURL (e.g. for resolved trailer URLs). Transcoders that cannot
+	// send headers ignore them; most resolved URLs need none (additive).
+	InputHeaders map[string]string
 	Info        MediaInfo
 	Decision    Decision
 	StartOffset time.Duration
