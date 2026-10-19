@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/ether-media/ether/internal/core"
 	"github.com/ether-media/ether/internal/plex/model"
 )
 
@@ -154,5 +155,19 @@ func TestRemoteBitrateCap(t *testing.T) {
 	}
 	if !slices.Contains(c.VideoCodecs, "hevc") {
 		t.Error("caps lost")
+	}
+}
+
+func TestPickAudioPrefersLanguageOverDefaultFlag(t *testing.T) {
+	info := core.MediaInfo{Streams: []core.StreamInfo{
+		{Index: 0, Type: "video", Codec: "h264"},
+		{Index: 1, Type: "audio", Codec: "eac3", Language: "tur", Default: true, Channels: 2},
+		{Index: 2, Type: "audio", Codec: "eac3", Language: "eng", Channels: 6},
+	}}
+	if got := pickAudio(info, []string{"en"}); got != 2 {
+		t.Fatalf("pickAudio(en) = %d, want the English track", got)
+	}
+	if got := pickAudio(info, nil); got != 1 {
+		t.Fatalf("pickAudio(no prefs) = %d, want the default-flagged track", got)
 	}
 }

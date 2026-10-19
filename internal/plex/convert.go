@@ -513,7 +513,7 @@ func (s *Server) buildStreams(key core.RatingKey, info core.MediaInfo, sel selec
 	// Default audio: explicit selection, then preferred language, then the
 	// default flag, then the first audio stream.
 	if audioSelected < 0 {
-		audioSelected = pickAudio(info, u)
+		audioSelected = pickAudio(info, s.audioLanguages(u))
 	}
 	subSelected := -1
 	if sel.subtitleSet {
@@ -600,13 +600,14 @@ func extendedTitle(title, display string) string {
 	return title + " (" + display + ")"
 }
 
-func pickAudio(info core.MediaInfo, u *core.User) int {
-	if u != nil {
-		for _, lang := range u.AudioLanguages {
-			for i, st := range info.Streams {
-				if st.Type == "audio" && sameLanguage(st.Language, lang) {
-					return i
-				}
+// pickAudio chooses the audio stream for languages in preference order
+// (see Server.audioLanguages), then the stream flagged default, then the
+// first. Multi-language releases often flag a dub as default.
+func pickAudio(info core.MediaInfo, langs []string) int {
+	for _, lang := range langs {
+		for i, st := range info.Streams {
+			if st.Type == "audio" && sameLanguage(st.Language, lang) {
+				return i
 			}
 		}
 	}
@@ -967,4 +968,19 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 			items[i].ViewCount = max(items[i].ViewCount, 1)
 		}
 	}
+}
+
+// audioLanguages is the user's audio preference, falling back to the
+// server's catalogue language (e.g. "en-US" -> "en").
+func (s *Server) audioLanguages(u *core.User) []string {
+	var langs []string
+	if u != nil {
+		langs = append(langs, u.AudioLanguages...)
+	}
+	if s.d.Config != nil {
+		if l := s.d.Config().Catalog.Language; l != "" {
+			langs = append(langs, strings.SplitN(l, "-", 2)[0])
+		}
+	}
+	return langs
 }

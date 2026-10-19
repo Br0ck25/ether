@@ -166,10 +166,10 @@ func sanitizeSessionID(s string) string {
 }
 
 // applySelections maps stream positions to DecideOptions stream indexes.
-func applySelections(p *playRequest, info core.MediaInfo, u *core.User) {
+func applySelections(p *playRequest, info core.MediaInfo, langs []string) {
 	audio := p.audioSel
 	if audio < 0 || audio >= len(info.Streams) {
-		audio = pickAudio(info, u)
+		audio = pickAudio(info, langs)
 	}
 	if audio >= 0 && audio < len(info.Streams) && info.Streams[audio].Type == "audio" {
 		p.opts.AudioStream = info.Streams[audio].Index
@@ -199,7 +199,7 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if err != nil {
 		return t, nil, core.Decision{}, err
 	}
-	applySelections(p, ps.Info, pr.User)
+	applySelections(p, ps.Info, s.audioLanguages(pr.User))
 	dec := core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container, AudioStream: p.opts.AudioStream, SubtitleStream: p.opts.SubtitleStream}
 	if s.d.Transcoder != nil {
 		dec = s.d.Transcoder.Decide(ps.Info, p.caps, p.opts)
