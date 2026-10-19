@@ -483,3 +483,42 @@ func TestStartHLSRedecidesForMDEStream(t *testing.T) {
 		t.Fatalf("start.m3u8 should re-decide without direct play: %+v", e.decision)
 	}
 }
+
+// Usenet decisions prefer a remux; local files retain the native MDE path.
+func TestMDEOnDemandPrefersCopyRemux(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		t.Run(fmt.Sprint("local=", local), func(t *testing.T) {
+			f := newFixture()
+			defer f.srv.Close()
+			user := &core.User{ID: 1, IsOwner: true}
+			caps := core.ClientCaps{ClientID: "remux-client"}
+			ps, err := f.playback.Prepare(context.Background(), user, fightClub.Key, caps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id := "usenet-release"
+			if local {
+				id = "local:" + fightClub.Key.String()
+			}
+			ps.Resolution = &core.Resolution{Release: core.Release{ID: id}}
+			pr := &Request{User: user, ClientID: caps.ClientID}
+			p := playRequest{key: fightClub.Key, caps: caps, mde: true, sessionID: "copy-remux", protocol: "hls", opts: core.DecideOptions{DirectPlay: true, DirectStream: true}}
+			title, session, dec, err := f.srv.prepare(context.Background(), pr, &p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := core.DecisionRemux
+			if local {
+				want = core.DecisionDirectPlay
+			}
+			if dec.Kind != want || !dec.VideoCopy || !dec.AudioCopy {
+				t.Fatalf("decision: %+v", dec)
+			}
+			mc := f.srv.decisionContainer(context.Background(), pr, title, session, dec, p)
+			part := mc.Metadata[0].Media[0].Part[0]
+			if !local && part.Decision == "directplay" {
+				t.Fatal("MDE response overrides safe remux")
+			}
+		})
+	}
+}

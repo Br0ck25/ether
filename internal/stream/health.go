@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -36,16 +35,6 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (bool, error) {
 		return false, err
 	}
 	defer e.release(rel)
-	if warmer, ok := e.fetcher.(interface {
-		Warm(context.Context, int) error
-	}); ok {
-		start := time.Now()
-		err := warmer.Warm(ctx, 4)
-		trace.Warm = time.Since(start)
-		if err != nil {
-			e.log.Debug("stream health warm failed; continuing with demand dials", "err", err)
-		}
-	}
 
 	b := &builder{e: e, rel: rel, prio: core.PriorityLive}
 	cands := b.candidates(rel.files)
@@ -74,13 +63,53 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (bool, error) {
 		statCh <- statResult{}
 	}
 
-	planStart := time.Now()
-	p, err := rel.ensurePlan(ctx, core.PriorityLive, "")
-	trace.Plan = time.Since(planStart)
-	if err != nil {
-		return false, err
+	type planned struct {
+		p       *plan
+		err     error
+		elapsed time.Duration
 	}
-	res := <-statCh
+	planCh := make(chan planned, 1)
+	go func() {
+		started := time.Now()
+		p, err := rel.ensurePlan(sctx, core.PriorityLive, "")
+		planCh <- planned{p, err, time.Since(started)}
+	}()
+	var ready planned
+	var res statResult
+	gotStats, gotPlan := false, false
+	defer func() {
+		cancelStats()
+		if !gotStats {
+			<-statCh
+		}
+		if !gotPlan {
+			<-planCh
+		}
+	}()
+	for !gotStats || !gotPlan {
+		select {
+		case <-ctx.Done():
+			cancelStats()
+			return false, ctx.Err()
+		case res = <-statCh:
+			gotStats = true
+			trace.STAT, trace.Samples = res.duration, res.samples
+			if res.err != nil || res.missing > 0 {
+				cancelStats()
+				if res.err != nil {
+					return false, res.err
+				}
+				return false, fmt.Errorf("stream: sampled BODY or STAT unavailable: %w", core.ErrArticleMissing)
+			}
+		case ready = <-planCh:
+			gotPlan = true
+			trace.Plan = ready.elapsed
+			if ready.err != nil {
+				return false, ready.err
+			}
+		}
+	}
+	p := ready.p
 	if !sameFiles(res.files, p.vols) {
 		started := time.Now()
 		m, t, err := e.statSample(ctx, p.vols)
@@ -160,68 +189,78 @@ type slotRef struct {
 // statSample STATs the health sample of files in parallel.
 func (e *Engine) statSample(ctx context.Context, files []*postedFile) (missing, total int, err error) {
 	refs := healthSample(files, e.opts.HealthSamples)
-	if many, ok := e.fetcher.(interface {
-		StatMany(context.Context, []string) (map[string]bool, error)
-	}); ok {
-		ids := make([]string, 0, len(refs))
-		for _, r := range refs {
-			id := r.pf.msgID(r.slot)
-			if id == "" {
-				missing++
-			} else {
-				ids = append(ids, id)
-			}
-		}
-		got, err := many.StatMany(ctx, ids)
-		if err != nil {
-			return missing, len(refs), err
-		}
-		for _, id := range ids {
-			if !got[id] {
-				missing++
-			}
-		}
-		return missing, len(refs), nil
-	}
-	var miss atomic.Int64
-	var mu sync.Mutex
-	var first error
-	sem := make(chan struct{}, e.opts.HealthParallel)
+	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
-	for _, r := range refs {
-		id := r.pf.msgID(r.slot)
-		if id == "" {
-			miss.Add(1)
-			continue
-		}
-		select {
-		case sem <- struct{}{}:
-		case <-ctx.Done():
-			wg.Wait()
-			return 0, len(refs), ctx.Err()
-		}
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			ok, err := e.fetcher.Stat(ctx, id)
-			switch {
-			case err != nil && isMissing(err):
-				miss.Add(1)
-			case err != nil:
-				mu.Lock()
-				if first == nil {
-					first = fmt.Errorf("stream: stat <%s>: %w", id, err)
-				}
-				mu.Unlock()
-			case !ok:
-				miss.Add(1)
+	defer wg.Wait()
+	defer cancel()
+	type result struct {
+		missing bool
+		err     error
+	}
+	results := make(chan result, len(refs))
+	type job struct {
+		ref  slotRef
+		body bool
+	}
+	jobs := make(chan job, len(refs))
+	for _, wantBody := range []bool{true, false} {
+		for i, ref := range refs {
+			body := len(refs) >= 4 && (i == len(refs)/3 || i == len(refs)*2/3)
+			if body == wantBody {
+				jobs <- job{ref, body}
 			}
-		}(id)
+		}
 	}
-	wg.Wait()
-	if first != nil {
-		return int(miss.Load()), len(refs), first
+	close(jobs)
+	check := func(j job) result {
+		ref := j.ref
+		id := ref.pf.msgID(ref.slot)
+		if id == "" {
+			return result{missing: true}
+		}
+		if j.body {
+			var err error
+			if checker, ok := e.fetcher.(interface {
+				CheckBody(context.Context, string, []string, core.Priority) error
+			}); ok {
+				err = checker.CheckBody(ctx, id, ref.pf.groups, core.PriorityLive)
+			} else {
+				_, err = e.fetcher.Body(ctx, id, ref.pf.groups, core.PriorityLive)
+			}
+			return result{missing: isMissing(err), err: err}
+		}
+		ok, err := e.fetcher.Stat(ctx, id)
+		return result{missing: (!ok && err == nil) || isMissing(err), err: err}
 	}
-	return int(miss.Load()), len(refs), nil
+	for i := 0; i < min(e.opts.HealthParallel, len(refs)); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case j, ok := <-jobs:
+					if !ok {
+						return
+					}
+					results <- check(j)
+				}
+			}
+		}()
+	}
+	for range refs {
+		select {
+		case <-ctx.Done():
+			return 0, len(refs), ctx.Err()
+		case r := <-results:
+			if r.missing {
+				return 1, len(refs), nil
+			}
+			if r.err != nil {
+				return 0, len(refs), r.err
+			}
+		}
+	}
+	return 0, len(refs), nil
 }

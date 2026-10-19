@@ -2,28 +2,32 @@ package playback
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-const preResolveTTL = time.Minute
+const preResolveTTL = 10 * time.Minute
 
 type warmEntry struct {
-	caps    string
+	profile string
 	done    chan struct{}
 	ready   sync.Once
 	expires time.Time
 	res     *core.Resolution
+	probe   *probeCache
 }
 
-func capsKey(c core.ClientCaps) string { b, _ := json.Marshal(c); return string(b) }
+type probeCache struct {
+	releaseID string
+	info      core.MediaInfo
+	points    []IndexPoint
+}
 
 // PreResolve schedules detail-page warming under a separate speculative budget:
 // two concurrent titles server-wide, one per user, six requests/minute/user,
-// 8 seconds each, and at most 2 MiB at background priority. Request cancellation
+// 8 seconds each, bounded probing/index reads, and a 2 MiB background prefetch. Request cancellation
 // does not cancel a detail-page warmup; manager shutdown always does. It neither
 // reserves a live stream nor writes resume/history. False means skipped.
 func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps) bool {
@@ -47,15 +51,44 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 			delete(m.warm, ident)
 		}
 	}
-	if m.warm[id] != nil || len(m.warm) >= 2 {
+	if m.warm[id] != nil {
 		m.mu.Unlock()
 		return false
 	}
-	for ident := range m.warm {
+	active := 0
+	for ident, e := range m.warm {
+		select {
+		case <-e.done:
+			continue
+		default:
+		}
+		active++
 		if ident.userID == user.ID {
 			m.mu.Unlock()
 			return false
 		}
+	}
+	if active >= 2 {
+		m.mu.Unlock()
+		return false
+	}
+	if len(m.warm) >= 32 {
+		var oldest identity
+		var expiry time.Time
+		for ident, e := range m.warm {
+			select {
+			case <-e.done:
+				if expiry.IsZero() || e.expires.Before(expiry) {
+					oldest, expiry = ident, e.expires
+				}
+			default:
+			}
+		}
+		if expiry.IsZero() {
+			m.mu.Unlock()
+			return false
+		}
+		delete(m.warm, oldest)
 	}
 	// Active playback always takes priority over speculation.
 	if len(m.sessions) > 0 || m.pendingN > 0 {
@@ -74,14 +107,21 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 		return false
 	}
 	m.warmRequests[user.ID] = append(recent, now)
-	e := &warmEntry{caps: capsKey(caps), done: make(chan struct{}), expires: now.Add(preResolveTTL)}
+	e := &warmEntry{profile: m.deps.SelectProfile(caps, user).Name, done: make(chan struct{}), expires: now.Add(preResolveTTL)}
 	m.warm[id] = e
 	u := *user
 	m.wg.Add(1)
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
-		defer e.ready.Do(func() { close(e.done) })
+		defer func() {
+			m.mu.Lock()
+			if e.res == nil && m.warm[id] == e {
+				delete(m.warm, id)
+			}
+			m.mu.Unlock()
+			e.ready.Do(func() { close(e.done) })
+		}()
 		ctx, cancel := context.WithTimeout(m.ctx, 8*time.Second)
 		defer cancel()
 		title, err := m.deps.Catalog.Get(ctx, key)
@@ -96,10 +136,23 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 		if err != nil {
 			return
 		}
-		_ = src.Close()
+		session := newSession(randomID(16), id, &u, caps, title, e.profile, m.now())
+		generation, err := m.probeGeneration(ctx, session, res, src, func(size int64) core.MediaInfo {
+			info := EstimateInfo(title, caps, m.deps.SelectProfile(caps, &u))
+			info.Size = size
+			return info
+		})
+		if err != nil {
+			return
+		}
+		facts := &probeCache{releaseID: res.Release.ID, info: generation.info, points: generation.tmap.Points}
+		m.dropGeneration(generation)
+		if facts.info.Estimated {
+			facts = nil
+		}
 		// Publish before prefetch so a play request need not wait for background IO.
 		m.mu.Lock()
-		e.res = res
+		e.res, e.probe = res, facts
 		m.mu.Unlock()
 		e.ready.Do(func() { close(e.done) })
 		_ = m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, 0, 2<<20)
@@ -107,10 +160,10 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 	return true
 }
 
-func (m *Manager) takeWarmResolution(ctx context.Context, id identity, caps core.ClientCaps) *core.Resolution {
+func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile string) *warmEntry {
 	m.mu.Lock()
 	e := m.warm[id]
-	if e == nil || e.caps != capsKey(caps) || !m.now().Before(e.expires) {
+	if e == nil || e.profile != profile || !m.now().Before(e.expires) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -126,5 +179,5 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, caps core
 		return nil
 	}
 	delete(m.warm, id)
-	return e.res
+	return e
 }

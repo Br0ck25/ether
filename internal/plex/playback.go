@@ -226,11 +226,26 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 			return t, nil, core.Decision{}, fmt.Errorf("this client requires media conversion; install or configure FFmpeg")
 		}
 	}
+	// On-demand sources can change during failover. A copy-only remux gives
+	// MDE clients fresh container headers at the resumed timestamp.
+	if p.mde && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
+		dec.Kind = core.DecisionRemux
+		dec.VideoCopy, dec.AudioCopy = true, true
+		dec.Container = transcode.ContainerMPEGTS
+		if v := ps.Info.Video(); v != nil && (v.Codec == "hevc" || v.Codec == "av1" || v.Codec == "vp9") {
+			dec.Container = transcode.ContainerFMP4
+		}
+		dec.Reason = "Direct stream preserves playback across source changes."
+	}
 	s.transcodes.put(&transcodeEntry{
 		id: p.sessionID, playID: ps.ID, userID: pr.User.ID, clientID: pr.ClientID, key: p.key,
 		decision: dec, info: ps.Info, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
 	})
 	return t, ps, dec, nil
+}
+
+func onDemandSession(ps *core.PlaySession) bool {
+	return ps.Resolution != nil && !strings.HasPrefix(ps.Resolution.Release.ID, "local:")
 }
 
 // handleDecision is /video/:/transcode/universal/decision.
@@ -328,7 +343,7 @@ func (s *Server) decisionContainer(ctx context.Context, pr *Request, t *core.Tit
 	// engine decides: PMS answers with the source media as direct play and
 	// only an mdeDecisionCode. Ether's own decision is kept for start.m3u8
 	// in case the client then asks for a stream.
-	mdeDirect := p.mde && p.opts.DirectPlay && len(p.opts.AudioFilters) == 0
+	mdeDirect := p.mde && p.opts.DirectPlay && len(p.opts.AudioFilters) == 0 && !(onDemandSession(ps) && p.opts.DirectStream)
 	shown := dec
 	if mdeDirect {
 		shown = core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container}

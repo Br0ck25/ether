@@ -720,7 +720,7 @@ func TestHotReload(t *testing.T) {
 func TestIdleTimeoutAndKeepAlive(t *testing.T) {
 	s := nntptest.Start(t, nntptest.Options{})
 	addSeg(t, s, "a@x", []byte("a"))
-	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 1)}, Options{IdleTimeout: 400 * time.Millisecond, KeepAlive: 60 * time.Millisecond})
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 1)}, Options{MinIdle: -1, IdleTimeout: 400 * time.Millisecond, KeepAlive: 60 * time.Millisecond})
 	if _, err := f.Body(context.Background(), "a@x", nil, core.PriorityLive); err != nil {
 		t.Fatal(err)
 	}
@@ -1040,5 +1040,70 @@ func TestStatManyKeysByCallerID(t *testing.T) {
 	}
 	if _, ok := got["gone@x"]; !ok {
 		t.Fatal("missing ids must be reported as false, not absent")
+	}
+}
+
+func TestPrimaryIdleFloorSurvivesTimeoutWithoutRedial(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, s, "floor@x", []byte("warm"))
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("primary", 4)}, Options{MinIdle: 2, IdleTimeout: 80 * time.Millisecond, KeepAlive: 20 * time.Millisecond})
+	if err := f.Warm(context.Background(), 4); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(240 * time.Millisecond)
+	st := statsFor(f, "primary")
+	if st.LiveConnections != 2 {
+		t.Fatalf("warm floor: %+v", st)
+	}
+	f.pools[0].mu.Lock()
+	for _, c := range f.pools[0].idle {
+		if time.Since(c.used) > 100*time.Millisecond {
+			t.Errorf("floor connection not kept alive: %v", time.Since(c.used))
+		}
+	}
+	f.pools[0].mu.Unlock()
+	dials := st.Dials
+	if _, err := f.Body(context.Background(), "floor@x", nil, core.PriorityLive); err != nil {
+		t.Fatal(err)
+	}
+	if statsFor(f, "primary").Dials != dials {
+		t.Fatal("request redialled the warm floor")
+	}
+	if s.Stats().Commands["DATE"] == 0 {
+		t.Fatal("warm connections were not pinged")
+	}
+}
+
+func TestTinyBodyCheckBackfillsWhenStatClaimsTakenDownArticleExists(t *testing.T) {
+	a := nntptest.Start(t, nntptest.Options{})
+	b := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, a, "body@x", bytes.Repeat([]byte("a"), 1<<20))
+	addSeg(t, b, "body@x", bytes.Repeat([]byte("b"), 1<<20))
+	a.SetFault(func(cmd, arg string) nntptest.Fault {
+		if cmd == "BODY" {
+			return nntptest.Fault{Code: 451, Text: "taken down"}
+		}
+		return nntptest.Fault{}
+	})
+	pa, pb := a.Provider("p", 2), b.Provider("b", 2)
+	pb.Backfill = true
+	f := newFetcher(t, []config.UsenetProvider{pa, pb}, Options{})
+	if ok, err := f.Stat(context.Background(), "body@x"); err != nil || !ok {
+		t.Fatalf("STAT fixture: %v %v", ok, err)
+	}
+	if err := f.CheckBody(context.Background(), "body@x", nil, core.PriorityLive); err != nil {
+		t.Fatal(err)
+	}
+	if statsFor(f, "b").Bytes > 2*readBufferSize {
+		t.Fatal("BODY check downloaded the full article")
+	}
+	b.SetFault(func(cmd, arg string) nntptest.Fault {
+		if cmd == "BODY" {
+			return nntptest.Fault{Code: 451, Text: "taken down"}
+		}
+		return nntptest.Fault{}
+	})
+	if err := f.CheckBody(context.Background(), "body@x", nil, core.PriorityLive); !errors.Is(err, core.ErrArticleMissing) {
+		t.Fatalf("global BODY absence not detected: %v", err)
 	}
 }
