@@ -69,6 +69,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 	deps.Identity = identity
 	deps.Hooks = hooks
 	srv := plex.NewServer(deps)
+	a.plexServer = srv
 	a.closers = append(a.closers, func() { srv.Close() })
 	return srv, nil
 }

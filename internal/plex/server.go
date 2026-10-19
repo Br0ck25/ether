@@ -320,3 +320,18 @@ func (s *Server) goHook(name string, fn func()) {
 }
 
 func trimSlash(p string) string { return strings.TrimSuffix(p, "/") }
+
+// TranscodeFor returns the running transcode session fed by a playback
+// session. Transcode sessions are keyed by the client's session id, so
+// playback needs this to move ffmpeg to a new input on mid-stream failover.
+func (s *Server) TranscodeFor(playSessionID string) (core.HLSSession, bool) {
+	if s.d.Transcoder == nil {
+		return nil, false
+	}
+	for _, id := range s.transcodes.byPlayID(playSessionID) {
+		if hs, ok := s.d.Transcoder.Session(id); ok && hs != nil {
+			return hs, true
+		}
+	}
+	return nil, false
+}

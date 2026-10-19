@@ -44,7 +44,7 @@ func Open(ctx context.Context, dataDir string) (*sql.DB, error) {
 
 // OpenPath opens a database file; ":memory:" works for tests (single conn).
 func OpenPath(ctx context.Context, path string) (*sql.DB, error) {
-	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
 	if path == ":memory:" {
 		dsn = "file::memory:?_pragma=foreign_keys(1)"
 	}

@@ -28,6 +28,7 @@ import (
 	"github.com/ether-media/ether/internal/llm"
 	"github.com/ether-media/ether/internal/newznab"
 	"github.com/ether-media/ether/internal/playback"
+	"github.com/ether-media/ether/internal/plex"
 	"github.com/ether-media/ether/internal/plextv"
 	"github.com/ether-media/ether/internal/prefetch"
 	"github.com/ether-media/ether/internal/recommend"
@@ -87,8 +88,9 @@ type App struct {
 	registrar   *plextv.Registrar
 	gdm         *remote.GDMResponder
 
-	handler http.Handler
-	closers []func()
+	plexServer *plex.Server
+	handler    http.Handler
+	closers    []func()
 }
 
 // New builds every component. Nothing listens until Run.
@@ -219,8 +221,21 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
 		},
 		FetchNZB: a.indexers.FetchNZB,
-		DB:       a.db,
-		Logger:   log,
+		// Transcode sessions are keyed by the client's session id; the Plex
+		// front end (built below) maps playback sessions to them.
+		HLSLookup: func(id string) (core.HLSSession, bool) {
+			if a.plexServer != nil {
+				if hs, ok := a.plexServer.TranscodeFor(id); ok {
+					return hs, true
+				}
+			}
+			if a.transcoder != nil {
+				return a.transcoder.Session(id)
+			}
+			return nil, false
+		},
+		DB:     a.db,
+		Logger: log,
 	}, cfg, playback.Options{DataDir: dataDir})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)

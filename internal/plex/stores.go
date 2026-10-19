@@ -227,3 +227,16 @@ func (s *Server) facetTitle(ctx context.Context, t core.MediaType, name, value s
 	}
 	return value
 }
+
+// byPlayID returns the transcode session ids fed by a playback session.
+func (t *transcodeTable) byPlayID(playID string) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var ids []string
+	for id, e := range t.m {
+		if e.playID == playID && e.started {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
