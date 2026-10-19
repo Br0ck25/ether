@@ -388,12 +388,12 @@ func (b *builder) genHiddenGems() []*candRow {
 	}
 	var gems []core.Title
 	for _, t := range rated {
-		if t.Popularity <= popCap {
+		if t.Popularity <= popCap && float64(t.VoteCount) <= 5*priorVotes(t.Type) {
 			gems = append(gems, t)
 		}
 	}
 	items := b.rank(gems, func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
-		r := fmt.Sprintf("Rated %.1f by %s viewers but little known", t.Rating, votesPhrase(t.VoteCount))
+		r := fmt.Sprintf("Rated %.1f from %s votes · A lesser-known match", t.Rating, votesPhrase(t.VoteCount))
 		if why != "" {
 			r += " · " + why
 		}

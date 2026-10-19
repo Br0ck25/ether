@@ -6,6 +6,7 @@ node_modules/
 .DS_Store
 /.claude/worktrees/
 /.scratch/
+/.playwright-cli/
 
 # Keep research, plans, agent instructions and development notes local.
 *.md

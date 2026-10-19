@@ -521,7 +521,7 @@ func (s *Server) handleHubItems(w http.ResponseWriter, r *http.Request) {
 	}
 	count := countParam(r, 50)
 	if pr.HasPage && pr.Size > 0 {
-		count = min(pr.Size, 200)
+		count = min(max(50, pr.Start+pr.Size), 200)
 	}
 	mc := hubContainer()
 	sections := parseSectionList(q.Get("contentDirectoryID"))
@@ -535,7 +535,16 @@ func (s *Server) handleHubItems(w http.ResponseWriter, r *http.Request) {
 		}
 		mc.Metadata = s.renderHub(ctx, pr, hs, hc).Metadata
 	}
+	total := len(mc.Metadata)
+	start := min(max(pr.Start, 0), total)
+	end := total
+	if pr.HasPage && pr.Size > 0 {
+		end = min(start+pr.Size, total)
+	}
+	mc.Metadata = mc.Metadata[start:end]
 	mc.Size = len(mc.Metadata)
+	mc.SetPage(start, total)
+	s.log.Debug("shelf items rendered", "id", id, "user", pr.User.ID, "start", pr.Start, "requested", pr.Size, "size", mc.Size, "total", total)
 	s.write(w, r, mc)
 }
 
