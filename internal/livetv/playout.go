@@ -39,6 +39,7 @@ type session struct {
 	nextSequence    int64
 	discontinuities int64
 	relay           core.HLSSession
+	relayInfo       *core.MediaInfo
 	dash            core.DASHSession
 	mu              sync.Mutex
 	info            SessionInfo
@@ -187,6 +188,9 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 	}
 	ss.ready = true
 	info := ss.info
+	if ss.relayInfo != nil {
+		info.MediaInfo = ss.relayInfo
+	}
 	ss.mu.Unlock()
 	info.Channel.StreamURL = ""
 	return info, nil
@@ -236,6 +240,9 @@ func (s *Service) Session(ctx context.Context, id string, u *core.User) (Session
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	info := ss.info
+	if ss.relayInfo != nil {
+		info.MediaInfo = ss.relayInfo
+	}
 	info.Channel.StreamURL = ""
 	ps, err := s.programmes(ctx, ss.info.Channel, s.o.Now(), s.o.Now().Add(time.Second))
 	if err == nil && len(ps) > 0 {
@@ -559,9 +566,11 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 		return readErr
 	}
 	isHLS := strings.HasPrefix(strings.TrimSpace(string(prefix[:n])), "#EXTM3U") || strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "mpegurl")
+	var info *core.MediaInfo
 	if isHLS && !c.Transcode {
-		if s.o.Transcoder != nil && (strings.Contains(strings.ToLower(ss.caps.Product), "apple") || strings.EqualFold(ss.caps.Platform, "tvos") || strings.EqualFold(ss.caps.Platform, "ios")) {
-			info, err := s.o.Transcoder.Probe(ctx, c.StreamURL)
+		analyze := len(ss.caps.VideoCodecs) > 0 || len(ss.caps.AudioCodecs) > 0 || strings.Contains(strings.ToLower(ss.caps.Product), "apple") || strings.EqualFold(ss.caps.Platform, "tvos") || strings.EqualFold(ss.caps.Platform, "ios")
+		if s.o.Transcoder != nil && analyze {
+			info, err = s.o.Transcoder.Probe(ctx, c.StreamURL)
 			if err != nil {
 				return err
 			}
@@ -570,7 +579,14 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 			}
 			copy := *info
 			copy.Duration = 0
-			ss.info.MediaInfo = &copy
+			info = &copy
+			ss.info.MediaInfo = info
+			// A playlist is a transport, not evidence that its codecs are
+			// playable. MPEG-2/MP2 HLS needs conversion on Apple TV too.
+			dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectPlay: true, DirectStream: true, AudioStream: -1, SubtitleStream: -1})
+			if !dec.VideoCopy || !dec.AudioCopy {
+				return s.startIPTVRelay(ss, *info)
+			}
 		}
 		ss.resources["index.m3u8"] = c.StreamURL
 		return nil
@@ -578,19 +594,17 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 	if s.o.Transcoder == nil {
 		return core.ErrNotAvailable
 	}
-	info, err := s.o.Transcoder.Probe(ctx, c.StreamURL)
+	info, err = s.o.Transcoder.Probe(ctx, c.StreamURL)
 	if err != nil {
 		return err
 	}
-	info.Duration = 0
-	ss.info.MediaInfo = info
-	dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectStream: !c.Transcode, AudioStream: -1, SubtitleStream: -1})
-	if dec.Kind == core.DecisionDirectPlay {
-		dec.Kind = core.DecisionRemux
+	if info == nil {
+		return core.ErrNotAvailable
 	}
-	dec.Container = "mpegts"
-	ss.relay, err = s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-" + ss.info.ID, InputURL: c.StreamURL, Info: *info, Decision: dec, SegmentDuration: segmentDuration})
-	return err
+	copy := *info
+	copy.Duration = 0
+	ss.info.MediaInfo = &copy
+	return s.startIPTVRelay(ss, copy)
 }
 func (s *Service) serveRelayPlaylist(w http.ResponseWriter, r *http.Request, ss *session) {
 	rec := httptest.NewRecorder()
@@ -598,6 +612,23 @@ func (s *Service) serveRelayPlaylist(w http.ResponseWriter, r *http.Request, ss 
 	if rec.Code != 200 {
 		http.Error(w, "IPTV playout unavailable", rec.Code)
 		return
+	}
+	// An unknown-duration transcoder initially has no completed segments.
+	// Native players can reject that empty EVENT playlist immediately. Use
+	// the session's bounded segment wait before returning the first playlist.
+	if !relayPlaylistHasMedia(rec.Body.String()) {
+		ready := &relayReadinessWriter{header: make(http.Header)}
+		ss.relay.ServeSegment(ready, r, 0)
+		if ready.status >= 400 {
+			http.Error(w, "IPTV playout unavailable", ready.status)
+			return
+		}
+		rec = httptest.NewRecorder()
+		ss.relay.ServePlaylist(rec, r)
+		if rec.Code != 200 || !relayPlaylistHasMedia(rec.Body.String()) {
+			http.Error(w, "IPTV playout unavailable", http.StatusBadGateway)
+			return
+		}
 	}
 	lines := strings.Split(rec.Body.String(), "\n")
 	for i, line := range lines {

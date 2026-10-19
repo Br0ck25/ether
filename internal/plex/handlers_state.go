@@ -29,6 +29,9 @@ func msParam(v string) time.Duration {
 
 // handleTimeline is /:/timeline: playback progress from the client.
 func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
+	if s.handleLiveTimeline(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	q := r.URL.Query()

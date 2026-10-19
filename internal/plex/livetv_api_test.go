@@ -13,6 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
 func liveFixture(t *testing.T, transcoders ...core.Transcoder) (*fixture, *livetv.Service, livetv.Channel) {
@@ -195,6 +196,9 @@ func (t *liveProbeTranscoder) Probe(context.Context, string) (*core.MediaInfo, e
 	v := t.info
 	return &v, nil
 }
+func (t *liveProbeTranscoder) Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions) core.Decision {
+	return transcode.Decide(info, caps, opts, transcode.Policy{})
+}
 func TestAppleTVTuneReturnsAnalyzedMediaAndCanonicalUUID(t *testing.T) {
 	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
 	f, service, c := liveFixture(t, tc)
@@ -234,31 +238,54 @@ func TestAppleTVTuneReturnsAnalyzedMediaAndCanonicalUUID(t *testing.T) {
 	}
 }
 
-func TestModernAppleTVTuneIncludesActiveSubscription(t *testing.T) {
+func TestModernAppleTVTuneReturnsPlayableQueue(t *testing.T) {
 	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
 	f, _, channel := liveFixture(t, tc)
 	headers := map[string]string{"Accept": "application/json", "X-Plex-Product": "Plex for Apple TV", "X-Plex-Platform": "tvOS", "X-Plex-Version": "2026.20.0"}
 	tune := f.request(t, "POST", "/livetv/dvrs/1/channels/"+channel.ID+"/tune", headers)
-	if tune.Code != 200 || tune.Header().Get("X-Plex-Activity") == "" {
-		t.Fatalf("modern tune has no active bootstrap: %d %s", tune.Code, tune.Body.String())
+	if tune.Code != 200 || tune.Header().Get("X-Plex-Activity") != "" {
+		t.Fatalf("modern tune must complete synchronously: %d %s", tune.Code, tune.Body.String())
 	}
 	mc := decodeJSON(t, tune)
 	analysis := mc["Metadata"].([]any)[0].(map[string]any)
+	queueID, hasQueue := mc["playQueueID"].(float64)
+	if !hasQueue || queueID <= 0 || mc["identifier"] != "com.plexapp.plugins.library" || mc["playQueueTotalCount"] != float64(1) || analysis["type"] != "clip" || analysis["key"] == "" || analysis["playQueueItemID"] != mc["playQueueSelectedItemID"] {
+		t.Fatalf("modern player cannot load tune as a playable queue: %s", tune.Body.String())
+	}
 	id := analysis["Media"].([]any)[0].(map[string]any)["uuid"].(string)
-	sub := mc["MediaSubscription"].([]any)[0].(map[string]any)
-	op := sub["MediaGrabOperation"].(map[string]any)
-	if sub["key"] != id || op["mediaSubscriptionID"] != id || analysis["genuineMediaAnalysis"] != true {
-		t.Fatalf("analysis and subscription identify different live sessions: %s", tune.Body.String())
+	if mc["MediaSubscription"] != nil || analysis["genuineMediaAnalysis"] != true {
+		t.Fatalf("native tune contains asynchronous Web subscription data: %s", tune.Body.String())
 	}
-	for _, path := range []string{"/media/subscriptions/" + id, "/media/grabbers/operations/" + id} {
-		if r := f.request(t, "GET", path, headers); r.Code != 200 {
-			t.Fatalf("bootstrap fetch %s: %d %s", path, r.Code, r.Body.String())
-		}
+	path := analysis["key"].(string)
+	queuePath := fmt.Sprintf("/playQueues/%.0f", queueID)
+	queue := f.request(t, "GET", queuePath, headers)
+	if queue.Code != 200 || decodeJSON(t, queue)["Metadata"].([]any)[0].(map[string]any)["key"] != path {
+		t.Fatalf("live queue refetch lost the selected item: %d %s", queue.Code, queue.Body.String())
 	}
-	md := op["Metadata"].(map[string]any)
-	path := md["key"].(string)
+	if foreign := f.request(t, "GET", queuePath, map[string]string{"X-Plex-Token": friendToken}); foreign.Code == 200 {
+		t.Fatal("another viewer can read the live queue")
+	}
+	decision := f.request(t, "GET", "/video/:/transcode/universal/decision?path="+url.QueryEscape(path)+"&hasMDE=1", headers)
+	if decision.Code != 200 || !strings.Contains(decision.Body.String(), path) {
+		t.Fatalf("selected live item cannot reach MDE: %d %s", decision.Code, decision.Body.String())
+	}
 	start := f.request(t, "GET", "/video/:/transcode/universal/start.m3u8?path="+url.QueryEscape(path), headers)
 	if start.Code != http.StatusTemporaryRedirect || !strings.Contains(start.Header().Get("Location"), id+"/0/index.m3u8") {
 		t.Fatalf("live playback bootstrap did not reach media: %d %s", start.Code, start.Body.String())
+	}
+	if media := f.request(t, "GET", start.Header().Get("Location"), headers); media.Code != 200 || !strings.Contains(media.Body.String(), "#EXTM3U") {
+		t.Fatalf("live queue cannot obtain a media playlist: %d %s", media.Code, media.Body.String())
+	}
+	for _, state := range []string{"playing", "stopped"} {
+		timeline := f.request(t, "GET", "/:/timeline?key="+url.QueryEscape(path)+"&ratingKey="+id+"&state="+state, headers)
+		if timeline.Code != 200 {
+			t.Fatalf("live timeline %s: %d %s", state, timeline.Code, timeline.Body.String())
+		}
+	}
+	if len(f.state.progress) != 0 {
+		t.Fatal("live channel entered catalogue watch history")
+	}
+	if ended := f.request(t, "GET", queuePath, headers); ended.Code == 200 {
+		t.Fatal("ended live session remained playable through its queue")
 	}
 }
