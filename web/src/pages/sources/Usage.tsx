@@ -160,13 +160,7 @@ export function SourceUsage() {
   const [error, setError] = useState<unknown>(null);
 
   if (infra.error && !data)
-    return (
-      <ErrorPanel
-        error={infra.error}
-        onRetry={() => void infra.reload()}
-        feature="Usage tracking"
-      />
-    );
+    return <ErrorPanel error={infra.error} onRetry={() => void infra.reload()} />;
   if (!data || !draft || !saved) return <LoadingRows rows={4} />;
 
   const price = (kind: Kind, id: string) =>

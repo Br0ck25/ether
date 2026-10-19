@@ -473,22 +473,10 @@ export function TitleSearch({
 
 let viewerCache: Promise<Viewer[]> | null = null;
 
-/** Viewers list, falling back to the user list on servers without the viewers API. */
+/** Viewers list, cached for the session. */
 export function loadViewers(force = false): Promise<Viewer[]> {
   if (!viewerCache || force) {
-    viewerCache = api.viewers().catch(async () => {
-      const users = await api.users();
-      return users.map((u) => ({
-        id: u.id,
-        plexId: u.plexId,
-        username: u.username,
-        title: u.title || u.username,
-        thumb: u.thumb,
-        isOwner: u.isOwner,
-        plays30d: 0,
-        hoursWatched30d: 0,
-      }));
-    });
+    viewerCache = api.viewers();
     viewerCache.catch(() => {
       viewerCache = null;
     });

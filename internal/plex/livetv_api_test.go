@@ -199,74 +199,94 @@ func (t *liveProbeTranscoder) Probe(context.Context, string) (*core.MediaInfo, e
 func (t *liveProbeTranscoder) Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions) core.Decision {
 	return transcode.Decide(info, caps, opts, transcode.Policy{})
 }
-func TestAppleTVTuneReturnsAnalyzedMediaAndCanonicalUUID(t *testing.T) {
+
+// Cardinality and element names here follow the saved PMS tune handler and its
+// rolling-subscription/grab serializers, rather than the OpenAPI sample.
+func TestNativeTuneReturnsRollingSubscription(t *testing.T) {
 	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
 	f, service, c := liveFixture(t, tc)
-	for _, format := range []string{"application/json", "application/xml"} {
-		tune := f.request(t, "POST", "/livetv/dvrs/1/channels/"+c.ID+"/tune", map[string]string{"Accept": format, "X-Plex-Product": "Plex for Apple TV", "X-Plex-Platform": "tvOS"})
-		if tune.Code != 200 {
-			t.Fatalf("tune: %d %s", tune.Code, tune.Body.String())
-		}
-		body := tune.Body.String()
-		if strings.Contains(body, "MediaSubscription") || strings.Contains(body, `decision="copy"`) {
-			t.Fatalf("native response contains web bootstrap or invalid part decision: %s", body)
-		}
-		if format == "application/json" {
-			mc := decodeJSON(t, tune)
-			md := mc["Metadata"].([]any)[0].(map[string]any)
-			if md["ratingKey"] != nil || md["type"] != nil || tune.Header().Get("X-Plex-Activity") != "" {
-				t.Fatal("native tune must be source analysis, without a fake library identity or asynchronous activity")
+	for _, client := range []struct{ product, platform, version string }{
+		{"Plex for Apple TV", "tvOS", "2026.20.0"},
+		{"Plex for iOS", "iOS", "2026.20.0"},
+		{"Plex for Android", "Android", "2026.20.0"},
+		{"Plex for Apple TV", "tvOS", ""},
+	} {
+		for _, format := range []string{"application/json", "application/xml"} {
+			tune := f.request(t, "POST", "/livetv/dvrs/1/channels/"+c.ID+"/tune", map[string]string{"Accept": format, "X-Plex-Product": client.product, "X-Plex-Platform": client.platform, "X-Plex-Version": client.version, "X-Plex-Session-Identifier": "client-playback-session"})
+			if tune.Code != 200 || tune.Header().Get("X-Plex-Activity") == "" {
+				t.Fatalf("tune: %d %s", tune.Code, tune.Body.String())
 			}
-			if md["genuineMediaAnalysis"] != true {
+			body := tune.Body.String()
+			if strings.Contains(body, "playQueueID") {
+				t.Fatalf("tune returned an ordinary play queue: %s", body)
+			}
+			if format == "application/json" {
+				mc := decodeJSON(t, tune)
+				sub := mc["MediaSubscription"].([]any)[0].(map[string]any)
+				op := sub["MediaGrabOperation"].([]any)[0].(map[string]any)
+				video := op["Video"].(map[string]any)
+				media := video["Media"].(map[string]any)
+				if sub["type"] != float64(4) || sub["channelIdentifier"] != c.ID || op["status"] != "inprogress" || video["genuineMediaAnalysis"] != true {
+					t.Fatal(body)
+				}
+				subID, ok := op["mediaSubscriptionID"].(float64)
+				if !ok || subID <= 0 || sub["key"] != fmt.Sprintf("%.0f", subID) || op["Metadata"] != nil || mc["Metadata"] != nil {
+					t.Fatal(body)
+				}
+				uuid := media["uuid"].(string)
+				if len(uuid) != 36 || uuid[8] != '-' || uuid[14] != '4' || video["guid"] != "plex://livetv/session/"+uuid {
+					t.Fatalf("invalid live identity: %s", body)
+				}
+				if len(media["Part"].([]any)[0].(map[string]any)["Stream"].([]any)) < 2 {
+					t.Fatalf("source analysis missing: %s", body)
+				}
+			} else if !strings.Contains(body, `<MediaSubscription`) || !strings.Contains(body, `type="4"`) || !strings.Contains(body, `<Video`) || !strings.Contains(body, `genuineMediaAnalysis="1"`) {
 				t.Fatal(body)
 			}
-			media := md["Media"].([]any)[0].(map[string]any)
-			uuid := media["uuid"].(string)
-			if len(uuid) != 36 || uuid[8] != '-' || uuid[13] != '-' || uuid[14] != '4' || uuid[18] != '-' || uuid[23] != '-' {
-				t.Fatalf("invalid UUID %q", uuid)
+			infos := service.Sessions(context.Background(), &ownerUser)
+			if len(infos) != 1 || infos[0].ClientSessionID != "client-playback-session" || infos[0].ActivityID != tune.Header().Get("X-Plex-Activity") || infos[0].ActivityID == infos[0].ID {
+				t.Fatalf("client/server identities conflated or abandoned tune retained: %+v", infos)
 			}
-			part := media["Part"].([]any)[0].(map[string]any)
-			if media["protocol"] != nil || part["key"] != nil || part["decision"] != nil || len(part["Stream"].([]any)) < 2 {
-				t.Fatal(body)
-			}
-		} else if !strings.Contains(body, `genuineMediaAnalysis="1"`) || !strings.Contains(body, `streamType="1"`) || !strings.Contains(body, `streamType="2"`) {
-			t.Fatal(body)
 		}
-	}
-	if len(service.Sessions(context.Background(), &ownerUser)) != 1 {
-		t.Fatal("abandoned native tune was not reclaimed")
 	}
 }
 
-func TestModernAppleTVTuneReturnsPlayableQueue(t *testing.T) {
+func TestNativeLiveSubscriptionOwnershipAndPlayback(t *testing.T) {
 	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
-	f, _, channel := liveFixture(t, tc)
+	f, service, channel := liveFixture(t, tc)
 	headers := map[string]string{"Accept": "application/json", "X-Plex-Product": "Plex for Apple TV", "X-Plex-Platform": "tvOS", "X-Plex-Version": "2026.20.0"}
 	tune := f.request(t, "POST", "/livetv/dvrs/1/channels/"+channel.ID+"/tune", headers)
-	if tune.Code != 200 || tune.Header().Get("X-Plex-Activity") != "" {
-		t.Fatalf("modern tune must complete synchronously: %d %s", tune.Code, tune.Body.String())
+	if tune.Code != 200 {
+		t.Fatal(tune.Body.String())
 	}
-	mc := decodeJSON(t, tune)
-	analysis := mc["Metadata"].([]any)[0].(map[string]any)
-	queueID, hasQueue := mc["playQueueID"].(float64)
-	if !hasQueue || queueID <= 0 || mc["identifier"] != "com.plexapp.plugins.library" || mc["playQueueTotalCount"] != float64(1) || analysis["type"] != "clip" || analysis["key"] == "" || analysis["playQueueItemID"] != mc["playQueueSelectedItemID"] {
-		t.Fatalf("modern player cannot load tune as a playable queue: %s", tune.Body.String())
+	sub := decodeJSON(t, tune)["MediaSubscription"].([]any)[0].(map[string]any)
+	op := sub["MediaGrabOperation"].([]any)[0].(map[string]any)
+	video := op["Video"].(map[string]any)
+	path := video["key"].(string)
+	id := video["Media"].(map[string]any)["uuid"].(string)
+	subPath := "/media/subscriptions/" + sub["key"].(string)
+	opPath := op["key"].(string)
+	for _, target := range []string{subPath, opPath} {
+		if got := f.request(t, "GET", target, headers); got.Code != 200 || !strings.Contains(got.Body.String(), id) {
+			t.Fatalf("cannot refetch native bootstrap %s: %d %s", target, got.Code, got.Body.String())
+		}
+		for _, method := range []string{"GET", "DELETE"} {
+			foreign := f.request(t, method, target, map[string]string{"Accept": "application/json", "X-Plex-Token": friendToken, "X-Plex-Platform": "Android"})
+			if foreign.Code == 200 {
+				t.Fatalf("another viewer can %s %s", method, target)
+			}
+		}
 	}
-	id := analysis["Media"].([]any)[0].(map[string]any)["uuid"].(string)
-	if analysis["guid"] != "plex://livetv/session/"+id || mc["playQueueSelectedMetadataItemID"] != nil {
-		t.Fatalf("live session lacks its native GUID or uses a UUID in the integer library-metadata selector: %s", tune.Body.String())
+	infos := service.Sessions(context.Background(), &ownerUser)
+	if len(infos) != 1 {
+		t.Fatal("foreign stop affected owner's session")
 	}
-	if mc["MediaSubscription"] != nil || analysis["genuineMediaAnalysis"] != true {
-		t.Fatalf("native tune contains asynchronous Web subscription data: %s", tune.Body.String())
+	if infos[0].ClientSessionID != "client-1" {
+		t.Fatal("missing client-session header did not fall back to client identifier")
 	}
-	path := analysis["key"].(string)
-	queuePath := fmt.Sprintf("/playQueues/%.0f", queueID)
-	queue := f.request(t, "GET", queuePath, headers)
-	if queue.Code != 200 || decodeJSON(t, queue)["Metadata"].([]any)[0].(map[string]any)["key"] != path {
-		t.Fatalf("live queue refetch lost the selected item: %d %s", queue.Code, queue.Body.String())
-	}
-	if foreign := f.request(t, "GET", queuePath, map[string]string{"X-Plex-Token": friendToken}); foreign.Code == 200 {
-		t.Fatal("another viewer can read the live queue")
+	listed := f.request(t, "GET", "/media/subscriptions", headers)
+	if listed.Code != 200 || decodeJSON(t, listed)["MediaSubscription"].([]any)[0].(map[string]any)["key"] != sub["key"] {
+		t.Fatalf("subscription list lost tune identity: %d %s", listed.Code, listed.Body.String())
 	}
 	decision := f.request(t, "GET", "/video/:/transcode/universal/decision?path="+url.QueryEscape(path)+"&hasMDE=1", headers)
 	if decision.Code != 200 || !strings.Contains(decision.Body.String(), path) {
@@ -277,7 +297,7 @@ func TestModernAppleTVTuneReturnsPlayableQueue(t *testing.T) {
 		t.Fatalf("live playback bootstrap did not reach media: %d %s", start.Code, start.Body.String())
 	}
 	if media := f.request(t, "GET", start.Header().Get("Location"), headers); media.Code != 200 || !strings.Contains(media.Body.String(), "#EXTM3U") {
-		t.Fatalf("live queue cannot obtain a media playlist: %d %s", media.Code, media.Body.String())
+		t.Fatalf("live subscription cannot obtain a media playlist: %d %s", media.Code, media.Body.String())
 	}
 	for _, state := range []string{"playing", "stopped"} {
 		timeline := f.request(t, "GET", "/:/timeline?key="+url.QueryEscape(path)+"&ratingKey="+id+"&state="+state, headers)
@@ -288,7 +308,18 @@ func TestModernAppleTVTuneReturnsPlayableQueue(t *testing.T) {
 	if len(f.state.progress) != 0 {
 		t.Fatal("live channel entered catalogue watch history")
 	}
-	if ended := f.request(t, "GET", queuePath, headers); ended.Code == 200 {
-		t.Fatal("ended live session remained playable through its queue")
+	if ended := f.request(t, "GET", subPath, headers); ended.Code == 200 {
+		t.Fatal("ended live session remained playable through its subscription")
+	}
+	// A second subscription has a new numeric identity, and its DELETE resolves
+	// to the correct owned stream instead of treating the number as a UUID.
+	tune = f.request(t, "POST", "/livetv/dvrs/1/channels/"+channel.ID+"/tune", headers)
+	next := decodeJSON(t, tune)["MediaSubscription"].([]any)[0].(map[string]any)
+	if next["key"] == sub["key"] {
+		t.Fatal("subscription identity reused")
+	}
+	stop := f.request(t, "DELETE", "/media/subscriptions/"+next["key"].(string), headers)
+	if stop.Code != 200 || len(service.Sessions(context.Background(), &ownerUser)) != 0 {
+		t.Fatalf("owned numeric subscription stop: %d %s", stop.Code, stop.Body.String())
 	}
 }

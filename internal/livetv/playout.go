@@ -80,6 +80,15 @@ func (ss *session) close(s *Service) {
 }
 
 func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps core.ClientCaps) (SessionInfo, error) {
+	return s.TuneWithSession(ctx, u, channelID, caps, caps.ClientID)
+}
+
+// TuneWithSession preserves the client's playback-session identity independently
+// of the server's stream, subscription and activity identities.
+func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID string, caps core.ClientCaps, clientSessionID string) (SessionInfo, error) {
+	if clientSessionID == "" {
+		clientSessionID = caps.ClientID
+	}
 	if u == nil || (s.o.CanPlay != nil && !s.o.CanPlay(u, caps.Remote, s.o.Now())) {
 		return SessionInfo{}, core.ErrUnauthorized
 	}
@@ -146,7 +155,15 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 		s.mu.Unlock()
 		return SessionInfo{}, core.ErrStreamLimit
 	}
-	ss := &session{info: SessionInfo{ID: liveSessionID(), UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now()}, user: *u, caps: caps, last: s.o.Now(), resources: map[string]string{}}
+	s.nextSubscription++
+	ss := &session{
+		info: SessionInfo{
+			ID: liveSessionID(), SubscriptionID: s.nextSubscription,
+			ActivityID: liveSessionID(), ClientSessionID: clientSessionID,
+			UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now(),
+		},
+		user: *u, caps: caps, last: s.o.Now(), resources: map[string]string{},
+	}
 	s.sessions[ss.info.ID] = ss
 	s.mu.Unlock()
 	if limiter, ok := s.o.Playback.(channelLimiter); ok {

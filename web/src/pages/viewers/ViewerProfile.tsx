@@ -10,13 +10,13 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import { ArrowLeft, CheckCircle2, History, LayoutTemplate, RefreshCw } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Artwork } from "../../components/Artwork";
 import { Meter } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { titleSubtitle } from "../../components/Poster";
 import { viewerName } from "../../components/pickers";
-import { api, errorMessage, isUnavailable } from "../../lib/api";
+import { api, errorMessage } from "../../lib/api";
 import type { Viewer, ViewerDetail } from "../../lib/contract";
 import { formatDateTime, formatNumber, relativeTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
@@ -30,42 +30,17 @@ import { ViewerPlayback } from "./ViewerPlayback";
 
 const TABS = ["taste", "activity", "home", "access", "playback", "watchlist"] as const;
 type Tab = (typeof TABS)[number];
-/** Pre-rework `?tab=` values. */
-const LEGACY_TABS: Record<string, Tab> = { limits: "access" };
-
-function asTab(raw: string | null | undefined): Tab | undefined {
-  if (!raw) return undefined;
-  return (TABS as readonly string[]).includes(raw) ? (raw as Tab) : LEGACY_TABS[raw];
+function asTab(raw: string | undefined): Tab | undefined {
+  return raw && (TABS as readonly string[]).includes(raw) ? (raw as Tab) : undefined;
 }
 
 export default function ViewerProfile() {
   const { id: raw, tab: routeTab } = useParams();
   const id = Number(raw);
-  const [params] = useSearchParams();
-  const tab: Tab = asTab(routeTab) ?? asTab(params.get("tab")) ?? "taste";
+  const tab: Tab = asTab(routeTab) ?? "taste";
   const navigate = useNavigate();
 
-  const viewer = useAsync<ViewerDetail | null>(async () => {
-    try {
-      return await api.viewer(id);
-    } catch (e) {
-      // Servers without the viewers API: fall back to the user record.
-      if (!isUnavailable(e)) throw e;
-      const u = (await api.users()).find((x) => x.id === id);
-      if (!u) throw e;
-      return {
-        id: u.id,
-        plexId: u.plexId,
-        username: u.username,
-        title: u.title,
-        thumb: u.thumb,
-        isOwner: u.isOwner,
-        plays30d: 0,
-        hoursWatched30d: 0,
-        recent: [],
-      };
-    }
-  }, [id]);
+  const viewer = useAsync<ViewerDetail | null>(() => api.viewer(id), [id]);
   const taste = useAsync(() => api.taste(id), [id]);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -149,11 +124,7 @@ export default function ViewerProfile() {
     >
       {tab === "taste" ? (
         taste.error ? (
-          <ErrorPanel
-            error={taste.error}
-            feature="Taste profiles"
-            onRetry={() => void taste.reload()}
-          />
+          <ErrorPanel error={taste.error} onRetry={() => void taste.reload()} />
         ) : !taste.data ? (
           <LoadingRows rows={4} />
         ) : (

@@ -221,8 +221,8 @@ describe("Home screens", () => {
     expect(lastPreview(fake).layout?.global[0]?.maxRows).toBe(3);
   });
 
-  it("redirects the old Home Designer URL and adds a custom row pattern from a drawer", async () => {
-    renderApp("/designer");
+  it("adds a custom row pattern from a drawer", async () => {
+    renderApp("/home-screens");
     expect(await screen.findByRole("heading", { name: "Home screens" }, WAIT)).toBeInTheDocument();
     await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     fireEvent.click(screen.getByRole("tab", { name: "Rows" }));

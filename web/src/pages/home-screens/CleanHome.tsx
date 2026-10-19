@@ -32,14 +32,7 @@ export function CleanHome() {
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  if (clean.error)
-    return (
-      <ErrorPanel
-        error={clean.error}
-        feature="Automatic Clean Home"
-        onRetry={() => void clean.reload()}
-      />
-    );
+  if (clean.error) return <ErrorPanel error={clean.error} onRetry={() => void clean.reload()} />;
   if (!clean.data || !draft) return <LoadingRows rows={2} />;
   const c = clean.data;
   const last = checkedAt(c);

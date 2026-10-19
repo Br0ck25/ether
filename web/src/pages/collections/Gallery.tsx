@@ -180,14 +180,7 @@ function MineTab({
   onOpenTemplates: () => void;
 }) {
   const navigate = useNavigate();
-  if (state.error)
-    return (
-      <ErrorPanel
-        error={state.error}
-        feature="Collection Studio"
-        onRetry={() => void state.reload()}
-      />
-    );
+  if (state.error) return <ErrorPanel error={state.error} onRetry={() => void state.reload()} />;
   if (!state.data) return <GallerySkeleton />;
 
   const act = async (c: CollectionSpec, action: "publish" | "unpublish" | "rebuild" | "delete") => {
@@ -412,14 +405,7 @@ function TemplatesTab({
     () => [...new Set((state.data ?? []).map((t) => t.category))],
     [state.data],
   );
-  if (state.error)
-    return (
-      <ErrorPanel
-        error={state.error}
-        feature="Collection templates"
-        onRetry={() => void state.reload()}
-      />
-    );
+  if (state.error) return <ErrorPanel error={state.error} onRetry={() => void state.reload()} />;
   if (!state.data) return <GallerySkeleton />;
   const shown = state.data.filter(
     (t) =>
@@ -516,14 +502,7 @@ function BuiltInTab({
   items: CollectionSpec[];
 }) {
   const navigate = useNavigate();
-  if (state.error)
-    return (
-      <ErrorPanel
-        error={state.error}
-        feature="Collection Studio"
-        onRetry={() => void state.reload()}
-      />
-    );
+  if (state.error) return <ErrorPanel error={state.error} onRetry={() => void state.reload()} />;
   if (!state.data) return <GallerySkeleton />;
   if (items.length === 0)
     return (
