@@ -56,7 +56,7 @@ type Service struct {
 	db       *sql.DB
 	d        Deps
 	mu       sync.Mutex
-	redeemMu sync.Mutex
+	redeemMu sync.Mutex // in-process only; the claim key and conditional use count keep redemption correct across nodes
 	pins     map[string]pending
 	rate     map[string]bucket
 }
@@ -97,11 +97,8 @@ func (s *Service) Create(ctx context.Context, in Invite) (Invite, string, error)
 		StreamLimit int           `json:"streamLimit"`
 	}{in.Policy, in.StreamLimit})
 	secs, _ := json.Marshal(in.Sections)
-	res, err := s.db.ExecContext(ctx, `INSERT INTO invites_links(token_hash,label,expires,max_uses,policy,sections) VALUES(?,?,?,?,?,?)`, hash(token), in.Label, in.Expires.Unix(), in.MaxUses, string(policy), string(secs))
-	if err != nil {
-		return in, "", err
-	}
-	in.ID, err = res.LastInsertId()
+	err = s.db.QueryRowContext(ctx, `INSERT INTO invites_links(token_hash,label,expires,max_uses,policy,sections) VALUES(?,?,?,?,?,?) RETURNING id`,
+		hash(token), in.Label, in.Expires.Unix(), in.MaxUses, string(policy), string(secs)).Scan(&in.ID)
 	return in, token, err
 }
 func scan(row interface{ Scan(...any) error }) (Invite, error) {
@@ -145,10 +142,26 @@ func (s *Service) Redeem(ctx context.Context, in Invite, a Account) error {
 	if err != nil {
 		return err
 	}
-	var state string
-	err = tx.QueryRowContext(ctx, `SELECT state FROM invites_claims WHERE invite_id=? AND plex_id=?`, in.ID, a.PlexID).Scan(&state)
-	if err == nil {
+	// Claim first: the claim's primary key decides between concurrent
+	// redemptions by the same account on different nodes, and the
+	// conditional use increment below decides between different accounts.
+	res, err := tx.ExecContext(ctx, `INSERT INTO invites_claims(invite_id,plex_id,state) VALUES(?,?,'pending') ON CONFLICT(invite_id,plex_id) DO NOTHING`, in.ID, a.PlexID)
+	if err != nil {
 		tx.Rollback()
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		tx.Rollback()
+		if err != nil {
+			return err
+		}
+		var state string
+		if err := s.db.QueryRowContext(ctx, `SELECT state FROM invites_claims WHERE invite_id=? AND plex_id=?`, in.ID, a.PlexID).Scan(&state); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("invitation is being processed")
+			}
+			return err
+		}
 		if state == "complete" {
 			return nil
 		}
@@ -157,11 +170,7 @@ func (s *Service) Redeem(ctx context.Context, in Invite, a Account) error {
 		}
 		return fmt.Errorf("invitation is being processed")
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		tx.Rollback()
-		return err
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE invites_links SET uses=uses+1 WHERE id=? AND revoked=0 AND expires>? AND uses<max_uses`, in.ID, s.d.Now().Unix())
+	res, err = tx.ExecContext(ctx, `UPDATE invites_links SET uses=uses+1 WHERE id=? AND revoked=0 AND expires>? AND uses<max_uses`, in.ID, s.d.Now().Unix())
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -170,10 +179,6 @@ func (s *Service) Redeem(ctx context.Context, in Invite, a Account) error {
 	if n != 1 {
 		tx.Rollback()
 		return core.ErrNotFound
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO invites_claims(invite_id,plex_id,state) VALUES(?,?,'pending')`, in.ID, a.PlexID); err != nil {
-		tx.Rollback()
-		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
@@ -208,10 +213,14 @@ func (s *Service) release(ctx context.Context, id, user int64) {
 		return
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM invites_claims WHERE invite_id=? AND plex_id=? AND state='pending'`, id, user); err != nil {
+	res, err := tx.ExecContext(ctx, `DELETE FROM invites_claims WHERE invite_id=? AND plex_id=? AND state='pending'`, id, user)
+	if err != nil {
 		return
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE invites_links SET uses=MAX(0,uses-1) WHERE id=?`, id); err == nil {
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return // already released elsewhere: do not return the use twice
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE invites_links SET uses=CASE WHEN uses>0 THEN uses-1 ELSE 0 END WHERE id=?`, id); err == nil {
 		_ = tx.Commit()
 	}
 }
