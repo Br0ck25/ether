@@ -3,13 +3,17 @@ package plex
 import (
 	"context"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/store"
-	"github.com/braedonsaunders/ether/internal/trackprefs"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/markers"
+	"github.com/braedonsaunders/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/trackprefs"
 )
 
 func TestPersistentShowChoiceAppliesToNextEpisodeDecision(t *testing.T) {
@@ -71,5 +75,39 @@ func TestMDECannotBypassRequestedAudioProcessing(t *testing.T) {
 	rec := f.get(t, "/video/:/transcode/universal/decision?path=/library/metadata/"+fightClub.Key.String()+"&hasMDE=1&session=processing")
 	if !strings.Contains(rec.Body.String(), `streamType="2" decision="transcode"`) || strings.Contains(rec.Body.String(), `mdeDecisionCode="1000"`) {
 		t.Fatalf("MDE bypassed filter decision: %s", rec.Body.String())
+	}
+}
+
+type fakeMarkers []markers.Marker
+
+func (f fakeMarkers) Markers(context.Context, core.RatingKey, core.MediaInfo) ([]markers.Marker, error) {
+	return append([]markers.Marker(nil), f...), nil
+}
+
+// A stinger splits credits in two; PMS renders both, in timeline order,
+// with final="1" only on the last credits marker — even if a provider
+// mistakenly flags an earlier one.
+func TestMultipleCreditsMarkersRendering(t *testing.T) {
+	srv := &Server{d: Deps{Markers: fakeMarkers{
+		{Type: "credits", StartMS: 5_800_000, EndMS: 6_000_000, Final: true},
+		{Type: "intro", StartMS: 30_000, EndMS: 90_000},
+		{Type: "credits", StartMS: 5_400_000, EndMS: 5_760_000, Final: true},
+		{Type: "recap", StartMS: 0, EndMS: 20_000},
+	}}, log: slog.Default()}
+	info := core.MediaInfo{Duration: 100 * time.Minute}
+	var m model.Metadata
+	srv.addProbedStreamFeatures(context.Background(), core.MovieKey(603), info, &m)
+	if len(m.Marker) != 3 {
+		t.Fatalf("markers %+v", m.Marker)
+	}
+	intro, first, last := m.Marker[0], m.Marker[1], m.Marker[2]
+	if intro.ID != 1 || intro.Type != "intro" || intro.StartTimeOffset != 30_000 || *intro.Final {
+		t.Fatalf("intro %+v", intro)
+	}
+	if first.Type != "credits" || first.StartTimeOffset != 5_400_000 || first.EndTimeOffset != 5_760_000 || *first.Final {
+		t.Fatalf("first credits must not be final: %+v", first)
+	}
+	if last.Type != "credits" || last.StartTimeOffset != 5_800_000 || last.EndTimeOffset != 6_000_000 || !*last.Final {
+		t.Fatalf("last credits must be final: %+v", last)
 	}
 }

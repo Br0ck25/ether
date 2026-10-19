@@ -274,7 +274,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	if a.transcoder != nil {
 		markerFFmpeg = a.transcoder.FFmpegPath()
 	}
-	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}})
+	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
 	a.closers = append(a.closers, func() { a.markers.Close() })
 	a.buildAdoption()
 	// Playback and prefetch.
