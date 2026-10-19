@@ -271,7 +271,7 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		}
 		sp.file = file
 		for _, c := range sp.out.chunks {
-			_ = os.Remove(c.path)
+			s.removals.remove(c.path)
 		}
 	}
 

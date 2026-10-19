@@ -34,6 +34,8 @@ type Session struct {
 	id        string
 	m         *Manager
 	dir       string
+	watchers  sync.WaitGroup // running watch goroutines; Close waits for them
+	removals  pendingRemovals
 	segDur    time.Duration
 	base      time.Duration
 	total     int // segments in the playlist; 0 = unknown duration
@@ -623,6 +625,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	runLog.Info("ffmpeg started", "segment", seg, "at", spec.Start, "kind", s.decision.Kind,
 		"videoCopy", s.decision.VideoCopy, "audioCopy", s.decision.AudioCopy, "hw", r.hw)
 	runLog.Debug("ffmpeg args", "args", strings.Join(args, " "))
+	s.watchers.Add(1)
 	go s.watch(r)
 	s.broadcastLocked()
 	return nil
@@ -644,6 +647,7 @@ func (s *Session) stopRunLocked() {
 
 // watch polls a run's output for finished segments until ffmpeg exits.
 func (s *Session) watch(r *run) {
+	defer s.watchers.Done()
 	t := time.NewTicker(s.m.opts.pollInterval)
 	defer t.Stop()
 	playlist := filepath.Join(s.dir, r.spec.Playlist)
@@ -665,6 +669,7 @@ func (s *Session) watch(r *run) {
 			return
 		case <-t.C:
 			collect(false)
+			s.removals.retry()
 		}
 	}
 }
@@ -974,7 +979,10 @@ func (s *Session) Close() error {
 	s.stopRunLocked()
 	s.broadcastLocked()
 	s.mu.Unlock()
-	err := os.RemoveAll(s.dir)
+	// The watcher may still be assembling segment files; on Windows open
+	// files can't be deleted and late writes would outlive RemoveAll.
+	waitTimeout(&s.watchers, 10*time.Second)
+	err := removeAllRetry(s.dir)
 	s.m.forget(s)
 	s.log.Info("session closed", "age", time.Since(s.created).Round(time.Second))
 	return err
