@@ -66,7 +66,8 @@ func (a *App) buildAdmin() http.Handler {
 			}
 			return s
 		},
-		RemoteStatus: func(context.Context) any { return a.registrar.Status() },
+		RemoteStatus:  func(context.Context) any { return a.registrar.Status() },
+		UpdatesStatus: a.updateStatus,
 		HWAccelStatus: func(context.Context) any {
 			if a.transcoder == nil {
 				return map[string]string{"error": "ffmpeg not found"}
