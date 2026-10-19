@@ -230,6 +230,10 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 		if err != nil {
 			s.log.Warn("home hubs", "err", err)
 		}
+		seen := map[string]bool{}
+		for _, h := range mc.Hub {
+			seen[h.HubIdentifier] = true
+		}
 		for _, h := range hubs {
 			if promotedOnly && !h.Promoted {
 				continue
@@ -237,7 +241,14 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 			if !s.hubInSections(h, sections) {
 				continue
 			}
-			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{}))
+			// The front end owns Continue Watching (PMS's shape, with watch
+			// state); drop a recommender row that repeats a hub we built.
+			rendered := s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{})
+			if seen[rendered.HubIdentifier] {
+				continue
+			}
+			seen[rendered.HubIdentifier] = true
+			mc.Hub = append(mc.Hub, rendered)
 		}
 	}
 	if len(sections) == 0 {
