@@ -151,7 +151,9 @@ func TestAlphabeticalDecisionOrder(t *testing.T) {
 	for _, want := range []string{
 		`<Media container="mkv" id="1" videoCodec="h264" selected="1">`,
 		`<Part id="2" decision="directplay" selected="1">`,
-		`<Stream codec="h264" id="5" streamType="1" decision="copy" selected="1" location="direct" />`,
+		// PMS sorts a stream's "selected" with the rest (observed in
+		// recorded decisions); only decision and location trail.
+		`<Stream codec="h264" id="5" selected="1" streamType="1" decision="copy" location="direct" />`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %s in\n%s", want, s)
