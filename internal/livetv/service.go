@@ -637,7 +637,7 @@ func (s *Service) DeleteSource(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM livetv_channels WHERE `+store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId")+`=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`} {
+	for _, q := range []string{`DELETE FROM livetv_channels WHERE ` + store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId") + `=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`} {
 		if _, err = tx.ExecContext(ctx, q, id); err != nil {
 			return err
 		}
