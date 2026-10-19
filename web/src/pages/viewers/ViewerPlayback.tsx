@@ -55,14 +55,7 @@ export function ViewerPlayback({ viewer }: { viewer: Viewer }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  if (data.error)
-    return (
-      <ErrorPanel
-        error={data.error}
-        feature="Audio and subtitle preferences"
-        onRetry={() => void data.reload()}
-      />
-    );
+  if (data.error) return <ErrorPanel error={data.error} onRetry={() => void data.reload()} />;
   if (!data.data || !draft) return <LoadingRows rows={4} />;
   const { defaults, rules, memory } = data.data;
   const custom = !sameRules(rules, defaults);

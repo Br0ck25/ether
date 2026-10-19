@@ -443,7 +443,7 @@ func (s *Server) handleLiveTune(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, 404)
 		return
 	}
-	info, err := s.d.LiveTV.Tune(r.Context(), pr.User, id, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+	info, err := s.d.LiveTV.TuneWithSession(r.Context(), pr.User, id, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps), pr.SessionID)
 	if err != nil {
 		s.log.Warn("live tune failed", "channel", id, "client", pr.ClientID, "product", pr.Product, "err", err)
 		s.writeErr(w, r, err)
@@ -579,62 +579,24 @@ func (s *Server) liveSubscriptionFor(info livetv.SessionInfo) liveSubscription {
 	return liveSubscription{Key: info.ID, Type: 12, Title: info.Channel.Name, Operation: op, Timeline: liveTimeline{Metadata: []model.Metadata{timeline}}}
 }
 
-// The native tune payload is source analysis, not a fabricated library item.
-// In particular a live UUID must not be put into the numeric ratingKey field.
-type liveTuneVideo struct {
-	Live    bool            `plex:"live"`
-	Genuine bool            `plex:"genuineMediaAnalysis"`
-	Media   []liveTuneMedia `plex:"Media"`
-}
-
-type liveTuneMedia struct {
-	UUID string         `plex:"uuid"`
-	Part []liveTunePart `plex:"Part"`
-}
-type liveTunePart struct {
-	Stream []model.Stream `plex:"Stream"`
-}
-
-func (liveTuneVideo) XMLElementName() string { return "Video" }
-
-type liveTuneContainer struct {
-	Size         int                `plex:"size"`
-	Metadata     []liveTuneVideo    `plex:"Metadata"`
-	Subscription []liveSubscription `plex:"MediaSubscription"`
-}
-
 func (s *Server) writeLiveSubscription(w http.ResponseWriter, r *http.Request, info livetv.SessionInfo) {
-	w.Header().Set("X-Plex-Activity", "livetv-"+info.ID)
-	// Native players consume the documented analyzed-media tune response.
-	// Plex Web additionally needs its subscription/operation bootstrap.
-	if pr := FromContext(r.Context()); strings.Contains(strings.ToLower(pr.Product), "apple") || strings.EqualFold(pr.Platform, "tvos") || strings.EqualFold(pr.Platform, "ios") {
-		major, _, _ := strings.Cut(pr.Version, ".")
-		year, _ := strconv.Atoi(major)
-		if year >= 2025 {
-			s.writeModernLiveTune(w, r, info)
-			return
-		}
-		// The native contract is an analysis result identified by UUID. The
-		// client constructs the live-session MDE request from that UUID; a
-		// fabricated HLS transport/Part key changes its interpretation.
-		var streams []model.Stream
-		if info.MediaInfo != nil {
-			for _, st := range s.buildStreams(0, *info.MediaInfo, selection{}, nil) {
-				if st.StreamType == 1 || st.StreamType == 2 {
-					streams = append(streams, st)
-				}
-			}
-		}
-		payload := &liveTuneContainer{Size: 1, Metadata: []liveTuneVideo{{Live: true, Genuine: info.MediaInfo != nil, Media: []liveTuneMedia{{UUID: info.ID, Part: []liveTunePart{{Stream: streams}}}}}}}
-		w.Header().Del("X-Plex-Activity")
-		s.write(w, r, payload)
+	if nativeLiveRequest(r) {
+		s.writeNativeLiveTune(w, r, info)
 		return
 	}
-
+	w.Header().Set("X-Plex-Activity", "livetv-"+info.ID)
 	s.write(w, r, &liveSubscriptionContainer{Size: 1, Identifier: livetv.Provider, Metadata: []model.Metadata{s.liveSessionMetadata(info)}, Subscription: []liveSubscription{s.liveSubscriptionFor(info)}})
 }
 func (s *Server) handleLiveSubscriptions(w http.ResponseWriter, r *http.Request) {
 	infos := s.d.LiveTV.Sessions(r.Context(), FromContext(r.Context()).User)
+	if nativeLiveRequest(r) {
+		out := []nativeLiveSubscription{}
+		for _, info := range infos {
+			out = append(out, s.nativeLiveSubscriptionFor(info))
+		}
+		s.write(w, r, &nativeLiveContainer{Size: len(out), Subscriptions: out})
+		return
+	}
 	out := []liveSubscription{}
 	for _, info := range infos {
 		out = append(out, s.liveSubscriptionFor(info))
@@ -642,7 +604,7 @@ func (s *Server) handleLiveSubscriptions(w http.ResponseWriter, r *http.Request)
 	s.write(w, r, &liveSubscriptionContainer{Size: len(out), Identifier: livetv.Provider, Subscription: out})
 }
 func (s *Server) handleLiveSubscription(w http.ResponseWriter, r *http.Request) {
-	info, err := s.d.LiveTV.Session(r.Context(), chi.URLParam(r, "subscription"), FromContext(r.Context()).User)
+	info, err := s.liveSubscriptionSession(r, chi.URLParam(r, "subscription"))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -650,7 +612,10 @@ func (s *Server) handleLiveSubscription(w http.ResponseWriter, r *http.Request) 
 	s.writeLiveSubscription(w, r, info)
 }
 func (s *Server) handleLiveSubscriptionStop(w http.ResponseWriter, r *http.Request) {
-	err := s.d.LiveTV.Stop(r.Context(), chi.URLParam(r, "subscription"), FromContext(r.Context()).User)
+	info, err := s.liveSubscriptionSession(r, chi.URLParam(r, "subscription"))
+	if err == nil {
+		err = s.d.LiveTV.Stop(r.Context(), info.ID, FromContext(r.Context()).User)
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -661,6 +626,10 @@ func (s *Server) handleLiveOperation(w http.ResponseWriter, r *http.Request) {
 	info, err := s.d.LiveTV.Session(r.Context(), chi.URLParam(r, "operation"), FromContext(r.Context()).User)
 	if err != nil {
 		s.writeErr(w, r, err)
+		return
+	}
+	if nativeLiveRequest(r) {
+		s.write(w, r, &nativeLiveContainer{Size: 1, Grabs: s.nativeLiveSubscriptionFor(info).Grab})
 		return
 	}
 	op := s.liveSubscriptionFor(info).Operation

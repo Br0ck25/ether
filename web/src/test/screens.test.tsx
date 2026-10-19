@@ -30,27 +30,6 @@ describe("Overview", () => {
     expect(screen.getByRole("button", { name: /Server health/ })).toBeInTheDocument();
   });
 
-  it("degrades gracefully on servers without the insights API", async () => {
-    renderApp("/", {}, (fake) => {
-      const original = fake.fetch;
-      fake.fetch = async (input, init) =>
-        String(input).includes("/insights/")
-          ? new Response(
-              JSON.stringify({ error: { code: "not_found", message: "no such API endpoint" } }),
-              { status: 404 },
-            )
-          : original(input, init);
-    });
-    expect(
-      await screen.findByText(/^Activity insights comes with a newer version of Ether/, {}, WAIT),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/^Row insights comes with a newer version of Ether/),
-    ).toBeInTheDocument();
-    // Live status still works.
-    expect(await screen.findByText(/Sam Rivera · Living Room/, {}, WAIT)).toBeInTheDocument();
-  });
-
   it("lists problems first, each linking to the screen that fixes it", async () => {
     renderApp("/", {}, (fake) => {
       const original = fake.fetch;

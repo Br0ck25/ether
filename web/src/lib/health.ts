@@ -9,8 +9,6 @@ export interface HealthItem {
   level: HealthLevel;
   summary: string;
   details: string[];
-  /** Settings section that fixes this (legacy id, kept for compatibility). */
-  settings: string;
   /** Where the owner fixes this, for "Needs attention" and health links. */
   href: string;
   /** 0..1 gauge when the item has a natural fill level. */
@@ -37,7 +35,6 @@ export function usenetHealth(v: unknown): HealthItem {
   const base = {
     id: "usenet" as const,
     label: "Usenet",
-    settings: "usenet",
     href: "/sources/usenet",
   };
   const err = errorOf(v);
@@ -78,7 +75,6 @@ export function indexersHealth(v: unknown): HealthItem {
   const base = {
     id: "indexers" as const,
     label: "Indexers",
-    settings: "indexers",
     href: "/sources/indexers",
   };
   const err = errorOf(v);
@@ -119,7 +115,7 @@ export function indexersHealth(v: unknown): HealthItem {
 }
 
 export function cacheHealth(v: unknown): HealthItem {
-  const base = { id: "cache" as const, label: "Cache", settings: "cache", href: "/playback/cache" };
+  const base = { id: "cache" as const, label: "Cache", href: "/playback/cache" };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const used = num(v.used ?? v.usedBytes);
   const budget = num(v.budget ?? v.budgetBytes);
@@ -138,7 +134,6 @@ export function catalogHealth(v: unknown, now = new Date()): HealthItem {
   const base = {
     id: "catalog" as const,
     label: "Catalogue",
-    settings: "catalog",
     href: "/metadata/catalogue",
   };
   const err = errorOf(v);
@@ -177,8 +172,7 @@ export function remoteHealth(v: unknown): HealthItem {
   const base = {
     id: "remote" as const,
     label: "Remote access",
-    settings: "plex",
-    href: "/settings/plex",
+    href: "/remote-access",
   };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   if (v.claimed === false)
@@ -208,8 +202,7 @@ export function plexDirectHealth(v: unknown, now = new Date()): HealthItem {
   const base = {
     id: "plexdirect" as const,
     label: "plex.direct",
-    settings: "plex",
-    href: "/settings/plex",
+    href: "/remote-access",
   };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const cert = isPlainObject(v.cert) ? v.cert : null;

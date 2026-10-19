@@ -51,8 +51,7 @@ export function ViewingStats({
   onRetry: () => void;
 }) {
   const [breakdown, setBreakdown] = useState<Breakdown>("daily");
-  if (error && !summary)
-    return <ErrorPanel error={error} onRetry={onRetry} feature="Viewing history" />;
+  if (error && !summary) return <ErrorPanel error={error} onRetry={onRetry} />;
   if (!summary) return <LoadingRows rows={3} />;
   const view = BREAKDOWNS.find((b) => b.value === breakdown)!;
   const items = summary[breakdown] ?? [];
