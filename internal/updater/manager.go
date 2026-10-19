@@ -258,6 +258,7 @@ func (m *Manager) wake() {
 func (m *Manager) step(ctx context.Context) {
 	now := m.opts.Now()
 	m.confirmIfHealthy(now)
+	feedKey := clientKey(m.opts.Config())
 	active := 0
 	if m.opts.ActiveSessions != nil {
 		active = m.opts.ActiveSessions()
@@ -270,7 +271,8 @@ func (m *Manager) step(ctx context.Context) {
 		m.idleSince = now
 	}
 	enabled := m.opts.NewClient != nil && !m.noKey
-	due := !now.Before(m.nextCheck)
+	// A channel/feed change in settings re-checks right away.
+	due := !now.Before(m.nextCheck) || (m.client != nil && feedKey != m.clientKey)
 	stop := m.restarting
 	m.mu.Unlock()
 	if stop || !enabled {

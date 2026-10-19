@@ -594,3 +594,21 @@ func TestManagerRunStopsAfterRestart(t *testing.T) {
 		t.Fatalf("restarts = %v", h.restarts)
 	}
 }
+
+func TestManagerRebuildsClientOnChannelChange(t *testing.T) {
+	var built []string
+	h := newHarness(t, nil)
+	h.m.opts.NewClient = func(u config.Updates) (Checker, error) {
+		built = append(built, u.Channel)
+		return h.checker, nil
+	}
+	h.run(DefaultFirstCheckDelay)
+	if h.checker.checks != 1 || len(built) != 0 {
+		t.Fatalf("checks=%d built=%v", h.checker.checks, built)
+	}
+	h.cfg.Channel = ChannelBeta
+	h.run(DefaultTick)
+	if h.checker.checks != 2 || len(built) != 1 || built[0] != ChannelBeta {
+		t.Fatalf("channel change: checks=%d built=%v", h.checker.checks, built)
+	}
+}
