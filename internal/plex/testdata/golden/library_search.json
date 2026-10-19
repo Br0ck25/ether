@@ -13,8 +13,6 @@
           "type": "movie",
           "title": "Fight Club",
           "librarySectionTitle": "Movies",
-          "librarySectionID": 1,
-          "librarySectionKey": "/library/sections/1",
           "contentRating": "R",
           "summary": "An insomniac office worker...",
           "audienceRating": 8.4,

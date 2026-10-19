@@ -60,7 +60,10 @@ func Corpus() []Request {
 		// with direct play allowed PMS only reports mdeDecisionCode; Plex
 		// Web asks with directPlay=0 for a stream.
 		"/video/:/transcode/universal/decision?hasMDE=1&path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=1&directStream=1&videoQuality=8",
-		"/video/:/transcode/universal/decision?hasMDE=1&path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=0&directStream=1&subtitleSize=100&audioBoost=100&location=lan"}
+		"/video/:/transcode/universal/decision?hasMDE=1&path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=0&directStream=1&subtitleSize=100&audioBoost=100&location=lan",
+		// Searches with results (the query matches the discovered movie).
+		"/hubs/search?query=burbs&limit=10&includeCollections=1",
+		"/library/search?query=burbs&limit=10&searchTypes=movies%2Ctv&includeMetadata=1"}
 	clients := Clients()
 	out := make([]Request, 0, len(paths))
 	for _, p := range paths {

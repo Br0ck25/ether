@@ -631,6 +631,8 @@ func (s *Server) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 	mc := &model.MediaContainer{}
 	for i := range md {
 		score := math.Round(searchScore(i, len(md))*10000) / 10000
+		// PMS names the section here but sends no section id or key.
+		md[i].LibrarySectionID, md[i].LibrarySectionKey = 0, ""
 		mc.SearchResult = append(mc.SearchResult, model.SearchResult{Score: score, Metadata: &md[i]})
 	}
 	mc.Size = len(mc.SearchResult)
