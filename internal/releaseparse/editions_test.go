@@ -28,7 +28,7 @@ func TestParseEdition(t *testing.T) {
 		{"Movie.2011.10th.Anniversary.Edition.BluRay-GRP", "Anniversary Edition"},
 		{"The.Matrix.1999.1080p.BluRay.x264-GRP", ""},
 		{"Extended.Family.2020.1080p.WEB-DL-GRP", "Extended"}, // title word; accepted heuristic
-		{"DC.League.of.Super.Pets.2022.1080p.WEB-DL-GRP", ""},  // leading DC is the brand, not a cut
+		{"DC.League.of.Super.Pets.2022.1080p.WEB-DL-GRP", ""}, // leading DC is the brand, not a cut
 		{"Show.S01E01.720p.HDTV.x264-GRP", ""},
 	}
 	for _, c := range cases {
