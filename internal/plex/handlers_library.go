@@ -812,7 +812,7 @@ func (s *Server) sectionOnDeck(w http.ResponseWriter, r *http.Request, sec Secti
 	mc := s.sectionContainer(sec)
 	mc.Title2 = "On Deck"
 	mc.Mixed = model.Ptr(true)
-	mc.Metadata = s.renderTitles(ctx, pr, items, renderOpts{media: true, state: state})
+	mc.Metadata = s.onDeckItems(ctx, pr, items, state)
 	mc.Size = len(mc.Metadata)
 	s.write(w, r, mc)
 }
@@ -824,9 +824,22 @@ func (s *Server) handleOnDeck(w http.ResponseWriter, r *http.Request) {
 	items, state := s.inProgressTitles(ctx, pr, "", min(size, 50))
 	mc := libraryContainer()
 	mc.Mixed = model.Ptr(true)
-	mc.Metadata = s.renderTitles(ctx, pr, items, renderOpts{media: true, state: state})
+	mc.Metadata = s.onDeckItems(ctx, pr, items, state)
 	mc.Size = len(mc.Metadata)
 	s.write(w, r, mc)
+}
+
+// onDeckItems renders On Deck the way PMS does: every item in full (tag
+// ids, Guid, Rating, streams), led by its sync flag and section UUID.
+func (s *Server) onDeckItems(ctx context.Context, pr *Request, items []core.Title, state map[core.RatingKey]core.WatchStatus) []model.Metadata {
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, detail: true, state: state})
+	for i := range md {
+		md[i].AllowSync = model.Ptr(false)
+		if sec, ok := s.sectionFor(items[i].Type); ok {
+			md[i].LibrarySectionUUID = sec.UUID
+		}
+	}
+	return md
 }
 
 func (s *Server) sectionRecentlyViewed(w http.ResponseWriter, r *http.Request, sec Section) {

@@ -178,6 +178,8 @@ type Metadata struct {
 	element string
 	alpha   bool
 
+	// On Deck items lead with their sync flag and section (PMS).
+	AllowSync             *bool   `plex:"allowSync"`
 	RatingKey             string  `plex:"ratingKey,omitempty"`
 	Key                   string  `plex:"key,omitempty"`
 	ParentRatingKey       string  `plex:"parentRatingKey,omitempty"`
@@ -198,6 +200,7 @@ type Metadata struct {
 	LibrarySectionTitle   string  `plex:"librarySectionTitle,omitempty"`
 	LibrarySectionID      int     `plex:"librarySectionID,omitempty"`
 	LibrarySectionKey     string  `plex:"librarySectionKey,omitempty"`
+	LibrarySectionUUID    string  `plex:"librarySectionUUID,omitempty"`
 	GrandparentTitle      string  `plex:"grandparentTitle,omitempty"`
 	ParentTitle           string  `plex:"parentTitle,omitempty"`
 	OriginalTitle         string  `plex:"originalTitle,omitempty"`
@@ -215,6 +218,7 @@ type Metadata struct {
 	ViewCount             int     `plex:"viewCount,omitempty"`
 	SkipCount             int     `plex:"skipCount,omitempty"`
 	LastViewedAt          int64   `plex:"lastViewedAt,omitempty"`
+	IncludedAt            int64   `plex:"includedAt,omitempty"` // joined Continue Watching
 	LastRatedAt           int64   `plex:"lastRatedAt,omitempty"`
 	Year                  int     `plex:"year,omitempty"`
 	ParentYear            int     `plex:"parentYear,omitempty"`

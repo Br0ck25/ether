@@ -28,7 +28,10 @@ type hubSpec struct {
 	core.Hub
 	key        string // overrides the computed key
 	noPromoted bool   // omit the promoted attribute (section rows)
-	state      map[core.RatingKey]core.WatchStatus
+	// detail renders every item in full and stamps includedAt, as PMS's
+	// /hubs/continueWatching does.
+	detail bool
+	state  map[core.RatingKey]core.WatchStatus
 }
 
 func hubItemsKey(h core.Hub, hc hubCtx) string {
@@ -51,7 +54,10 @@ func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubC
 	// Related hubs (detail pages, postplay) omit the items' library section
 	// and the hub's promoted flag, like PMS.
 	related := hc.related != 0
-	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detailEpisodes: true})
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detail: hs.detail, detailEpisodes: true})
+	if hs.detail {
+		stampIncluded(md)
+	}
 	keys := make([]string, 0, len(items))
 	for _, t := range items {
 		keys = append(keys, t.Key.String())
@@ -92,6 +98,16 @@ func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubC
 	return mh
 }
 
+// stampIncluded sets includedAt (when an item joined Continue Watching) to
+// its last view, which is when Ether's in-progress list picked it up.
+func stampIncluded(md []model.Metadata) {
+	for i := range md {
+		if md[i].LastViewedAt > 0 {
+			md[i].IncludedAt = md[i].LastViewedAt
+		}
+	}
+}
+
 func (s *Server) renderHubs(ctx context.Context, pr *Request, hubs []core.Hub, hc hubCtx) []model.Hub {
 	out := make([]model.Hub, 0, len(hubs))
 	for _, h := range hubs {
@@ -129,6 +145,7 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 		hs.ID, hs.Context, hs.key = "home.continue", "hub.home.continue", "/hubs/home/continueWatching"
 	case cwGlobal:
 		hs.ID, hs.Context, hs.key, hs.noPromoted = "continueWatching", "hub.continueWatching", "/hubs/continueWatching/items", true
+		hs.detail = true
 	case cwSection:
 		id := strconv.Itoa(sec.ID)
 		hs.Style, hs.noPromoted = "shelf", true
@@ -275,7 +292,10 @@ func (s *Server) handleContinueWatchingItems(w http.ResponseWriter, r *http.Requ
 	}
 	hs := s.continueHub(ctx, pr, v, sec, count)
 	mc := hubContainer()
-	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state})
+	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state, detail: hs.detail})
+	if hs.detail {
+		stampIncluded(mc.Metadata)
+	}
 	mc.Size = len(mc.Metadata)
 	s.write(w, r, mc)
 }
