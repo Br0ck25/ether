@@ -172,3 +172,12 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .avatar { width: 28px; height: 28px; border-radius: 50%; vertical-align: middle; }
 .gate { min-height: 100vh; display: grid; place-items: center; padding: 1.25rem; }
 .gate-card { max-width: 460px; width: 100%; }
+
+/* Login screen */
+.gate-card h1 { margin-bottom: 0.25rem; }
+.btn-plex { width: 100%; padding: 0.8rem 1rem; font-size: 1rem; margin: 0.75rem 0; }
+.gate-card .small { font-size: 0.85rem; }
+.gate-card .pin-code { font-size: 1rem; letter-spacing: 0.2em; }
+.token-fallback { margin: 1rem 0 0.5rem; }
+.token-fallback summary { cursor: pointer; }
+.token-fallback form { margin-top: 0.75rem; display: grid; gap: 0.75rem; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { api, ApiError, getToken, setToken } from "./api";
 import { ErrorBanner, Spinner } from "./components";
@@ -9,7 +9,71 @@ import Setup from "./pages/Setup";
 import Traces from "./pages/Traces";
 import type { Bootstrap } from "./types";
 
-function TokenGate({ onReady }: { onReady: () => void }) {
+const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
+const POLL_MS = 2000;
+
+/** Login screen: "Sign in with Plex", with a manual token as a fallback. */
+function LoginGate({ boot, onReady }: { boot: Bootstrap; onReady: () => void }) {
+  const [error, setError] = useState<unknown>(null);
+  const [pending, setPending] = useState<{ code: string; authUrl: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const cancelled = useRef(false);
+  useEffect(() => () => { cancelled.current = true; }, []);
+
+  const signIn = async () => {
+    setError(null); setBusy(true);
+    // Open the window inside the click so popup blockers allow it.
+    const popup = window.open("", "plex-sign-in", "width=560,height=720");
+    try {
+      const pin = await api.signInStart();
+      setPending({ code: pin.code, authUrl: pin.authUrl });
+      if (popup) popup.location.href = pin.authUrl;
+      const deadline = Date.now() + SIGN_IN_TIMEOUT_MS;
+      while (!cancelled.current && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        const res = await api.signInPoll(pin.handle);
+        if (res.done && res.token) {
+          setToken(res.token);
+          popup?.close();
+          onReady();
+          return;
+        }
+      }
+      if (!cancelled.current) setError(new Error("Sign-in timed out. Try again."));
+    } catch (err) {
+      popup?.close();
+      setError(err instanceof ApiError && err.code === "not_owner"
+        ? new Error("That Plex account doesn't own this server. Sign in with the account that set Ether up.")
+        : err);
+    } finally {
+      if (!cancelled.current) { setBusy(false); setPending(null); }
+    }
+  };
+
+  return (
+    <main className="gate">
+      <div className="card gate-card">
+        <h1>{boot.serverName || "Ether"}</h1>
+        <p className="muted">Sign in with the Plex account that owns this server.</p>
+        <ErrorBanner error={error} />
+        {boot.signIn !== false ? (
+          <button type="button" className="btn btn-primary btn-plex" onClick={() => void signIn()} disabled={busy}>
+            {busy ? "Waiting for Plex…" : "Sign in with Plex"}
+          </button>
+        ) : null}
+        {pending ? (
+          <p className="muted small">
+            Finish signing in in the Plex window. No window? <a href={pending.authUrl} target="_blank" rel="noreferrer">Open plex.tv</a> and enter code <strong className="pin-code">{pending.code}</strong>.
+          </p>
+        ) : null}
+        <TokenFallback onReady={onReady} />
+        <p className="muted small">On the computer running Ether, open <code>http://localhost:{location.port || "32400"}/ether/</code> to skip sign-in.</p>
+      </div>
+    </main>
+  );
+}
+
+function TokenFallback({ onReady }: { onReady: () => void }) {
   const [value, setValue] = useState(getToken());
   const [error, setError] = useState<unknown>(null);
   const [checking, setChecking] = useState(false);
@@ -26,18 +90,17 @@ function TokenGate({ onReady }: { onReady: () => void }) {
     } finally { setChecking(false); }
   };
   return (
-    <main className="gate">
-      <form className="card gate-card" onSubmit={submit}>
-        <h1>Ether admin</h1>
-        <p className="muted">This server is set up. Enter the owner Plex token (<code>X-Plex-Token</code>) to manage it. The token is stored only in this browser and sent as a header — never as a cookie.</p>
+    <details className="token-fallback">
+      <summary className="muted small">Use a Plex token instead</summary>
+      <form onSubmit={submit}>
         <ErrorBanner error={error} />
         <label className="field">
-          <span className="field-label">Owner token</span>
-          <input className="input" type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" autoFocus />
+          <span className="field-label">Owner token (X-Plex-Token)</span>
+          <input className="input" type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" />
         </label>
-        <button type="submit" className="btn btn-primary" disabled={checking || !value.trim()}>{checking ? "Checking…" : "Unlock"}</button>
+        <button type="submit" className="btn" disabled={checking || !value.trim()}>{checking ? "Checking…" : "Unlock"}</button>
       </form>
-    </main>
+    </details>
   );
 }
 
@@ -55,7 +118,7 @@ function Shell({ boot, children }: { boot: Bootstrap; children: ReactNode }) {
           <NavLink to="/traces">Resolver traces</NavLink>
         </nav>
         {boot.authRequired ? (
-          <button type="button" className="btn btn-ghost btn-small" onClick={() => { setToken(""); location.reload(); }}>Lock</button>
+          <button type="button" className="btn btn-ghost btn-small" onClick={() => { setToken(""); location.reload(); }}>Sign out</button>
         ) : null}
       </header>
       <main>{children}</main>
@@ -79,7 +142,7 @@ export default function App() {
     return <main className="gate"><div className="card gate-card">{error ? <ErrorBanner error={error} /> : <Spinner label="Connecting to Ether…" />}</div></main>;
   }
   const needsToken = boot.authRequired && !boot.authenticated && !unlocked;
-  if (needsToken) return <TokenGate onReady={() => { setUnlocked(true); void loadBoot(); }} />;
+  if (needsToken) return <LoginGate boot={boot} onReady={() => { setUnlocked(true); void loadBoot(); }} />;
 
   return (
     <Shell boot={boot}>

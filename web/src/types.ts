@@ -72,7 +72,7 @@ export interface QualityRule {
 
 export interface SetupStep { id: string; title: string; complete: boolean; required: boolean; detail?: string }
 export interface SetupStatus { setupComplete: boolean; requiredComplete: boolean; steps: SetupStep[] }
-export interface Bootstrap { ok: boolean; version: string; setupComplete: boolean; authenticated: boolean; authRequired: boolean; serverName: string }
+export interface Bootstrap { ok: boolean; version: string; setupComplete: boolean; authenticated: boolean; authRequired: boolean; localTrusted?: boolean; signIn?: boolean; serverName: string }
 export interface TestResult { ok: boolean; error?: string; durationMs: number }
 export interface LogEntry { time: string; level: string; message: string; attrs?: Record<string, string> }
 export interface DiskInfo { path: string; probedPath: string; totalBytes: number; freeBytes: number; usedBytes: number; cacheBudgetBytes: number }

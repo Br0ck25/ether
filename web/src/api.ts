@@ -63,6 +63,8 @@ export const api = {
   setupComplete: (force = false) => post<SetupStatus>("/setup/complete", { force }),
   setupReopen: () => post<SetupStatus>("/setup/reopen"),
   pinStart: () => post<{ id: string; code: string; authUrl: string }>("/plex/pin"),
+  signInStart: () => post<{ handle: string; code: string; authUrl: string }>("/auth/pin"),
+  signInPoll: (handle: string) => apiFetch<{ done: boolean; token?: string }>(`/auth/pin/${encodeURIComponent(handle)}`),
   pinPoll: (id: string) => apiFetch<{ done: boolean }>(`/plex/pin/${encodeURIComponent(id)}`),
   claim: () => post<{ ok: boolean }>("/plex/claim"),
   plexStatus: () => apiFetch<Record<string, unknown>>("/plex/status"),

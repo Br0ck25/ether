@@ -55,6 +55,17 @@ type PlexAuth interface {
 	Status() any
 }
 
+// SignIn is a plex.tv PIN sign-in that, unlike PlexAuth, changes nothing on
+// the server: it only yields the signed-in account's token so the admin UI
+// can authenticate as that account.
+type SignIn interface {
+	// StartPIN creates a PIN; forwardURL is where plex.tv sends the browser
+	// after approval.
+	StartPIN(ctx context.Context, forwardURL string) (id, code, authURL string, err error)
+	// PINToken returns the account token once approved, "" while pending.
+	PINToken(ctx context.Context, id string) (string, error)
+}
+
 // UserStore is the user-administration surface (satisfied by core.Auth
 // implementations; only the two admin methods are required here).
 type UserStore interface {
@@ -85,6 +96,10 @@ type Deps struct {
 
 	// PlexAuth drives wizard step 1. Nil → pinned endpoints answer 501.
 	PlexAuth PlexAuth
+
+	// SignIn powers "Sign in with Plex" on the admin login screen. Nil
+	// leaves only the token form.
+	SignIn SignIn
 
 	// IsOwnerToken reports whether a bearer token belongs to the owner.
 	// When nil, the stored Plex owner token (config.Plex.Token) is the
@@ -137,6 +152,7 @@ type Handler struct {
 	logs    *LogBuffer
 	mux     *http.ServeMux
 	version string
+	pins    *pinHandles
 }
 
 // New returns the admin handler per the work-package contract.
@@ -163,7 +179,7 @@ func NewHandler(deps Deps) *Handler {
 	if version == "" {
 		version = "dev"
 	}
-	h := &Handler{deps: deps, log: deps.Logger, logs: deps.Logs, version: version}
+	h := &Handler{deps: deps, log: deps.Logger, logs: deps.Logs, version: version, pins: newPINHandles()}
 	h.mux = h.routes()
 	return h
 }
@@ -195,6 +211,10 @@ func (h *Handler) routes() *http.ServeMux {
 	// Public bootstrap: minimal, non-sensitive; the SPA needs it before auth.
 	mux.HandleFunc("GET /api/bootstrap", h.handleBootstrap)
 	mux.HandleFunc("GET /api/health", h.handleBootstrap)
+	// Public sign-in: yields a token only to the browser that started the
+	// PIN, and only if it belongs to the owner.
+	mux.HandleFunc("POST /api/auth/pin", h.handleSignInStart)
+	mux.HandleFunc("GET /api/auth/pin/{handle}", h.handleSignInPoll)
 
 	api("GET /api/config", h.handleGetConfig)
 	api("PUT /api/config", h.handlePutConfig)

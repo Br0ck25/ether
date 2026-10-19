@@ -24,6 +24,7 @@ func (a *App) buildAdmin() http.Handler {
 		Logs:     a.logs,
 		Version:  a.opts.Version,
 		PlexAuth: &plexAuth{app: a, pins: map[string]*plextv.PIN{}},
+		SignIn:   &plexSignIn{app: a, pins: map[string]*plextv.PIN{}},
 		IsOwnerToken: func(ctx context.Context, token string) bool {
 			u, err := a.users.Authenticate(ctx, token)
 			return err == nil && u.IsOwner
@@ -148,3 +149,44 @@ func (p *plexAuth) Claim(ctx context.Context) error {
 }
 
 func (p *plexAuth) Status() any { return p.app.registrar.Status() }
+
+// plexSignIn is the admin login: a plex.tv PIN whose token the admin
+// handler accepts only if it belongs to the owner. Unlike plexAuth it
+// changes no settings.
+type plexSignIn struct {
+	app  *App
+	mu   sync.Mutex
+	pins map[string]*plextv.PIN
+}
+
+func (p *plexSignIn) StartPIN(ctx context.Context, forwardURL string) (id, code, authURL string, err error) {
+	c := p.app.registrar.SignInClient()
+	pin, err := c.CreatePIN(ctx)
+	if err != nil {
+		return "", "", "", err
+	}
+	id = strconv.FormatInt(pin.ID, 10)
+	p.mu.Lock()
+	p.pins[id] = pin
+	p.mu.Unlock()
+	return id, pin.Code, c.AuthURL(pin, forwardURL), nil
+}
+
+func (p *plexSignIn) PINToken(ctx context.Context, id string) (string, error) {
+	p.mu.Lock()
+	pin := p.pins[id]
+	p.mu.Unlock()
+	if pin == nil {
+		return "", errors.New("unknown sign-in request")
+	}
+	got, err := p.app.registrar.SignInClient().CheckPIN(ctx, pin.ID, pin.Code)
+	if err != nil {
+		return "", err
+	}
+	if got.AuthToken != "" {
+		p.mu.Lock()
+		delete(p.pins, id)
+		p.mu.Unlock()
+	}
+	return got.AuthToken, nil
+}
