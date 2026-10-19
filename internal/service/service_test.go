@@ -118,8 +118,8 @@ type exitRecorder struct {
 	ch chan int
 }
 
-func newExitRecorder() *exitRecorder { return &exitRecorder{ch: make(chan int, 1)} }
-func (e *exitRecorder) exit(code int)  { e.ch <- code }
+func newExitRecorder() *exitRecorder  { return &exitRecorder{ch: make(chan int, 1)} }
+func (e *exitRecorder) exit(code int) { e.ch <- code }
 func (e *exitRecorder) wait(t *testing.T) int {
 	t.Helper()
 	select {
