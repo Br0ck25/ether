@@ -336,7 +336,7 @@ type browseRequest struct {
 // parseBrowse converts Plex filter/sort params into a catalogue query.
 func (s *Server) parseBrowse(ctx context.Context, sec Section, t core.MediaType, u *core.User, q url.Values) browseRequest {
 	br := browseRequest{}
-	f := core.Filter{Type: t, IncludeUnreleased: s.cfg().Catalog.ShowUnreleased}
+	f := core.Filter{Type: t}
 	if u != nil {
 		f.MaxContentRating = u.MaxContentRating
 	}
@@ -622,7 +622,6 @@ func (s *Server) sectionList(w http.ResponseWriter, r *http.Request, sec Section
 		mc.Title2 = "Unwatched"
 	case "newest":
 		br.q.Sort, br.q.Desc = core.SortReleased, true
-		br.q.Filter.IncludeUnreleased = false
 		mc.Title2 = "Recently Released"
 	case "recentlyAdded":
 		br.q.Sort, br.q.Desc = core.SortAdded, true

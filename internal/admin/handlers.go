@@ -112,10 +112,6 @@ func (h *Handler) handleSetupReopen(w http.ResponseWriter, r *http.Request) {
 // ---- Plex sign-in ----
 
 func (h *Handler) handlePINStart(w http.ResponseWriter, r *http.Request) {
-	if h.deps.PlexAuth == nil {
-		writeNotImplemented(w, "plex.tv sign-in")
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.deps.TestTimeout)
 	defer cancel()
 	id, code, authURL, err := h.deps.PlexAuth.StartPIN(ctx)
@@ -127,10 +123,6 @@ func (h *Handler) handlePINStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePINPoll(w http.ResponseWriter, r *http.Request) {
-	if h.deps.PlexAuth == nil {
-		writeNotImplemented(w, "plex.tv sign-in")
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.deps.TestTimeout)
 	defer cancel()
 	done, err := h.deps.PlexAuth.PollPIN(ctx, r.PathValue("id"))
@@ -142,10 +134,6 @@ func (h *Handler) handlePINPoll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleClaim(w http.ResponseWriter, r *http.Request) {
-	if h.deps.PlexAuth == nil {
-		writeNotImplemented(w, "plex.tv claim")
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.deps.TestTimeout)
 	defer cancel()
 	if err := h.deps.PlexAuth.Claim(ctx); err != nil {
@@ -162,9 +150,7 @@ func (h *Handler) handlePlexStatus(w http.ResponseWriter, r *http.Request) {
 		"signedIn":      cfg.Plex.Token != "",
 		"ownerUsername": cfg.Plex.OwnerUsername,
 		"ownerPlexId":   cfg.Plex.OwnerPlexID,
-	}
-	if h.deps.PlexAuth != nil {
-		out["detail"] = h.safeStatus(r, func(ctx context.Context) any { return h.deps.PlexAuth.Status() })
+		"detail":        h.safeStatus(r, func(context.Context) any { return h.deps.PlexAuth.Status() }),
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -177,11 +163,7 @@ type testResult struct {
 	DurationMs int64  `json:"durationMs"`
 }
 
-func (h *Handler) runTest(w http.ResponseWriter, r *http.Request, name string, fn func(ctx context.Context) error) {
-	if fn == nil {
-		writeNotImplemented(w, name+" testing")
-		return
-	}
+func (h *Handler) runTest(w http.ResponseWriter, r *http.Request, fn func(ctx context.Context) error) {
 	ctx, cancel := context.WithTimeout(r.Context(), h.deps.TestTimeout)
 	defer cancel()
 	start := time.Now()
@@ -213,11 +195,7 @@ func (h *Handler) handleTestUsenet(w http.ResponseWriter, r *http.Request) {
 		writeValidationError(w, errs)
 		return
 	}
-	var fn func(ctx context.Context) error
-	if h.deps.TestUsenet != nil {
-		fn = func(ctx context.Context) error { return h.deps.TestUsenet(ctx, p) }
-	}
-	h.runTest(w, r, "usenet", fn)
+	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestUsenet(ctx, p) })
 }
 
 func withProvider(p config.UsenetProvider) config.Config {
@@ -233,11 +211,7 @@ func (h *Handler) handleTestIndexer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ix = unredactIndexer(ix, h.deps.Config.Get())
-	var fn func(ctx context.Context) error
-	if h.deps.TestIndexer != nil {
-		fn = func(ctx context.Context) error { return h.deps.TestIndexer(ctx, ix) }
-	}
-	h.runTest(w, r, "indexer", fn)
+	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestIndexer(ctx, ix) })
 }
 
 func (h *Handler) handleTestTMDB(w http.ResponseWriter, r *http.Request) {
@@ -249,11 +223,7 @@ func (h *Handler) handleTestTMDB(w http.ResponseWriter, r *http.Request) {
 	if isRedacted(key) || key == "" {
 		key = h.deps.Config.Get().Catalog.TMDBKey
 	}
-	var fn func(ctx context.Context) error
-	if h.deps.TestTMDB != nil {
-		fn = func(ctx context.Context) error { return h.deps.TestTMDB(ctx, key) }
-	}
-	h.runTest(w, r, "tmdb", fn)
+	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestTMDB(ctx, key) })
 }
 
 func (h *Handler) handleTestOpenSubtitles(w http.ResponseWriter, r *http.Request) {
@@ -262,33 +232,21 @@ func (h *Handler) handleTestOpenSubtitles(w http.ResponseWriter, r *http.Request
 	prev := h.deps.Config.Get()
 	cfg.APIKey = preserve(cfg.APIKey, prev.OpenSubtitles.APIKey)
 	cfg.Password = preserve(cfg.Password, prev.OpenSubtitles.Password)
-	var fn func(ctx context.Context) error
-	if h.deps.TestOpenSubtitles != nil {
-		fn = func(ctx context.Context) error { return h.deps.TestOpenSubtitles(ctx, cfg) }
-	}
-	h.runTest(w, r, "opensubtitles", fn)
+	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestOpenSubtitles(ctx, cfg) })
 }
 
 func (h *Handler) handleTestLLM(w http.ResponseWriter, r *http.Request) {
 	cfg := h.deps.Config.Get().LLM
 	_ = decodeJSONLenient(r, &cfg)
 	cfg.APIKey = preserve(cfg.APIKey, h.deps.Config.Get().LLM.APIKey)
-	var fn func(ctx context.Context) error
-	if h.deps.TestLLM != nil {
-		fn = func(ctx context.Context) error { return h.deps.TestLLM(ctx, cfg) }
-	}
-	h.runTest(w, r, "llm", fn)
+	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestLLM(ctx, cfg) })
 }
 
 func (h *Handler) handleTestTrakt(w http.ResponseWriter, r *http.Request) {
 	cfg := h.deps.Config.Get().Trakt
 	_ = decodeJSONLenient(r, &cfg)
 	cfg.ClientSecret = preserve(cfg.ClientSecret, h.deps.Config.Get().Trakt.ClientSecret)
-	var fn func(ctx context.Context) error
-	if h.deps.TestTrakt != nil {
-		fn = func(ctx context.Context) error { return h.deps.TestTrakt(ctx, cfg) }
-	}
-	h.runTest(w, r, "trakt", fn)
+	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestTrakt(ctx, cfg) })
 }
 
 // ---- Dashboard / status / traces ----
@@ -307,8 +265,6 @@ func (h *Handler) statusProviders() map[string]StatusFunc {
 	add("catalog", h.deps.CatalogStatus)
 	add("remote", h.deps.RemoteStatus)
 	add("hwaccel", h.deps.HWAccelStatus)
-	add("updates", h.deps.UpdatesStatus)
-	add("traces", h.deps.TracesStatus)
 	for name, fn := range h.deps.ExtraStatus {
 		add(name, fn)
 	}
@@ -365,22 +321,14 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleTraces(w http.ResponseWriter, r *http.Request) {
-	if h.deps.ResolverTraces != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), h.deps.StatusTimeout)
-		defer cancel()
-		v, err := h.deps.ResolverTraces(ctx)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, "traces_failed", err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"traces": v})
+	ctx, cancel := context.WithTimeout(r.Context(), h.deps.StatusTimeout)
+	defer cancel()
+	v, err := h.deps.ResolverTraces(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "traces_failed", err.Error())
 		return
 	}
-	if h.deps.TracesStatus != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"traces": h.safeStatus(r, h.deps.TracesStatus)})
-		return
-	}
-	writeNotImplemented(w, "resolver traces")
+	writeJSON(w, http.StatusOK, map[string]any{"traces": v})
 }
 
 // ---- Disk ----
@@ -421,10 +369,6 @@ func (h *Handler) handleDisk(w http.ResponseWriter, r *http.Request) {
 // ---- Users ----
 
 func (h *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	if h.deps.Users == nil {
-		writeNotImplemented(w, "user administration")
-		return
-	}
 	users, err := h.deps.Users.Users(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
@@ -437,10 +381,6 @@ func (h *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
-	if h.deps.Users == nil {
-		writeNotImplemented(w, "user administration")
-		return
-	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_id", "user id must be a number")

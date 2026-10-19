@@ -54,11 +54,6 @@ func (m *Manager) PreResolve(ctx context.Context, user *core.User, key core.Rati
 // 64 MiB) and get 45s. Prefetch goes through Engine.Prefetch, which runs
 // at core.PriorityPrefetch and yields to live streams.
 func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps, opts core.PrewarmOptions) bool {
-	if local, ok := m.deps.LocalMedia.(interface {
-		Available(context.Context, core.RatingKey) bool
-	}); ok && local.Available(m.ctx, key) {
-		return false
-	}
 	if user == nil || caps.ClientID == "" || caps.Product == "" {
 		return false
 	}

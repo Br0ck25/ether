@@ -783,7 +783,6 @@ func newFixture() *fixture {
 			c.Plex.Claimed = true
 			c.Plex.OwnerUsername = "owner"
 			c.Transcode.RemoteMaxBitrateKbps = 8000
-			c.Catalog.ShowUnreleased = true
 			return c
 		},
 		Identity: Identity{Version: "1.43.4.10903-e5521bd8c", Platform: "Linux", PlatformVersion: "6.1"},

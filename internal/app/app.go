@@ -32,7 +32,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/invites"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/llm"
-	"github.com/braedonsaunders/ether/internal/localmedia"
 	"github.com/braedonsaunders/ether/internal/markers"
 	"github.com/braedonsaunders/ether/internal/migrate"
 	"github.com/braedonsaunders/ether/internal/newznab"
@@ -118,7 +117,6 @@ type App struct {
 	livetv            *livetv.Service
 	trackprefs        *trackprefs.Service
 	markers           *markers.Service
-	localmedia        *localmedia.Service
 	extras            *extras.Service
 	backups           *backup.Service
 	migration         *migrate.Service
@@ -284,16 +282,10 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		}
 		return ""
 	}})
-	markerFFmpeg := cfg.Transcode.FFmpegPath
-	if a.transcoder != nil {
-		markerFFmpeg = a.transcoder.FFmpegPath()
-	}
-	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
-	a.closers = append(a.closers, func() { a.markers.Close() })
+	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
 	a.buildAdoption()
 	// Playback and prefetch.
 	a.playback, err = playback.New(playback.Deps{
-		LocalMedia:   a.localmedia,
 		AugmentMedia: a.enrichSubtitles,
 		Resolver:     a.resolver,
 		Engine:       a.engine,
@@ -494,9 +486,6 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.ratings.Run(ctx) })
 	background.start(func() { a.plexDiscovery.Run(ctx) })
 	background.start(func() { a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) }) })
-	background.start(func() {
-		a.localmedia.Watch(ctx, time.Minute, func(err error) { a.log.Warn("local library scan", "err", err) })
-	})
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)

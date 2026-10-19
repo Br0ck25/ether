@@ -39,8 +39,8 @@ it as a personal collection. Generated collections are viewer-owned, in memory a
 expire. Plain title searches behave as before.
 
 When the owner enables extras, trailers appear as extras, and before a feature as
-Cinema Trailers, only when a source can play them: an owner-configured resolver
-for TMDB trailer videos, or a local trailer file. While a trailer plays, the
+Cinema Trailers, only when an owner-configured resolver can play their TMDB
+trailer videos. While a trailer plays, the
 feature is warmed so it can start without a resolution delay. Preview thumbnails for scrubbing are generated progressively
 during playback. Permitted viewers can download titles for offline viewing; the
 Download button also depends on plex.tv entitlements that Ether does not control.
@@ -153,8 +153,8 @@ produce a timestamp discontinuity.
 
 ## Sources, history and live television
 
-Local media can supplement the catalogue and takes precedence when selected.
-Owners may supply M3U playlists and XMLTV guides or assemble virtual channels.
+Ether does not index local media; owners who keep their own files run a Plex
+Media Server alongside it. Owners may supply M3U playlists and XMLTV guides or assemble virtual channels.
 Source URLs, channel access, availability and account entitlements remain the
 owner's responsibility. A successful tune response alone does not establish that
 a particular physical client has played the stream.

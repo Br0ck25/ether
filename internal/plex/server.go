@@ -115,7 +115,7 @@ type Deps struct {
 	// Optional: without it, colours are kept in memory only.
 	DB *sql.DB
 	// DisableEnrichment turns off the background title-detail and
-	// UltraBlurColors work (spike/local libraries have nothing to fetch).
+	// UltraBlurColors work (the spike test library has nothing to fetch).
 	DisableEnrichment bool
 	// Now is the clock (tests).
 	Now func() time.Time

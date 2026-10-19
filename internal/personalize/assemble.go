@@ -20,7 +20,6 @@ type assembly struct {
 	section core.MediaType // "" = Home
 	limit   int            // items per row
 	layout  *core.HomeLayout
-	rules   []core.LayoutRule
 	global  map[string]arm // server-wide evidence by prior kind
 	arms    map[string]arm // this viewer's evidence by kind
 	allowed func(core.MediaType) bool
@@ -47,7 +46,6 @@ const mmrLambda = 0.75
 const maxOwnerRows = 4
 
 func (a *assembly) run() []core.HomeRow {
-	plan := planFor(a.rules, a.user.ID, sectionName(a.section), a.hc)
 	var rows []*rankedRow
 	cands := append([]*candRow{}, a.model.rows...)
 	cands = append(cands, a.owner...)
@@ -75,7 +73,6 @@ func (a *assembly) run() []core.HomeRow {
 			continue
 		}
 		rr := &rankedRow{c: c, items: items, hubID: a.hubID(c)}
-		rr.d = plan.decide(rr.hubID, c.kind)
 		if a.layout != nil {
 			p, _ := effectiveHomePolicy(*a.layout, a.user.ID, sectionName(a.section), core.HomeRow{HubID: rr.hubID, Kind: c.kind})
 			if p != nil {
@@ -86,15 +83,7 @@ func (a *assembly) run() []core.HomeRow {
 				}
 			}
 		}
-		if c.source == core.RowSourcePlex && a.layout == nil {
-			// The front end always shows its own rows; layout rules can
-			// move them (pin, bury) but not remove them.
-			rr.d.hidden = false
-		}
 		rr.score, rr.strength = a.rowScore(c, items)
-		if rr.d.boost {
-			rr.score *= 1.5
-		}
 		// Live session intent also reorders rows, not just items.
 		rr.score *= a.intent.liftFor(items)
 		rows = append(rows, rr)
@@ -112,9 +101,6 @@ func (a *assembly) run() []core.HomeRow {
 		}
 	}
 	sort.SliceStable(visible, func(i, j int) bool {
-		if visible[i].d.bury != visible[j].d.bury {
-			return !visible[i].d.bury
-		}
 		if visible[i].score != visible[j].score {
 			return visible[i].score > visible[j].score
 		}
@@ -156,11 +142,7 @@ func (a *assembly) run() []core.HomeRow {
 	}
 	ordered := placePinned(capped, pinned, func(r *rankedRow) int { return r.d.position })
 
-	maxRows := a.maxRows
-	if plan.maxRows > 0 {
-		maxRows = plan.maxRows
-	}
-	out := a.fill(ordered, maxRows)
+	out := a.fill(ordered, a.maxRows)
 	for _, r := range hidden {
 		items := r.items
 		if len(items) > a.limit {

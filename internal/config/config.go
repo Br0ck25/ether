@@ -138,7 +138,6 @@ type Catalog struct {
 	MinVotes        int      `json:"minVotes"`
 	IncludeAdult    bool     `json:"includeAdult"`
 	RefreshInterval Duration `json:"refreshInterval"`
-	ShowUnreleased  bool     `json:"showUnreleased"` // Legacy field; release dates are always enforced.
 }
 
 type Resolver struct {

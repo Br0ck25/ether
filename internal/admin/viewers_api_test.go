@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -20,7 +21,10 @@ type fakeEngine struct {
 	limit     int
 	overrides []core.TasteOverride
 	refreshed []int64
-	rules     []core.LayoutRule
+	doc       core.HomeLayout
+	draft     core.HomeLayout
+	who       int64
+	writes    int
 	fail      error
 }
 
@@ -77,20 +81,42 @@ func (f *fakeEngine) Refresh(_ context.Context, u *core.User) error {
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeEngine) Layout(context.Context) ([]core.LayoutRule, error) { return f.rules, nil }
-func (f *fakeEngine) SetLayout(_ context.Context, rules []core.LayoutRule) ([]core.LayoutRule, error) {
-	for i, r := range rules {
-		for _, rr := range r.Rows {
-			if rr.Action == "explode" {
-				return nil, viewerFieldErr{"rules[" + string(rune('0'+i)) + "].rows[0].action", "must be pin, hide, boost or bury"}
+func (f *fakeEngine) HomeLayout(context.Context) (core.HomeLayout, error) {
+	d := f.doc
+	if d.Global == nil {
+		d.Global = []core.LayoutPage{}
+	}
+	if d.Viewers == nil {
+		d.Viewers = []core.ViewerLayout{}
+	}
+	return d, nil
+}
+func (f *fakeEngine) SetHomeLayout(_ context.Context, d core.HomeLayout) (core.HomeLayout, error) {
+	for i, p := range d.Global {
+		for j, r := range p.Rows {
+			if r.Status != "always" && r.Status != "eligible" && r.Status != "off" {
+				return d, viewerFieldErr{fmt.Sprintf("layout.global[%d].rows[%d].status", i, j), "must be always, eligible or off"}
 			}
 		}
-		if rules[i].ID == "" {
-			rules[i].ID = "r1"
-		}
 	}
-	f.rules = rules
-	return rules, nil
+	f.doc = d
+	f.writes++
+	return d, nil
+}
+func (f *fakeEngine) LayoutDefaults() map[string]int {
+	return map[string]int{"home": 14, "movies": 10, "shows": 10}
+}
+func (f *fakeEngine) PreviewLayout(_ context.Context, u *core.User, hc core.HubContext, sec string, n int, d core.HomeLayout) (*core.HomePreview, error) {
+	f.draft = d
+	f.who = u.ID
+	f.hc = hc
+	f.section = sec
+	f.limit = n
+	p := &core.HomePreview{Context: hc, GeneratedAt: time.Date(2026, 10, 19, 1, 0, 0, 0, time.UTC), Rows: []core.HomeRow{{HubID: "a", Title: "A", Kind: "a", Layer: "global", Slot: 1, AnchorSlot: 1, Placement: "global anchor at slot 1", Policy: &core.RowPolicy{Row: "a", Status: "always", Slot: 1}, PolicyLayer: "global", Items: []core.Title{poster}}}}
+	if len(d.Global) > 0 {
+		p.Rows = append(p.Rows, core.HomeRow{HubID: "new", Title: "New", Kind: "new", Layer: "personalized", Slot: 2})
+	}
+	return p, nil
 }
 func (f *fakeEngine) AvailableRows(context.Context) ([]core.RowDescriptor, error) {
 	return []core.RowDescriptor{{HubID: "top-10", Title: "Top 10 for You", Kind: "top-10", Description: "d"}}, nil
@@ -106,7 +132,7 @@ func personalizationHandler(t *testing.T, eng admin.Personalization) http.Handle
 	t.Helper()
 	store := newStore(t, nil)
 	us := &fakeUsers{users: []core.User{{ID: 1, PlexID: 11, Username: "alice", Title: "Alice", IsOwner: true}, {ID: 2, PlexID: 22, Username: "bob"}}}
-	return admin.New(admin.Deps{Config: store, Users: us, Personalization: eng})
+	return admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Users: us, Personalization: eng})
 }
 
 func TestViewersEndpoints(t *testing.T) {
@@ -223,26 +249,31 @@ func TestLayoutAndInsightsEndpoints(t *testing.T) {
 	eng := &fakeEngine{}
 	h := personalizationHandler(t, eng)
 	rec := serve(h, req(http.MethodGet, "/ether/api/layout", ""))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rules":[]`) || !strings.Contains(rec.Body.String(), `"availableRows":[{"hubId":"top-10"`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"layout":{"global":[],"viewers":[]`) || !strings.Contains(rec.Body.String(), `"availableRows":[{"hubId":"top-10"`) || strings.Contains(rec.Body.String(), `"rules"`) {
 		t.Fatalf("layout: %d %s", rec.Code, rec.Body)
 	}
-	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":{"userIds":[2]},"section":"home","rows":[{"hubId":"short-on-time","action":"pin","position":1,"when":{"days":[1,2,3,4],"fromHour":18}}],"maxRows":8}]}`))
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"layout":{"global":[],"viewers":[{"userId":2,"pages":[{"section":"home","maxRows":8,"rows":[{"row":"short-on-time","status":"always","slot":2,"when":{"days":[1,2,3,4],"fromHour":18}}]}]}]}}`))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("put layout: %d %s", rec.Code, rec.Body)
 	}
-	if len(eng.rules) != 1 || eng.rules[0].Scope.All || eng.rules[0].Scope.UserIDs[0] != 2 || *eng.rules[0].Rows[0].Position != 1 || *eng.rules[0].Rows[0].When.FromHour != 18 {
-		t.Fatalf("rules = %+v", eng.rules)
+	if len(eng.doc.Viewers) != 1 || eng.doc.Viewers[0].UserID != 2 || eng.doc.Viewers[0].Pages[0].Rows[0].Slot != 2 || *eng.doc.Viewers[0].Pages[0].Rows[0].When.FromHour != 18 {
+		t.Fatalf("layout = %+v", eng.doc)
 	}
-	if !strings.Contains(rec.Body.String(), `"scope":{"userIds":[2]}`) || !strings.Contains(rec.Body.String(), `"id":"r1"`) {
+	if !strings.Contains(rec.Body.String(), `"userId":2`) || !strings.Contains(rec.Body.String(), `"defaults":{"maxRows":{"home":14`) {
 		t.Fatalf("put layout response: %s", rec.Body)
 	}
-	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":"all","rows":[{"hubId":"x","action":"explode"}]}]}`))
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "rows[0].action") {
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"layout":{"global":[{"section":"home","rows":[{"row":"x","status":"explode"}]}],"viewers":[]}}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "rows[0].status") {
 		t.Fatalf("invalid layout: %d %s", rec.Code, rec.Body)
 	}
-	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":"everyone","rows":[]}]}`))
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("bad scope: %d", rec.Code)
+	// Only the document is accepted; a rules list is an unknown field.
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":"all","rows":[]}]}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `rules`) {
+		t.Fatalf("rules body: %d %s", rec.Code, rec.Body)
+	}
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"field":"layout"`) {
+		t.Fatalf("missing layout: %d %s", rec.Code, rec.Body)
 	}
 
 	rec = serve(h, req(http.MethodGet, "/ether/api/insights/rows", ""))
@@ -252,15 +283,5 @@ func TestLayoutAndInsightsEndpoints(t *testing.T) {
 	rec = serve(h, req(http.MethodGet, "/ether/api/insights/activity", ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"days":[{"date":"2026-10-18","plays":3,"hours":2.5,"uniqueViewers":2}]`) {
 		t.Fatalf("insights activity: %d %s", rec.Code, rec.Body)
-	}
-}
-
-func TestPersonalizationNotWired(t *testing.T) {
-	store := newStore(t, nil)
-	h := admin.New(admin.Deps{Config: store})
-	for _, p := range []string{"/ether/api/viewers", "/ether/api/viewers/1/home", "/ether/api/layout", "/ether/api/insights/rows", "/ether/api/insights/activity"} {
-		if rec := serve(h, req(http.MethodGet, p, "")); rec.Code != http.StatusNotImplemented {
-			t.Fatalf("%s: %d", p, rec.Code)
-		}
 	}
 }

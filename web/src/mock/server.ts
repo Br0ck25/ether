@@ -159,7 +159,6 @@ function defaultConfig(): EtherConfig {
       minVotes: 100,
       includeAdult: false,
       refreshInterval: "24h0m0s",
-      showUnreleased: false,
     },
     resolver: {
       allowCam: false,
@@ -294,8 +293,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
       setupComplete: true,
       authenticated: true,
       authRequired: false,
-      localTrusted: true,
-      signIn: true,
       serverName: "Living Room Ether",
       ...opts.bootstrap,
     } as Bootstrap,

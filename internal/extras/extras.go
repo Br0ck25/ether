@@ -4,8 +4,7 @@
 // TMDB only gives YouTube/Vimeo keys, which official Plex apps cannot
 // play, so an extra is only advertised when a playable source exists: an
 // owner-configured yt-dlp-compatible resolver command that turns a video
-// page into a direct media URL, or a trailer file in the owner's local
-// libraries. Ether ships no resolver binary and no content.
+// page into a direct media URL. Ether ships no resolver binary and no content.
 package extras
 
 import (
@@ -14,7 +13,6 @@ import (
 	"hash/fnv"
 	"log/slog"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -25,11 +23,8 @@ import (
 	"github.com/braedonsaunders/ether/internal/tmdb"
 )
 
-// Source kinds of an Extra.
-const (
-	SourceCommand = "command" // TMDB video resolved by the owner's command
-	SourceLocal   = "local"   // trailer file in a local library
-)
+// SourceCommand marks an Extra whose TMDB video is resolved by the owner's command.
+const SourceCommand = "command"
 
 // MaxExtras caps how many extras one title advertises.
 const MaxExtras = 10
@@ -49,10 +44,9 @@ type Extra struct {
 	PublishedAt time.Time
 	Size        int // vertical resolution when known
 	Duration    time.Duration
-	Source      string // SourceCommand or SourceLocal
+	Source      string // SourceCommand
 
-	identity  string // registry identity (collision detection)
-	localPath string // SourceLocal only
+	identity string // registry identity (collision detection)
 }
 
 // IsTrailer reports whether the extra can serve as a Cinema Trailer.
@@ -60,20 +54,14 @@ func (e Extra) IsTrailer() bool { return e.Subtype == "trailer" || e.Subtype == 
 
 // Resolved is a playable location for an extra.
 type Resolved struct {
-	URL       string // direct media URL (command source)
-	LocalPath string // local file path (local source)
+	URL       string // direct media URL
 	Headers   map[string]string
-	Expires   time.Time // zero for local files
+	Expires   time.Time
 	Container string
 }
 
-// Input returns the ffmpeg input (URL or local path).
-func (r Resolved) Input() string {
-	if r.LocalPath != "" {
-		return r.LocalPath
-	}
-	return r.URL
-}
+// Input returns the ffmpeg input.
+func (r Resolved) Input() string { return r.URL }
 
 // VideoProvider is the TMDB videos surface the service needs
 // (*tmdb.Client satisfies it).
@@ -84,20 +72,6 @@ type VideoProvider interface {
 	EpisodeVideos(ctx context.Context, tvID int64, season, episode int, lang string) ([]tmdb.Video, error)
 }
 
-// LocalFile is one indexed local media file.
-type LocalFile struct {
-	Path      string
-	Key       core.RatingKey // matched title, 0 when unmatched
-	Size      int64
-	Duration  time.Duration
-	Container string
-}
-
-// LocalLister lists local library files (adapted from localmedia).
-type LocalLister interface {
-	LocalFiles(ctx context.Context) ([]LocalFile, error)
-}
-
 // CommandRunner runs the resolver command and returns its stdout. Tests
 // substitute a fake; the default is exec without a shell.
 type CommandRunner func(ctx context.Context, name string, args []string) ([]byte, error)
@@ -105,7 +79,6 @@ type CommandRunner func(ctx context.Context, name string, args []string) ([]byte
 // Options are the extras service dependencies.
 type Options struct {
 	Videos   VideoProvider
-	Local    LocalLister
 	Config   func() config.Extras
 	Logger   *slog.Logger
 	Now      func() time.Time
@@ -122,7 +95,6 @@ type listEntry struct {
 // Service lists, registers and resolves extras. Safe for concurrent use.
 type Service struct {
 	videos VideoProvider
-	local  LocalLister
 	cfgFn  func() config.Extras
 	log    *slog.Logger
 	now    func() time.Time
@@ -163,7 +135,7 @@ func New(o Options) *Service {
 		o.LookPath = exec.LookPath
 	}
 	return &Service{
-		videos: o.Videos, local: o.Local, cfgFn: o.Config,
+		videos: o.Videos, cfgFn: o.Config,
 		log: o.Logger.With("component", "extras"), now: o.Now,
 		ttl: o.CacheTTL, runner: o.Runner, look: o.LookPath,
 		registry: map[core.RatingKey]Extra{}, lists: map[string]listEntry{},
@@ -183,14 +155,9 @@ func (s *Service) CommandAvailable() bool {
 	return err == nil
 }
 
-// LocalAvailable reports whether local trailer files can be a source.
-func (s *Service) LocalAvailable() bool {
-	return s.cfg().LocalTrailers && s.local != nil
-}
-
 // Enabled reports whether any playable extras can be advertised.
 func (s *Service) Enabled() bool {
-	return s.cfg().Enabled && (s.CommandAvailable() || s.LocalAvailable())
+	return s.cfg().Enabled && s.CommandAvailable()
 }
 
 // DisabledReason explains why extras are off, for a startup log line.
@@ -202,8 +169,8 @@ func (s *Service) DisabledReason() string {
 		return "extras disabled in config (extras.enabled is false)"
 	case s.Enabled():
 		return ""
-	case strings.TrimSpace(c.ResolverCommand) == "" && !s.LocalAvailable():
-		return "extras enabled but no playable source: set extras.resolverCommand to a yt-dlp-compatible tool or enable local trailers"
+	case strings.TrimSpace(c.ResolverCommand) == "":
+		return "extras enabled but no playable source: set extras.resolverCommand to a yt-dlp-compatible tool"
 	default:
 		return fmt.Sprintf("extras resolver command %q not found or not executable", c.ResolverCommand)
 	}
@@ -248,14 +215,6 @@ func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]
 			s.log.Debug("tmdb videos", "key", parent.Key, "err", err)
 		}
 		out = append(out, videosToExtras(parent, vs)...)
-	}
-	if s.LocalAvailable() {
-		files, err := s.local.LocalFiles(ctx)
-		if err != nil {
-			s.log.Debug("local trailers", "key", parent.Key, "err", err)
-		} else {
-			out = append(out, localExtras(parent, files)...)
-		}
 	}
 	out = dedupeExtras(out)
 	sortExtras(out, iso)
@@ -360,38 +319,10 @@ func (s *Service) pruneLocked() {
 // Resolve turns an extra into a playable input, caching command results
 // until the returned URL expires.
 func (s *Service) Resolve(ctx context.Context, e Extra) (Resolved, error) {
-	switch e.Source {
-	case SourceLocal:
-		return s.resolveLocal(ctx, e)
-	case SourceCommand:
+	if e.Source == SourceCommand {
 		return s.resolveCommand(ctx, e)
 	}
 	return Resolved{}, fmt.Errorf("extras: unknown source %q", e.Source)
-}
-
-func (s *Service) resolveLocal(ctx context.Context, e Extra) (Resolved, error) {
-	if !s.LocalAvailable() || e.localPath == "" {
-		return Resolved{}, core.ErrNotFound
-	}
-	files, err := s.local.LocalFiles(ctx)
-	if err != nil {
-		return Resolved{}, err
-	}
-	for _, f := range files {
-		if f.Path != e.localPath {
-			continue
-		}
-		st, err := filepathAbsStat(f.Path)
-		if err != nil || !st {
-			return Resolved{}, core.ErrNotFound
-		}
-		ct := f.Container
-		if ct == "" {
-			ct = strings.TrimPrefix(strings.ToLower(filepath.Ext(f.Path)), ".")
-		}
-		return Resolved{LocalPath: f.Path, Container: ct}, nil
-	}
-	return Resolved{}, core.ErrNotFound
 }
 
 func (s *Service) resolveCommand(ctx context.Context, e Extra) (Resolved, error) {
@@ -509,16 +440,15 @@ func langRank(e Extra, iso string) int {
 	return 3
 }
 
-// sortExtras orders by type, official/local first, viewer language,
-// resolution, then newest. Local (owner-provided) trailers rank with
-// official ones.
+// sortExtras orders by type, official first, viewer language,
+// resolution, then newest.
 func sortExtras(es []Extra, iso string) {
 	sort.SliceStable(es, func(i, j int) bool {
 		a, b := es[i], es[j]
 		if ra, rb := typeRank(a.Subtype), typeRank(b.Subtype); ra != rb {
 			return ra < rb
 		}
-		oa, ob := a.Official || a.Source == SourceLocal, b.Official || b.Source == SourceLocal
+		oa, ob := a.Official, b.Official
 		if oa != ob {
 			return oa
 		}

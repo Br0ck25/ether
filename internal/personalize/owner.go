@@ -22,7 +22,7 @@ const previewWait = 45 * time.Second
 // viewer in this context (the same assembly as HomeHubsFor and
 // SectionHubsFor), plus the rows the front end adds itself (Continue
 // Watching and Recently Added in sections, Recent Playlists on Home),
-// marked source "plex". Rows hidden by a layout rule are included last
+// marked source "plex". Rows hidden by a layout policy are included last
 // with Hidden set; Plex never receives them.
 //
 // section is "" or "home", "movies", "shows", or a library section id.
@@ -289,28 +289,7 @@ func (e *Engine) SetTasteOverrides(ctx context.Context, user *core.User, os []co
 	return e.Taste(ctx, user)
 }
 
-// Layout returns the owner's layout rules.
-func (e *Engine) Layout(ctx context.Context) ([]core.LayoutRule, error) {
-	rules := e.layoutRules()
-	out := make([]core.LayoutRule, len(rules))
-	copy(out, rules)
-	return out, nil
-}
-
-// SetLayout validates and stores layout rules; they apply to the next
-// /hubs request.
-func (e *Engine) SetLayout(ctx context.Context, rules []core.LayoutRule) ([]core.LayoutRule, error) {
-	norm, err := normalizeLayout(rules)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := e.SetHomeLayout(ctx, migrateLayout(norm)); err != nil {
-		return nil, err
-	}
-	return e.Layout(ctx)
-}
-
-// AvailableRows lists the row kinds layout rules can target, plus owner
+// AvailableRows lists the row kinds layout policies can target, plus owner
 // collection rows recently served.
 func (e *Engine) AvailableRows(ctx context.Context) ([]core.RowDescriptor, error) {
 	e.rec.flush(ctx)

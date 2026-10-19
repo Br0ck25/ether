@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -26,17 +25,7 @@ func tokenFromRequest(r *http.Request) string {
 }
 
 func (h *Handler) isOwner(r *http.Request, token string) bool {
-	if token == "" {
-		return false
-	}
-	if h.deps.IsOwnerToken != nil {
-		return h.deps.IsOwnerToken(r.Context(), token)
-	}
-	stored := h.deps.Config.Get().Plex.Token
-	if stored == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(stored)) == 1
+	return token != "" && h.deps.IsOwnerToken(r.Context(), token)
 }
 
 // isLocalOrLAN reports whether the direct peer is loopback, RFC-1918
@@ -98,8 +87,6 @@ func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		"setupComplete": cfg.SetupComplete,
 		"authenticated": authed,
 		"authRequired":  cfg.SetupComplete,
-		"localTrusted":  false,
-		"signIn":        h.deps.SignIn != nil,
 		"serverName":    cfg.Server.FriendlyName,
 	})
 }

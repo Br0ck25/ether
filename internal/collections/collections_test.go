@@ -22,7 +22,7 @@ func setup(t *testing.T) (*collections.Service, *catalog.Catalog) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	cfg := config.Catalog{Language: "en-US", Region: "US", MinPopularity: 5, MinVotes: 100, ShowUnreleased: true}
+	cfg := config.Catalog{Language: "en-US", Region: "US", MinPopularity: 5, MinVotes: 100}
 	cat, err := catalog.New(db, nil, cfg, slog.Default())
 	if err != nil {
 		t.Fatal(err)

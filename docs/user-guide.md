@@ -54,8 +54,7 @@ file under these names:
 - `downloads`: offline downloads, on for the owner. Set `allowFriends` to let
   viewers download.
 - `extras`: trailers and Cinema Trailers, off until `enabled` is set. Configure
-  `resolverCommand` (a yt-dlp-compatible tool you install) or keep
-  `localTrailers` for trailer files in your local libraries.
+  `resolverCommand`, a yt-dlp-compatible tool you install.
 - `personalize`: post-play ranking, detail-page headers and session-based Home
   changes.
 - `transcode`: `fastStart`, `abrLadder`, `vbvReservoir` and `spikeGovernor`

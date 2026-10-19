@@ -28,7 +28,6 @@ import (
 // Deps are the components playback orchestrates. Resolver, Engine,
 // Transcoder, Catalog and SelectProfile are required.
 type Deps struct {
-	LocalMedia   LocalMedia                                                                                          // optional adopted files, tried before Usenet
 	AugmentMedia func(context.Context, *core.Title, *core.User, *core.Resolution, core.MediaSource, *core.MediaInfo) // synchronous enrichment before publishing a generation
 	Resolver     core.Resolver
 	Engine       core.Engine

@@ -76,17 +76,15 @@ export default function Login({ boot, onReady }: { boot: Bootstrap; onReady: () 
             <AlertDescription>{errorMessage(error)}</AlertDescription>
           </Alert>
         ) : null}
-        {boot.signIn !== false ? (
-          <Button
-            type="button"
-            size="lg"
-            className="w-full"
-            onClick={() => void signIn()}
-            disabled={busy}
-          >
-            {busy ? "Waiting for Plex…" : "Sign in with Plex"}
-          </Button>
-        ) : null}
+        <Button
+          type="button"
+          size="lg"
+          className="w-full"
+          onClick={() => void signIn()}
+          disabled={busy}
+        >
+          {busy ? "Waiting for Plex…" : "Sign in with Plex"}
+        </Button>
         {pending ? (
           <p className="mt-3 text-center text-xs text-fg-muted">
             Finish signing in in the Plex window. No window?{" "}

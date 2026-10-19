@@ -11,7 +11,6 @@ const remoteBoot = {
   setupComplete: true,
   authenticated: false,
   authRequired: true,
-  signIn: true,
   serverName: "Ether",
 };
 
@@ -94,7 +93,7 @@ describe("sign-in", () => {
 
   it("is skipped on the server machine itself", async () => {
     const fake = createFakeServer({
-      bootstrap: { authenticated: true, authRequired: false, localTrusted: true },
+      bootstrap: { authenticated: true, authRequired: false },
     });
     vi.stubGlobal("fetch", vi.fn(fake.fetch));
     renderApp();

@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -36,7 +35,6 @@ type Options struct {
 	Config func() (bool, string) // current TheIntroDB enabled state and optional end-user key
 
 	Logger     *slog.Logger
-	Detector   DetectOptions
 	DB         *sql.DB
 	Enabled    bool
 	BaseURL    string
@@ -57,13 +55,7 @@ type Options struct {
 	Dialogue func(ctx context.Context, key core.RatingKey, info core.MediaInfo) ([]DialogueCue, bool)
 }
 type Service struct {
-	o       Options
-	mu      sync.Mutex
-	jobs    chan detectJob
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	closed  bool
-	pending map[core.RatingKey]bool
+	o Options
 }
 
 func New(o Options) *Service {

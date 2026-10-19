@@ -65,10 +65,6 @@ func (h *Handler) handleSignInStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "csrf", "mutating requests require the X-Ether-Request: 1 header and a JSON content type")
 		return
 	}
-	if h.deps.SignIn == nil {
-		writeError(w, http.StatusNotImplemented, "not_wired", "Plex sign-in is not available")
-		return
-	}
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
@@ -85,10 +81,6 @@ func (h *Handler) handleSignInStart(w http.ResponseWriter, r *http.Request) {
 // handleSignInPoll reports whether the PIN was approved. The token is
 // returned only if the account owns this server.
 func (h *Handler) handleSignInPoll(w http.ResponseWriter, r *http.Request) {
-	if h.deps.SignIn == nil {
-		writeError(w, http.StatusNotImplemented, "not_wired", "Plex sign-in is not available")
-		return
-	}
 	handle := r.PathValue("handle")
 	pinID, ok := h.pins.get(handle)
 	if !ok {
