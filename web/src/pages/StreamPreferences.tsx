@@ -48,7 +48,7 @@ export default function StreamPreferences() {
   async function forget(showId: number) { try { await apiFetch(`/stream-preferences/${user}/shows/${showId}`, { method: "DELETE" }); setMemory(m => m.filter(x => x.showId !== showId)); } catch (e) { setMessage(errorMessage(e)); } }
   async function loadCoverage() { setCoverage(null); try { setCoverage(await apiFetch<Coverage>(`/markers/shows/${encodeURIComponent(show)}`)); } catch (e) { setMessage(errorMessage(e)); } }
   async function sync() { setBusy(true); setSynced(""); try { const result = await apiFetch<{ externalUrl: string }>(`/subtitle-sync/${encodeURIComponent(subtitle.replace(/^ether-subtitle:/, ""))}`, { method: "POST", body: JSON.stringify({ offsetMs: Number(offset), rate: Number(rate), reference, apply: applySync }) }); setSynced(result.externalUrl); } catch (e) { setMessage(errorMessage(e)); } finally { setBusy(false); } }
-  return <PageContainer className="max-w-4xl space-y-8">
+  return <PageContainer className="space-y-6">
     <PageHeader title="Audio, subtitles and skipping" description="Set owner defaults or a viewer override. Plex track changes are remembered for later episodes of the same show." />
     <div className="border-b border-border"><SubtabNav ariaLabel="Stream tools" active={tab} onSelect={setTab} tabs={[{key:"preferences",label:"Preferences"},{key:"memory",label:"Show memory"},{key:"markers",label:"Intro & credits"},{key:"sync",label:"Subtitle timing"}]} /></div>
     {message && !preferencesOpen && !syncOpen && <p role="status" className="rounded-md border border-border p-3 text-sm">{message}</p>}
