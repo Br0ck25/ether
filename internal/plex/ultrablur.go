@@ -253,9 +253,27 @@ func (c *ultraBlurCache) save(ctx context.Context, key core.RatingKey, path stri
 // computeUltraBlur fetches a backdrop's small variant through the artwork
 // cache and derives its corner colours.
 func (s *Server) computeUltraBlur(ctx context.Context, path string) (model.UltraBlurColors, error) {
-	img, err := s.images.get(ctx, s.d.ImageURL(path, ultraBlurImageSize), s.now())
-	if err != nil {
-		return model.UltraBlurColors{}, err
+	// The artwork cache finishes a fetch even if its first caller goes
+	// away (others may be waiting on it), so wait here with ctx: shutdown
+	// must not block on a slow CDN.
+	type result struct {
+		img *cachedImage
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		img, err := s.images.get(ctx, s.d.ImageURL(path, ultraBlurImageSize), s.now())
+		ch <- result{img, err}
+	}()
+	var img *cachedImage
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return model.UltraBlurColors{}, r.err
+		}
+		img = r.img
+	case <-ctx.Done():
+		return model.UltraBlurColors{}, ctx.Err()
 	}
 	decoded, _, err := image.Decode(bytes.NewReader(img.data))
 	if err != nil {

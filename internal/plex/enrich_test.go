@@ -206,6 +206,40 @@ func TestUltraBlurComputedLazilyAndPersisted(t *testing.T) {
 	}
 }
 
+// blockingCDN never answers until the request's context ends.
+type blockingCDN struct{ started chan struct{} }
+
+func (b *blockingCDN) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case b.started <- struct{}{}:
+	default:
+	}
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
+func TestCloseDoesNotWaitForSlowArtwork(t *testing.T) {
+	f := newFixture()
+	f.srv.Close()
+	cdn := &blockingCDN{started: make(chan struct{}, 1)}
+	d := f.srv.d
+	d.HTTPClient = &http.Client{Transport: cdn}
+	f.srv = NewServer(d)
+	f.get(t, "/library/metadata/1000000000000550")
+	select {
+	case <-cdn.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("UltraBlur fetch never started")
+	}
+	done := make(chan struct{})
+	go func() { f.srv.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close blocked on an in-flight artwork fetch")
+	}
+}
+
 func TestUltraBlurFailureIsRetriedLater(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
