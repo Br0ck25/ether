@@ -239,6 +239,13 @@ func TestWarmFloorAfterProviderUpdate(t *testing.T) {
 	p2.Connections = 6 // changed settings: fresh pool
 	f.Update([]config.UsenetProvider{p2})
 	st := waitLive(t, f, "p", 2)
+	// LiveConnections includes background dials in flight. Wait for both
+	// warm dials to complete before asserting on the completed-redial counter.
+	deadline := time.Now().Add(2 * time.Second)
+	for st.BackgroundRedials < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		st = statsFor(f, "p")
+	}
 	if st.ConfiguredConnections != 6 || st.BackgroundRedials < 2 {
 		t.Fatalf("replacement pool not warmed: %+v", st)
 	}

@@ -119,6 +119,22 @@ func TestListHiddenWithoutSource(t *testing.T) {
 	}
 }
 
+func TestListingCachesStayBounded(t *testing.T) {
+	s := New(Options{
+		Videos: fakeVideos{[]tmdb.Video{{Site: "YouTube", Key: "trlOffEN001", Type: "Trailer", Official: true}}},
+		Config: enabledCfg("yt-dlp"), LookPath: lookOK, Now: func() time.Time { return testNow },
+	})
+	for id := int64(1); id <= maxListEntries+1; id++ {
+		title := &core.Title{Key: core.MovieKey(id), Type: core.TypeMovie, IDs: core.IDs{TMDB: id}}
+		if _, err := s.List(context.Background(), title, "en"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(s.lists) > maxListEntries || len(s.registry) > maxRegistryEntries {
+		t.Fatalf("unbounded list/registry caches: lists=%d registry=%d", len(s.lists), len(s.registry))
+	}
+}
+
 func TestLocalTrailers(t *testing.T) {
 	dir := t.TempDir()
 	feature := filepath.Join(dir, "The Matrix (1999).mkv")

@@ -136,6 +136,12 @@ type Service struct {
 	resolved map[string]Resolved
 }
 
+const (
+	maxListEntries     = 2048
+	maxRegistryEntries = 8192
+	maxResolvedEntries = 2048
+)
+
 // New builds the extras service.
 func New(o Options) *Service {
 	if o.Config == nil {
@@ -227,6 +233,9 @@ func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]
 	s.mu.Lock()
 	if e, ok := s.lists[cacheKey]; ok && s.now().Before(e.expires) {
 		out := append([]Extra(nil), e.extras...)
+		for i := range out {
+			out[i] = s.registerLocked(out[i])
+		}
 		s.mu.Unlock()
 		return out, nil
 	}
@@ -254,8 +263,15 @@ func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]
 		out = out[:MaxExtras]
 	}
 	s.mu.Lock()
+	s.pruneLocked()
 	for i := range out {
 		out[i] = s.registerLocked(out[i])
+	}
+	if len(s.lists) >= maxListEntries {
+		for k := range s.lists {
+			delete(s.lists, k)
+			break
+		}
 	}
 	s.lists[cacheKey] = listEntry{extras: append([]Extra(nil), out...), expires: s.now().Add(s.ttl)}
 	s.mu.Unlock()
@@ -314,8 +330,30 @@ func (s *Service) registerLocked(e Extra) Extra {
 			continue
 		}
 		e.Key = key
+		if len(s.registry) >= maxRegistryEntries {
+			for k := range s.registry {
+				delete(s.registry, k)
+				break
+			}
+		}
 		s.registry[key] = e
 		return e
+	}
+}
+
+// pruneLocked removes expired cache records. The hard caps below also bound
+// entries whose keys are never revisited and therefore never expire lazily.
+func (s *Service) pruneLocked() {
+	now := s.now()
+	for k, v := range s.lists {
+		if !now.Before(v.expires) {
+			delete(s.lists, k)
+		}
+	}
+	for k, v := range s.resolved {
+		if !v.Expires.IsZero() && !now.Before(v.Expires) {
+			delete(s.resolved, k)
+		}
 	}
 }
 
@@ -372,7 +410,16 @@ func (s *Service) resolveCommand(ctx context.Context, e Extra) (Resolved, error)
 		return Resolved{}, err
 	}
 	s.mu.Lock()
+	s.pruneLocked()
 	s.resolved[cacheKey] = r
+	if len(s.resolved) > maxResolvedEntries {
+		for k := range s.resolved {
+			if k != cacheKey {
+				delete(s.resolved, k)
+				break
+			}
+		}
+	}
 	s.mu.Unlock()
 	return r, nil
 }
