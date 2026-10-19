@@ -224,30 +224,40 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 }
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
-// DefaultDataDir is where Ether keeps config, database and cache.
+// DefaultDataDir is where Ether keeps config, database and cache. On
+// Windows that is %ProgramData%\Ether: the server runs as a LocalSystem
+// service, so a per-user directory would depend on who installed it.
 func DefaultDataDir() string {
-	if v := os.Getenv("ETHER_DATA_DIR"); v != "" {
+	return defaultDataDir(runtime.GOOS, os.Getenv, os.UserHomeDir, os.Geteuid)
+}
+
+func defaultDataDir(goos string, getenv func(string) string, home func() (string, error), euid func() int) string {
+	if v := getenv("ETHER_DATA_DIR"); v != "" {
 		return v
 	}
-	switch runtime.GOOS {
+	switch goos {
 	case "windows":
-		if v := os.Getenv("LOCALAPPDATA"); v != "" {
-			return filepath.Join(v, "Ether")
+		base := getenv("PROGRAMDATA")
+		if base == "" {
+			base = `C:\ProgramData`
 		}
+		// Join with a backslash explicitly so the result is right even
+		// when computed (in tests) on a non-Windows host.
+		return strings.TrimRight(base, `\/`) + `\Ether`
 	case "darwin":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "Ether")
+		if h, err := home(); err == nil {
+			return filepath.Join(h, "Library", "Application Support", "Ether")
 		}
 	case "linux":
-		if os.Geteuid() == 0 {
+		if euid() == 0 {
 			return "/var/lib/ether"
 		}
-		if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+		if v := getenv("XDG_DATA_HOME"); v != "" {
 			return filepath.Join(v, "ether")
 		}
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "ether")
+	h, _ := home()
+	return filepath.Join(h, ".local", "share", "ether")
 }
 
 // Store loads, saves and broadcasts the config.

@@ -73,14 +73,17 @@ func newApp(log *slog.Logger) *app {
 	}
 	dataDir := config.DefaultDataDir()
 	cfg := config.Updates{Channel: "stable"}
-	if store, err := config.Open(dataDir); err == nil {
+	if store, err := openServerConfig(dataDir); err == nil {
 		c := store.Get()
 		cfg = c.Updates
 		if c.Server.Port != 0 && os.Getenv("ETHER_URL") == "" {
 			base = fmt.Sprintf("http://127.0.0.1:%d", c.Server.Port)
 		}
 	} else {
-		log.Debug("tray: config not loaded; using defaults", "err", err)
+		// Expected on Windows: the service's %ProgramData%\Ether is locked
+		// to SYSTEM and Administrators, so the tray (a normal user) uses
+		// the default port and update settings.
+		log.Debug("tray: server config not readable; using defaults", "dir", dataDir, "err", err)
 	}
 	a := &app{
 		baseURL:   base,
@@ -109,6 +112,19 @@ func newApp(log *slog.Logger) *app {
 		log.Debug("tray: update checks disabled", "err", err)
 	}
 	return a
+}
+
+// openServerConfig opens the server's config only when config.json is
+// already readable. config.Open creates the directory, config.json and the
+// credential key when they are missing, which the tray must never do: it
+// would leave user-owned files in the service's data directory.
+func openServerConfig(dataDir string) (*config.Store, error) {
+	f, err := os.Open(filepath.Join(dataDir, "config.json"))
+	if err != nil {
+		return nil, err
+	}
+	f.Close()
+	return config.Open(dataDir)
 }
 
 // serverExecutable locates the ether server binary relative to the tray:
