@@ -90,7 +90,7 @@ type Service struct {
 	scorerErr error
 
 	mu            sync.RWMutex
-	bad           map[string]string
+	bad           map[string]time.Time // release id -> when it was (last) marked bad
 	reps          map[string]reputation
 	avail         map[int64]availEntry
 	searchCache   map[string]searchCacheEntry
@@ -120,7 +120,7 @@ var _ core.Resolver = (*Service)(nil)
 func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config.Config, opts Options) *Service {
 	s := &Service{
 		indexer: indexer, health: health, db: db,
-		bad: map[string]string{}, reps: map[string]reputation{},
+		bad: map[string]time.Time{}, reps: map[string]reputation{},
 		avail: map[int64]availEntry{}, searchCache: map[string]searchCacheEntry{},
 		flights:       map[string]*inflight{},
 		retentionDays: opts.RetentionDays,
@@ -205,7 +205,7 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 		return fmt.Errorf("resolver: empty release id")
 	}
 	s.mu.Lock()
-	s.bad[releaseID] = reason
+	s.bad[releaseID] = s.now()
 	s.mu.Unlock()
 	s.forgetVerified(ctx, releaseID)
 	return s.persistBad(ctx, releaseID, reason)
@@ -214,8 +214,8 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 func (s *Service) isBad(id string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.bad[id]
-	return ok
+	at, ok := s.bad[id]
+	return ok && s.now().Sub(at) < badRetention
 }
 
 // Traces returns the most recent resolution traces, newest first.
@@ -466,6 +466,8 @@ func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Re
 		}
 	}
 	s.mu.Lock()
+	now := s.now()
+	boundMap(s.searchCache, maxSearchCache, func(e searchCacheEntry) bool { return !now.Before(e.expires) })
 	s.searchCache[key] = searchCacheEntry{results: append([]core.Release(nil), results...), expires: s.now().Add(s.searchTTL())}
 	s.mu.Unlock()
 	return results, nil
