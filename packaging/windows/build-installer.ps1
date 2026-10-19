@@ -15,7 +15,7 @@ $ldflags = "-s -w" +
   " -X github.com/braedonsaunders/ether/internal/updater.Version=$Version" +
   " -X github.com/braedonsaunders/ether/internal/updater.Commit=$env:COMMIT" +
   " -X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64=$env:ETHER_UPDATE_PUBLIC_KEY" +
-  " -X github.com/braedonsaunders/ether/internal/tmdb.BundledAPIKey=$env:ETHER_TMDB_KEY"
+  " -X github.com/braedonsaunders/ether/internal/tmdb.BundledKey=$env:ETHER_TMDB_KEY"
 
 Write-Host "==> building ether.exe + ether-tray.exe (windows/$Arch, CGO_ENABLED=0)"
 $env:CGO_ENABLED = "0"; $env:GOOS = "windows"; $env:GOARCH = $Arch

@@ -344,7 +344,10 @@ type StreamInfo struct {
 
 	// DolbyVisionProfile is the DV profile (5, 7, 8...) from the DOVI
 	// configuration record; 0 when unknown or not Dolby Vision.
-	DolbyVisionProfile int `json:"dolbyVisionProfile,omitempty"`
+	DolbyVisionProfile         int    `json:"dolbyVisionProfile,omitempty"`
+	DolbyVisionLevel           int    `json:"dolbyVisionLevel,omitempty"`
+	DolbyVisionCompatibilityID int    `json:"dolbyVisionCompatibilityId,omitempty"`
+	CodecString                string `json:"codecString,omitempty"` // RFC 6381, derived from the codec configuration
 }
 
 type Chapter struct {
