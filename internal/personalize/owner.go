@@ -22,8 +22,10 @@ const previewWait = 45 * time.Second
 // viewer in this context (the same assembly as HomeHubsFor and
 // SectionHubsFor), plus the rows the front end adds itself (Continue
 // Watching and Recently Added in sections, Recent Playlists on Home),
-// marked source "plex". Rows hidden by a layout rule are included last
-// with Hidden set; Plex never receives them.
+// marked source "plex". Rows that are not on the page (off, out of
+// schedule, capped, cut by the page length, too thin) are included last
+// with Hidden set and a HiddenReason; Plex never receives them. Every row
+// carries its provenance (Layer, Slot, Placement, Policy).
 //
 // section is "" or "home", "movies", "shows", or a library section id.
 // The daypart and weekend flag are derived from hc.Now in server local
@@ -31,6 +33,24 @@ const previewWait = 45 * time.Second
 func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubContext, sectionName string, limit int) (*core.HomePreview, error) {
 	if user == nil {
 		return nil, fmt.Errorf("personalize: no user")
+	}
+	return e.PreviewLayout(ctx, user, hc, sectionName, limit, nil)
+}
+
+// PreviewLayout is PreviewHome for the Home Designer: user nil previews
+// the typical viewer (the model new viewers get), and draft, when set, is
+// an unsaved layout to assemble with instead of the saved one.
+func (e *Engine) PreviewLayout(ctx context.Context, user *core.User, hc core.HubContext, sectionName string, limit int, draft *core.HomeLayout) (*core.HomePreview, error) {
+	var ix *layoutIndex
+	if draft != nil {
+		norm, err := normalizeHomeLayout(draft)
+		if err != nil {
+			return nil, err
+		}
+		ix = newLayoutIndex(norm)
+	}
+	if user == nil {
+		user = &core.User{ID: genericID, Title: "Typical viewer"}
 	}
 	sid, section, err := e.resolveSection(sectionName)
 	if err != nil {
@@ -46,7 +66,7 @@ func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubCo
 	}
 	wctx, cancel := context.WithTimeout(ctx, previewWait)
 	defer cancel()
-	p := e.home(wctx, user, hc, section, limit, true)
+	p := e.home(wctx, user, hc, section, limit, homeOpts{wait: true, draft: ix, explain: true})
 	if limit <= 0 {
 		limit = 12
 	}
@@ -61,8 +81,11 @@ func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubCo
 		}
 		if !hasCW {
 			items := e.continueItems(ctx, user, limit)
-			p.Rows = append([]core.HomeRow{plexRow("home.continue", "Continue Watching", KindContinue,
-				"Titles you're part-way through (Plex's own row).", items)}, p.Rows...)
+			row := plexRow("home.continue", "Continue Watching", KindContinue,
+				"Titles you're part-way through (Plex's own row).", items)
+			row.Placement = "Plex puts Continue Watching first when the engine does not place it."
+			p.Rows = append([]core.HomeRow{row}, p.Rows...)
+			renumber(p.Rows)
 		}
 		if row, ok := e.playlistsRow(ctx, user); ok {
 			p.Rows = insertBeforeHidden(p.Rows, row)
@@ -259,49 +282,6 @@ func (e *Engine) SetTasteOverrides(ctx context.Context, user *core.User, os []co
 		return nil, err
 	}
 	return e.Taste(ctx, user)
-}
-
-// Layout returns the owner's layout rules.
-func (e *Engine) Layout(ctx context.Context) ([]core.LayoutRule, error) {
-	rules := e.layoutRules()
-	out := make([]core.LayoutRule, len(rules))
-	copy(out, rules)
-	return out, nil
-}
-
-// SetLayout validates and stores layout rules; they apply to the next
-// /hubs request.
-func (e *Engine) SetLayout(ctx context.Context, rules []core.LayoutRule) ([]core.LayoutRule, error) {
-	norm, err := normalizeLayout(rules)
-	if err != nil {
-		return nil, err
-	}
-	if err := e.store.setLayout(ctx, norm, e.now()); err != nil {
-		return nil, err
-	}
-	e.mu.Lock()
-	e.layout = norm
-	e.layoutVer++
-	e.mu.Unlock()
-	return e.Layout(ctx)
-}
-
-// AvailableRows lists the row kinds layout rules can target, plus owner
-// collection rows recently served.
-func (e *Engine) AvailableRows(ctx context.Context) ([]core.RowDescriptor, error) {
-	e.rec.flush(ctx)
-	shows, err := e.store.rowShowsSince(ctx, e.now().AddDate(0, 0, -30))
-	if err != nil {
-		return nil, err
-	}
-	var extra []core.RowDescriptor
-	for kind, st := range shows {
-		if strings.HasPrefix(kind, KindCollectionPrefix) {
-			extra = append(extra, core.RowDescriptor{HubID: kind, Title: st.title, Kind: kind,
-				Description: "Owner collection row (" + st.hubID + ")."})
-		}
-	}
-	return descriptors(extra), nil
 }
 
 // RowInsights reports, per row kind, how often it was shown and played

@@ -25,8 +25,17 @@ type Personalization interface {
 	// the context.
 	PreviewHome(ctx context.Context, user *core.User, hc core.HubContext, section string, limit int) (*core.HomePreview, error)
 	Refresh(ctx context.Context, user *core.User) error
-	Layout(ctx context.Context) ([]core.LayoutRule, error)
-	SetLayout(ctx context.Context, rules []core.LayoutRule) ([]core.LayoutRule, error)
+	// Home Designer (the layered layout).
+	HomeLayout(ctx context.Context) (*core.HomeLayout, error)
+	SetHomeLayout(ctx context.Context, doc *core.HomeLayout) (*core.HomeLayout, error)
+	// ConvertLayoutRules turns the legacy rule list into a layered
+	// document (not saved).
+	ConvertLayoutRules(rules []core.LayoutRule) (*core.HomeLayout, error)
+	LayoutDefaults() map[string]int
+	// PreviewLayout is PreviewHome with a draft layout (nil = saved);
+	// user nil previews the typical viewer.
+	PreviewLayout(ctx context.Context, user *core.User, hc core.HubContext, section string, limit int, draft *core.HomeLayout) (*core.HomePreview, error)
+	LayoutImpact(ctx context.Context, draft *core.HomeLayout, hc core.HubContext, section string, users []core.User) ([]core.LayoutImpact, error)
 	AvailableRows(ctx context.Context) ([]core.RowDescriptor, error)
 	RowInsights(ctx context.Context, days int) ([]core.RowInsight, error)
 	Activity(ctx context.Context, days int) ([]core.ActivityDay, error)
@@ -48,6 +57,8 @@ func (h *Handler) personalizationRoutes(api func(pattern string, fn http.Handler
 	api("POST /api/viewers/{id}/refresh", h.handleViewerRefresh)
 	api("GET /api/layout", h.handleGetLayout)
 	api("PUT /api/layout", h.handlePutLayout)
+	api("POST /api/layout/preview", h.handleLayoutPreview)
+	api("POST /api/layout/impact", h.handleLayoutImpact)
 	api("GET /api/insights/rows", h.handleInsightRows)
 	api("GET /api/insights/activity", h.handleInsightActivity)
 }
@@ -101,11 +112,8 @@ type viewer struct {
 }
 
 func toViewer(u core.User, st core.ViewerStats) viewer {
-	v := viewer{ID: u.ID, PlexID: u.PlexID, Username: u.Username, Title: u.Title, Thumb: u.Thumb, IsOwner: u.IsOwner,
+	v := viewer{ID: u.ID, PlexID: u.PlexID, Username: u.Username, Title: viewerTitle(u), Thumb: u.Thumb, IsOwner: u.IsOwner,
 		Plays30d: st.Plays30d, HoursWatched30d: st.HoursWatched30d}
-	if v.Title == "" {
-		v.Title = u.Username
-	}
 	if !st.LastActive.IsZero() {
 		t := st.LastActive.UTC()
 		v.LastActive = &t
@@ -121,6 +129,19 @@ func (h *Handler) viewerByID(w http.ResponseWriter, r *http.Request) (*core.User
 		writeError(w, http.StatusBadRequest, "bad_id", "viewer id must be a number")
 		return nil, false
 	}
+	return h.findViewer(w, r, id)
+}
+
+// viewerTitle is a viewer's display name.
+func viewerTitle(u core.User) string {
+	if u.Title != "" {
+		return u.Title
+	}
+	return u.Username
+}
+
+// findViewer looks a user up by id, answering 404 itself when it cannot.
+func (h *Handler) findViewer(w http.ResponseWriter, r *http.Request, id int64) (*core.User, bool) {
 	users, err := h.deps.Users.Users(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
@@ -240,18 +261,70 @@ func (h *Handler) handleViewerOverrides(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, p)
 }
 
-// homeRow is the HomeRow shape of the contract.
+// homeRow is the HomeRow shape of the contract, with the row's
+// provenance in the layered Home Designer.
 type homeRow struct {
-	HubID       string            `json:"hubId"`
-	Title       string            `json:"title"`
-	Kind        string            `json:"kind"`
-	Reason      string            `json:"reason"`
-	Score       float64           `json:"score"`
-	Pinned      bool              `json:"pinned,omitempty"`
-	Hidden      bool              `json:"hidden,omitempty"`
-	Source      string            `json:"source"`
-	Items       []homeTitleCard   `json:"items"`
-	ItemReasons map[string]string `json:"itemReasons,omitempty"`
+	HubID        string            `json:"hubId"`
+	Title        string            `json:"title"`
+	Kind         string            `json:"kind"`
+	Reason       string            `json:"reason"`
+	Score        float64           `json:"score"`
+	Pinned       bool              `json:"pinned,omitempty"`
+	Hidden       bool              `json:"hidden,omitempty"`
+	Source       string            `json:"source"`
+	Items        []homeTitleCard   `json:"items"`
+	ItemReasons  map[string]string `json:"itemReasons,omitempty"`
+	Layer        string            `json:"layer,omitempty"`
+	Slot         int               `json:"slot,omitempty"`
+	AnchorSlot   int               `json:"anchorSlot,omitempty"`
+	Placement    string            `json:"placement,omitempty"`
+	HiddenReason string            `json:"hiddenReason,omitempty"`
+	Policy       *core.RowPolicy   `json:"policy,omitempty"`
+	PolicyLayer  string            `json:"policyLayer,omitempty"`
+}
+
+// parseDevice validates a device class ("" = tv).
+func parseDevice(v string) (string, []FieldError) {
+	device := strings.ToLower(strings.TrimSpace(v))
+	if device == "" {
+		device = core.DeviceTV
+	}
+	switch device {
+	case core.DeviceTV, core.DeviceMobile, core.DeviceWeb, core.DeviceDesktop:
+		return device, nil
+	}
+	return device, []FieldError{{Field: "device", Message: "must be tv, mobile, web or desktop"}}
+}
+
+// writeHome writes a preview as the contract's viewer Home response,
+// plus extra top-level fields.
+func writeHome(w http.ResponseWriter, p *core.HomePreview, extra map[string]any) {
+	rows := make([]homeRow, 0, len(p.Rows))
+	for _, row := range p.Rows {
+		hr := homeRow{HubID: row.HubID, Title: row.Title, Kind: row.Kind, Reason: row.Reason, Score: row.Score,
+			Pinned: row.Pinned, Hidden: row.Hidden, Source: row.Source, Items: make([]homeTitleCard, 0, len(row.Items)),
+			Layer: row.Layer, Slot: row.Slot, AnchorSlot: row.AnchorSlot, Placement: row.Placement,
+			HiddenReason: row.HiddenReason, Policy: row.Policy, PolicyLayer: row.PolicyLayer}
+		for _, t := range row.Items {
+			hr.Items = append(hr.Items, homeCard(t))
+		}
+		if len(row.ItemReasons) > 0 {
+			hr.ItemReasons = make(map[string]string, len(row.ItemReasons))
+			for k, v := range row.ItemReasons {
+				hr.ItemReasons[k.String()] = v
+			}
+		}
+		rows = append(rows, hr)
+	}
+	out := map[string]any{
+		"rows":        rows,
+		"generatedAt": p.GeneratedAt.UTC(),
+		"context":     map[string]any{"device": p.Context.Device, "daypart": p.Context.Daypart, "weekend": p.Context.Weekend},
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
@@ -263,14 +336,9 @@ func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	device := strings.ToLower(strings.TrimSpace(q.Get("device")))
-	if device == "" {
-		device = core.DeviceTV
-	}
-	switch device {
-	case core.DeviceTV, core.DeviceMobile, core.DeviceWeb, core.DeviceDesktop:
-	default:
-		writeValidationError(w, []FieldError{{Field: "device", Message: "must be tv, mobile, web or desktop"}})
+	device, fields := parseDevice(q.Get("device"))
+	if len(fields) > 0 {
+		writeValidationError(w, fields)
 		return
 	}
 	at := time.Now()
@@ -298,26 +366,7 @@ func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
-	rows := make([]homeRow, 0, len(p.Rows))
-	for _, row := range p.Rows {
-		hr := homeRow{HubID: row.HubID, Title: row.Title, Kind: row.Kind, Reason: row.Reason, Score: row.Score,
-			Pinned: row.Pinned, Hidden: row.Hidden, Source: row.Source, Items: make([]homeTitleCard, 0, len(row.Items))}
-		for _, t := range row.Items {
-			hr.Items = append(hr.Items, homeCard(t))
-		}
-		if len(row.ItemReasons) > 0 {
-			hr.ItemReasons = make(map[string]string, len(row.ItemReasons))
-			for k, v := range row.ItemReasons {
-				hr.ItemReasons[k.String()] = v
-			}
-		}
-		rows = append(rows, hr)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"rows":        rows,
-		"generatedAt": p.GeneratedAt.UTC(),
-		"context":     map[string]any{"device": p.Context.Device, "daypart": p.Context.Daypart, "weekend": p.Context.Weekend},
-	})
+	writeHome(w, p, nil)
 }
 
 func (h *Handler) handleViewerRefresh(w http.ResponseWriter, r *http.Request) {

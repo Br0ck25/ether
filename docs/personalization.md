@@ -176,20 +176,85 @@ For a request (viewer, context, Home or section):
    Context multipliers: Short on Time ×1.3 weeknights, ×1.4 on phones,
    ×0.55 on Saturday-night TVs; Comfort ×1.3 late; film-heavy rows up on
    weekend-evening TVs and where the viewer watches films, down on phones.
-4. **Layout rules** (Home Designer): server-wide rules apply first, then
-   rules for specific viewers; pin (at a position), hide, boost (×1.5),
-   bury (below every unburied row), with day/hour/device schedules and
-   `maxRows`.
-5. **Caps and dedupe**: per-kind caps; then titles are allocated so each
-   appears once per screen: anchored rows (franchise, Up Next, owner
-   collections, watchlist) keep theirs, the rest draft titles in turns in
-   display order so no row is starved by a greedy one above it. Rows left
-   under their minimum are dropped and the draft reruns. Default maxRows:
-   14 on Home, 10 in sections (Plex's own rows not counted).
+4. **Layout** (Home Designer, three layers, see below): each row's
+   effective policy is the viewer's override if one matches, else the
+   Global policy, else the defaults (eligible). Off rows, rows outside
+   their schedule and rows over their days-per-week cap leave the pool;
+   `priority` multiplies the score.
+5. **The page**: per-page caps (a policy's `maxPerPage`, else the kind's:
+   Because you watched 3, More from 2, showcases 3 (one per genre
+   family), franchise 2, LLM 2; at most 4 owner collections unless a
+   policy places them). Rows that must be there (Always, anchored) are
+   selected first, then the eligible rows by score up to the page length
+   (viewer device → viewer page → Global device → Global page → 14 on
+   Home, 10 in sections; Plex's own rows not counted).
+6. **Slots**: the solver (`slots.go`) puts anchored rows on their slot (an
+   override beats a Global anchor on the same slot; the loser takes the
+   nearest free slot; an anchor beyond the page sits last), then fills the
+   free slots in score order while honouring "never above"/"never below"
+   bounds: each slot takes the best-ranked row that may sit there and
+   leaves the rest a feasible arrangement (earliest-deadline-first check).
+   An eligible row whose "never above" bound lies past the end of the page
+   is not shown. On Home the engine always places Continue Watching (an
+   empty placeholder when nothing is in progress), so slot numbers mean
+   the same for every viewer.
+7. **Dedupe**: titles are allocated so each appears once per screen:
+   anchored-content rows (franchise, Up Next, owner collections,
+   watchlist) keep theirs, the rest draft titles in turns in display
+   order so no row is starved by a greedy one above it. Rows left under
+   their minimum are dropped, the next eligible row moves up and the page
+   is arranged again.
+
+Every row carries its provenance: `layer` (`global` for a Global
+anchor or Always row, `personalized` when the engine chose and ordered
+it, `override` when the viewer's override decided it), `slot`,
+`anchorSlot`, the effective `policy` and its layer, and `placement`, a
+sentence on why it sits there ("Anchored to slot 1 in Global Home.",
+"2nd of 11 by predicted engagement (score 0.41); moved up to slot 3:
+never below slot 3 in Global Home."). Owner previews also list the rows
+that are not on the page, with `hiddenReason` (off, out of schedule,
+frequency or per-page cap, page full, too few titles after dedupe);
+`/hubs` skips that work.
 
 Assembled screens are memoised for two minutes, keyed by everything they
-depend on (model version, layout, statistics, owner rows, Continue
-Watching, hour), so polling clients cost nothing.
+depend on (model version, layout version, statistics, owner rows,
+Continue Watching, hour), so polling clients cost nothing.
+
+## Home Designer layers
+
+Like Netflix's homepage (a candidate pool of rows, page-level
+constraints, then per-profile personalisation), a page is composed from:
+
+1. **Global Home**, the owner's template: for any row in the pool a
+   status (`always`, `eligible`, `off`), an anchored slot, bounds
+   ("never above slot N", "never below slot N"), a priority, a per-page
+   cap, a days-per-week frequency cap and a schedule (days, hours,
+   dayparts, devices, months, date range: "a seasonal row only in
+   December"); plus the page length per section and device. Rows without
+   a policy are eligible.
+2. **Personalized**: the engine's ranking above, within those
+   constraints.
+3. **Per-viewer overrides**: the same policies and page lengths for one
+   viewer, replacing the Global setting for that row; "reset to global"
+   deletes the override. An override can place an owner collection that
+   is not targeted at the viewer (`collection:<id>`, fetched through
+   `core.CollectionRowLookup`); a Global placement still honours the
+   collection's audience.
+
+Policies match a row by hub id, kind or glob; the most specific match
+wins within a layer and an override always beats Global. Frequency caps
+count the days a row kind was shown to the viewer (row impressions): it
+may appear when it was shown on fewer than N of the previous six days, and
+stays for the rest of a day it was shown on. Previews of unsaved drafts
+run the same assembly without touching the memo or the saved layout;
+`layout/impact` assembles every viewer's page with the saved layout and
+the draft and reports what changes.
+
+The previous flat rule list (pin / hide / boost / bury) is converted to
+this model once, on the first start of this version (pin at position p →
+anchor slot p+1, hide → off, boost → priority 1.5, bury → priority 0.3,
+scoped rules → overrides); approximations are kept as notes for the
+owner.
 
 ## Feedback and storage
 
@@ -209,15 +274,19 @@ Watching, hour), so polling clients cost nothing.
   active viewers' models every 3 hours; the owner can rebuild now.
 
 Tables: `personalize_row_impressions`, `personalize_item_impressions`,
-`personalize_plays`, `personalize_overrides`, `personalize_layout`.
+`personalize_plays`, `personalize_overrides`, `personalize_home_layout`
+(the Home Designer document) and `personalize_layout` (the legacy rule
+list, read once to convert it).
 
 ## Owner API
 
-See `docs/owner-ui.md`. `viewers/{id}/home` runs the same assembly as
-`/hubs` and adds the rows the front end builds itself (source `plex`);
-rows hidden by a layout rule are listed last with `hidden: true` and are
-never sent to Plex. Insights count row-days shown and attributed plays per
-row kind.
+See `docs/owner-ui.md`. `viewers/{id}/home` and `layout/preview` run the
+same assembly as `/hubs` and add the rows the front end builds itself
+(source `plex`); rows that are not on the page are listed last with
+`hidden: true` and a reason, and are never sent to Plex. `layout/preview`
+takes an unsaved draft and previews the typical viewer (the generic
+model) when no viewer is given. Insights count row-days shown and
+attributed plays per row kind.
 
 ## Wiring
 

@@ -35,43 +35,92 @@ func (s *Service) HomeRowsFor(ctx context.Context, user *core.User, hc core.HubC
 		if !scheduleAllows(sp.Targets.Schedule, hc.Device, now) {
 			continue
 		}
-		keys, err := s.serve(ctx, row, user, sp.Refresh == RefreshLive)
-		if err != nil {
-			if !errors.Is(err, errNotBuilt) {
-				s.log.Debug("collections: row", "id", row.publicID(), "err", err)
-			}
-			continue
+		if cr, ok := s.rowFor(ctx, row, user); ok {
+			out = append(out, cr)
 		}
-		if len(keys) == 0 {
-			continue
-		}
-		page := keys
-		if len(page) > rowItems {
-			page = page[:rowItems]
-		}
-		items, err := loadTitles(ctx, s.db, page)
-		if err != nil || len(items) == 0 {
-			continue
-		}
-		hub := core.Hub{
-			ID: "collection." + row.publicID(), Title: sp.Name, Style: "shelf",
-			Promoted: sp.Targets.HomeRow, Items: items, More: len(keys) > len(items), Key: row.key(),
-		}
-		switch sp.MediaType {
-		case MediaMovie:
-			hub.Type, hub.Context = core.TypeMovie, "hub.movie.collection"
-		case MediaShow:
-			hub.Type, hub.Context = core.TypeShow, "hub.tv.collection"
-		default:
-			hub.Context = "hub.home.collection"
-		}
-		if sp.Targets.HomeRow {
-			hub.Context = "hub.home.collection"
-		}
-		out = append(out, core.CollectionRow{Hub: hub, CollectionID: row.publicID(),
-			HomeRow: sp.Targets.HomeRow, SectionRow: sp.Targets.SectionRow})
 	}
 	return out, nil
+}
+
+var _ core.CollectionRowLookup = (*Service)(nil)
+
+// CollectionRowsByID implements core.CollectionRowLookup: the rows of
+// specific collections for a user, whatever their Home/section targeting
+// and schedule, because the owner placed them on a page in the Home
+// Designer (whose own schedules then apply). Disabled collections are
+// skipped; ignoreAudience serves collections whose audience does not
+// include the user (a per-viewer placement). Personal collections of other
+// users are never served.
+func (s *Service) CollectionRowsByID(ctx context.Context, user *core.User, _ core.HubContext, ids []string, ignoreAudience bool) ([]core.CollectionRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		want[id] = true
+	}
+	rows, err := s.loadRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []core.CollectionRow
+	for _, row := range rows {
+		if !want[row.publicID()] || !row.enabled {
+			continue
+		}
+		if row.owner != 0 && (user == nil || user.ID != row.owner) {
+			continue
+		}
+		if !ignoreAudience && !visible(row, user) {
+			continue
+		}
+		if cr, ok := s.rowFor(ctx, row, user); ok {
+			cr.HomeRow, cr.SectionRow = true, true
+			out = append(out, cr)
+		}
+	}
+	return out, nil
+}
+
+// rowFor builds a collection's row for a user: its members (personal
+// rules, order and rotation applied), first page of titles.
+func (s *Service) rowFor(ctx context.Context, row *specRow, user *core.User) (core.CollectionRow, bool) {
+	sp := row.spec
+	keys, err := s.serve(ctx, row, user, sp.Refresh == RefreshLive)
+	if err != nil {
+		if !errors.Is(err, errNotBuilt) {
+			s.log.Debug("collections: row", "id", row.publicID(), "err", err)
+		}
+		return core.CollectionRow{}, false
+	}
+	if len(keys) == 0 {
+		return core.CollectionRow{}, false
+	}
+	page := keys
+	if len(page) > rowItems {
+		page = page[:rowItems]
+	}
+	items, err := loadTitles(ctx, s.db, page)
+	if err != nil || len(items) == 0 {
+		return core.CollectionRow{}, false
+	}
+	hub := core.Hub{
+		ID: "collection." + row.publicID(), Title: sp.Name, Style: "shelf",
+		Promoted: sp.Targets.HomeRow, Items: items, More: len(keys) > len(items), Key: row.key(),
+	}
+	switch sp.MediaType {
+	case MediaMovie:
+		hub.Type, hub.Context = core.TypeMovie, "hub.movie.collection"
+	case MediaShow:
+		hub.Type, hub.Context = core.TypeShow, "hub.tv.collection"
+	default:
+		hub.Context = "hub.home.collection"
+	}
+	if sp.Targets.HomeRow {
+		hub.Context = "hub.home.collection"
+	}
+	return core.CollectionRow{Hub: hub, CollectionID: row.publicID(),
+		HomeRow: sp.Targets.HomeRow, SectionRow: sp.Targets.SectionRow}, true
 }
 
 // scheduleAllows applies a row schedule. Days are 0 (Sunday) to 6; hours

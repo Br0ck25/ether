@@ -70,59 +70,6 @@ func TestWhenMatches(t *testing.T) {
 	}
 }
 
-func TestLayoutPlanPrecedence(t *testing.T) {
-	hc := core.NewHubContext(time.Date(2026, 10, 14, 21, 0, 0, 0, time.UTC), "", "", "")
-	rules := []core.LayoutRule{
-		{Scope: core.LayoutScope{UserIDs: []int64{5}}, Section: "home", Rows: []core.LayoutRowRule{{HubID: "short-on-time", Action: "pin", Position: ip(1)}}, MaxRows: 6},
-		{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: "short-on-time", Action: "hide"}, {HubID: "because.*", Action: "bury"}}, MaxRows: 10},
-		{Scope: core.LayoutScope{All: true}, Section: "movies", Rows: []core.LayoutRowRule{{HubID: "top-10", Action: "hide"}}},
-	}
-	// Everyone else: hidden, server-wide max.
-	p := planFor(rules, 9, "home", hc)
-	if d := p.decide("home.shortontime", KindShortOnTime); !d.hidden || d.pinned {
-		t.Fatalf("server-wide hide = %+v", d)
-	}
-	if d := p.decide("home.because.1", KindBecause); !d.bury {
-		t.Fatalf("glob bury = %+v", d)
-	}
-	if p.maxRows != 10 {
-		t.Fatalf("maxRows = %d", p.maxRows)
-	}
-	// User 5's own rule wins over the server-wide one.
-	p = planFor(rules, 5, "home", hc)
-	if d := p.decide("home.shortontime", KindShortOnTime); !d.pinned || d.hidden || d.position != 1 {
-		t.Fatalf("per-user pin = %+v", d)
-	}
-	if p.maxRows != 6 {
-		t.Fatalf("per-user maxRows = %d", p.maxRows)
-	}
-	// Section rules only apply to their section.
-	if d := planFor(rules, 9, "movies", hc).decide("movie.top10", KindTop10); !d.hidden {
-		t.Fatalf("movies rule = %+v", d)
-	}
-	if d := planFor(rules, 9, "home", hc).decide("home.top10", KindTop10); d.hidden {
-		t.Fatal("movies rule leaked into home")
-	}
-}
-
-func TestPlacePinned(t *testing.T) {
-	got := placePinned([]string{"a", "b", "c"}, []string{"z@9", "x@0", "y@2"}, func(s string) int {
-		switch s {
-		case "x@0":
-			return 0
-		case "y@2":
-			return 2
-		}
-		return 9
-	})
-	want := []string{"x@0", "a", "y@2", "b", "c", "z@9"}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("placePinned = %v, want %v", got, want)
-		}
-	}
-}
-
 func TestBanditPosterior(t *testing.T) {
 	// No evidence: the hand-set prior.
 	mean, _ := rowRate(0.1, arm{}, arm{}, 0, nil)

@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -20,7 +21,10 @@ type fakeEngine struct {
 	limit     int
 	overrides []core.TasteOverride
 	refreshed []int64
-	rules     []core.LayoutRule
+	layout    *core.HomeLayout
+	draft     *core.HomeLayout
+	previewed *core.User
+	impactFor []core.User
 	fail      error
 }
 
@@ -77,20 +81,66 @@ func (f *fakeEngine) Refresh(_ context.Context, u *core.User) error {
 	f.mu.Unlock()
 	return nil
 }
-func (f *fakeEngine) Layout(context.Context) ([]core.LayoutRule, error) { return f.rules, nil }
-func (f *fakeEngine) SetLayout(_ context.Context, rules []core.LayoutRule) ([]core.LayoutRule, error) {
-	for i, r := range rules {
-		for _, rr := range r.Rows {
-			if rr.Action == "explode" {
-				return nil, viewerFieldErr{"rules[" + string(rune('0'+i)) + "].rows[0].action", "must be pin, hide, boost or bury"}
+func (f *fakeEngine) HomeLayout(context.Context) (*core.HomeLayout, error) {
+	if f.layout == nil {
+		return &core.HomeLayout{}, nil
+	}
+	return f.layout, nil
+}
+func (f *fakeEngine) SetHomeLayout(_ context.Context, doc *core.HomeLayout) (*core.HomeLayout, error) {
+	for i, p := range doc.Global {
+		for j, r := range p.Rows {
+			if r.Status == "explode" {
+				return nil, viewerFieldErr{fmt.Sprintf("global[%d].rows[%d].status", i, j), "must be always, eligible or off"}
 			}
 		}
-		if rules[i].ID == "" {
-			rules[i].ID = "r1"
+	}
+	doc.UpdatedAt = time.Date(2026, 10, 19, 2, 0, 0, 0, time.UTC)
+	f.layout = doc
+	return doc, nil
+}
+func (f *fakeEngine) ConvertLayoutRules(rules []core.LayoutRule) (*core.HomeLayout, error) {
+	doc := &core.HomeLayout{Notes: []string{"converted"}}
+	for _, r := range rules {
+		for _, rr := range r.Rows {
+			if rr.Action == "explode" {
+				return nil, viewerFieldErr{"rules[0].rows[0].action", "must be pin, hide, boost or bury"}
+			}
+			doc.Global = append(doc.Global, core.LayoutPage{Section: "home", Rows: []core.RowPolicy{{Row: rr.HubID, Status: core.RowAlways, Slot: 1}}})
 		}
 	}
-	f.rules = rules
-	return rules, nil
+	return doc, nil
+}
+func (f *fakeEngine) LayoutDefaults() map[string]int {
+	return map[string]int{"home": 14, "movies": 10, "shows": 10}
+}
+func (f *fakeEngine) PreviewLayout(ctx context.Context, u *core.User, hc core.HubContext, section string, limit int, draft *core.HomeLayout) (*core.HomePreview, error) {
+	f.mu.Lock()
+	f.draft, f.previewed = draft, u
+	f.mu.Unlock()
+	p, err := f.PreviewHome(ctx, u, hc, section, limit)
+	if err != nil {
+		return nil, err
+	}
+	p.Rows[0].Layer, p.Rows[0].Slot, p.Rows[0].AnchorSlot = core.LayerGlobal, 1, 1
+	p.Rows[0].Placement = "Anchored to slot 1 in Global Home."
+	p.Rows[0].Policy, p.Rows[0].PolicyLayer = &core.RowPolicy{Row: "top-10", Status: core.RowAlways, Slot: 1}, core.LayerGlobal
+	p.Rows[1].Layer, p.Rows[1].HiddenReason = core.LayerOverride, "Off for bob (override)."
+	return p, nil
+}
+func (f *fakeEngine) LayoutImpact(_ context.Context, draft *core.HomeLayout, hc core.HubContext, section string, users []core.User) ([]core.LayoutImpact, error) {
+	f.mu.Lock()
+	f.draft, f.impactFor, f.hc, f.section = draft, users, hc, section
+	f.mu.Unlock()
+	out := []core.LayoutImpact{}
+	for _, u := range users {
+		im := core.LayoutImpact{UserID: u.ID, Title: u.Title, Added: []string{}, Removed: []string{}}
+		if u.ID == 2 {
+			im.Overrides, im.Changed, im.Added = 1, true, []string{"Short on Time"}
+		}
+		out = append(out, im)
+	}
+	return out, nil
 }
 func (f *fakeEngine) AvailableRows(context.Context) ([]core.RowDescriptor, error) {
 	return []core.RowDescriptor{{HubID: "top-10", Title: "Top 10 for You", Kind: "top-10", Description: "d"}}, nil
@@ -219,33 +269,149 @@ func TestViewerHomeEndpoint(t *testing.T) {
 	}
 }
 
-func TestLayoutAndInsightsEndpoints(t *testing.T) {
+func TestLayoutEndpoints(t *testing.T) {
 	eng := &fakeEngine{}
 	h := personalizationHandler(t, eng)
 	rec := serve(h, req(http.MethodGet, "/ether/api/layout", ""))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"rules":[]`) || !strings.Contains(rec.Body.String(), `"availableRows":[{"hubId":"top-10"`) {
-		t.Fatalf("layout: %d %s", rec.Code, rec.Body)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, `"layout":{"global":[],"viewers":[]}`) ||
+		!strings.Contains(body, `"availableRows":[{"hubId":"top-10"`) || !strings.Contains(body, `"defaults":{"maxRows":{"home":14,"movies":10,"shows":10}}`) {
+		t.Fatalf("layout: %d %s", rec.Code, body)
 	}
-	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":{"userIds":[2]},"section":"home","rows":[{"hubId":"short-on-time","action":"pin","position":1,"when":{"days":[1,2,3,4],"fromHour":18}}],"maxRows":8}]}`))
+
+	// The layered document round-trips.
+	doc := `{"layout":{"global":[{"section":"home","maxRows":12,"deviceMaxRows":{"mobile":8},"rows":[
+		{"row":"continue-watching","status":"always","slot":1},
+		{"row":"short-on-time","status":"eligible","maxSlot":4,"when":{"days":[1,2,3,4],"dayparts":["evening"]}},
+		{"row":"collection:7","status":"always","months":[12]}]}],
+		"viewers":[{"userId":2,"pages":[{"section":"home","rows":[{"row":"short-on-time","status":"off"}]}]}]}}`
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", doc))
+	if rec.Code != http.StatusBadRequest { // "months" belongs in "when": unknown fields are rejected
+		t.Fatalf("unknown field accepted: %d %s", rec.Code, rec.Body)
+	}
+	doc = strings.Replace(doc, `"status":"always","months":[12]`, `"status":"always","when":{"months":[12]}`, 1)
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", doc))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("put layout: %d %s", rec.Code, rec.Body)
 	}
-	if len(eng.rules) != 1 || eng.rules[0].Scope.All || eng.rules[0].Scope.UserIDs[0] != 2 || *eng.rules[0].Rows[0].Position != 1 || *eng.rules[0].Rows[0].When.FromHour != 18 {
-		t.Fatalf("rules = %+v", eng.rules)
+	g := eng.layout.Global[0]
+	if g.MaxRows != 12 || g.DeviceMaxRows["mobile"] != 8 || g.Rows[0].Slot != 1 || g.Rows[1].MaxSlot != 4 ||
+		g.Rows[1].When.Dayparts[0] != "evening" || g.Rows[2].When.Months[0] != 12 || eng.layout.Viewers[0].UserID != 2 {
+		t.Fatalf("saved = %+v", eng.layout)
 	}
-	if !strings.Contains(rec.Body.String(), `"scope":{"userIds":[2]}`) || !strings.Contains(rec.Body.String(), `"id":"r1"`) {
+	if !strings.Contains(rec.Body.String(), `"updatedAt":"2026-10-19T02:00:00Z"`) {
 		t.Fatalf("put layout response: %s", rec.Body)
+	}
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"layout":{"global":[{"section":"home","rows":[{"row":"x","status":"explode"}]}],"viewers":[]}}`))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"field":"global[0].rows[0].status"`) {
+		t.Fatalf("invalid layout: %d %s", rec.Code, rec.Body)
+	}
+	if rec := serve(h, req(http.MethodPut, "/ether/api/layout", `{}`)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty body: %d", rec.Code)
+	}
+
+	// Legacy rule lists are converted, and the notes come back once.
+	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":"all","section":"home","rows":[{"hubId":"short-on-time","action":"pin","position":1}]}]}`))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"notes":["converted"]`) || eng.layout.Global[0].Rows[0].Row != "short-on-time" {
+		t.Fatalf("legacy put: %d %s", rec.Code, rec.Body)
 	}
 	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":"all","rows":[{"hubId":"x","action":"explode"}]}]}`))
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "rows[0].action") {
-		t.Fatalf("invalid layout: %d %s", rec.Code, rec.Body)
+		t.Fatalf("invalid legacy layout: %d %s", rec.Code, rec.Body)
 	}
 	rec = serve(h, req(http.MethodPut, "/ether/api/layout", `{"rules":[{"scope":"everyone","rows":[]}]}`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad scope: %d", rec.Code)
 	}
+}
 
-	rec = serve(h, req(http.MethodGet, "/ether/api/insights/rows", ""))
+func TestLayoutPreviewEndpoint(t *testing.T) {
+	eng := &fakeEngine{}
+	h := personalizationHandler(t, eng)
+	// A viewer, with a draft.
+	rec := serve(h, req(http.MethodPost, "/ether/api/layout/preview",
+		`{"viewerId":2,"device":"mobile","at":"2026-10-17T20:30:00Z","section":"home","count":8,
+		  "layout":{"global":[{"section":"home","rows":[{"row":"top-10","status":"always","slot":1}]}],"viewers":[]}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Rows []struct {
+			HubID        string          `json:"hubId"`
+			Layer        string          `json:"layer"`
+			Slot         int             `json:"slot"`
+			AnchorSlot   int             `json:"anchorSlot"`
+			Placement    string          `json:"placement"`
+			HiddenReason string          `json:"hiddenReason"`
+			Policy       *core.RowPolicy `json:"policy"`
+			PolicyLayer  string          `json:"policyLayer"`
+		} `json:"rows"`
+		Viewer *struct {
+			ID    int64
+			Title string
+		} `json:"viewer"`
+		Context map[string]any `json:"context"`
+	}
+	decode(t, rec, &body)
+	if eng.previewed == nil || eng.previewed.ID != 2 || eng.draft == nil || eng.draft.Global[0].Rows[0].Slot != 1 || eng.limit != 8 ||
+		eng.hc.Device != "mobile" || eng.section != "home" {
+		t.Fatalf("engine got user %+v draft %+v limit %d hc %+v", eng.previewed, eng.draft, eng.limit, eng.hc)
+	}
+	r0, r1 := body.Rows[0], body.Rows[1]
+	if r0.Layer != "global" || r0.Slot != 1 || r0.AnchorSlot != 1 || r0.Placement == "" || r0.Policy == nil || r0.Policy.Row != "top-10" || r0.PolicyLayer != "global" {
+		t.Fatalf("row 0 = %+v", r0)
+	}
+	if r1.Layer != "override" || r1.HiddenReason == "" || r1.Slot != 0 {
+		t.Fatalf("row 1 = %+v", r1)
+	}
+	if body.Viewer == nil || body.Viewer.ID != 2 || body.Viewer.Title != "bob" || body.Context["device"] != "mobile" {
+		t.Fatalf("viewer %+v context %+v", body.Viewer, body.Context)
+	}
+	// The typical viewer, with the saved layout.
+	rec = serve(h, req(http.MethodPost, "/ether/api/layout/preview", `{"viewerId":null}`))
+	if rec.Code != http.StatusOK || eng.previewed != nil || eng.draft != nil || eng.limit != 12 || eng.hc.Device != "tv" ||
+		!strings.Contains(rec.Body.String(), `"viewer":null`) {
+		t.Fatalf("typical preview: %d %s (user %+v)", rec.Code, rec.Body, eng.previewed)
+	}
+	for _, bad := range []string{`{"device":"fridge"}`, `{"at":"soon"}`, `{"count":500}`} {
+		if rec := serve(h, req(http.MethodPost, "/ether/api/layout/preview", bad)); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", bad, rec.Code)
+		}
+	}
+	if rec := serve(h, req(http.MethodPost, "/ether/api/layout/preview", `{"viewerId":99}`)); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown viewer: %d", rec.Code)
+	}
+}
+
+func TestLayoutImpactEndpoint(t *testing.T) {
+	eng := &fakeEngine{}
+	h := personalizationHandler(t, eng)
+	rec := serve(h, req(http.MethodPost, "/ether/api/layout/impact",
+		`{"device":"tv","at":"2026-10-17T20:30:00Z","layout":{"global":[],"viewers":[{"userId":2,"pages":[{"section":"home","rows":[{"row":"short-on-time","status":"always"}]}]}]}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("impact: %d %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Viewers []core.LayoutImpact `json:"viewers"`
+		Summary map[string]int      `json:"summary"`
+	}
+	decode(t, rec, &body)
+	if len(eng.impactFor) != 2 || eng.impactFor[1].Title != "bob" || eng.draft.Viewers[0].UserID != 2 {
+		t.Fatalf("engine got users %+v draft %+v", eng.impactFor, eng.draft)
+	}
+	if body.Summary["viewers"] != 2 || body.Summary["withOverrides"] != 1 || body.Summary["changed"] != 1 ||
+		body.Viewers[1].Added[0] != "Short on Time" || body.Viewers[0].Added == nil {
+		t.Fatalf("impact = %+v", body)
+	}
+	if rec := serve(h, req(http.MethodPost, "/ether/api/layout/impact", `{"device":"tv"}`)); rec.Code != http.StatusBadRequest {
+		t.Fatalf("impact without a layout: %d", rec.Code)
+	}
+}
+
+func TestInsightsEndpoints(t *testing.T) {
+	eng := &fakeEngine{}
+	h := personalizationHandler(t, eng)
+	rec := serve(h, req(http.MethodGet, "/ether/api/insights/rows", ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"impressions7d":20`) || !strings.Contains(rec.Body.String(), `"playRate":0.25`) {
 		t.Fatalf("insights rows: %d %s", rec.Code, rec.Body)
 	}
@@ -260,6 +426,11 @@ func TestPersonalizationNotWired(t *testing.T) {
 	h := admin.New(admin.Deps{Config: store})
 	for _, p := range []string{"/ether/api/viewers", "/ether/api/viewers/1/home", "/ether/api/layout", "/ether/api/insights/rows", "/ether/api/insights/activity"} {
 		if rec := serve(h, req(http.MethodGet, p, "")); rec.Code != http.StatusNotImplemented {
+			t.Fatalf("%s: %d", p, rec.Code)
+		}
+	}
+	for _, p := range []string{"/ether/api/layout/preview", "/ether/api/layout/impact"} {
+		if rec := serve(h, req(http.MethodPost, p, `{}`)); rec.Code != http.StatusNotImplemented {
 			t.Fatalf("%s: %d", p, rec.Code)
 		}
 	}

@@ -42,7 +42,7 @@ func TestAssembledScreensAreMemoised(t *testing.T) {
 	}
 	// So does a layout change.
 	gets = h.cat.callCount("get")
-	if _, err := h.e.SetLayout(ctx, []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindTop10, Action: "hide"}}}}); err != nil {
+	if _, err := h.e.SetHomeLayout(ctx, &core.HomeLayout{Global: []core.LayoutPage{{Section: "home", Rows: []core.RowPolicy{{Row: KindTop10, Status: core.RowOff}}}}}); err != nil {
 		t.Fatal(err)
 	}
 	hubs, _ := h.e.HomeHubsFor(ctx, &u, hc, 12)

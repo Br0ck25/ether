@@ -22,7 +22,9 @@ import (
 //	personalize_plays             plays observed from watch-state events,
 //	                              attributed to the row they came from.
 //	personalize_overrides         owner corrections to a viewer's taste.
-//	personalize_layout            the owner's Home Designer rules (JSON).
+//	personalize_layout            legacy Home Designer rules (JSON), read once
+//	                              to convert them.
+//	personalize_home_layout       the layered Home Designer document (JSON).
 //
 // Impressions are compacted on write: repeated serves of the same row on
 // the same day bump a counter instead of adding rows, so a client that
@@ -92,6 +94,16 @@ CREATE TABLE personalize_overrides (
 CREATE TABLE personalize_layout (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   rules TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);`)
+	// The layered Home Designer document (core.HomeLayout). The legacy
+	// rule list in personalize_layout is converted into it once, on the
+	// first start after this migration (Engine.loadLayout), and kept
+	// untouched for a downgrade.
+	store.Register("personalize", 2, `
+CREATE TABLE personalize_home_layout (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  doc TEXT NOT NULL,
   updated_at INTEGER NOT NULL
 );`)
 }
@@ -514,7 +526,8 @@ func (s *sqlStore) setOverrides(ctx context.Context, userID int64, os []core.Tas
 
 // ---- layout --------------------------------------------------------------------
 
-func (s *sqlStore) layout(ctx context.Context) ([]core.LayoutRule, error) {
+// legacyLayout reads the pre-layered rule list (converted once).
+func (s *sqlStore) legacyLayout(ctx context.Context) ([]core.LayoutRule, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT rules FROM personalize_layout WHERE id = 1`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -533,14 +546,59 @@ func (s *sqlStore) layout(ctx context.Context) ([]core.LayoutRule, error) {
 	return rules, nil
 }
 
-func (s *sqlStore) setLayout(ctx context.Context, rules []core.LayoutRule, now time.Time) error {
-	raw, err := json.Marshal(rules)
+// homeLayout reads the layered document; ok is false when none was ever
+// saved.
+func (s *sqlStore) homeLayout(ctx context.Context) (doc *core.HomeLayout, ok bool, err error) {
+	var raw string
+	var at int64
+	err = s.db.QueryRowContext(ctx, `SELECT doc, updated_at FROM personalize_home_layout WHERE id = 1`).Scan(&raw, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	doc = &core.HomeLayout{}
+	if err := json.Unmarshal([]byte(raw), doc); err != nil {
+		return nil, false, err
+	}
+	doc.UpdatedAt = fromMS(at)
+	return doc, true, nil
+}
+
+func (s *sqlStore) setHomeLayout(ctx context.Context, doc *core.HomeLayout, now time.Time) error {
+	raw, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO personalize_layout (id, rules, updated_at) VALUES (1, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET rules = excluded.rules, updated_at = excluded.updated_at`, string(raw), ms(now))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO personalize_home_layout (id, doc, updated_at) VALUES (1, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET doc = excluded.doc, updated_at = excluded.updated_at`, string(raw), ms(now))
 	return err
+}
+
+// kindDays lists, per viewer and row kind, the local days (YYYYMMDD) the
+// kind was shown since day `since` (frequency caps).
+func (s *sqlStore) kindDays(ctx context.Context, since int) (map[int64]map[string][]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id, kind, day FROM personalize_row_impressions
+		WHERE day >= ? GROUP BY user_id, kind, day ORDER BY day`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]map[string][]int{}
+	for rows.Next() {
+		var uid int64
+		var kind string
+		var day int
+		if err := rows.Scan(&uid, &kind, &day); err != nil {
+			return nil, err
+		}
+		if out[uid] == nil {
+			out[uid] = map[string][]int{}
+		}
+		out[uid][kind] = append(out[uid][kind], day)
+	}
+	return out, rows.Err()
 }
 
 // ---- retention -------------------------------------------------------------------

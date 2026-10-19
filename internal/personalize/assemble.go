@@ -1,8 +1,10 @@
 package personalize
 
 import (
+	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/recommend"
@@ -11,6 +13,12 @@ import (
 // assembly turns a precomputed userModel into the rows one request
 // receives. It is pure: same inputs, same rows. Everything time-dependent
 // (rotation, exploration) is seeded by the local date.
+//
+// It composes the page in the Home Designer's three layers: the Global
+// template and the viewer's overrides (layout) decide which rows may
+// appear, which must, where some are anchored and within which bounds
+// the rest may move; personalization ranks the eligible rows for this
+// viewer and context and fills the page.
 type assembly struct {
 	model   *userModel
 	owner   []*candRow // owner collection rows for this context
@@ -19,13 +27,19 @@ type assembly struct {
 	hc      core.HubContext
 	section core.MediaType // "" = Home
 	limit   int            // items per row
-	rules   []core.LayoutRule
+	layout  *layoutIndex   // nil = engine defaults
 	global  map[string]arm // server-wide evidence by prior kind
 	arms    map[string]arm // this viewer's evidence by kind
 	allowed func(core.MediaType) bool
-	maxRows int
+	maxRows int // engine default page length
 	explore float64
 	day     int
+	// days are the local days (YYYYMMDD) each row kind was shown to this
+	// viewer in the last week (frequency caps).
+	days map[string][]int
+	// explain lists the rows that are not on the page, with reasons
+	// (owner previews); Plex never receives them.
+	explain bool
 }
 
 // rankedRow is a candidate row during assembly.
@@ -34,25 +48,44 @@ type rankedRow struct {
 	items    []candItem
 	hubID    string
 	score    float64
-	d        decision
 	strength float64
+	pol      effPolicy
+	must     bool // Always or anchored: on the page whenever it has titles
+	// hidden says why the row is not on the page ("" = it is);
+	// hiddenLayer is the layer responsible.
+	hidden      string
+	hiddenLayer string
+	slot        int
+	placement   string
+}
+
+func (r *rankedRow) hide(layer, why string) {
+	r.hidden, r.hiddenLayer = why, layer
 }
 
 // mmrLambda trades relevance against redundancy inside a row.
 const mmrLambda = 0.75
 
-// maxOwnerRows caps owner collection rows on one screen.
+// maxOwnerRows caps owner collection rows on one screen (unless a policy
+// sets its own cap or places them).
 const maxOwnerRows = 4
 
 func (a *assembly) run() []core.HomeRow {
-	plan := planFor(a.rules, a.user.ID, sectionName(a.section), a.hc)
-	var rows []*rankedRow
+	pv := a.layout.page(a.user.ID, sectionName(a.section))
+	var rows, hidden []*rankedRow
 	cands := append([]*candRow{}, a.model.rows...)
 	cands = append(cands, a.owner...)
 	// New viewers get the curated cold-start rows (Top 10 today, genre
 	// showcases) and acclaimed section rows on Home: there is little
 	// personal to put there yet.
 	newViewer := a.newViewer()
+	if a.section == "" && !hasKind(cands, KindContinue) {
+		// The engine always places Continue Watching on Home (the generic
+		// model has no row for it), so slots mean the same for everyone.
+		cands = append(cands, &candRow{kind: KindContinue, id: "continue", title: "Continue Watching",
+			reason: "Titles you're part-way through, most recent first.", context: "continue",
+			source: core.RowSourcePlex, keepOrder: true, homeOnly: true, scale: 1})
+	}
 	for _, c := range cands {
 		if a.section == "" && c.sectionOnly && !(newViewer && c.coldHome) || a.section != "" && c.homeOnly {
 			continue
@@ -73,80 +106,85 @@ func (a *assembly) run() []core.HomeRow {
 			continue
 		}
 		rr := &rankedRow{c: c, items: items, hubID: a.hubID(c)}
-		rr.d = plan.decide(rr.hubID, c.kind)
-		if c.source == core.RowSourcePlex {
-			// The front end always shows its own rows; layout rules can
-			// move them (pin, bury) but not remove them.
-			rr.d.hidden = false
-		}
+		rr.pol = pv.policyFor(rr.hubID, c.kind)
 		rr.score, rr.strength = a.rowScore(c, items)
-		if rr.d.boost {
-			rr.score *= 1.5
+		if p := rr.pol.p; p != nil {
+			if p.Priority > 0 {
+				rr.score *= p.Priority
+			}
+			rr.must = p.Status == core.RowAlways || p.Slot > 0
+			// The front end always shows its own rows: policies place
+			// them but cannot remove them.
+			if c.source != core.RowSourcePlex {
+				switch {
+				case p.Status == core.RowOff:
+					rr.hide(rr.pol.layer, "Off "+a.where(rr.pol.layer)+".")
+				case !whenMatches(p.When, a.hc):
+					rr.hide(rr.pol.layer, "Scheduled for "+describeWhen(p.When)+" "+a.where(rr.pol.layer)+"; not now.")
+				case p.MaxDaysPerWeek > 0:
+					if shown, ok := a.frequencyOK(c.kind, p.MaxDaysPerWeek); !ok {
+						rr.hide(rr.pol.layer, fmt.Sprintf("Frequency cap %s: at most %d days a week, and it was shown on %d of the last 6 days.",
+							a.where(rr.pol.layer), p.MaxDaysPerWeek, shown))
+					}
+				}
+			}
+		}
+		if rr.hidden != "" {
+			hidden = append(hidden, rr)
+			continue
 		}
 		rows = append(rows, rr)
 	}
 
-	var visible, pinned, hidden []*rankedRow
-	for _, r := range rows {
-		switch {
-		case r.d.hidden:
-			hidden = append(hidden, r)
-		case r.d.pinned:
-			pinned = append(pinned, r)
-		default:
-			visible = append(visible, r)
+	// Rows that must be on the page claim their caps first, then the rest
+	// by predicted engagement.
+	sort.SliceStable(rows, func(i, j int) bool {
+		if rows[i].must != rows[j].must {
+			return rows[i].must
 		}
-	}
-	sort.SliceStable(visible, func(i, j int) bool {
-		if visible[i].d.bury != visible[j].d.bury {
-			return !visible[i].d.bury
+		if rows[i].score != rows[j].score {
+			return rows[i].score > rows[j].score
 		}
-		if visible[i].score != visible[j].score {
-			return visible[i].score > visible[j].score
-		}
-		return visible[i].hubID < visible[j].hubID
+		return rows[i].hubID < rows[j].hubID
 	})
-	// Per-kind caps (pinned rows count but are never dropped).
-	perKind := map[string]int{}
-	groups := map[string]bool{}
+	perGroup := map[string]int{}
+	clusters := map[string]bool{}
 	owners := 0
-	for _, r := range pinned {
-		perKind[r.c.kind]++
-		if r.c.group != "" {
-			groups[r.c.kind+"/"+r.c.group] = true
-		}
-		if r.c.source == core.RowSourceOwner {
-			owners++
-		}
-	}
-	capped := visible[:0:0]
-	for _, r := range visible {
-		info := infoFor(r.c.kind)
-		if perKind[r.c.kind] >= info.cap {
+	pool := rows[:0:0]
+	for _, r := range rows {
+		group, limit, label := a.capFor(r)
+		if perGroup[group] >= limit {
+			r.hide(r.pol.layer, fmt.Sprintf("At most %d %s per page%s; higher-ranked ones took the places.", limit, label, a.capWhere(r)))
+			hidden = append(hidden, r)
 			continue
 		}
-		if r.c.group != "" {
-			if groups[r.c.kind+"/"+r.c.group] {
-				continue // one showcase per genre family
+		if r.c.group != "" && !r.must {
+			if clusters[r.c.kind+"/"+r.c.group] {
+				r.hide("", "One showcase per genre family; another from this family ranked higher.")
+				hidden = append(hidden, r)
+				continue
 			}
-			groups[r.c.kind+"/"+r.c.group] = true
+			clusters[r.c.kind+"/"+r.c.group] = true
 		}
-		if r.c.source == core.RowSourceOwner && owners >= maxOwnerRows {
+		ownerCapped := r.c.source == core.RowSourceOwner && !r.must && (r.pol.p == nil || r.pol.p.MaxPerPage == 0)
+		if ownerCapped && owners >= maxOwnerRows {
+			r.hide("", fmt.Sprintf("At most %d collection rows per page; higher-ranked ones took the places.", maxOwnerRows))
+			hidden = append(hidden, r)
 			continue
 		}
-		perKind[r.c.kind]++
+		perGroup[group]++
 		if r.c.source == core.RowSourceOwner {
 			owners++
 		}
-		capped = append(capped, r)
+		pool = append(pool, r)
 	}
-	ordered := placePinned(capped, pinned, func(r *rankedRow) int { return r.d.position })
 
-	maxRows := a.maxRows
-	if plan.maxRows > 0 {
-		maxRows = plan.maxRows
+	maxRows, maxLayer := pv.maxRows(a.hc.Device, a.maxRows)
+	out, dropped := a.fill(pool, maxRows, maxLayer)
+	hidden = append(hidden, dropped...)
+	if !a.explain {
+		return out
 	}
-	out := a.fill(ordered, maxRows)
 	for _, r := range hidden {
 		items := r.items
 		if len(items) > a.limit {
@@ -159,47 +197,141 @@ func (a *assembly) run() []core.HomeRow {
 	return out
 }
 
+func hasKind(rows []*candRow, kind string) bool {
+	for _, r := range rows {
+		if r.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// capFor is the per-page cap that applies to a row: its policy's
+// MaxPerPage (counted over the rows that policy matches), else the
+// engine's cap for its kind.
+func (a *assembly) capFor(r *rankedRow) (group string, limit int, label string) {
+	if p := r.pol.p; p != nil && p.MaxPerPage > 0 {
+		return "policy:" + r.pol.group(), p.MaxPerPage, rowsLabel(p.Row, p.MaxPerPage)
+	}
+	info := infoFor(r.c.kind)
+	return "kind:" + r.c.kind, info.cap, rowsLabel(r.c.kind, info.cap)
+}
+
+func (a *assembly) capWhere(r *rankedRow) string {
+	if p := r.pol.p; p != nil && p.MaxPerPage > 0 {
+		return " " + a.where(r.pol.layer)
+	}
+	return ""
+}
+
+func rowsLabel(row string, n int) string {
+	title := infoFor(row).title
+	if title == row || strings.ContainsAny(row, "*?[") {
+		title = "“" + row + "”"
+	} else {
+		title = "“" + strings.TrimRight(title, "…") + "”"
+	}
+	if n == 1 {
+		return title + " row"
+	}
+	return title + " rows"
+}
+
+// where names a layer for explanations.
+func (a *assembly) where(layer string) string {
+	switch layer {
+	case core.LayerGlobal:
+		return "in Global Home"
+	case core.LayerOverride:
+		return "for " + a.viewerName() + " (override)"
+	}
+	return "by default"
+}
+
+func (a *assembly) viewerName() string {
+	if a.user.ID == genericID {
+		return "the typical viewer"
+	}
+	if a.user.Title != "" {
+		return a.user.Title
+	}
+	if a.user.Username != "" {
+		return a.user.Username
+	}
+	return "this viewer"
+}
+
+// frequencyOK applies a days-per-week cap: a row shown today stays for
+// the day; otherwise it may appear if it was shown on fewer than max of
+// the previous six days.
+func (a *assembly) frequencyOK(kind string, maxDays int) (int, bool) {
+	days := a.days[kind]
+	if containsInt(days, a.day) {
+		return 0, true
+	}
+	shown := 0
+	for k := 1; k <= 6; k++ {
+		if containsInt(days, dayOf(a.hc.Now.AddDate(0, 0, -k), a.hc.Now.Location())) {
+			shown++
+		}
+	}
+	return shown, shown < maxDays
+}
+
 // anchored rows are defined by their exact titles (a franchise's
 // remaining films, the next episodes, an owner's collection, the viewer's
 // own watchlist): they keep their titles and similarity-driven rows give
 // way.
 func anchored(c *candRow) bool { return c.keepOrder && c.kind != KindContinue }
 
-// fill picks each row's items with cross-row dedupe, so a title appears
-// once per screen:
+// fill chooses the page and each row's items, with cross-row dedupe so a
+// title appears once per screen:
 //
-//  1. The front end's own rows keep their items.
-//  2. Anchored rows keep their titles (the first anchored row wins a
-//     title they share).
+//  1. The page: every row that must be there (Always, anchored), then the
+//     eligible rows by predicted engagement until the page length
+//     (maxRows; Plex's own rows not counted). The slot solver
+//     (placeSlots) arranges them: anchors, bounds, rank order.
+//  2. The front end's own rows keep their items; anchored-content rows
+//     (franchise, Up Next, owner collections, watchlist) keep their
+//     titles (the first such row wins a title they share).
 //  3. The other rows draft the remaining titles in turns, in display
 //     order: each round, every row takes its best title nobody has taken.
 //     Higher rows pick first, but no row is starved by a greedy one above
 //     it (Top 10 cannot swallow every Because-you-watched title).
 //
-// Rows left with fewer than their minimum are dropped and the draft is
-// rerun without them, so their titles go back to the others. maxRows
-// counts engine and owner rows; the next row moves up when one drops.
-func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
-	excluded := map[*rankedRow]bool{}
+// Rows left with fewer than their minimum are dropped and the page is
+// rebuilt without them, so their titles go back to the others and the
+// next eligible row moves up. It returns the page and the rows that did
+// not make it, with reasons.
+func (a *assembly) fill(pool []*rankedRow, maxRows int, maxLayer string) ([]core.HomeRow, []*rankedRow) {
+	excluded := map[*rankedRow]string{}
 	const attempts = 6
 	for attempt := 0; ; attempt++ {
-		var sel []*rankedRow
+		var sel, cut []*rankedRow
 		counted := 0
-		for _, r := range ordered {
-			if excluded[r] {
+		for _, r := range pool {
+			if excluded[r] != "" {
 				continue
 			}
 			if r.c.source != core.RowSourcePlex {
-				if maxRows > 0 && counted >= maxRows {
+				if !r.must && maxRows > 0 && counted >= maxRows {
+					cut = append(cut, r)
 					continue
 				}
 				counted++
 			}
 			sel = append(sel, r)
 		}
-		picked := make(map[*rankedRow][]candItem, len(sel))
+		order, tooLow := a.place(sel, attempt >= attempts)
+		if len(tooLow) > 0 && attempt < attempts {
+			for _, r := range tooLow {
+				excluded[r] = fmt.Sprintf("Never above slot %d %s, and the page has fewer rows.", r.pol.p.MinSlot, a.where(r.pol.layer))
+			}
+			continue
+		}
+		picked := make(map[*rankedRow][]candItem, len(order))
 		claimed := map[core.RatingKey]bool{}
-		for _, r := range sel {
+		for _, r := range order {
 			if r.c.source == core.RowSourcePlex {
 				items := r.items
 				if n := a.rowCap(r.c); len(items) > n {
@@ -211,7 +343,7 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				}
 			}
 		}
-		for _, r := range sel {
+		for _, r := range order {
 			if r.c.source == core.RowSourcePlex || !anchored(r.c) {
 				continue
 			}
@@ -225,10 +357,10 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				}
 			}
 		}
-		cursor := make(map[*rankedRow]int, len(sel))
+		cursor := make(map[*rankedRow]int, len(order))
 		for progress := true; progress; {
 			progress = false
-			for _, r := range sel {
+			for _, r := range order {
 				if r.c.source == core.RowSourcePlex || anchored(r.c) || len(picked[r]) >= a.rowCap(r.c) {
 					continue
 				}
@@ -246,32 +378,144 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 			}
 		}
 		thin := false
-		for _, r := range sel {
+		for _, r := range order {
 			if r.c.source == core.RowSourcePlex {
 				continue
 			}
 			min := r.c.minItems
-			if r.d.pinned && min > 1 {
+			if r.must && min > 1 {
 				min = 1
 			}
 			if n := len(picked[r]); n == 0 || n < min {
-				excluded[r] = true
+				excluded[r] = fmt.Sprintf("Too few titles left after removing ones shown in rows above (%d, needs %d).", n, max(min, 1))
 				thin = true
 			}
 		}
 		if thin && attempt < attempts {
 			continue
 		}
-		out := make([]core.HomeRow, 0, len(sel))
-		for _, r := range sel {
+		out := make([]core.HomeRow, 0, len(order))
+		var dropped []*rankedRow
+		for _, r := range order {
 			items := picked[r]
-			if r.c.source != core.RowSourcePlex && (len(items) == 0 || excluded[r] && thin) {
+			if r.c.source != core.RowSourcePlex && (len(items) == 0 || excluded[r] != "") {
+				r.hide("", excluded[r])
+				dropped = append(dropped, r)
 				continue
 			}
 			out = append(out, a.homeRow(r, items, len(r.items) > len(items)))
 		}
-		return out
+		for _, r := range pool {
+			if why := excluded[r]; why != "" && r.hidden == "" {
+				layer := ""
+				if strings.HasPrefix(why, "Never above") {
+					layer = r.pol.layer
+				}
+				r.hide(layer, why)
+				dropped = append(dropped, r)
+			}
+		}
+		for _, r := range cut {
+			where := "the engine default"
+			if maxLayer != "" {
+				where = a.where(maxLayer)
+			}
+			r.hide(maxLayer, fmt.Sprintf("Didn't make the page: %d rows at most (%s), and higher-ranked rows filled it.", maxRows, where))
+			dropped = append(dropped, r)
+		}
+		return out, dropped
 	}
+}
+
+// place arranges the selected rows into slots. Eligible rows whose
+// "never above" bound lies beyond the end of the page are returned
+// instead (they cannot be shown honestly), unless force is set (the last
+// attempt), when they sit as low as the page allows.
+func (a *assembly) place(sel []*rankedRow, force bool) ([]*rankedRow, []*rankedRow) {
+	ranked := append([]*rankedRow(nil), sel...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].hubID < ranked[j].hubID
+	})
+	n := len(ranked)
+	var tooLow []*rankedRow
+	for _, r := range ranked {
+		if p := r.pol.p; p != nil && !r.must && p.MinSlot > n {
+			tooLow = append(tooLow, r)
+		}
+	}
+	if len(tooLow) > 0 && !force {
+		return nil, tooLow
+	}
+	reqs := make([]slotReq, n)
+	bounded := false
+	for i, r := range ranked {
+		if p := r.pol.p; p != nil {
+			reqs[i] = slotReq{anchor: p.Slot, lo: min(p.MinSlot, n), hi: p.MaxSlot, pri: 1}
+			if r.pol.layer == core.LayerOverride {
+				reqs[i].pri = 2
+			}
+			bounded = bounded || p.MinSlot > 0 || p.MaxSlot > 0
+		}
+	}
+	outcome := placeSlots(reqs)
+	natural := outcome
+	if bounded {
+		free := make([]slotReq, n)
+		for i, q := range reqs {
+			free[i] = slotReq{anchor: q.anchor, pri: q.pri}
+		}
+		natural = placeSlots(free)
+	}
+	order := make([]*rankedRow, n)
+	for i, r := range ranked {
+		o := outcome[i]
+		r.slot = o.slot
+		r.placement = a.placementOf(r, i+1, n, o, natural[i].slot)
+		order[o.slot-1] = r
+	}
+	return order, nil
+}
+
+// placementOf says why a row sits at its slot.
+func (a *assembly) placementOf(r *rankedRow, rank, n int, o slotOutcome, natural int) string {
+	p := r.pol.p
+	if p != nil && p.Slot > 0 {
+		s := fmt.Sprintf("Anchored to slot %d %s", p.Slot, a.where(r.pol.layer))
+		switch {
+		case o.clamped && !o.displaced:
+			s += fmt.Sprintf("; the page has %d rows, so it is last", n)
+		case o.displaced:
+			s += fmt.Sprintf("; another anchor holds that slot, so it sits at slot %d", o.slot)
+		}
+		return s + "."
+	}
+	var b strings.Builder
+	if r.must {
+		fmt.Fprintf(&b, "Always on the page %s; ", a.where(r.pol.layer))
+	} else if r.c.source == core.RowSourcePlex {
+		b.WriteString("Plex's own row; ")
+	}
+	fmt.Fprintf(&b, "%s of %d by predicted engagement (score %.2f)", ordinal(rank), n, r.score)
+	if p != nil && p.Priority > 0 {
+		fmt.Fprintf(&b, ", priority ×%g %s", p.Priority, a.where(r.pol.layer))
+	}
+	switch {
+	case o.missedHi:
+		fmt.Fprintf(&b, "; could not honour never below slot %d: anchors and other bounds hold the slots above", p.MaxSlot)
+	case o.missedLo:
+		fmt.Fprintf(&b, "; could not honour never above slot %d: too few rows to fill the slots above", p.MinSlot)
+	case p != nil && p.MaxSlot > 0 && o.slot < natural:
+		fmt.Fprintf(&b, "; moved up to slot %d: never below slot %d %s", o.slot, p.MaxSlot, a.where(r.pol.layer))
+	case p != nil && p.MinSlot > 0 && o.slot > natural:
+		fmt.Fprintf(&b, "; held down to slot %d: never above slot %d %s", o.slot, p.MinSlot, a.where(r.pol.layer))
+	case o.slot != rank:
+		fmt.Fprintf(&b, "; at slot %d around anchored and bounded rows", o.slot)
+	}
+	b.WriteString(".")
+	return b.String()
 }
 
 // rowCap is the most items a row shows on this screen.
@@ -556,10 +800,29 @@ func (a *assembly) homeRow(r *rankedRow, items []candItem, more bool) core.HomeR
 	}
 	h.Items = titles
 	h.Type = rowType(titles, a.section)
-	return core.HomeRow{
+	hr := core.HomeRow{
 		HubID: r.hubID, Title: c.title, Kind: c.kind, Reason: c.reason, Score: round3(r.score),
-		Pinned: r.d.pinned, Source: c.source, Items: titles, ItemReasons: reasons, Hub: h,
+		Source: c.source, Items: titles, ItemReasons: reasons, Hub: h,
+		Layer: core.LayerPersonalized, Slot: r.slot, Placement: r.placement, HiddenReason: r.hidden,
 	}
+	if p := r.pol.p; p != nil {
+		pol := clonePolicy(*p)
+		hr.Policy, hr.PolicyLayer, hr.AnchorSlot = &pol, r.pol.layer, p.Slot
+		hr.Pinned = p.Slot > 0
+		switch {
+		case r.pol.layer == core.LayerOverride:
+			hr.Layer = core.LayerOverride
+		case r.must || p.Status == core.RowOff:
+			hr.Layer = core.LayerGlobal
+		}
+	}
+	if r.hidden != "" {
+		hr.Slot, hr.Placement = 0, ""
+		if r.hiddenLayer != "" {
+			hr.Layer = r.hiddenLayer
+		}
+	}
+	return hr
 }
 
 // rowType is the hub's item type: the common type of its items, or mixed

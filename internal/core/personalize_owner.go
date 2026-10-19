@@ -96,6 +96,24 @@ type HomeRow struct {
 	ItemReasons map[RatingKey]string `json:"itemReasons,omitempty"`
 	// Hub is the row as handed to the Plex front end.
 	Hub Hub `json:"-"`
+
+	// Provenance (layered Home Designer, additive). Layer is where the
+	// row's presence and position came from: LayerGlobal (a Global Home
+	// anchor or Always row), LayerPersonalized (the engine picked and
+	// ordered it within the Global constraints) or LayerOverride (a
+	// per-viewer override decided it). Slot is its 1-based position among
+	// the rows the engine arranges (0 for hidden rows); AnchorSlot the
+	// slot its policy anchors it to. Placement explains the position,
+	// HiddenReason why a hidden row is not on the page. Policy is the
+	// effective row policy and PolicyLayer the layer it came from ("" =
+	// engine defaults).
+	Layer        string     `json:"layer,omitempty"`
+	Slot         int        `json:"slot,omitempty"`
+	AnchorSlot   int        `json:"anchorSlot,omitempty"`
+	Placement    string     `json:"placement,omitempty"`
+	HiddenReason string     `json:"hiddenReason,omitempty"`
+	Policy       *RowPolicy `json:"policy,omitempty"`
+	PolicyLayer  string     `json:"policyLayer,omitempty"`
 }
 
 // HomePreview is a viewer's assembled rows for one context.
@@ -161,12 +179,20 @@ func (s LayoutScope) AppliesTo(userID int64) bool {
 
 // LayoutWhen restricts a layout row rule to days (0 = Sunday … 6 =
 // Saturday), an hour window [FromHour, ToHour) in server local time (wraps
-// past midnight when FromHour > ToHour) and device classes.
+// past midnight when FromHour > ToHour) and device classes. Dayparts
+// (DaypartMorning…), Months (1 = January … 12) and an inclusive date
+// window (StartDate/EndDate, "2006-01-02", server local time) narrow it
+// further; every set field must match.
 type LayoutWhen struct {
 	Days     []int    `json:"days,omitempty"`
 	FromHour *int     `json:"fromHour,omitempty"`
 	ToHour   *int     `json:"toHour,omitempty"`
 	Devices  []string `json:"devices,omitempty"`
+	// Additive (layered Home Designer).
+	Dayparts  []string `json:"dayparts,omitempty"`
+	Months    []int    `json:"months,omitempty"`
+	StartDate string   `json:"startDate,omitempty"`
+	EndDate   string   `json:"endDate,omitempty"`
 }
 
 // Layout actions for LayoutRowRule.Action.

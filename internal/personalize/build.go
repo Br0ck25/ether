@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -479,6 +480,9 @@ type statsSnapshot struct {
 	at     time.Time
 	global map[string]arm           // by prior kind
 	users  map[int64]map[string]arm // by user, kind
+	// days are the local days each kind was shown to each viewer in the
+	// last week (frequency caps).
+	days map[int64]map[string][]int
 }
 
 // statsWindow is how far back row engagement counts for the bandit.
@@ -498,7 +502,7 @@ func (e *Engine) statsFor(ctx context.Context) *statsSnapshot {
 		if e.stats != nil {
 			return e.stats
 		}
-		return &statsSnapshot{at: e.now(), global: map[string]arm{}, users: map[int64]map[string]arm{}}
+		return &statsSnapshot{at: e.now(), global: map[string]arm{}, users: map[int64]map[string]arm{}, days: map[int64]map[string][]int{}}
 	}
 	e.stats = s
 	return s
@@ -521,7 +525,11 @@ func (e *Engine) computeStats(ctx context.Context) (*statsSnapshot, error) {
 		return nil, err
 	}
 	plays = sessions(plays, e.loc)
-	s := &statsSnapshot{at: e.now(), global: map[string]arm{}, users: map[int64]map[string]arm{}}
+	days, err := e.store.kindDays(ctx, dayOf(e.now().AddDate(0, 0, -7), e.loc))
+	if err != nil {
+		return nil, err
+	}
+	s := &statsSnapshot{at: e.now(), global: map[string]arm{}, users: map[int64]map[string]arm{}, days: days}
 	user := func(id int64) map[string]arm {
 		if s.users[id] == nil {
 			s.users[id] = map[string]arm{}
@@ -573,7 +581,10 @@ func (e *Engine) computeStats(ctx context.Context) (*statsSnapshot, error) {
 // ---- owner collection rows ---------------------------------------------------------
 
 type ownerEntry struct {
-	rows    []core.CollectionRow
+	rows []core.CollectionRow
+	// placed are collections the Home Designer put on the page (fetched
+	// regardless of their own Home/section targeting).
+	placed  map[string]bool
 	at      time.Time
 	loading bool
 	done    chan struct{}
@@ -583,13 +594,22 @@ type ownerEntry struct {
 const ownerRowsTTL = 5 * time.Minute
 
 // ownerRows returns owner collection rows for the viewer and context from a
-// per-context cache. Misses fetch in the background; the request waits at
-// most OwnerRowsWait for a context it has never fetched.
-func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType) ([]*candRow, int64) {
+// per-context cache: the collections targeted at the viewer, plus those the
+// layout places on this page. Misses fetch in the background; the request
+// waits at most OwnerRowsWait for a context it has never fetched (an owner
+// preview, wait, waits for the fetch).
+func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType, pv pageView, wait bool) ([]*candRow, int64) {
 	if e.opts.Collections == nil {
 		return nil, 0
 	}
+	gIDs, vIDs := pv.collectionIDs()
+	if _, ok := e.opts.Collections.(core.CollectionRowLookup); !ok {
+		gIDs, vIDs = nil, nil
+	}
 	key := strconv.FormatInt(user.ID, 10) + "|" + hc.Bucket()
+	if len(gIDs)+len(vIDs) > 0 {
+		key += "|g:" + strings.Join(gIDs, ",") + "|v:" + strings.Join(vIDs, ",")
+	}
 	e.mu.Lock()
 	ent := e.owner[key]
 	now := e.now()
@@ -602,12 +622,15 @@ func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubCont
 		ent.loading = true
 		ent.done = make(chan struct{})
 		u := *user
-		go e.fetchOwnerRows(key, &u, hc, ent)
+		go e.fetchOwnerRows(key, &u, hc, ent, gIDs, vIDs)
 	}
 	done, have := ent.done, !ent.at.IsZero()
 	e.mu.Unlock()
 	if !have && done != nil {
 		t := time.NewTimer(e.opts.OwnerRowsWait)
+		if wait {
+			t.Reset(e.opts.SourceTimeout)
+		}
 		select {
 		case <-done:
 		case <-t.C:
@@ -616,18 +639,22 @@ func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubCont
 		t.Stop()
 	}
 	e.mu.Lock()
-	rows, at := ent.rows, ent.at
+	rows, placed, at := ent.rows, ent.placed, ent.at
 	e.mu.Unlock()
+	onPage := map[string]bool{}
+	for _, id := range append(append([]string(nil), gIDs...), vIDs...) {
+		onPage[id] = true
+	}
 	var out []*candRow
 	for _, cr := range rows {
-		if c := e.ownerCandidate(cr, section, user); c != nil {
+		if c := e.ownerCandidate(cr, section, user, onPage[cr.CollectionID], placed[cr.CollectionID]); c != nil {
 			out = append(out, c)
 		}
 	}
 	return out, at.UnixNano()
 }
 
-func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext, ent *ownerEntry) {
+func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext, ent *ownerEntry, gIDs, vIDs []string) {
 	defer func() {
 		if v := recover(); v != nil {
 			e.log.Error("personalize: owner rows panicked", "panic", v)
@@ -644,8 +671,41 @@ func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext,
 		e.log.Debug("personalize: owner rows failed", "err", err)
 		return
 	}
+	placed := map[string]bool{}
+	if lk, ok := e.opts.Collections.(core.CollectionRowLookup); ok {
+		have := map[string]bool{}
+		for _, r := range rows {
+			have[r.CollectionID] = true
+		}
+		for _, set := range []struct {
+			ids    []string
+			ignore bool
+		}{{vIDs, true}, {gIDs, false}} {
+			var missing []string
+			for _, id := range set.ids {
+				if !have[id] {
+					missing = append(missing, id)
+				}
+			}
+			if len(missing) == 0 {
+				continue
+			}
+			extra, err := lk.CollectionRowsByID(ctx, user, hc, missing, set.ignore)
+			if err != nil {
+				e.log.Debug("personalize: placed collection rows failed", "err", err)
+				continue
+			}
+			for _, r := range extra {
+				if have[r.CollectionID] {
+					continue
+				}
+				have[r.CollectionID], placed[r.CollectionID] = true, true
+				rows = append(rows, r)
+			}
+		}
+	}
 	e.mu.Lock()
-	ent.rows, ent.at = rows, e.now()
+	ent.rows, ent.placed, ent.at = rows, placed, e.now()
 	if len(e.owner) > 5000 {
 		for k, v := range e.owner {
 			if k != key && !v.loading {
@@ -656,9 +716,11 @@ func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext,
 	e.mu.Unlock()
 }
 
-// ownerCandidate adapts an owner collection row for this screen.
-func (e *Engine) ownerCandidate(cr core.CollectionRow, section core.MediaType, user *core.User) *candRow {
-	if section == "" && !cr.HomeRow || section != "" && !cr.SectionRow {
+// ownerCandidate adapts an owner collection row for this screen. onPage:
+// the layout places it on this page (it appears whatever its own Home or
+// section targeting says); placed: it was fetched only because of that.
+func (e *Engine) ownerCandidate(cr core.CollectionRow, section core.MediaType, user *core.User, onPage, placed bool) *candRow {
+	if !onPage && (section == "" && !cr.HomeRow || section != "" && !cr.SectionRow) {
 		return nil
 	}
 	if len(cr.Hub.Items) == 0 {
@@ -682,9 +744,12 @@ func (e *Engine) ownerCandidate(cr core.CollectionRow, section core.MediaType, u
 		}
 		items = append(items, candItem{t: t, base: rankScore(i, len(hub.Items)), fit: fit, qual: quality(&t), reason: why})
 	}
-	desc := hub.Title
+	reason := "Owner collection “" + hub.Title + "”, targeted at this viewer."
+	if placed {
+		reason = "Owner collection “" + hub.Title + "”, placed on this page in the Home Designer."
+	}
 	c := &candRow{kind: KindCollectionPrefix + cr.CollectionID, id: hub.ID, title: hub.Title,
-		reason: "Owner collection “" + desc + "”, targeted at this viewer.", context: "collection",
+		reason: reason, context: "collection",
 		source: core.RowSourceOwner, items: items, minItems: 3, keepOrder: true, scale: 1, hub: &hub}
 	return c
 }

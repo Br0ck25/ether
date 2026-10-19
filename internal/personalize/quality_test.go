@@ -106,7 +106,7 @@ func TestColdStartHome(t *testing.T) {
 	groups := map[string]bool{}
 	showcases := 0
 	for _, r := range p.Rows {
-		if r.Kind != KindShowcase {
+		if r.Kind != KindShowcase || r.Hidden {
 			continue
 		}
 		showcases++

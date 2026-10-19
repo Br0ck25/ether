@@ -48,10 +48,19 @@ A personal Home per Plex user, rebuilt in the background and served instantly:
    optional LLM draft the rules. Schedule refreshes, rotate members, choose
    artwork, and target who sees it and where (Collections tab, Home row,
    section row, specific users).
-3. **Home Designer**: pick a viewer and a device context and see their Plex
-   Home exactly as Plex will receive it, with each row's reason. Pin, hide or
-   reorder rows server-wide or per user; set rules ("Short on time" only on
-   weeknights).
+3. **Home Designer**: a Netflix-style layered Home. The owner edits a
+   **Global Home** template for everyone (which rows are in the pool and
+   whether they are always shown, eligible or off; anchored slots;
+   "never above / never below" bounds; per-page and days-per-week caps;
+   schedules by day, hour, daypart, device, month and date; page length
+   per section and device). **Personalization** then picks and orders the
+   eligible rows per viewer and context, and **per-viewer overrides** sit
+   on top (pin, hide, add a collection just for them, change limits),
+   each with "reset to global". The preview shows the Plex Home of a
+   viewer, or of the typical viewer, for any device, day, time and
+   section, rendered server-side from the unsaved draft, with every row's
+   provenance (Global anchor / Personalized / Override) and why it sits at
+   its slot; editing Global shows how many viewers it affects.
 4. **Viewers**: each Plex user's taste profile (genres, people, decades,
    moods), recent activity, and what the engine is learning; the owner can
    correct it ("not into horror") and set limits.
@@ -167,11 +176,22 @@ type TasteProfile = {
 
 type HomeRow = {
   hubId: string; title: string; kind: string;      // e.g. "because-you-watched", "collection:<id>"
-  reason: string;                                  // human explanation
+  reason: string;                                  // why this row / these titles
   score: number;                                   // predicted engagement used for ordering
-  pinned?: boolean; hidden?: boolean; source: "engine" | "owner" | "plex";
+  pinned?: boolean;                                // anchored to a slot
+  hidden?: boolean;                                // not on the page (never sent to Plex)
+  source: "engine" | "owner" | "plex";
   items: TitleCard[];                              // what Plex receives, in order
   itemReasons?: Record<string, string>;            // key -> why this title
+  // Provenance in the layered Home Designer:
+  layer?: "global" | "personalized" | "override";  // who put it there: a Global anchor/Always row,
+                                                   // the engine within the Global constraints, or
+                                                   // the viewer's override
+  slot?: number;                                   // 1-based position among the rows the engine arranges
+  anchorSlot?: number;                             // the slot its policy anchors it to
+  placement?: string;                              // why it is at this slot
+  hiddenReason?: string;                           // why a hidden row is not on the page
+  policy?: RowPolicy; policyLayer?: "global" | "override";  // the effective policy and its layer
 };
 ```
 
@@ -181,25 +201,84 @@ type HomeRow = {
 | GET | `viewers/{id}` | | `Viewer & { recent: { title: TitleCard, at, completed, progress }[] }` |
 | GET | `viewers/{id}/taste` | | `TasteProfile` |
 | PUT | `viewers/{id}/taste/overrides` | `{ overrides: TasteProfile["overrides"] }` | `TasteProfile` |
-| GET | `viewers/{id}/home` | `device=tv\|mobile\|web\|desktop, at=<RFC3339>, section?` | `{ rows: HomeRow[], generatedAt, context: { device, daypart, weekend } }` — exactly what `/hubs` would return to that user in that context |
+| GET | `viewers/{id}/home` | `device=tv\|mobile\|web\|desktop, at=<RFC3339>, section?, count?` | `{ rows: HomeRow[], generatedAt, context: { device, daypart, weekend } }` — exactly what `/hubs` would return to that user in that context (same code path), plus Plex's own rows (`source: "plex"`) and, last, the rows that are not on the page with `hidden: true` and a `hiddenReason` |
 | POST | `viewers/{id}/refresh` | | `204` (rebuild their rows now) |
 
-### Home Designer (layout policy)
+### Home Designer (layered layout)
+
+A Home is composed in three layers, like Netflix's homepage (rows chosen
+from a candidate pool under page-level constraints, then personalised per
+profile):
+
+1. **Global Home**: the owner's template for everyone, per page (`home`,
+   `movies`, `shows`): a row policy for any row in the pool, and the page
+   length (per device if wanted). Rows without a policy are *eligible*.
+2. **Personalized**: within those constraints the engine picks and orders
+   the eligible rows per viewer and context (`docs/personalization.md`).
+3. **Overrides**: per viewer. An override replaces the Global policy for
+   the same `row` (or the page length); deleting it is "reset to global".
 
 ```ts
-type LayoutRule = {
-  id?: string; scope: "all" | { userIds: number[] };
-  section?: "home" | "movies" | "shows";
-  rows: { hubId: string; action: "pin" | "hide" | "boost" | "bury"; position?: number;
-          when?: { days?: number[]; fromHour?: number; toHour?: number; devices?: string[] } }[];
-  maxRows?: number;
+type RowPolicy = {
+  row: string;              // kind ("short-on-time"), "collection:<id>", a hub id ("because.123"),
+                            // or a glob ("because.*", "collection:*"); hub id beats kind beats glob
+  status: "always" | "eligible" | "off";
+  slot?: number;            // anchored slot, 1 = top (implies "always")
+  minSlot?: number;         // never above this slot
+  maxSlot?: number;         // never below this slot
+  priority?: number;        // ranking weight 0.1–5 (default 1)
+  maxPerPage?: number;      // rows this policy matches on one page (1–10; engine default per kind)
+  maxDaysPerWeek?: number;  // frequency cap per viewer (1–6; stays all day once shown)
+  when?: LayoutWhen;        // only shown then; off otherwise
 };
+type LayoutWhen = {
+  days?: number[];          // 0 = Sunday … 6
+  fromHour?: number; toHour?: number;   // [from, to), server local time, wraps midnight
+  dayparts?: ("morning" | "afternoon" | "evening" | "late")[];
+  devices?: ("tv" | "mobile" | "web" | "desktop")[];
+  months?: number[];        // 1 = January … 12 ("only in December")
+  startDate?: string; endDate?: string; // "YYYY-MM-DD", inclusive
+};
+type LayoutPage = {
+  section: "home" | "movies" | "shows";
+  maxRows?: number;         // page length: rows the engine arranges (Plex's own not counted); 0 = inherit
+  deviceMaxRows?: Partial<Record<"tv" | "mobile" | "web" | "desktop", number>>;
+  rows: RowPolicy[];
+};
+type HomeLayout = {
+  global: LayoutPage[];
+  viewers: { userId: number; pages: LayoutPage[] }[];   // overrides
+  updatedAt?: string;
+  notes?: string[];         // server remarks (legacy conversion); cleared by the next save
+};
+type LayoutImpact = { viewerId: number; title: string; overrides: number; changed: boolean;
+  added: string[]; removed: string[]; moved: number };
 ```
+
+Rules the server enforces (400 `validation` with dotted field paths
+otherwise): one policy per `row` and one anchor per slot on a page; an
+anchored row has no bounds and cannot be off; `minSlot ≤ maxSlot`;
+Continue Watching (Plex's own row, Home only) can be anchored or bounded
+but not turned off, scheduled or capped; Recently Added and Recent
+Playlists are built by Plex outside the arrangement and cannot be
+targeted. Page length resolves viewer device → viewer page → Global
+device → Global page → engine default (`defaults.maxRows`).
 
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `layout` | | `{ rules: LayoutRule[], availableRows: { hubId, title, kind, description }[] }` |
-| PUT | `layout` | `{ rules: LayoutRule[] }` | same as GET |
+| GET | `layout` | | `{ layout: HomeLayout, availableRows: { hubId, title, kind, description }[], defaults: { maxRows: { home, movies, shows } } }` |
+| PUT | `layout` | `{ layout: HomeLayout }` (legacy `{ rules: LayoutRule[] }` is still accepted and converted; the response then carries `notes`) | same as GET |
+| POST | `layout/preview` | `{ layout?: HomeLayout /* unsaved draft; omitted = saved */, viewerId?: number \| null /* null = typical viewer */, device?, at?, section?, count? }` | `{ rows: HomeRow[], generatedAt, context, viewer: { id, title } \| null }` — the same assembly as `/hubs` |
+| POST | `layout/impact` | `{ layout: HomeLayout, device?, at?, section? }` | `{ viewers: LayoutImpact[], summary: { viewers, withOverrides, changed } }` — every viewer's page under the saved layout vs the draft |
+
+The legacy `LayoutRule` list (pin / hide / boost / bury with scopes and
+schedules) is converted once, the first time this version starts: server-wide
+rules become Global policies, rules for specific viewers become their
+overrides; pin at position p anchors to slot p+1, hide is off, boost is
+priority 1.5, bury priority 0.3, `maxRows` the page length. A hide limited
+to days, hours or devices becomes a schedule for the complement; other
+scheduled rules keep their effect at all times. Every approximation is
+listed in `notes`.
 
 ### Insights (dashboard)
 

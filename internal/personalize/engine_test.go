@@ -207,7 +207,7 @@ func TestPreviewMatchesHubs(t *testing.T) {
 		t.Fatalf("section preview head = %v", kindsOf(p.Rows))
 	}
 	hubs, _ := h.e.SectionHubsFor(ctx, &u, core.TypeShow, sec, 12)
-	if len(hubs) != len(p.Rows)-2 {
+	if len(hubs) != len(kindsOf(p.Rows))-2 {
 		t.Fatalf("section hubs %v vs preview %d rows", hubIDsOf(hubs), len(p.Rows))
 	}
 	for _, hb := range hubs {
@@ -248,9 +248,9 @@ func TestOverridesAndLayoutPersist(t *testing.T) {
 		}
 	}
 
-	rules, err := h.e.SetLayout(ctx, []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindTrending, Action: "hide"}}}})
-	if err != nil || len(rules) != 1 || rules[0].ID == "" {
-		t.Fatalf("set layout = %+v %v", rules, err)
+	doc, err := h.e.SetHomeLayout(ctx, &core.HomeLayout{Global: []core.LayoutPage{{Section: "home", Rows: []core.RowPolicy{{Row: KindTrending, Status: core.RowOff}}}}})
+	if err != nil || len(doc.Global) != 1 || doc.UpdatedAt.IsZero() {
+		t.Fatalf("set layout = %+v %v", doc, err)
 	}
 	// A fresh engine over the same database loads them.
 	e2, err := New(Options{DB: h.db, Catalog: h.cat, Logger: quietLogger(), Now: h.clock.Now, Location: time.UTC, RefreshEvery: -1})
@@ -258,8 +258,8 @@ func TestOverridesAndLayoutPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer e2.Close()
-	got, _ := e2.Layout(ctx)
-	if len(got) != 1 || got[0].ID != rules[0].ID || got[0].Rows[0].Action != "hide" {
+	got, _ := e2.HomeLayout(ctx)
+	if len(got.Global) != 1 || got.Global[0].Rows[0].Status != core.RowOff || !got.UpdatedAt.Equal(doc.UpdatedAt) {
 		t.Fatalf("persisted layout = %+v", got)
 	}
 	os, _ := e2.store.overrides(ctx, 1)

@@ -2,6 +2,7 @@ package personalize
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func emptyModel(rows ...*candRow) *userModel {
 
 func run(m *userModel, mut func(a *assembly)) []core.HomeRow {
 	a := &assembly{model: m, user: core.User{ID: 1}, hc: hubContext(testNow, core.DeviceTV), limit: 6,
-		global: map[string]arm{}, explore: 0, day: dayOf(testNow, time.UTC), maxRows: 14}
+		global: map[string]arm{}, explore: 0, day: dayOf(testNow, time.UTC), maxRows: 14, explain: true}
 	if mut != nil {
 		mut(a)
 	}
@@ -51,7 +52,7 @@ func TestAssemblyDedupesAcrossRows(t *testing.T) {
 			seen[it.Key] = r.HubID
 		}
 	}
-	if len(rows) != 3 {
+	if len(rows) != 4 || rows[3].Kind != KindContinue { // the engine always places Continue Watching on Home
 		t.Fatalf("rows = %v", kindsOf(rows))
 	}
 	// The shared titles stay in the highest row.
@@ -67,7 +68,7 @@ func TestAssemblyDedupesAcrossRows(t *testing.T) {
 	thin := testRow(KindHiddenGems, "hiddengems", items(cat, append(shared, movieKey(3, 1))...))
 	thin.minItems = 4
 	rows = run(emptyModel(top, thin), nil)
-	if rowByKind(rows, KindHiddenGems) != nil {
+	if r := rowByKind(rows, KindHiddenGems); r != nil && !r.Hidden {
 		t.Fatalf("thin row kept: %v", kindsOf(rows))
 	}
 }
@@ -113,7 +114,7 @@ func TestAssemblyMMRDiversifies(t *testing.T) {
 	}
 }
 
-func TestAssemblyLayoutRules(t *testing.T) {
+func TestAssemblyGlobalPolicies(t *testing.T) {
 	cat := newFakeCatalog(testNow)
 	mk := func(kind, id string, g int) *candRow {
 		var keys []core.RatingKey
@@ -125,50 +126,60 @@ func TestAssemblyLayoutRules(t *testing.T) {
 	m := emptyModel(mk(KindTop10, "top10", 0), mk(KindTrending, "trending", 1), mk(KindNewReleases, "newreleases", 2),
 		mk(KindComfort, "comfort", 5), mk(KindBecause, "because.1", 4))
 	base := run(m, nil)
-	if len(base) != 5 {
+	if len(kindsOf(base)) != 6 { // five rows plus Continue Watching, which the engine always places on Home
 		t.Fatalf("base rows = %v", kindsOf(base))
 	}
-	rules := []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Section: "home", Rows: []core.LayoutRowRule{
-		{HubID: "new-releases", Action: "pin", Position: ip(0)},
-		{HubID: "home.top10", Action: "bury"},
-		{HubID: "because.*", Action: "hide"},
-		{HubID: KindComfort, Action: "hide", When: &core.LayoutWhen{Days: []int{0, 6}}}, // weekends only: no effect on Wednesday
-	}, MaxRows: 3}}
-	rows := run(m, func(a *assembly) { a.rules = rules })
+	for _, r := range base {
+		if !r.Hidden && (r.Layer != core.LayerPersonalized || r.Slot == 0 || r.Placement == "") {
+			t.Fatalf("default provenance = %+v", r)
+		}
+	}
+	doc := &core.HomeLayout{Global: []core.LayoutPage{{Section: "home", MaxRows: 2, Rows: []core.RowPolicy{
+		{Row: KindNewReleases, Status: core.RowAlways, Slot: 1},
+		{Row: "home.top10", Priority: 0.3},
+		{Row: "because.*", Status: core.RowOff},
+		{Row: KindComfort, Status: core.RowEligible, When: &core.LayoutWhen{Days: []int{0, 6}}}, // weekends only; testNow is a Wednesday
+	}}}}
+	rows := run(m, func(a *assembly) { a.layout = mustIndex(t, doc) })
 	visible := kindsOf(rows)
-	if len(visible) != 3 || visible[0] != KindNewReleases || !rows[0].Pinned {
-		t.Fatalf("pinned first, max 3: %v", visible)
+	if len(visible) != 3 || visible[0] != KindNewReleases || !rows[0].Pinned || rows[0].Layer != core.LayerGlobal || rows[0].Slot != 1 ||
+		rows[0].AnchorSlot != 1 || !strings.Contains(rows[0].Placement, "Anchored to slot 1 in Global Home") {
+		t.Fatalf("anchored first, 2 engine rows + Continue Watching: %v %+v", visible, rows[0])
 	}
 	for _, k := range visible {
 		if k == KindTop10 {
-			t.Fatalf("buried row survived maxRows ahead of others: %v", visible)
+			t.Fatalf("deprioritised row survived the page length ahead of others: %v", visible)
 		}
 	}
-	if r := rowByKind(rows, KindComfort); r != nil && r.Hidden {
-		t.Fatal("weekend-only hide applied on a Wednesday")
+	comfort := rowByKind(rows, KindComfort)
+	if comfort == nil || !comfort.Hidden || !strings.Contains(comfort.HiddenReason, "Scheduled for Weekends in Global Home") || comfort.Layer != core.LayerGlobal {
+		t.Fatalf("out-of-schedule row: %+v", comfort)
 	}
-	hidden := rowByKind(rows, KindBecause)
-	if hidden == nil || !hidden.Hidden || rows[len(rows)-1].Kind != KindBecause {
-		t.Fatalf("hidden rows are reported last with Hidden set: %+v", hidden)
+	because := rowByKind(rows, KindBecause)
+	if because == nil || !because.Hidden || because.HiddenReason != "Off in Global Home." || because.Policy == nil || because.PolicyLayer != core.LayerGlobal {
+		t.Fatalf("off row: %+v", because)
 	}
-	// Boost lifts a low row to the top.
-	rows = run(m, func(a *assembly) {
-		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindNewReleases, Action: "boost"}}}}
-		a.global = map[string]arm{KindNewReleases: {shows: 100, reward: 3}, KindTop10: {shows: 100, reward: 6}}
-	})
-	idx := map[string]int{}
+	top := rowByKind(rows, KindTop10)
+	if top == nil || !top.Hidden || !strings.Contains(top.HiddenReason, "Didn't make the page: 2 rows at most (in Global Home)") {
+		t.Fatalf("cut row: %+v", top)
+	}
 	for i, r := range rows {
-		idx[r.Kind] = i
+		if r.Hidden && i < len(visible) || !r.Hidden && r.Slot != i+1 {
+			t.Fatalf("visible rows first with slots 1…n, hidden last: %d %+v", i, r)
+		}
 	}
-	plain := run(m, func(a *assembly) {
-		a.global = map[string]arm{KindNewReleases: {shows: 100, reward: 3}, KindTop10: {shows: 100, reward: 6}}
+	// Priority lifts a low row.
+	stats := map[string]arm{KindNewReleases: {shows: 100, reward: 3}, KindTop10: {shows: 100, reward: 6}}
+	boosted := run(m, func(a *assembly) {
+		a.layout = mustIndex(t, &core.HomeLayout{Global: []core.LayoutPage{{Section: "home", Rows: []core.RowPolicy{{Row: KindNewReleases, Priority: 3}}}}})
+		a.global = stats
 	})
-	pidx := map[string]int{}
-	for i, r := range plain {
-		pidx[r.Kind] = i
+	plain := run(m, func(a *assembly) { a.global = stats })
+	if slotOf(boosted, KindNewReleases) >= slotOf(plain, KindNewReleases) {
+		t.Fatalf("priority did not raise the row: %d vs %d", slotOf(boosted, KindNewReleases), slotOf(plain, KindNewReleases))
 	}
-	if idx[KindNewReleases] >= pidx[KindNewReleases] {
-		t.Fatalf("boost did not raise the row: %d vs %d", idx[KindNewReleases], pidx[KindNewReleases])
+	if r := rowByKind(boosted, KindNewReleases); !strings.Contains(r.Placement, "priority ×3 in Global Home") {
+		t.Fatalf("placement = %q", r.Placement)
 	}
 }
 
@@ -215,7 +226,7 @@ func TestAssemblyExplorationRotatesDaily(t *testing.T) {
 			a.hc = hubContext(day, core.DeviceTV)
 			a.day = dayOf(day, time.UTC)
 		})
-		if got := len(kindsOf(out)); got != 3 {
+		if got := countKind(out, KindBecause); got != 3 {
 			t.Fatalf("because rows capped at 3, got %d", got)
 		}
 		key := ""
@@ -400,19 +411,22 @@ func TestLayoutCannotHidePlexRows(t *testing.T) {
 	}
 	cw := testRow(KindContinue, "continue", nil)
 	cw.keepOrder, cw.homeOnly, cw.minItems, cw.source = true, true, 0, core.RowSourcePlex
-	m := emptyModel(cw, testRow(KindTrending, "trending", items(cat, keys...)))
+	m := emptyModel(cw, testRow(KindTrending, "trending", items(cat, keys...)), testRow(KindTop10, "top10", items(cat, movieKey(3, 1), movieKey(3, 2), movieKey(3, 3), movieKey(3, 4))))
+	// Validation refuses to turn Plex's row off; assembly ignores it too.
+	off := &layoutIndex{global: map[string]*core.LayoutPage{"home": {Section: "home", Rows: []core.RowPolicy{{Row: KindContinue, Status: core.RowOff}}}}}
 	rows := run(m, func(a *assembly) {
 		a.cw = items(cat, movieKey(1, 1))
-		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindContinue, Action: "hide"}}}}
+		a.layout = off
 	})
 	if r := rowByKind(rows, KindContinue); r == nil || r.Hidden {
 		t.Fatalf("Continue Watching hidden: %+v", r)
 	}
+	// It can be bounded: never above slot 3.
 	rows = run(m, func(a *assembly) {
 		a.cw = items(cat, movieKey(1, 1))
-		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindContinue, Action: "bury"}}}}
+		a.layout = mustIndex(t, &core.HomeLayout{Global: []core.LayoutPage{{Section: "home", Rows: []core.RowPolicy{{Row: KindContinue, MinSlot: 3}}}}})
 	})
-	if rows[len(rows)-1].Kind != KindContinue {
-		t.Fatalf("buried Continue Watching not last: %v", kindsOf(rows))
+	if r := rowByKind(rows, KindContinue); r.Slot != 3 || !strings.Contains(r.Placement, "never above slot 3") {
+		t.Fatalf("bounded Continue Watching: %v %+v", kindsOf(rows), r)
 	}
 }

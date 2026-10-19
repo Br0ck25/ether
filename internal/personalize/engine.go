@@ -17,8 +17,10 @@
 //     LLM themes, Trakt, and popularity rows for new viewers;
 //   - assembly per request context (assemble.go): context-aware item
 //     scoring, MMR diversity, cross-row dedupe, bandit row ranking with
-//     daily-seeded Thompson exploration (bandit.go), the owner's layout
-//     rules (layout.go) and daily rotation;
+//     daily-seeded Thompson exploration (bandit.go) and daily rotation,
+//     inside the owner's layered Home Designer layout (homelayout.go: a
+//     Global template plus per-viewer overrides) arranged by the slot
+//     solver (slots.go);
 //   - a feedback loop: every served row is recorded as an impression
 //     (impressions.go) and every play is attributed to the row it came
 //     from (plays.go), which feeds both the taste model and the bandit.
@@ -186,7 +188,7 @@ type Engine struct {
 	flights   map[int64]*flight
 	debounce  map[int64]*time.Timer
 	version   uint64
-	layout    []core.LayoutRule
+	layout    *layoutIndex // the saved Home Designer document, resolved
 	layoutVer uint64
 	owner     map[string]*ownerEntry
 
@@ -250,11 +252,11 @@ func New(opts Options) (*Engine, error) {
 		queue: make(chan int64, 1024), events: make(chan state.Event, 4096), evSync: make(chan chan struct{}),
 	}
 	e.rec = newRecorder(st, e.log, opts.ImpressionBuffer, opts.FlushEvery)
-	rules, err := st.layout(context.Background())
+	doc, err := e.loadLayout(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("personalize: loading layout: %w", err)
 	}
-	e.layout = rules
+	e.layout = newLayoutIndex(doc)
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); e.rec.run(e.ctx) }()
@@ -338,7 +340,7 @@ func (e *Engine) Related(ctx context.Context, user *core.User, key core.RatingKe
 // Watching row is returned as a placeholder ("home.continue", no items)
 // marking where the Plex front end should put its own.
 func (e *Engine) HomeHubsFor(ctx context.Context, user *core.User, hc core.HubContext, limit int) ([]core.Hub, error) {
-	p := e.home(ctx, user, hc, "", limit, false)
+	p := e.home(ctx, user, hc, "", limit, homeOpts{})
 	return toHubs(p.Rows), nil
 }
 
@@ -346,7 +348,7 @@ func (e *Engine) HomeHubsFor(ctx context.Context, user *core.User, hc core.HubCo
 // section's rows (below the front end's Continue Watching and Recently
 // Added).
 func (e *Engine) SectionHubsFor(ctx context.Context, user *core.User, t core.MediaType, hc core.HubContext, limit int) ([]core.Hub, error) {
-	p := e.home(ctx, user, hc, t, limit, false)
+	p := e.home(ctx, user, hc, t, limit, homeOpts{})
 	return toHubs(p.Rows), nil
 }
 
@@ -365,9 +367,20 @@ func toHubs(rows []core.HomeRow) []core.Hub {
 	return out
 }
 
+// homeOpts are the owner preview's variations on the /hubs path.
+type homeOpts struct {
+	// wait for the viewer's first model build and owner rows (previews).
+	wait bool
+	// draft is an unsaved layout to assemble with instead of the saved
+	// one (never memoised).
+	draft *layoutIndex
+	// explain adds the rows that are not on the page, with reasons.
+	explain bool
+}
+
 // home is the one code path behind /hubs, /hubs/sections/{id} and the
 // owner's Home preview.
-func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType, limit int, wait bool) core.HomePreview {
+func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType, limit int, o homeOpts) core.HomePreview {
 	if limit <= 0 {
 		limit = 12
 	}
@@ -379,31 +392,37 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 		u = *user
 	}
 	p := core.HomePreview{GeneratedAt: e.now(), Context: hc, Rows: []core.HomeRow{}}
-	m := e.modelFor(ctx, &u, wait)
+	m := e.modelFor(ctx, &u, o.wait)
 	if m == nil {
 		return p
 	}
 	stats := e.statsFor(ctx)
 	var inprog []core.WatchStatus
-	if section == "" && !m.generic && e.state != nil {
+	if section == "" && u.ID != genericID && e.state != nil {
 		var err error
 		if inprog, err = e.state.InProgress(ctx, u.ID, 50); err != nil {
 			e.log.Debug("personalize: in progress failed", "err", err)
 		}
 	}
-	owner, ownerVer := e.ownerRows(ctx, &u, hc, section)
-	rules, layoutVer := e.layoutState()
+	layout, layoutVer := e.layoutState()
+	if o.draft != nil {
+		layout = o.draft
+	}
+	owner, ownerVer := e.ownerRows(ctx, &u, hc, section, layout.page(u.ID, sectionName(section)), o.wait)
 	day := dayOf(hc.Now, e.loc)
 	key := memoKey{user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
 		layout: layoutVer, stats: stats.at.UnixNano(), owner: ownerVer, cw: progressSig(inprog),
-		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner)}
-	if rows, ok := e.memoGet(key); ok {
-		p.Rows = rows
-		return p
+		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner) + "|" + u.Title, explain: o.explain}
+	if o.draft == nil {
+		if rows, ok := e.memoGet(key); ok {
+			p.Rows = rows
+			return p
+		}
 	}
 	a := &assembly{
-		model: m, user: u, hc: hc, section: section, limit: limit, rules: rules, owner: owner,
+		model: m, user: u, hc: hc, section: section, limit: limit, layout: layout, owner: owner,
 		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration, day: day,
+		days: stats.days[u.ID], explain: o.explain,
 	}
 	if section == "" {
 		a.maxRows = e.opts.MaxHomeRows
@@ -412,8 +431,13 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 		a.maxRows = e.opts.MaxSectionRows
 	}
 	p.Rows = a.run()
+	if o.draft != nil {
+		return p
+	}
 	for _, r := range p.Rows {
-		e.registerHub(r.HubID, r.Kind)
+		if !r.Hidden {
+			e.registerHub(r.HubID, r.Kind)
+		}
 	}
 	e.memoPut(key, p.Rows)
 	return p
@@ -437,6 +461,7 @@ type memoKey struct {
 	owner   int64
 	cw      string
 	limits  string
+	explain bool
 }
 
 type memoEntry struct {
@@ -504,12 +529,7 @@ func (e *Engine) allowedFor(u *core.User) func(core.MediaType) bool {
 	return func(t core.MediaType) bool { return ok[t] }
 }
 
-func (e *Engine) layoutRules() []core.LayoutRule {
-	rules, _ := e.layoutState()
-	return rules
-}
-
-func (e *Engine) layoutState() ([]core.LayoutRule, uint64) {
+func (e *Engine) layoutState() (*layoutIndex, uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.layout, e.layoutVer
