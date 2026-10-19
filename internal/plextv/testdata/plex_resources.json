@@ -1,0 +1,96 @@
+{
+  "httpStatus": 200,
+  "contentType": "application/json; charset=utf-8",
+  "response": [
+    {
+      "name": "<REDACTED:11 chars>",
+      "product": "Plex Media Server",
+      "productVersion": "1.42.2.10156-f737b826c",
+      "platform": "MacOSX",
+      "platformVersion": "arm64",
+      "device": "<REDACTED:6 chars>",
+      "clientIdentifier": "<HASH:40 chars>",
+      "provides": "server",
+      "ownerId": null,
+      "sourceTitle": null,
+      "publicAddress": "<URL:14 chars>",
+      "accessToken": "<TOKEN:20 chars>",
+      "searchEnabled": true,
+      "createdAt": "<REDACTED:20 chars>",
+      "lastSeenAt": "<REDACTED:20 chars>",
+      "owned": true,
+      "home": false,
+      "synced": false,
+      "relay": true,
+      "presence": true,
+      "httpsRequired": false,
+      "publicAddressMatches": false,
+      "dnsRebindingProtection": false,
+      "natLoopbackSupported": true,
+      "connections": [
+        {
+          "protocol": "https",
+          "address": "<URL:9 chars>",
+          "port": 32400,
+          "uri": "<URL:68 chars>",
+          "local": true,
+          "relay": false,
+          "IPv6": false
+        },
+        {
+          "protocol": "https",
+          "address": "<URL:14 chars>",
+          "port": 32401,
+          "uri": "<URL:73 chars>",
+          "local": false,
+          "relay": false,
+          "IPv6": false
+        },
+        {
+          "protocol": "https",
+          "address": "<URL:14 chars>",
+          "port": 8443,
+          "uri": "<URL:72 chars>",
+          "local": false,
+          "relay": true,
+          "IPv6": false
+        }
+      ]
+    },
+    {
+      "name": "<REDACTED:5 chars>",
+      "product": "Plex Media Server",
+      "productVersion": "1.42.2.10156-f737b826c",
+      "platform": "MacOSX",
+      "platformVersion": "arm64",
+      "device": "<REDACTED:6 chars>",
+      "clientIdentifier": "<HASH:40 chars>",
+      "provides": "server",
+      "ownerId": null,
+      "sourceTitle": null,
+      "publicAddress": "<URL:13 chars>",
+      "accessToken": null,
+      "searchEnabled": false,
+      "createdAt": "<REDACTED:20 chars>",
+      "lastSeenAt": "<REDACTED:20 chars>",
+      "owned": true,
+      "home": false,
+      "synced": false,
+      "relay": false,
+      "presence": false,
+      "httpsRequired": false,
+      "publicAddressMatches": true,
+      "connections": [
+        {
+          "protocol": "http",
+          "address": "<URL:13 chars>",
+          "port": 32400,
+          "uri": "<URL:26 chars>",
+          "local": true,
+          "relay": false,
+          "IPv6": false
+        }
+      ]
+    }
+  ]
+}

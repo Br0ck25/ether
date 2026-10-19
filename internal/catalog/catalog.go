@@ -85,6 +85,10 @@ CREATE TABLE catalog_collections (
   poster TEXT NOT NULL DEFAULT '', backdrop TEXT NOT NULL DEFAULT '', fetched_at INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE catalog_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
 `)
+	store.Register("catalog", 2, `
+CREATE TABLE catalog_keywords (key INTEGER NOT NULL, keyword TEXT NOT NULL, PRIMARY KEY(key, keyword));
+CREATE INDEX catalog_keywords_keyword ON catalog_keywords(keyword, key);
+`)
 }
 
 // TMDB is the subset of the TMDB client the catalogue needs.

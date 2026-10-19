@@ -1,0 +1,14 @@
+{
+  "httpStatus": 200,
+  "contentType": "application/json; charset=utf-8",
+  "response": [
+    {
+      "identifier": "<REDACTED:25 chars>",
+      "baseURL": "<URL:33 chars>",
+      "title": "<REDACTED:8 chars>",
+      "icon": "<URL:54 chars>",
+      "sourceTitle": null,
+      "token": "<TOKEN:20 chars>"
+    }
+  ]
+}

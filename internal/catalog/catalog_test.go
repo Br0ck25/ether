@@ -30,6 +30,9 @@ func TestGetMovieOnDemand(t *testing.T) {
 	if len(m.Genres) != 1 || m.Genres[0] != "Drama" || len(m.Studios) != 1 || len(m.Countries) != 1 {
 		t.Fatalf("facets: %+v", m)
 	}
+	if len(m.Keywords) != 2 || m.Keywords[0] != "dual identity" {
+		t.Fatalf("keywords: %v", m.Keywords)
+	}
 	if m.SortTitle != "fight club" {
 		t.Fatalf("sort title %q", m.SortTitle)
 	}

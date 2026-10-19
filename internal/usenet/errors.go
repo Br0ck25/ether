@@ -61,7 +61,9 @@ func (e *ProtocolError) Error() string {
 // Unwrap maps well-known codes to sentinel errors.
 func (e *ProtocolError) Unwrap() error {
 	switch e.Code {
-	case 430, 423:
+	// 451 is how some providers (Giganews) refuse an article that was taken
+	// down: unavailable here, so another provider may still have it.
+	case 430, 423, 451:
 		return ErrNoSuchArticle
 	case 480:
 		return ErrAuthRequired

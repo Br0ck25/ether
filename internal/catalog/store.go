@@ -107,6 +107,11 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	}, idx); err != nil {
 		return err
 	}
+	if err := c.scanPairs(ctx, `SELECT key,keyword FROM catalog_keywords WHERE key IN (`+ph+`) ORDER BY keyword`, args, func(i int, v string) {
+		items[i].Keywords = append(items[i].Keywords, v)
+	}, idx); err != nil {
+		return err
+	}
 	if err := c.scanPairs(ctx, `SELECT key,studio FROM catalog_studios WHERE key IN (`+ph+`) ORDER BY studio`, args, func(i int, v string) {
 		items[i].Studios = append(items[i].Studios, v)
 	}, idx); err != nil {
@@ -310,6 +315,11 @@ ON CONFLICT(key) DO UPDATE SET
 	// summary upserts don't wipe detail-fetched genres/credits.
 	if t.Genres != nil {
 		if err := replacePairs(ctx, tx, "catalog_genres", "genre", int64(t.Key), t.Genres); err != nil {
+			return err
+		}
+	}
+	if t.Keywords != nil {
+		if err := replacePairs(ctx, tx, "catalog_keywords", "keyword", int64(t.Key), t.Keywords); err != nil {
 			return err
 		}
 	}

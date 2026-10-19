@@ -93,10 +93,10 @@ type RegistrarOptions struct {
 	Tick                 time.Duration // loop granularity (15s)
 	AddressInterval      time.Duration // LAN/WAN re-check (5m)
 	PublishInterval      time.Duration // unconditional re-publish (1h)
-	FriendSyncInterval   time.Duration // access token sync (30m)
+	FriendSyncInterval   time.Duration // access token sync (1m, observed)
 	MappingInterval      time.Duration // UPnP/NAT-PMP renew check (5m)
-	CertInterval         time.Duration // certificate renewal check (12h)
-	ReachabilityInterval time.Duration // remote self-test (30m)
+	CertInterval         time.Duration // certificate expiry check (1w, observed when not near expiry)
+	ReachabilityInterval time.Duration // remote self-test (1h, observed)
 
 	// PublishPlexDirect also publishes the https plex.direct URIs. Off by
 	// default: PMS publishes plain http URIs and plex.tv synthesises the
@@ -158,10 +158,10 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 	def(&o.Tick, 15*time.Second)
 	def(&o.AddressInterval, 5*time.Minute)
 	def(&o.PublishInterval, time.Hour)
-	def(&o.FriendSyncInterval, 30*time.Minute)
+	def(&o.FriendSyncInterval, time.Minute)
 	def(&o.MappingInterval, 5*time.Minute)
-	def(&o.CertInterval, 12*time.Hour)
-	def(&o.ReachabilityInterval, 30*time.Minute)
+	def(&o.CertInterval, 7*24*time.Hour)
+	def(&o.ReachabilityInterval, time.Hour)
 	if o.Version == "" {
 		o.Version = DefaultServerVersion
 	}
@@ -537,6 +537,10 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	}
 	reg := ServerRegistration{
 		Name: cfg.Server.FriendlyName, Version: r.o.Version, LocalAddresses: lan, MappingState: mapping,
+		PrivatePort: serverPort(cfg),
+	}
+	if len(lan) > 0 {
+		reg.PrivateAddress = lan[0]
 	}
 	if cfg.Plex.RemoteAccess {
 		reg.Port = publicPort(cfg)
@@ -545,6 +549,9 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 		}
 	}
 	regErr := r.client.RegisterServer(ctx, cfg.Plex.Token, reg)
+	if regErr == nil && cfg.Plex.RemoteAccess {
+		_, regErr = r.client.ReportConnectivity(ctx, cfg.Plex.Token)
+	}
 	if regErr != nil && ctx.Err() == nil {
 		r.log.Debug("servers.xml registration failed (non-fatal)", "err", regErr)
 	}
@@ -599,9 +606,26 @@ func (r *Registrar) SyncFriendsNow(ctx context.Context) error {
 func (r *Registrar) CheckReachability(ctx context.Context) remote.Reachability {
 	cfg := r.o.Config.Get()
 	var uris []string
-	for _, c := range r.connections(cfg) {
-		if !c.Local {
-			uris = append(uris, c.URI)
+	// PMS checks its own public plex.direct name on the mapped public port,
+	// even when the local listener uses a different port.
+	r.mu.Lock()
+	wan := r.lastWAN
+	r.mu.Unlock()
+	if ip := net.ParseIP(wan); ip != nil && cfg.Plex.CertHash != "" {
+		hash := cfg.Plex.CertHash
+		if r.o.Certs != nil {
+			if ci := r.o.Certs.Info(); ci.Present && !ci.SelfSigned && ci.Hash != "" {
+				hash = ci.Hash
+			}
+		}
+		if hash != "" {
+			uris = append(uris, "https://"+net.JoinHostPort(remote.PlexDirectHost(ip, hash), fmt.Sprint(publicPort(cfg))))
+		}
+	} else {
+		for _, c := range r.connections(cfg) {
+			if !c.Local {
+				uris = append(uris, c.URI)
+			}
 		}
 	}
 	res := r.o.Reach.Check(ctx, uris, cfg.Server.MachineIdentifier)
@@ -712,8 +736,19 @@ func (r *Registrar) RefreshOwner(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	pass := acct.Subscription.Active
+	if subs, serr := r.client.UserSubscriptions(ctx, cfg.Plex.Token); serr == nil {
+		for _, s := range subs {
+			if s.PlexID == acct.ID {
+				if s.PlexPassKnown {
+					pass = s.PlexPass
+				}
+				break
+			}
+		}
+	}
 	r.mu.Lock()
-	r.st.PlexPass = acct.Subscription.Active
+	r.st.PlexPass = pass
 	r.mu.Unlock()
 	if r.o.Users != nil {
 		return r.o.Users.SetOwner(ctx, *acct, cfg.Plex.Token)

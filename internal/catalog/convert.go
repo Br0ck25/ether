@@ -155,6 +155,7 @@ func (c *Catalog) movieToTitle(ctx context.Context, m tmdb.Movie) core.Title {
 
 func (c *Catalog) movieDetailsToTitle(ctx context.Context, d *tmdb.MovieDetails) core.Title {
 	t := c.movieToTitle(ctx, d.Movie)
+	t.Keywords = keywordNames(d.Keywords)
 	t.Tagline = d.Tagline
 	t.Status = d.Status
 	if d.Runtime > 0 {
@@ -239,6 +240,7 @@ func (c *Catalog) tvToTitle(ctx context.Context, s tmdb.TVShow) core.Title {
 
 func (c *Catalog) tvDetailsToTitle(ctx context.Context, d *tmdb.TVDetails) core.Title {
 	t := c.tvToTitle(ctx, d.TVShow)
+	t.Keywords = keywordNames(d.Keywords)
 	t.Tagline = d.Tagline
 	t.Status = d.Status
 	if len(d.EpisodeRunTime) > 0 && d.EpisodeRunTime[0] > 0 {
@@ -382,4 +384,22 @@ func itoa(n int) string {
 		b[i] = '-'
 	}
 	return string(b[i:])
+}
+
+// keywordNames flattens TMDB keywords (movies use "keywords", TV "results").
+// It returns a non-nil slice when TMDB sent the block, so an empty list
+// still replaces stale rows.
+func keywordNames(k *tmdb.Keywords) []string {
+	if k == nil {
+		return nil
+	}
+	out := []string{}
+	for _, list := range [][]tmdb.Keyword{k.Keywords, k.Results} {
+		for _, kw := range list {
+			if kw.Name != "" {
+				out = append(out, kw.Name)
+			}
+		}
+	}
+	return out
 }

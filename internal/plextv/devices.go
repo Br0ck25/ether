@@ -2,12 +2,13 @@ package plextv
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -45,6 +46,8 @@ type ServerRegistration struct {
 	Name           string
 	Address        string // public IP; empty lets plex.tv use the request's source address
 	Port           int    // public port
+	PrivateAddress string // primary LAN address
+	PrivatePort    int    // listener port
 	Version        string
 	LocalAddresses []string // LAN IPs
 	// MappingState mirrors PMS's states: "mapped", "unmapped", "unknown".
@@ -53,39 +56,61 @@ type ServerRegistration struct {
 
 // RegisterServer sends ServerRegistration: POST /servers.xml?auth_token=…&async=1.
 // The endpoint and its 201 response are confirmed from PMS logs; the field
-// names are the attribute names plex.tv's own /servers.xml listing uses,
-// since the PMS request body itself is not publicly documented. Callers
-// should treat failures as non-fatal: PublishConnections is what populates
-// the resources list clients read.
+// names follow the registration/resource vocabulary found in the PMS
+// executable. The live request body is not present in DEBUG logs; failures
+// remain non-fatal because clients discover connections through resources.
 func (c *Client) RegisterServer(ctx context.Context, serverToken string, reg ServerRegistration) error {
 	q := url.Values{"async": {"1"}}
-	form := url.Values{}
-	form.Set("name", reg.Name)
-	form.Set("machineIdentifier", c.id.ClientIdentifier)
-	form.Set("version", reg.Version)
-	if reg.Address != "" {
-		form.Set("address", reg.Address)
+	// The PMS registration request uses XML. Keep this to resource fields whose
+	// names are present in the PMS vocabulary rather than sending guessed
+	// aliases for the separate connectivity status record.
+	type serverElement struct {
+		XMLName           xml.Name `xml:"Server"`
+		Name              string   `xml:"name,attr"`
+		Address           string   `xml:"address,attr,omitempty"`
+		Port              int      `xml:"port,attr,omitempty"`
+		Version           string   `xml:"version,attr,omitempty"`
+		MachineIdentifier string   `xml:"machineIdentifier,attr"`
+		LocalAddresses    string   `xml:"localAddresses,attr,omitempty"`
 	}
-	if reg.Port > 0 {
-		form.Set("port", strconv.Itoa(reg.Port))
+	body, err := xml.Marshal(serverElement{Name: reg.Name, Address: reg.Address, Port: reg.Port,
+		Version: reg.Version, MachineIdentifier: c.id.ClientIdentifier, LocalAddresses: strings.Join(reg.LocalAddresses, ",")})
+	if err != nil {
+		return fmt.Errorf("plextv: encode server registration: %w", err)
 	}
-	if len(reg.LocalAddresses) > 0 {
-		form.Set("localAddresses", strings.Join(reg.LocalAddresses, ","))
-	}
-	if reg.MappingState != "" {
-		form.Set("mappingState", reg.MappingState)
-	}
-	_, err := c.do(ctx, request{
+	_, err = c.do(ctx, request{
 		method:      http.MethodPost,
+		host:        c.serversHost(),
 		path:        "/servers.xml",
 		query:       q,
 		token:       serverToken,
 		tokenQuery:  "auth_token",
-		body:        []byte(form.Encode()),
-		contentType: "application/x-www-form-urlencoded",
+		body:        body,
+		contentType: "application/xml",
 		accept:      "application/xml",
 	})
 	return err
+}
+
+// ReportConnectivity starts Plex's asynchronous reachability check. The PMS
+// sends PUT /api/servers/{machineIdentifier}/connectivity with its server
+// token and a fresh asyncIdentifier immediately after servers.xml registration.
+func (c *Client) ReportConnectivity(ctx context.Context, serverToken string) (string, error) {
+	if c.id.ClientIdentifier == "" {
+		return "", errors.New("plextv: machine identifier required")
+	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("plextv: connectivity id: %w", err)
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	identifier := fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
+	_, err := c.do(ctx, request{method: http.MethodPut, host: c.serversHost(), path: "/api/servers/" + url.PathEscape(c.id.ClientIdentifier) + "/connectivity", query: url.Values{"asyncIdentifier": {identifier}}, token: serverToken, tokenQuery: "X-Plex-Token", accept: "application/json, application/xml;q=0.9"})
+	if err != nil {
+		return "", err
+	}
+	return identifier, nil
 }
 
 // Resource is a device in the account's resources list
@@ -117,6 +142,43 @@ type Resource struct {
 	Connections            []ResourceConnection `json:"connections"`
 }
 
+// UnmarshalJSON accepts Plex's boolean flags serialized as either JSON
+// booleans or numeric 0/1 values.
+func (r *Resource) UnmarshalJSON(b []byte) error {
+	type wire struct {
+		Name                   string               `json:"name"`
+		Product                string               `json:"product"`
+		ProductVersion         string               `json:"productVersion"`
+		Platform               string               `json:"platform"`
+		PlatformVersion        string               `json:"platformVersion"`
+		Device                 string               `json:"device"`
+		ClientIdentifier       string               `json:"clientIdentifier"`
+		CreatedAt              flexTime             `json:"createdAt"`
+		LastSeenAt             flexTime             `json:"lastSeenAt"`
+		Provides               string               `json:"provides"`
+		OwnerID                *int64               `json:"ownerId"`
+		SourceTitle            string               `json:"sourceTitle"`
+		PublicAddress          string               `json:"publicAddress"`
+		AccessToken            string               `json:"accessToken"`
+		Owned                  json.RawMessage      `json:"owned"`
+		Home                   json.RawMessage      `json:"home"`
+		Synced                 json.RawMessage      `json:"synced"`
+		Relay                  json.RawMessage      `json:"relay"`
+		Presence               json.RawMessage      `json:"presence"`
+		HTTPSRequired          json.RawMessage      `json:"httpsRequired"`
+		PublicAddressMatches   json.RawMessage      `json:"publicAddressMatches"`
+		DNSRebindingProtection json.RawMessage      `json:"dnsRebindingProtection"`
+		NatLoopbackSupported   json.RawMessage      `json:"natLoopbackSupported"`
+		Connections            []ResourceConnection `json:"connections"`
+	}
+	var v wire
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*r = Resource{Name: v.Name, Product: v.Product, ProductVersion: v.ProductVersion, Platform: v.Platform, PlatformVersion: v.PlatformVersion, Device: v.Device, ClientIdentifier: v.ClientIdentifier, CreatedAt: v.CreatedAt, LastSeenAt: v.LastSeenAt, Provides: v.Provides, OwnerID: v.OwnerID, SourceTitle: v.SourceTitle, PublicAddress: v.PublicAddress, AccessToken: v.AccessToken, Owned: plexBool(v.Owned), Home: plexBool(v.Home), Synced: plexBool(v.Synced), Relay: plexBool(v.Relay), Presence: plexBool(v.Presence), HTTPSRequired: plexBool(v.HTTPSRequired), PublicAddressMatches: plexBool(v.PublicAddressMatches), DNSRebindingProtection: plexBool(v.DNSRebindingProtection), NatLoopbackSupported: plexBool(v.NatLoopbackSupported), Connections: v.Connections}
+	return nil
+}
+
 // ResourceConnection is one published way to reach a resource.
 type ResourceConnection struct {
 	Protocol string `json:"protocol"`
@@ -126,6 +188,44 @@ type ResourceConnection struct {
 	Local    bool   `json:"local"`
 	Relay    bool   `json:"relay"`
 	IPv6     bool   `json:"IPv6"`
+}
+
+// UnmarshalJSON handles the integer IPv6 flag emitted by current resources
+// responses as well as boolean variants used by other Plex API versions.
+func (c *ResourceConnection) UnmarshalJSON(b []byte) error {
+	var v struct {
+		Protocol string          `json:"protocol"`
+		Address  string          `json:"address"`
+		Port     int             `json:"port"`
+		URI      string          `json:"uri"`
+		Local    json.RawMessage `json:"local"`
+		Relay    json.RawMessage `json:"relay"`
+		IPv6     json.RawMessage `json:"IPv6"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*c = ResourceConnection{Protocol: v.Protocol, Address: v.Address, Port: v.Port, URI: v.URI, Local: plexBool(v.Local), Relay: plexBool(v.Relay), IPv6: plexBool(v.IPv6)}
+	return nil
+}
+
+func plexBool(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var b bool
+	if json.Unmarshal(raw, &b) == nil {
+		return b
+	}
+	var n int
+	if json.Unmarshal(raw, &n) == nil {
+		return n != 0
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s == "1" || strings.EqualFold(s, "true")
+	}
+	return false
 }
 
 // ProvidesServer reports whether the resource is a media server.

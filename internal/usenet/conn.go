@@ -367,7 +367,7 @@ func (c *Conn) Stat(ctx context.Context, messageID string) (bool, error) {
 	switch code {
 	case 223:
 		return true, nil
-	case 430, 423:
+	case 430, 423, 451:
 		return false, nil
 	}
 	return false, &ProtocolError{Cmd: "STAT", Code: code, Msg: msg}
