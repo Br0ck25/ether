@@ -293,6 +293,9 @@ func (e *Engine) acquireFile(ctx context.Context, releaseID string, payload []by
 	e.trimLocked()
 	f := e.files[releaseID]
 	if f == nil || f.tag != p.fileTag() {
+		if f != nil && f.refs <= 0 {
+			f.cancel()
+		}
 		f = e.newFile(releaseID, p)
 		e.files[releaseID] = f
 	} else {
@@ -553,7 +556,7 @@ func (f *remoteFile) block(ctx context.Context, idx int64, mode fetchMode, runBl
 			if runCtx == nil {
 				runCtx = f.ctx
 			}
-			fl = f.startRun(runCtx, idx, runBlocks, mode)
+			fl, _ = f.startRun(runCtx, idx, runBlocks, mode, false)
 		}
 		select {
 		case <-fl.done:
@@ -572,12 +575,14 @@ func (f *remoteFile) block(ctx context.Context, idx int64, mode fetchMode, runBl
 }
 
 // startRun registers flights for a run of missing blocks starting at idx
-// and fetches them with one range request. It returns idx's flight.
-func (f *remoteFile) startRun(ctx context.Context, idx, n int64, mode fetchMode) *blockFlight {
+// and fetches them with one range request. It returns idx's flight and
+// whether this call started the run. slotHeld means the caller already
+// holds a read-ahead slot for the run (released when it ends).
+func (f *remoteFile) startRun(ctx context.Context, idx, n int64, mode fetchMode, slotHeld bool) (*blockFlight, bool) {
 	f.bmu.Lock()
 	if fl := f.flights[idx]; fl != nil {
 		f.bmu.Unlock()
-		return fl
+		return fl, false
 	}
 	var fls []*blockFlight
 	for i := idx; i < idx+max(n, 1) && i < f.nblocks; i++ {
@@ -589,8 +594,8 @@ func (f *remoteFile) startRun(ctx context.Context, idx, n int64, mode fetchMode)
 		fls = append(fls, fl)
 	}
 	f.bmu.Unlock()
-	go f.fetchRun(ctx, idx, fls, mode)
-	return fls[0]
+	go f.fetchRun(ctx, idx, fls, mode, slotHeld)
+	return fls[0], true
 }
 
 func (f *remoteFile) finish(idx int64, fl *blockFlight, data []byte, err error, mode fetchMode) {
@@ -608,7 +613,7 @@ func (f *remoteFile) finish(idx int64, fl *blockFlight, data []byte, err error, 
 
 // fetchRun reads blocks [first, first+len(fls)) with one range request,
 // publishing each block as soon as its bytes arrive.
-func (f *remoteFile) fetchRun(ctx context.Context, first int64, fls []*blockFlight, mode fetchMode) {
+func (f *remoteFile) fetchRun(ctx context.Context, first int64, fls []*blockFlight, mode fetchMode, slotHeld bool) {
 	i := 0
 	fail := func(err error) {
 		if ctx.Err() != nil {
@@ -619,7 +624,9 @@ func (f *remoteFile) fetchRun(ctx context.Context, first int64, fls []*blockFlig
 		}
 	}
 	slots := f.conns
-	if mode == fetchReadAhead || mode == fetchPrefetch {
+	if slotHeld {
+		defer func() { <-f.raSlots }()
+	} else if mode == fetchReadAhead || mode == fetchPrefetch {
 		select {
 		case f.raSlots <- struct{}{}:
 			defer func() { <-f.raSlots }()
@@ -1103,9 +1110,9 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 		}
 		s.last = lastBlock
 		s.mu.Unlock()
-		// Start read-ahead before blocking so the burst runs in parallel
-		// with the first request.
-		s.readAhead(first)
+		// Start read-ahead past this read before blocking, so the burst
+		// runs in parallel with the request for the bytes asked for.
+		s.readAhead(lastBlock)
 	}
 	n := 0
 	for idx := first; idx <= lastBlock; idx++ {
@@ -1151,9 +1158,6 @@ func (s *httpSource) readAhead(from int64) {
 	lastIdx := min(f.nblocks-1, from+window/f.e.block)
 	run := int64(1)
 	for idx := from + 1; idx <= lastIdx; {
-		if len(f.raSlots) == cap(f.raSlots) {
-			return // every read-ahead connection is busy; the next read reschedules
-		}
 		f.bmu.Lock()
 		present := f.presentLocked(idx)
 		f.bmu.Unlock()
@@ -1161,8 +1165,18 @@ func (s *httpSource) readAhead(from int64) {
 			idx++
 			continue
 		}
+		// Read-ahead runs never queue: a queued run would hold flights a
+		// reader may soon wait on. Without a free slot, the next read
+		// tops the window up.
+		select {
+		case f.raSlots <- struct{}{}:
+		default:
+			return
+		}
 		n := min(run, lastIdx-idx+1)
-		f.startRun(ctx, idx, n, fetchReadAhead)
+		if _, started := f.startRun(ctx, idx, n, fetchReadAhead, true); !started {
+			<-f.raSlots
+		}
 		idx += n
 		run = min(run*2, maxRun)
 	}
