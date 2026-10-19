@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"math/big"
@@ -25,30 +26,32 @@ type fakePlexTV struct {
 	t   *testing.T
 	srv *httptest.Server
 
-	mu          sync.Mutex
-	users       map[string]Account // token -> account
-	pins        map[int64]*PIN
-	nextPIN     int64
-	claims      map[string]int64 // claim token -> account id
-	exchangeErr int              // status to fail claim exchange with
-	machineID   string
-	published   []string
-	putCount    int
-	registered  []string // servers.xml bodies
-	certHash    string
-	csrStatus   int // status to fail CSR upload with
-	pendingDL   int // 202s before the certificate is ready
-	issued      []byte
-	caKey       *ecdsa.PrivateKey
-	caCert      *x509.Certificate
-	certTTL     time.Duration
-	accessXML   string
-	accessFail  int // fail access_tokens.xml this many times with 500
-	sharedXML   string
-	usersXML    string
-	requests    []string
-	headers     map[string]http.Header // path -> last headers
-	resources   map[string][]Resource  // token -> extra resources
+	mu           sync.Mutex
+	users        map[string]Account // token -> account
+	pins         map[int64]*PIN
+	nextPIN      int64
+	claims       map[string]int64 // claim token -> account id
+	exchangeErr  int              // status to fail claim exchange with
+	machineID    string
+	published    []string
+	putCount     int
+	registered   []string // servers.xml bodies
+	connectivity int
+	certHash     string
+	csrStatus    int // status to fail CSR upload with
+	pendingDL    int // 202s before the certificate is ready
+	issued       []byte
+	caKey        *ecdsa.PrivateKey
+	caCert       *x509.Certificate
+	certTTL      time.Duration
+	accessXML    string
+	accessFail   int // fail access_tokens.xml this many times with 500
+	sharedXML    string
+	usersXML     string
+	userXML      string
+	requests     []string
+	headers      map[string]http.Header // path -> last headers
+	resources    map[string][]Resource  // token -> extra resources
 }
 
 const fakeHash = "0a1b2c3d4e5f60718293a4b5c6d7e8f9"
@@ -168,6 +171,15 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 			f.jsonErr(w, 401, 1001, "User could not be authenticated")
 			return
 		}
+		if r.URL.Query().Get("includeSubscriptions") != "1" || r.URL.Query().Get("includeProviders") != "1" {
+			f.jsonErr(w, 400, 1000, "missing user includes")
+			return
+		}
+		if f.userXML != "" {
+			w.Header().Set("Content-Type", "application/xml")
+			io.WriteString(w, f.userXML)
+			return
+		}
 		json.NewEncoder(w).Encode(acct)
 	case r.URL.Path == "/api/claim/token.json":
 		if !authed {
@@ -212,13 +224,32 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 		f.published = r.URL.Query()["Connection[][uri]"]
 		io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><Device/>`)
 	case r.Method == http.MethodPost && r.URL.Path == "/servers.xml":
-		if !authed || r.URL.Query().Get("async") != "1" {
+		if !authed || r.URL.Query().Get("async") != "1" || r.Header.Get("Content-Type") != "application/xml" {
 			w.WriteHeader(401)
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
 		f.registered = append(f.registered, string(b))
+		var payload struct {
+			XMLName           xml.Name `xml:"Server"`
+			Name              string   `xml:"name,attr"`
+			Address           string   `xml:"address,attr"`
+			Port              int      `xml:"port,attr"`
+			MachineIdentifier string   `xml:"machineIdentifier,attr"`
+			LocalAddresses    string   `xml:"localAddresses,attr"`
+		}
+		if xml.Unmarshal(b, &payload) != nil || payload.Name == "" || payload.MachineIdentifier != f.machineID {
+			w.WriteHeader(422)
+			return
+		}
 		w.WriteHeader(201)
+	case r.Method == http.MethodPut && r.URL.Path == "/api/servers/"+f.machineID+"/connectivity":
+		if !authed || r.URL.Query().Get("X-Plex-Token") == "" || r.URL.Query().Get("asyncIdentifier") == "" {
+			w.WriteHeader(401)
+			return
+		}
+		f.connectivity++
+		w.WriteHeader(200)
 	case r.URL.Path == "/api/v2/resources":
 		if !authed {
 			f.jsonErr(w, 401, 1001, "User could not be authenticated")
@@ -248,7 +279,7 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 				Owned: true, PublicAddress: "203.0.113.7", Connections: conns})
 		}
 		json.NewEncoder(w).Encode(out)
-	case r.URL.Path == "/servers/"+f.machineID+"/access_tokens.xml":
+	case r.URL.Path == "/api/v2/server/access_tokens":
 		if !authed || r.URL.Query().Get("auth_token") == "" {
 			w.WriteHeader(401)
 			return
@@ -265,7 +296,7 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		io.WriteString(w, f.sharedXML)
-	case r.URL.Path == "/api/users":
+	case r.URL.Path == "/api/v2/server/users":
 		if !authed {
 			w.WriteHeader(401)
 			return
@@ -275,12 +306,29 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		io.WriteString(w, f.usersXML)
+	case r.URL.Path == "/api/v2/server/users/subscriptions":
+		if !authed {
+			w.WriteHeader(401)
+			return
+		}
+		io.WriteString(w, `<users><user id="42"><subscriptions/></user></users>`)
+	case r.URL.Path == "/api/v2/server/users/services":
+		if !authed {
+			w.WriteHeader(401)
+			return
+		}
+		io.WriteString(w, `<users><user id="42"><services><service identifier="example" endpoint="https://service.invalid" status="active" token="must-not-be-returned" secret="must-not-be-returned"/></services></user></users>`)
 	case r.URL.Path == devPrefix+"subject":
 		if !authed {
 			w.WriteHeader(401)
 			return
 		}
-		fmt.Fprintf(w, "/CN=*.%s.plex.direct", f.certHash)
+		if r.Header.Get("Accept") != "application/xml" {
+			f.jsonErr(w, 406, 1006, "Format not acceptable")
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		fmt.Fprintf(w, `<subject commonName="*.%s.plex.direct" subject="redacted certificate subject"/>`, f.certHash)
 	case r.URL.Path == devPrefix+"csr" && r.Method == http.MethodPut:
 		if !authed {
 			w.WriteHeader(401)

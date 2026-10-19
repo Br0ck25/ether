@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,20 +20,21 @@ import (
 
 // CertInfo describes the certificate Ether serves.
 type CertInfo struct {
-	Present     bool      `json:"present"`
-	SelfSigned  bool      `json:"selfSigned"`
-	Custom      bool      `json:"custom"` // owner-supplied files, never replaced
-	Hash        string    `json:"hash,omitempty"`
-	Subject     string    `json:"subject,omitempty"`
-	DNSNames    []string  `json:"dnsNames,omitempty"`
-	NotBefore   time.Time `json:"notBefore,omitempty"`
-	NotAfter    time.Time `json:"notAfter,omitempty"`
-	Fingerprint string    `json:"fingerprint,omitempty"`
-	CertFile    string    `json:"certFile,omitempty"`
-	KeyFile     string    `json:"keyFile,omitempty"`
-	LastAttempt time.Time `json:"lastAttempt,omitempty"` // last plex.tv request
-	NextAttempt time.Time `json:"nextAttempt,omitempty"`
-	LastError   string    `json:"lastError,omitempty"`
+	Present     bool          `json:"present"`
+	SelfSigned  bool          `json:"selfSigned"`
+	Custom      bool          `json:"custom"` // owner-supplied files, never replaced
+	Hash        string        `json:"hash,omitempty"`
+	Subject     string        `json:"subject,omitempty"`
+	DNSNames    []string      `json:"dnsNames,omitempty"`
+	NotBefore   time.Time     `json:"notBefore,omitempty"`
+	NotAfter    time.Time     `json:"notAfter,omitempty"`
+	Fingerprint string        `json:"fingerprint,omitempty"`
+	CertFile    string        `json:"certFile,omitempty"`
+	KeyFile     string        `json:"keyFile,omitempty"`
+	LastAttempt time.Time     `json:"lastAttempt,omitempty"` // last plex.tv request
+	NextAttempt time.Time     `json:"nextAttempt,omitempty"`
+	RetryAfter  time.Duration `json:"retryAfter,omitempty"`
+	LastError   string        `json:"lastError,omitempty"`
 }
 
 // CertManagerOptions configures a CertManager.
@@ -52,6 +54,9 @@ type CertManagerOptions struct {
 	// after a failure (default 24h). plex.tv rate-limits CSR uploads per
 	// device; PMS servers that retried daily ended up locked out for days.
 	RetryAfter time.Duration
+	// ClientErrorRetryAfter controls retries after non-429 4xx responses,
+	// which usually indicate a malformed request. Default: 5 minutes.
+	ClientErrorRetryAfter time.Duration
 	// SelfSignedValidity for the fallback certificate (default 1 year).
 	SelfSignedValidity time.Duration
 	// Request overrides the download timing (tests).
@@ -75,9 +80,10 @@ type CertManager struct {
 }
 
 type certState struct {
-	LastAttempt time.Time `json:"lastAttempt"`
-	LastError   string    `json:"lastError"`
-	Hash        string    `json:"hash"`
+	LastAttempt time.Time     `json:"lastAttempt"`
+	LastError   string        `json:"lastError"`
+	Hash        string        `json:"hash"`
+	RetryAfter  time.Duration `json:"retryAfter,omitempty"`
 }
 
 // NewCertManager returns a manager and loads any certificate on disk.
@@ -87,6 +93,9 @@ func NewCertManager(o CertManagerOptions) (*CertManager, error) {
 	}
 	if o.RetryAfter <= 0 {
 		o.RetryAfter = 24 * time.Hour
+	}
+	if o.ClientErrorRetryAfter <= 0 {
+		o.ClientErrorRetryAfter = 5 * time.Minute
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
@@ -137,7 +146,7 @@ func (m *CertManager) load() error {
 		}
 	}
 	m.mu.Lock()
-	m.info.LastAttempt, m.info.LastError = st.LastAttempt, st.LastError
+	m.info.LastAttempt, m.info.LastError, m.info.RetryAfter = st.LastAttempt, st.LastError, st.RetryAfter
 	m.mu.Unlock()
 	pair, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -172,7 +181,7 @@ func (m *CertManager) install(pair *tls.Certificate, leaf *x509.Certificate, cer
 		}
 	}
 	m.mu.Lock()
-	info.LastAttempt, info.LastError = m.info.LastAttempt, m.info.LastError
+	info.LastAttempt, info.LastError, info.RetryAfter = m.info.LastAttempt, m.info.LastError, m.info.RetryAfter
 	m.cert = pair
 	m.info = info
 	m.mu.Unlock()
@@ -190,7 +199,11 @@ func (m *CertManager) Info() CertInfo {
 	info := m.info
 	info.DNSNames = append([]string(nil), m.info.DNSNames...)
 	if !info.LastAttempt.IsZero() && info.LastError != "" {
-		info.NextAttempt = info.LastAttempt.Add(m.o.RetryAfter)
+		d := info.RetryAfter
+		if d <= 0 {
+			d = m.o.RetryAfter
+		}
+		info.NextAttempt = info.LastAttempt.Add(d)
 	}
 	return info
 }
@@ -256,13 +269,17 @@ func (m *CertManager) Ensure(ctx context.Context, serverToken string, hosts []st
 	cur := m.Info()
 	var reqErr error
 	needPlex := !cur.Present || cur.SelfSigned || now.After(cur.NotAfter.Add(-m.renewBefore(cur)))
-	throttled := !force && cur.LastError != "" && now.Before(cur.LastAttempt.Add(m.o.RetryAfter))
+	retryAfter := cur.RetryAfter
+	if retryAfter <= 0 {
+		retryAfter = m.o.RetryAfter
+	}
+	throttled := !force && cur.LastError != "" && now.Before(cur.LastAttempt.Add(retryAfter))
 	switch {
 	case !needPlex:
 	case serverToken == "" || m.o.Client == nil:
 		reqErr = errors.New("plextv: not claimed; cannot request a plex.direct certificate")
 	case throttled:
-		reqErr = fmt.Errorf("plextv: certificate request deferred until %s after: %s", cur.LastAttempt.Add(m.o.RetryAfter).Format(time.RFC3339), cur.LastError)
+		reqErr = fmt.Errorf("plextv: certificate request deferred until %s after: %s", cur.LastAttempt.Add(retryAfter).Format(time.RFC3339), cur.LastError)
 	default:
 		reqErr = m.requestPlexDirect(ctx, serverToken, cur, now)
 	}
@@ -290,15 +307,19 @@ func (m *CertManager) requestPlexDirect(ctx context.Context, token string, cur C
 	}
 	m.o.Logger.Info("requesting plex.direct certificate", "reason", req.Reason)
 	bundle, err := m.o.Client.RequestPlexDirectCertificate(ctx, token, req)
-	st := certState{LastAttempt: now, Hash: cur.Hash}
+	st := certState{LastAttempt: now, Hash: cur.Hash, RetryAfter: m.o.RetryAfter}
 	if err != nil {
 		if ctx.Err() != nil {
 			return err
 		}
 		st.LastError = err.Error()
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status >= 400 && apiErr.Status < 500 && apiErr.Status != http.StatusTooManyRequests {
+			st.RetryAfter = m.o.ClientErrorRetryAfter
+		}
 		m.saveState(st)
 		m.mu.Lock()
-		m.info.LastAttempt, m.info.LastError = st.LastAttempt, st.LastError
+		m.info.LastAttempt, m.info.LastError, m.info.RetryAfter = st.LastAttempt, st.LastError, st.RetryAfter
 		m.mu.Unlock()
 		m.o.Logger.Warn("plex.direct certificate request failed", "err", err)
 		return err
@@ -311,7 +332,7 @@ func (m *CertManager) requestPlexDirect(ctx context.Context, token string, cur C
 	}
 	m.saveState(st)
 	m.mu.Lock()
-	m.info.LastAttempt, m.info.LastError = st.LastAttempt, ""
+	m.info.LastAttempt, m.info.LastError, m.info.RetryAfter = st.LastAttempt, "", 0
 	m.mu.Unlock()
 	m.o.Logger.Info("plex.direct certificate installed", "subject", bundle.Subject, "expires", bundle.Leaf.NotAfter)
 	return nil

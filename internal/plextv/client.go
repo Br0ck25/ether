@@ -35,7 +35,7 @@ const (
 	// DefaultServerVersion is the PMS version Ether reports towards plex.tv
 	// and clients. Official apps gate features on server version, so it
 	// tracks a recent PMS release rather than Ether's own version.
-	DefaultServerVersion = "1.42.2.10156-f737b826c"
+	DefaultServerVersion = "1.43.4.10903-e5521bd8c"
 	// ServerProduct is the product name of a Plex Media Server device.
 	ServerProduct = "Plex Media Server"
 	// AppProduct is the product shown for the setup wizard's sign-in.
