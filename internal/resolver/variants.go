@@ -38,21 +38,29 @@ func (s *Service) Variants(ctx context.Context, req core.ResolveRequest, max int
 	if !ok || len(results) == 0 {
 		return nil, nil
 	}
+	// An owner pin that applies to this client is what normal resolution
+	// tries first, so it is Auto (pins.go).
+	pinID := ""
+	if pin, _ := s.pinForResolve(req); pin != nil {
+		pinID = pin.Release.ID
+		results = withRelease(results, pin.Release)
+	}
 	// Auto is exactly what normal resolution would pick: strict profile.
-	strict, _, err := s.scoreCandidates(req, sreq, profile, results, nil)
+	strict, _, err := s.rankCandidates(req, sreq, profile, results, nil, pinID)
 	if err != nil {
 		return nil, err
 	}
 	if len(strict) == 0 {
 		return nil, nil
 	}
+	strict = pinFirst(strict, pinID)
 	pool := strict
 	// The alternative pool may exceed the profile's height cap (a 4K pick
 	// on a 1080p remote profile), but never the client's own limits; every
 	// other acceptability rule still applies. Resolve honours the pick via
 	// ResolveRequest.Prefer's profile-gate bypass.
 	if relaxed, ok := relaxedVariantProfile(profile, req.Client); ok {
-		pool, _, err = s.scoreCandidates(req, sreq, relaxed, results, nil)
+		pool, _, err = s.rankCandidates(req, sreq, relaxed, results, nil, pinID)
 		if err != nil {
 			return nil, err
 		}
