@@ -77,6 +77,7 @@ type Deps struct {
 	AccessPolicy AccessPolicy
 	Catalog      core.Catalog
 	Collections  core.Collections
+	VibeSearch   core.VibeSearcher
 	Recommender  core.Recommender
 	State        core.State
 	Playlists    core.Playlists
