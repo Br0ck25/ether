@@ -14,6 +14,7 @@ import (
 // rejects it before making a media decision. Keep the queue bound to the actual
 // live session and its viewer, independently of catalogue rating keys.
 func (s *Server) writeModernLiveTune(w http.ResponseWriter, r *http.Request, info livetv.SessionInfo) {
+	w.Header().Del("X-Plex-Activity")
 	pr := FromContext(r.Context())
 	q := s.queues.create(pr.User.ID, pr.ClientID, []core.RatingKey{0}, s.now())
 	snap, _ := s.queues.with(q.id, pr.User.ID, s.now(), func(q *playQueue) {
@@ -23,12 +24,11 @@ func (s *Server) writeModernLiveTune(w http.ResponseWriter, r *http.Request, inf
 	s.write(w, r, s.livePlayQueue(snap, info))
 }
 
-func (s *Server) livePlayQueue(pq playQueue, info livetv.SessionInfo) *liveSubscriptionContainer {
+func (s *Server) livePlayQueue(pq playQueue, info livetv.SessionInfo) *model.MediaContainer {
 	md := s.liveSessionMetadata(info)
 	md.PlayQueueItemID = pq.items[0].id
-	return &liveSubscriptionContainer{
+	return &model.MediaContainer{
 		Size: 1, Identifier: model.LibraryIdentifier, Metadata: []model.Metadata{md},
-		Subscription: []liveSubscription{s.liveSubscriptionFor(info)},
 		Extra: []model.Attr{
 			model.A("playQueueID", pq.id),
 			model.A("playQueueSelectedItemID", pq.items[0].id),
