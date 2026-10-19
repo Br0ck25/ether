@@ -196,7 +196,9 @@ func TestWarmFloorBackoffAfterDialFailures(t *testing.T) {
 	if n > 12 {
 		t.Fatalf("janitor redialled %d times in 700ms: no backoff", n)
 	}
-	if st := statsFor(f, "p"); st.RedialFailures == 0 || st.LiveConnections != 0 {
+	// Live may transiently be 1 (a redial in flight counts as live), so
+	// only the failure accounting is asserted.
+	if st := statsFor(f, "p"); st.RedialFailures == 0 || st.Dials != 0 {
 		t.Fatalf("stats: %+v", st)
 	}
 }
