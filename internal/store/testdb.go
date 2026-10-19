@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,9 +34,6 @@ const testSchemaPrefix = "ether_test_"
 // single connection), or a fresh PostgreSQL schema when TestPostgresEnv is
 // set.
 func OpenMemory(ctx context.Context) (*sql.DB, error) {
-	if u := os.Getenv(TestPostgresEnv); u != "" {
-		return OpenTestPostgres(ctx, u)
-	}
 	return OpenPath(ctx, ":memory:")
 }
 

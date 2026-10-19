@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -124,18 +125,29 @@ func OpenWith(ctx context.Context, o Options) (*sql.DB, Dialect, error) {
 		if o.DataDir == "" {
 			return nil, d, errors.New("store: sqlite requires a data directory")
 		}
-		db, err := OpenPath(ctx, filepath.Join(o.DataDir, "ether.db"))
+		db, err := openSQLite(ctx, filepath.Join(o.DataDir, "ether.db"))
 		return db, d, err
 	}
 }
 
 // Open opens (creating if needed) ether.db in dataDir and migrates it.
 func Open(ctx context.Context, dataDir string) (*sql.DB, error) {
-	return OpenPath(ctx, filepath.Join(dataDir, "ether.db"))
+	return openSQLite(ctx, filepath.Join(dataDir, "ether.db"))
 }
 
 // OpenPath opens a database file; ":memory:" works for tests (single conn).
+// Like OpenMemory, ":memory:" is a fresh PostgreSQL schema instead when
+// TestPostgresEnv is set.
 func OpenPath(ctx context.Context, path string) (*sql.DB, error) {
+	if path == ":memory:" {
+		if u := os.Getenv(TestPostgresEnv); u != "" {
+			return OpenTestPostgres(ctx, u)
+		}
+	}
+	return openSQLite(ctx, path)
+}
+
+func openSQLite(ctx context.Context, path string) (*sql.DB, error) {
 	// journal_size_limit caps the WAL left on disk after a checkpoint; without
 	// it one large transaction leaves a WAL file that never shrinks.
 	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)" +
