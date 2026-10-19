@@ -55,7 +55,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		deps = plex.Deps{
 			Catalog:     a.catalog,
 			Collections: a.collections,
-			Recommender: a.recommend,
+			Recommender: a.personalize,
 			State:       a.state,
 			Playlists:   a.state.Playlists(),
 			Auth:        a.users,

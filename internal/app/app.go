@@ -27,6 +27,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/llm"
 	"github.com/braedonsaunders/ether/internal/newznab"
+	"github.com/braedonsaunders/ether/internal/personalize"
 	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/plex"
 	"github.com/braedonsaunders/ether/internal/plextv"
@@ -73,6 +74,7 @@ type App struct {
 	trakt       *trakt.Client
 	llm         *llm.Service
 	recommend   *recommend.Recommender
+	personalize *personalize.Engine
 	subtitles   *subtitles.Service
 	fetcher     *usenet.Fetcher
 	cache       *segcache.Cache
@@ -171,6 +173,17 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger: log.With("component", "recommend"),
 	})
 	a.closers = append(a.closers, a.recommend.Close)
+	// Per-viewer Homes, built in the background and served to Plex.
+	if a.personalize, err = personalize.New(personalize.Options{
+		DB: a.db, Catalog: a.catalog, State: a.state, Events: a.state, Users: a.usersSource(),
+		LLM: a.llm, Trakt: a.trakt, Playlists: a.state.Playlists(), Base: a.recommend,
+		ServerName: func() string { return a.cfg.Get().Server.FriendlyName },
+		Logger:     log.With("component", "personalize"),
+	}); err != nil {
+		return fmt.Errorf("personalization: %w", err)
+	}
+	a.recommend.SetScorer(a.personalize)
+	a.closers = append(a.closers, a.personalize.Close)
 	a.subtitles = subtitles.New(subtitles.Options{
 		Config:    cfg.OpenSubtitles,
 		CacheDir:  filepath.Join(dataDir, "subtitles"),
@@ -439,4 +452,17 @@ func appendUnique(xs []string, more ...string) []string {
 		}
 	}
 	return xs
+}
+
+// usersSource lists Plex users for the personalization engine. Auth is
+// built later in New, so the lookup is resolved on use.
+func (a *App) usersSource() lateUsers { return lateUsers{a} }
+
+type lateUsers struct{ a *App }
+
+func (l lateUsers) Users(ctx context.Context) ([]core.User, error) {
+	if l.a.users == nil {
+		return nil, nil
+	}
+	return l.a.users.Users(ctx)
 }

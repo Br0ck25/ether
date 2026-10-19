@@ -74,8 +74,9 @@ func (a *App) buildAdmin() http.Handler {
 			"stream":   func(context.Context) any { return a.engine.Stats() },
 			"prefetch": func(context.Context) any { return a.prefetch.Stats() },
 		},
-		ResolverTraces: func(context.Context) (any, error) { return a.resolver.Traces(), nil },
-		Users:          a.users,
+		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
+		Users:           a.users,
+		Personalization: a.personalize,
 	})
 }
 
