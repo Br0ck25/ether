@@ -17,7 +17,8 @@ const (
 // breaker is a per-provider circuit breaker. Authentication failures open it
 // permanently (a new pool, created when settings change, starts closed).
 // Connection failures open it for an exponentially growing backoff once
-// failThreshold consecutive dials have failed; any successful dial resets it.
+// failThreshold consecutive connections or commands have failed; a successful
+// article/STAT response resets it. A successful login alone does not.
 type breaker struct {
 	mu            sync.Mutex
 	now           func() time.Time

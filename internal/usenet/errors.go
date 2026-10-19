@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/core"
 	"io"
 	"net"
 	"os"
@@ -30,7 +31,7 @@ var (
 	ErrNoSuchGroup = errors.New("nntp: no such group")
 	// ErrCorrupt means an article was received but did not decode as valid
 	// yEnc (bad CRC, wrong size, missing headers).
-	ErrCorrupt = errors.New("usenet: corrupt article")
+	ErrCorrupt = core.ErrArticleCorrupt
 	// ErrInvalidMessageID rejects message-ids that would break the protocol.
 	ErrInvalidMessageID = errors.New("usenet: invalid message-id")
 	// ErrNoProviders means no provider is configured and enabled.
