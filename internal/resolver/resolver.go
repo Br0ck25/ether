@@ -34,25 +34,28 @@ type Options struct {
 
 // CandidateTrace explains one candidate's fate in a resolution.
 type CandidateTrace struct {
-	ReleaseID     string  `json:"releaseId"`
-	Name          string  `json:"name"`
-	Indexer       string  `json:"indexer"`
-	Score         float64 `json:"score"`
-	Rejected      bool    `json:"rejected"`
-	Reason        string  `json:"reason,omitempty"`
-	HealthChecked bool    `json:"healthChecked"`
-	Healthy       bool    `json:"healthy"`
+	ReleaseID      string        `json:"releaseId"`
+	Name           string        `json:"name"`
+	Indexer        string        `json:"indexer"`
+	Score          float64       `json:"score"`
+	Rejected       bool          `json:"rejected"`
+	Reason         string        `json:"reason,omitempty"`
+	HealthChecked  bool          `json:"healthChecked"`
+	Healthy        bool          `json:"healthy"`
+	FetchDuration  time.Duration `json:"fetchDuration"`
+	HealthDuration time.Duration `json:"healthDuration"`
 }
 
 // Trace is one recorded resolution attempt, for the admin UI.
 type Trace struct {
-	TitleKey   core.RatingKey   `json:"titleKey"`
-	TitleName  string           `json:"titleName"`
-	Profile    string           `json:"profile"`
-	At         time.Time        `json:"at"`
-	Candidates []CandidateTrace `json:"candidates"`
-	Winner     string           `json:"winner,omitempty"` // release id
-	Err        string           `json:"err,omitempty"`
+	TitleKey       core.RatingKey   `json:"titleKey"`
+	TitleName      string           `json:"titleName"`
+	Profile        string           `json:"profile"`
+	At             time.Time        `json:"at"`
+	Candidates     []CandidateTrace `json:"candidates"`
+	Winner         string           `json:"winner,omitempty"` // release id
+	Err            string           `json:"err,omitempty"`
+	SearchDuration time.Duration    `json:"searchDuration"`
 }
 
 type searchCacheEntry struct {
@@ -301,7 +304,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 
 	sreq := searchRequestFor(t)
+	searchStart := time.Now()
 	results, err := s.search(ctx, sreq)
+	trace.SearchDuration = time.Since(searchStart)
 	if err != nil {
 		trace.Err = err.Error()
 		return nil, err
@@ -340,6 +345,41 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 
 	attempts := 0
 	var alternatesStart int
+	// Fetch and validate the leading candidates together. Selection remains in
+	// score order, so latency improves without changing ranking or acceptance.
+	limit := min(len(cands), maxHealthAttempts)
+	if limit > 3 {
+		limit = 3
+	}
+	type validation struct {
+		nzb            []byte
+		fetchErr       error
+		healthy        bool
+		healthErr      error
+		fetchDuration  time.Duration
+		healthDuration time.Duration
+	}
+	validated := make([]validation, limit)
+	var wg sync.WaitGroup
+	for i := range validated {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			v := &validated[i]
+			phase := time.Now()
+			v.nzb, v.fetchErr = s.indexer.FetchNZB(ctx, cands[i].rel)
+			v.fetchDuration = time.Since(phase)
+			if v.fetchErr == nil {
+				v.healthy = true
+				if s.health != nil {
+					phase = time.Now()
+					v.healthy, v.healthErr = s.health.Check(ctx, v.nzb)
+					v.healthDuration = time.Since(phase)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 	for i, cd := range cands {
 		if attempts >= maxHealthAttempts {
 			break
@@ -349,30 +389,44 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			return nil, err
 		}
 		attempts++
-		nzb, err := s.indexer.FetchNZB(ctx, cd.rel)
-		if err != nil {
-			trace.Candidates[cd.trace].Reason = "nzb fetch: " + err.Error()
+		v := validation{}
+		if i < len(validated) {
+			v = validated[i]
+		} else {
+			phase := time.Now()
+			v.nzb, v.fetchErr = s.indexer.FetchNZB(ctx, cd.rel)
+			v.fetchDuration = time.Since(phase)
+			if v.fetchErr == nil {
+				v.healthy = true
+				if s.health != nil {
+					phase = time.Now()
+					v.healthy, v.healthErr = s.health.Check(ctx, v.nzb)
+					v.healthDuration = time.Since(phase)
+				}
+			}
+		}
+		trace.Candidates[cd.trace].FetchDuration = v.fetchDuration
+		trace.Candidates[cd.trace].HealthDuration = v.healthDuration
+		if v.fetchErr != nil {
+			trace.Candidates[cd.trace].Reason = "nzb fetch: " + v.fetchErr.Error()
 			trace.Candidates[cd.trace].Rejected = true
 			s.recordReputation(ctx, cd.rel.Indexer, false)
 			continue
 		}
-		healthy := true
 		if s.health != nil {
 			trace.Candidates[cd.trace].HealthChecked = true
-			ok, herr := s.health.Check(ctx, nzb)
-			if herr != nil && ctx.Err() != nil {
-				trace.Err = herr.Error()
-				return nil, herr
+			if v.healthErr != nil && ctx.Err() != nil {
+				trace.Err = v.healthErr.Error()
+				return nil, v.healthErr
 			}
-			healthy = ok && herr == nil
-			if herr != nil {
-				trace.Candidates[cd.trace].Reason = "health: " + herr.Error()
-			} else if !ok {
+			if v.healthErr != nil {
+				trace.Candidates[cd.trace].Reason = "health: " + v.healthErr.Error()
+			} else if !v.healthy {
 				trace.Candidates[cd.trace].Reason = "health: unhealthy"
 			}
 		}
-		trace.Candidates[cd.trace].Healthy = healthy
-		if !healthy {
+		trace.Candidates[cd.trace].Healthy = v.healthy && v.healthErr == nil
+		if !trace.Candidates[cd.trace].Healthy {
 			trace.Candidates[cd.trace].Rejected = true
 			s.recordReputation(ctx, cd.rel.Indexer, false)
 			continue
@@ -381,7 +435,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
 		trace.Winner = cd.rel.ID
 		alternatesStart = i + 1
-		res := &core.Resolution{Title: t.Key, Release: cd.rel, NZB: nzb, ResolvedAt: s.now()}
+		res := &core.Resolution{Title: t.Key, Release: cd.rel, NZB: v.nzb, ResolvedAt: s.now()}
 		for j := alternatesStart; j < len(cands) && len(res.Alternates) < s.maxCandidates(); j++ {
 			if !trace.Candidates[cands[j].trace].Rejected {
 				res.Alternates = append(res.Alternates, cands[j].rel)
