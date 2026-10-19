@@ -63,11 +63,16 @@ type Service struct {
 	state    core.State
 	auth     core.Auth
 	chat     Chatter
-	scorer   atomic.Pointer[scorerBox]
-	art      *artwork.Renderer
-	images   *artwork.Images
-	catCfg   func() config.Catalog
-	traktCfg func() config.Trakt
+	// Ephemeral vibe-search collections (vibe_ephemeral.go).
+	vibeRefiner core.VibeRefiner
+	vibe        *vibeRegistry
+	vibeTTL     time.Duration
+	vibeMax     int
+	scorer      atomic.Pointer[scorerBox]
+	art         *artwork.Renderer
+	images      *artwork.Images
+	catCfg      func() config.Catalog
+	traktCfg    func() config.Trakt
 
 	liveTTL     time.Duration
 	tick        time.Duration
@@ -604,6 +609,7 @@ func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) (
 		}
 		out = append(out, s.collectionFor(ctx, row, user, t, keys))
 	}
+	out = append(out, s.listEphemeral(user, t)...)
 	if t == "" || t == core.TypeMovie {
 		fr, err := s.listFranchises(ctx, user)
 		if err == nil {
@@ -617,6 +623,9 @@ func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) (
 
 // Get returns one collection by key.
 func (s *Service) Get(ctx context.Context, user *core.User, key core.RatingKey) (*core.Collection, error) {
+	if key.IsEphemeral() {
+		return s.getEphemeral(ctx, user, key)
+	}
 	switch key.Kind() {
 	case core.KindCollection:
 		return s.getFranchise(ctx, user, key)
@@ -645,6 +654,9 @@ func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey
 	}
 	if offset < 0 {
 		offset = 0
+	}
+	if key.IsEphemeral() {
+		return s.ephemeralItems(ctx, user, key, offset, limit)
 	}
 	switch key.Kind() {
 	case core.KindCollection:

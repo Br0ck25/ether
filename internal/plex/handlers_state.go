@@ -201,6 +201,21 @@ func (s *Server) handleRate(w http.ResponseWriter, r *http.Request) {
 	if rating > 10 {
 		rating = 10
 	}
+	if rating > 0 {
+		promoter := s.d.VibeSearch
+		if promoter == nil {
+			promoter, _ = s.d.Collections.(core.VibeSearcher)
+		}
+		if promoter != nil {
+			if _, promoted, err := promoter.PromoteEphemeral(ctx, pr.User, key); err != nil {
+				s.writeErr(w, r, err)
+				return
+			} else if promoted {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+	}
 	if err := s.d.State.Rate(ctx, pr.User.ID, key, rating); err != nil {
 		s.writeErr(w, r, err)
 		return

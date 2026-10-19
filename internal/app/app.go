@@ -207,6 +207,9 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Catalog: a.catalog,
 		Logger:  log.With("component", "llm"),
 	})
+	if a.collections != nil {
+		a.collections.SetVibeRefiner(a.llm)
+	}
 	a.recommend = recommend.New(recommend.Options{
 		Catalog: a.catalog, State: a.state, LLM: a.llm,
 		Logger: log.With("component", "recommend"),
