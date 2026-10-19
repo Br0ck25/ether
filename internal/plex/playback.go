@@ -210,6 +210,9 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 			p.opts.MaxBitrateKbps = limit
 		}
 	}
+	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
+		return t, nil, core.Decision{}, core.ErrUnauthorized
+	}
 	ps, err := s.d.Playback.Prepare(ctx, pr.User, p.key, p.caps)
 	if err != nil {
 		return t, nil, core.Decision{}, err
@@ -555,6 +558,10 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
+	if !s.transcodes.claim(p.sessionID, pr.User.ID, pr.ClientID, s.now()) {
+		writeHTTPError(w, http.StatusForbidden)
+		return
+	}
 	entry, ok := s.transcodes.get(p.sessionID)
 	var ps *core.PlaySession
 	if ok && entry.key == p.key && entry.userID == pr.User.ID {
@@ -626,7 +633,9 @@ func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, ses
 			line += fmt.Sprintf(",FRAME-RATE=%.3f", v.FrameRate)
 		}
 	}
-	body := "#EXTM3U\n" + line + "\nsession/" + sessionID + "/base/index.m3u8\n"
+	line += transcode.HLSVariantAttributes(info, dec)
+	entry, _ := s.transcodes.get(sessionID)
+	body := "#EXTM3U\n" + line + "\n" + streamGrantURL("session/"+sessionID+"/base/index.m3u8", entry.streamToken) + "\n"
 	h := w.Header()
 	h.Set("Content-Type", "application/vnd.apple.mpegurl")
 	h.Set("Cache-Control", "no-cache")
@@ -656,7 +665,7 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 		name = rest[i+1:]
 	}
 	if strings.HasSuffix(name, ".m3u8") {
-		hs.ServePlaylist(w, r)
+		s.serveStreamManifest(w, r, id, hs.ServePlaylist)
 		return
 	}
 	n, ok := segmentNumber(name)
@@ -691,7 +700,9 @@ func segmentNumber(name string) (int, bool) {
 
 func (s *Server) handleTranscodePing(w http.ResponseWriter, r *http.Request) {
 	if id := sanitizeSessionID(r.URL.Query().Get("session")); id != "" {
-		s.transcodes.touch(id, s.now())
+		if e, ok := s.transcodes.get(id); ok && e.userID == FromContext(r.Context()).User.ID {
+			s.transcodes.touch(id, s.now())
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -712,7 +723,11 @@ func (s *Server) handleTranscodeStop(w http.ResponseWriter, r *http.Request) {
 // handleTranscodeSessions is /transcode/sessions.
 func (s *Server) handleTranscodeSessions(w http.ResponseWriter, r *http.Request) {
 	mc := &model.MediaContainer{}
+	u := FromContext(r.Context()).User
 	for _, e := range s.sessions.list() {
+		if !u.IsOwner && e.user.ID != u.ID {
+			continue
+		}
 		if e.transcodeID == "" {
 			continue
 		}

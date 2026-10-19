@@ -421,6 +421,8 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 
 // applyConfig pushes an edited config into the running components.
 func (a *App) applyConfig(c config.Config) {
+	a.tmdb.UpdateConfig(c.Catalog)
+	a.llm.UpdateConfig(c.LLM)
 	a.fetcher.Update(c.Usenet.Providers)
 	a.indexers.ApplyConfig(c)
 	a.resolver.UpdateConfig(c)

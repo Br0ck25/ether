@@ -320,7 +320,7 @@ func TestStartHLS(t *testing.T) {
 		t.Fatalf("start: %d %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.HasPrefix(body, "#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=7600000,RESOLUTION=1920x1080") || !strings.HasSuffix(body, "session/abc-123/base/index.m3u8\n") {
+	if !strings.HasPrefix(body, "#EXTM3U\n#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=7600000,RESOLUTION=1920x1080") || !strings.Contains(body, "session/abc-123/base/index.m3u8?X-Ether-Stream-Token=") {
 		t.Fatalf("master: %q", body)
 	}
 	if rec.Header().Get("Content-Type") != "application/vnd.apple.mpegurl" {
@@ -687,27 +687,6 @@ func TestTerminate(t *testing.T) {
 	}
 }
 
-// dash.js and hls.js fetch segments from the manifest's relative URLs with
-// no token; a live session id authorizes them, anything else stays 401.
-func TestTranscodeSessionPathsAuthorizedBySession(t *testing.T) {
-	f := newFixture()
-	if _, err := f.trans.StartHLS(context.Background(), core.HLSRequest{SessionID: "live-sess"}); err != nil {
-		t.Fatal(err)
-	}
-	for path, want := range map[string]bool{
-		"/video/:/transcode/universal/session/live-sess/0/header":  true,
-		"/video/:/transcode/universal/session/live-sess/1/12.m4s":  true,
-		"/video/:/transcode/universal/session/other-sess/0/header": false,
-		"/library/sections": false,
-	} {
-		rec := httptest.NewRecorder()
-		f.srv.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
-		if got := rec.Code != http.StatusUnauthorized; got != want {
-			t.Errorf("%s: status %d, authorized=%v want %v", path, rec.Code, got, want)
-		}
-	}
-}
-
 func TestHLSInitializationSegmentServedForNativePlayer(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
@@ -717,7 +696,8 @@ func TestHLSInitializationSegmentServedForNativePlayer(t *testing.T) {
 		t.Fatal(start.Code, start.Body.String())
 	}
 	// AVPlayer's segment requests do not carry the original Plex headers.
-	init := f.request(t, "GET", "/video/:/transcode/universal/session/native-fmp4/base/init.mp4", map[string]string{"X-Plex-Token": ""})
+	e, _ := f.srv.transcodes.get("native-fmp4")
+	init := f.request(t, "GET", streamGrantURL("/video/:/transcode/universal/session/native-fmp4/base/init.mp4", e.streamToken), map[string]string{"X-Plex-Token": ""})
 	if init.Code != 200 || init.Body.String() != "segment--1" {
 		t.Fatalf("init was not routed to InitSegment: %d %s", init.Code, init.Body.String())
 	}

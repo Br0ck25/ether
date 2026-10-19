@@ -454,3 +454,49 @@ func TestPlexTVValidator(t *testing.T) {
 		t.Fatal(ok, err)
 	}
 }
+
+func TestValidatedViewerRechecksAccess(t *testing.T) {
+	s, v, c := setup(t)
+	ctx := context.Background()
+	u, err := s.Authenticate(ctx, "home-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.mu.Lock()
+	v.access["home-user"] = false
+	v.mu.Unlock()
+	c.add(11 * time.Minute)
+	if _, err := s.Authenticate(ctx, "home-user"); !errors.Is(err, core.ErrUnauthorized) {
+		t.Fatalf("revoked validation: %v", err)
+	}
+	if _, err := s.ActiveUser(ctx, u.ID); !errors.Is(err, core.ErrUnauthorized) {
+		t.Fatalf("stream access survived revocation: %v", err)
+	}
+}
+
+func TestSyncRevokesValidatedViewerAndPreservesTokenlessMember(t *testing.T) {
+	s, v, c := setup(t)
+	ctx := context.Background()
+	u, err := s.Authenticate(ctx, "home-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SyncFriends(ctx, []plextv.Friend{{PlexID: 100, Username: "alice", AllLibs: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ActiveUser(ctx, u.ID); !errors.Is(err, core.ErrUnauthorized) {
+		t.Fatalf("revoked viewer active: %v", err)
+	}
+	// Even a stale resources response must not resurrect an explicitly revoked user.
+	if _, err := s.Authenticate(ctx, "home-user"); !errors.Is(err, core.ErrUnauthorized) {
+		t.Fatalf("cached resources resurrected viewer: %v", err)
+	}
+	if _, err := s.Authenticate(ctx, "alice-device"); err != nil {
+		t.Fatalf("tokenless member denied: %v", err)
+	}
+	c.add(11 * time.Minute)
+	v.setDown(true)
+	if _, err := s.Authenticate(ctx, "home-user"); err == nil {
+		t.Fatalf("outage resurrected viewer: %v", err)
+	}
+}

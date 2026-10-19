@@ -155,7 +155,11 @@ func buildCodecArgs(s runSpec) []string {
 				args = append(args, "-tag:v", tag)
 			}
 			if v.Codec == "hevc" && container == ContainerFMP4 {
-				args = append(args, "-tag:v", "hvc1")
+				tag := "hvc1"
+				if v.DolbyVision && v.DolbyVisionProfile == 5 {
+					tag = "dvh1"
+				}
+				args = append(args, "-tag:v", tag)
 			}
 			if v.DolbyVision && container == ContainerFMP4 {
 				args = append(args, "-strict", "unofficial") // write the dvcC box
