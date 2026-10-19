@@ -27,6 +27,8 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		FriendlyName:      cfg.Server.FriendlyName,
 		Version:           plextv.DefaultServerVersion,
 		Platform:          plexPlatform(),
+		// Reported honestly: the owner's real subscription state.
+		MyPlexSubscription: a.registrar.Status().PlexPass,
 	}
 	hooks := plex.Hooks{
 		OnTimeline: func(u *core.User, key core.RatingKey, offset, duration time.Duration, state string) {

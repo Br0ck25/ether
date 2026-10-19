@@ -261,6 +261,13 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}); err != nil {
 		return fmt.Errorf("registrar: %w", err)
 	}
+	if cfg.Plex.Token != "" {
+		rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := a.registrar.RefreshOwner(rctx); err != nil {
+			log.Warn("plex.tv owner refresh", "err", err)
+		}
+		cancel()
+	}
 	a.gdm = remote.NewGDMResponder(remote.GDMOptions{
 		Info: func() remote.GDMInfo {
 			c := a.cfg.Get()
