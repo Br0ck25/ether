@@ -567,7 +567,15 @@ func TestStatManyPipelinesAndFallsBackToBlockProvider(t *testing.T) {
 	s1 := nntptest.Start(t, nntptest.Options{Username: "u", Password: "p"})
 	s2 := nntptest.Start(t, nntptest.Options{})
 	addSeg(t, s1, "primary@x", []byte("p"))
+	addSeg(t, s1, "taken@x", []byte("primary takedown"))
 	addSeg(t, s2, "block@x", []byte("b"))
+	addSeg(t, s2, "taken@x", []byte("secondary copy"))
+	s1.SetFault(func(cmd, arg string) nntptest.Fault {
+		if cmd == "STAT" && arg == "taken@x" {
+			return nntptest.Fault{Code: 451, Text: "0 <taken@x>"}
+		}
+		return nntptest.Fault{}
+	})
 	p2 := s2.Provider("block", 2)
 	p2.Backfill = true
 	f := newFetcher(t, []config.UsenetProvider{s1.Provider("primary", 4), p2}, Options{})
@@ -577,11 +585,11 @@ func TestStatManyPipelinesAndFallsBackToBlockProvider(t *testing.T) {
 	if got := s1.Stats().Accepted; got < 2 {
 		t.Fatalf("warm opened %d connections, want at least 2", got)
 	}
-	got, err := f.StatMany(context.Background(), []string{"primary@x", "block@x", "gone@x"})
+	got, err := f.StatMany(context.Background(), []string{"primary@x", "block@x", "gone@x", "taken@x"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got["<primary@x>"] || !got["<block@x>"] || got["<gone@x>"] {
+	if !got["<primary@x>"] || !got["<block@x>"] || got["<gone@x>"] || !got["<taken@x>"] {
 		t.Fatalf("results %v", got)
 	}
 	stats := f.Stats()

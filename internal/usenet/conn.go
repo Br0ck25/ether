@@ -421,7 +421,7 @@ func (c *Conn) StatMany(ctx context.Context, messageIDs []string) (map[string]bo
 		switch code {
 		case 223:
 			out[messageIDs[i]] = true
-		case 430, 423:
+		case 430, 423, 451:
 			out[messageIDs[i]] = false
 		default:
 			c.broken = true
