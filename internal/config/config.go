@@ -16,21 +16,21 @@ import (
 )
 
 type Config struct {
-	Server        Server              `json:"server"`
-	Plex          Plex                `json:"plex"`
-	Usenet        Usenet              `json:"usenet"`
-	Indexers      []Indexer           `json:"indexers"`
-	Cache         Cache               `json:"cache"`
-	Catalog       Catalog             `json:"catalog"`
-	Resolver      Resolver            `json:"resolver"`
-	Quality       Quality             `json:"quality"`
-	Transcode     Transcode           `json:"transcode"`
-	Trakt         Trakt               `json:"trakt"`
-	OpenSubtitles OpenSubtitles       `json:"openSubtitles"`
-	LLM           LLM                 `json:"llm"`
-	Updates       Updates             `json:"updates"`
-	Spike         Spike               `json:"spike"`
-	SetupComplete bool                `json:"setupComplete"`
+	Server        Server        `json:"server"`
+	Plex          Plex          `json:"plex"`
+	Usenet        Usenet        `json:"usenet"`
+	Indexers      []Indexer     `json:"indexers"`
+	Cache         Cache         `json:"cache"`
+	Catalog       Catalog       `json:"catalog"`
+	Resolver      Resolver      `json:"resolver"`
+	Quality       Quality       `json:"quality"`
+	Transcode     Transcode     `json:"transcode"`
+	Trakt         Trakt         `json:"trakt"`
+	OpenSubtitles OpenSubtitles `json:"openSubtitles"`
+	LLM           LLM           `json:"llm"`
+	Updates       Updates       `json:"updates"`
+	Spike         Spike         `json:"spike"`
+	SetupComplete bool          `json:"setupComplete"`
 }
 
 type Server struct {
@@ -40,29 +40,29 @@ type Server struct {
 	FriendlyName string `json:"friendlyName"`
 	// MachineIdentifier is generated on first run and never changes.
 	MachineIdentifier string `json:"machineIdentifier"`
-	LogLevel     string `json:"logLevel"`
+	LogLevel          string `json:"logLevel"`
 	// DefaultStreamLimit applies to users without their own limit.
 	DefaultStreamLimit int `json:"defaultStreamLimit"`
-	MaxStreams   int    `json:"maxStreams"` // server-wide cap, 0 = derived from Usenet connections
+	MaxStreams         int `json:"maxStreams"` // server-wide cap, 0 = derived from Usenet connections
 }
 
 type Plex struct {
 	// Token is the owner's plex.tv token from sign-in; the server token.
-	Token          string `json:"token"`
+	Token            string `json:"token"`
 	ClientIdentifier string `json:"clientIdentifier"` // X-Plex-Client-Identifier Ether uses towards plex.tv
-	OwnerPlexID    int64  `json:"ownerPlexId"`
-	OwnerUsername  string `json:"ownerUsername"`
-	Claimed        bool   `json:"claimed"`
+	OwnerPlexID      int64  `json:"ownerPlexId"`
+	OwnerUsername    string `json:"ownerUsername"`
+	Claimed          bool   `json:"claimed"`
 	// Remote access
-	RemoteAccess   bool   `json:"remoteAccess"`
-	UseUPnP        bool   `json:"useUpnp"`
-	PublicPort     int    `json:"publicPort"` // manual port forward; 0 = same as Server.Port
-	PublicHost     string `json:"publicHost"` // override detected WAN IP
-	CustomURLs     []string `json:"customUrls"`
+	RemoteAccess bool     `json:"remoteAccess"`
+	UseUPnP      bool     `json:"useUpnp"`
+	PublicPort   int      `json:"publicPort"` // manual port forward; 0 = same as Server.Port
+	PublicHost   string   `json:"publicHost"` // override detected WAN IP
+	CustomURLs   []string `json:"customUrls"`
 	// TLS certificate for *.plex.direct (or a self-signed fallback).
-	CertFile       string `json:"certFile"`
-	KeyFile        string `json:"keyFile"`
-	CertHash       string `json:"certHash"` // plex.direct subdomain hash
+	CertFile          string `json:"certFile"`
+	KeyFile           string `json:"keyFile"`
+	CertHash          string `json:"certHash"`          // plex.direct subdomain hash
 	SecureConnections string `json:"secureConnections"` // "required", "preferred", "disabled"
 }
 
@@ -80,9 +80,9 @@ type UsenetProvider struct {
 	Password    string `json:"password"`
 	Connections int    `json:"connections"`
 	// Priority: lower is tried first. Block accounts set Backfill.
-	Priority    int    `json:"priority"`
-	Backfill    bool   `json:"backfill"` // only used for articles missing elsewhere
-	Enabled     bool   `json:"enabled"`
+	Priority int  `json:"priority"`
+	Backfill bool `json:"backfill"` // only used for articles missing elsewhere
+	Enabled  bool `json:"enabled"`
 }
 
 type Indexer struct {
@@ -90,8 +90,8 @@ type Indexer struct {
 	Name       string `json:"name"`
 	URL        string `json:"url"` // base URL; /api is appended
 	APIKey     string `json:"apiKey"`
-	DailyLimit int    `json:"dailyLimit"`     // API hits per day, 0 = unlimited
-	DailyGrabs int    `json:"dailyGrabs"`     // NZB downloads per day, 0 = unlimited
+	DailyLimit int    `json:"dailyLimit"` // API hits per day, 0 = unlimited
+	DailyGrabs int    `json:"dailyGrabs"` // NZB downloads per day, 0 = unlimited
 	Priority   int    `json:"priority"`
 	Enabled    bool   `json:"enabled"`
 	// Categories override; empty uses Newznab defaults (2000 movies, 5000 TV).
@@ -103,31 +103,31 @@ type Cache struct {
 	Dir         string `json:"dir"`
 	BudgetBytes int64  `json:"budgetBytes"`
 	// Prefetch
-	PrefetchNextEpisode bool          `json:"prefetchNextEpisode"`
-	PrefetchBytes       int64         `json:"prefetchBytes"` // opening bytes pulled ahead
-	KeepInProgressWarm  bool          `json:"keepInProgressWarm"`
-	NextEpisodeAt       float64       `json:"nextEpisodeAt"` // fraction of current episode, e.g. 0.8
+	PrefetchNextEpisode bool    `json:"prefetchNextEpisode"`
+	PrefetchBytes       int64   `json:"prefetchBytes"` // opening bytes pulled ahead
+	KeepInProgressWarm  bool    `json:"keepInProgressWarm"`
+	NextEpisodeAt       float64 `json:"nextEpisodeAt"` // fraction of current episode, e.g. 0.8
 }
 
 type Catalog struct {
-	TMDBKey        string  `json:"tmdbKey"` // owner override; empty uses the bundled key
-	Language       string  `json:"language"` // TMDB language, e.g. "en-US"
-	Region         string  `json:"region"`
-	MinPopularity  float64 `json:"minPopularity"`
-	MinVotes       int     `json:"minVotes"`
-	IncludeAdult   bool    `json:"includeAdult"`
+	TMDBKey         string   `json:"tmdbKey"`  // owner override; empty uses the bundled key
+	Language        string   `json:"language"` // TMDB language, e.g. "en-US"
+	Region          string   `json:"region"`
+	MinPopularity   float64  `json:"minPopularity"`
+	MinVotes        int      `json:"minVotes"`
+	IncludeAdult    bool     `json:"includeAdult"`
 	RefreshInterval Duration `json:"refreshInterval"`
-	ShowUnreleased bool    `json:"showUnreleased"`
+	ShowUnreleased  bool     `json:"showUnreleased"`
 }
 
 type Resolver struct {
-	AllowCam          bool     `json:"allowCam"` // owner setting, off by default
-	HealthSamples     int      `json:"healthSamples"`
-	SearchCacheTTL    Duration `json:"searchCacheTtl"`
+	AllowCam           bool     `json:"allowCam"` // owner setting, off by default
+	HealthSamples      int      `json:"healthSamples"`
+	SearchCacheTTL     Duration `json:"searchCacheTtl"`
 	UnavailableCooloff Duration `json:"unavailableCooloff"` // hide titles with no release this long
-	MaxCandidates     int      `json:"maxCandidates"`
-	BlockedGroups     []string `json:"blockedGroups"`
-	BlockedTerms      []string `json:"blockedTerms"`
+	MaxCandidates      int      `json:"maxCandidates"`
+	BlockedGroups      []string `json:"blockedGroups"`
+	BlockedTerms       []string `json:"blockedTerms"`
 }
 
 type Quality struct {
@@ -147,13 +147,13 @@ type QualityRule struct {
 }
 
 type Transcode struct {
-	FFmpegPath  string `json:"ffmpegPath"` // empty = bundled, then PATH
-	FFprobePath string `json:"ffprobePath"`
-	HWAccel     string `json:"hwAccel"` // "auto", "none", "videotoolbox", "nvenc", "qsv", "vaapi"
-	VAAPIDevice string `json:"vaapiDevice"`
-	TempDir     string `json:"tempDir"`
-	MaxTranscodes int  `json:"maxTranscodes"`
-	RemoteMaxBitrateKbps int `json:"remoteMaxBitrateKbps"`
+	FFmpegPath           string `json:"ffmpegPath"` // empty = bundled, then PATH
+	FFprobePath          string `json:"ffprobePath"`
+	HWAccel              string `json:"hwAccel"` // "auto", "none", "videotoolbox", "nvenc", "qsv", "vaapi"
+	VAAPIDevice          string `json:"vaapiDevice"`
+	TempDir              string `json:"tempDir"`
+	MaxTranscodes        int    `json:"maxTranscodes"`
+	RemoteMaxBitrateKbps int    `json:"remoteMaxBitrateKbps"`
 }
 
 type Trakt struct {
@@ -177,9 +177,9 @@ type LLM struct {
 }
 
 type Updates struct {
-	Channel     string `json:"channel"` // "stable", "beta"
-	AutoUpdate  bool   `json:"autoUpdate"`
-	FeedURL     string `json:"feedUrl"`
+	Channel    string `json:"channel"` // "stable", "beta"
+	AutoUpdate bool   `json:"autoUpdate"`
+	FeedURL    string `json:"feedUrl"`
 }
 
 // Spike serves local files as a library so the Plex front end can be

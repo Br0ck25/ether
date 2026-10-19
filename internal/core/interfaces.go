@@ -21,22 +21,22 @@ const (
 
 // Filter narrows a browse or a smart collection. Zero values mean "any".
 type Filter struct {
-	Type          MediaType `json:"type,omitempty"` // movie or show
-	Genres        []string  `json:"genres,omitempty"`
-	YearFrom      int       `json:"yearFrom,omitempty"`
-	YearTo        int       `json:"yearTo,omitempty"`
-	MinRating     float64   `json:"minRating,omitempty"`
-	MaxRuntime    time.Duration `json:"maxRuntime,omitempty"`
-	MinRuntime    time.Duration `json:"minRuntime,omitempty"`
-	Languages     []string  `json:"languages,omitempty"`
-	Countries     []string  `json:"countries,omitempty"`
-	ContentRatings []string `json:"contentRatings,omitempty"`
-	MaxContentRating string `json:"maxContentRating,omitempty"` // per-user limit
-	Collection    int64     `json:"collection,omitempty"`
-	Person        int64     `json:"person,omitempty"` // cast or crew TMDB id
-	Studio        string    `json:"studio,omitempty"`
-	Query         string    `json:"query,omitempty"` // title substring
-	IncludeUnreleased bool  `json:"includeUnreleased,omitempty"`
+	Type              MediaType     `json:"type,omitempty"` // movie or show
+	Genres            []string      `json:"genres,omitempty"`
+	YearFrom          int           `json:"yearFrom,omitempty"`
+	YearTo            int           `json:"yearTo,omitempty"`
+	MinRating         float64       `json:"minRating,omitempty"`
+	MaxRuntime        time.Duration `json:"maxRuntime,omitempty"`
+	MinRuntime        time.Duration `json:"minRuntime,omitempty"`
+	Languages         []string      `json:"languages,omitempty"`
+	Countries         []string      `json:"countries,omitempty"`
+	ContentRatings    []string      `json:"contentRatings,omitempty"`
+	MaxContentRating  string        `json:"maxContentRating,omitempty"` // per-user limit
+	Collection        int64         `json:"collection,omitempty"`
+	Person            int64         `json:"person,omitempty"` // cast or crew TMDB id
+	Studio            string        `json:"studio,omitempty"`
+	Query             string        `json:"query,omitempty"` // title substring
+	IncludeUnreleased bool          `json:"includeUnreleased,omitempty"`
 }
 
 type BrowseQuery struct {
@@ -89,10 +89,10 @@ type ImageURLFunc func(path, size string) string
 
 // Hub is a Home row or a section row.
 type Hub struct {
-	ID       string    `json:"id"`      // stable identifier, e.g. "trending.week.movie"
+	ID       string    `json:"id"` // stable identifier, e.g. "trending.week.movie"
 	Title    string    `json:"title"`
-	Type     MediaType `json:"type"`    // item type in the row ("mixed" allowed via "")
-	Context  string    `json:"context"` // Plex hub context, e.g. "hub.movie.recentlyreleased"
+	Type     MediaType `json:"type"`            // item type in the row ("mixed" allowed via "")
+	Context  string    `json:"context"`         // Plex hub context, e.g. "hub.movie.recentlyreleased"
 	Style    string    `json:"style,omitempty"` // "shelf", "hero", "clip"
 	Promoted bool      `json:"promoted"`        // show on Home
 	Items    []Title   `json:"items"`
@@ -101,17 +101,17 @@ type Hub struct {
 }
 
 type Collection struct {
-	Key     RatingKey `json:"key"`
-	Title   string    `json:"title"`
-	Summary string    `json:"summary,omitempty"`
-	Kind    string    `json:"kind"` // "franchise", "trending", "smart", "user"
-	Type    MediaType `json:"type"`
-	Filter  *Filter   `json:"filter,omitempty"` // smart
-	Sort    SortOrder `json:"sort,omitempty"`
-	OwnerUserID int64 `json:"ownerUserId,omitempty"` // 0 = server-wide
-	PosterPath  string `json:"posterPath,omitempty"`
-	BackdropPath string `json:"backdropPath,omitempty"`
-	ChildCount  int    `json:"childCount"`
+	Key          RatingKey `json:"key"`
+	Title        string    `json:"title"`
+	Summary      string    `json:"summary,omitempty"`
+	Kind         string    `json:"kind"` // "franchise", "trending", "smart", "user"
+	Type         MediaType `json:"type"`
+	Filter       *Filter   `json:"filter,omitempty"` // smart
+	Sort         SortOrder `json:"sort,omitempty"`
+	OwnerUserID  int64     `json:"ownerUserId,omitempty"` // 0 = server-wide
+	PosterPath   string    `json:"posterPath,omitempty"`
+	BackdropPath string    `json:"backdropPath,omitempty"`
+	ChildCount   int       `json:"childCount"`
 }
 
 type Collections interface {
@@ -146,10 +146,10 @@ type WatchStatus struct {
 }
 
 type HistoryEntry struct {
-	UserID   int64     `json:"userId"`
-	Key      RatingKey `json:"key"`
-	ViewedAt time.Time `json:"viewedAt"`
-	Completed bool     `json:"completed"`
+	UserID    int64     `json:"userId"`
+	Key       RatingKey `json:"key"`
+	ViewedAt  time.Time `json:"viewedAt"`
+	Completed bool      `json:"completed"`
 }
 
 type State interface {
@@ -236,6 +236,9 @@ type Resolver interface {
 }
 
 // HealthChecker checks a sample of an NZB's articles exist (NNTP STAT).
+// It also inspects archive headers: compressed or encrypted RARs and
+// releases without a playable video file report healthy=false with a reason.
+// Implemented by internal/stream.
 type HealthChecker interface {
 	Check(ctx context.Context, nzb []byte) (healthy bool, err error)
 }
@@ -246,9 +249,9 @@ type HealthChecker interface {
 type Priority int
 
 const (
-	PriorityLive     Priority = 0 // a viewer is waiting
+	PriorityLive      Priority = 0 // a viewer is waiting
 	PriorityReadahead Priority = 1
-	PriorityPrefetch Priority = 2 // background; yields to live streams
+	PriorityPrefetch  Priority = 2 // background; yields to live streams
 )
 
 // ArticleFetcher fetches and yEnc-decodes articles across the configured
@@ -257,8 +260,23 @@ type ArticleFetcher interface {
 	// Body returns the decoded payload of one article (one NZB segment).
 	// Returns ErrArticleMissing when no provider has it.
 	Body(ctx context.Context, messageID string, groups []string, prio Priority) ([]byte, error)
+	// BodyPart is Body plus the article's yEnc =ybegin/=ypart header, which
+	// gives the segment's exact byte range inside the posted file.
+	BodyPart(ctx context.Context, messageID string, groups []string, prio Priority) ([]byte, ArticlePart, error)
 	// Stat reports whether any provider has the article.
 	Stat(ctx context.Context, messageID string) (bool, error)
+}
+
+// ArticlePart is the yEnc header of one article. Begin and End are 1-based
+// inclusive offsets in the posted file, as in =ypart; for single-part posts
+// Begin is 1 and End is FileSize.
+type ArticlePart struct {
+	Name     string `json:"name"`
+	FileSize int64  `json:"fileSize"`
+	Part     int    `json:"part"`
+	Total    int    `json:"total"`
+	Begin    int64  `json:"begin"`
+	End      int64  `json:"end"`
 }
 
 // ---------------------------------------------------------------------------
@@ -295,26 +313,26 @@ type SegmentCache interface {
 // Transcoder (internal/transcode)
 
 type StreamInfo struct {
-	Index     int    `json:"index"`
-	Type      string `json:"type"` // video, audio, subtitle
-	Codec     string `json:"codec"`
-	Profile   string `json:"profile,omitempty"`
-	Language  string `json:"language,omitempty"`
-	Title     string `json:"title,omitempty"`
-	Default   bool   `json:"default,omitempty"`
-	Forced    bool   `json:"forced,omitempty"`
-	Width     int    `json:"width,omitempty"`
-	Height    int    `json:"height,omitempty"`
-	FrameRate float64 `json:"frameRate,omitempty"`
-	BitDepth  int    `json:"bitDepth,omitempty"`
-	ColorTransfer string `json:"colorTransfer,omitempty"` // smpte2084 = HDR10, arib-std-b67 = HLG
-	DolbyVision bool `json:"dolbyVision,omitempty"`
-	Channels  int    `json:"channels,omitempty"`
-	ChannelLayout string `json:"channelLayout,omitempty"`
-	SampleRate int   `json:"sampleRate,omitempty"`
-	BitrateKbps int  `json:"bitrateKbps,omitempty"`
-	External  bool   `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
-	ExternalURL string `json:"externalUrl,omitempty"`
+	Index         int     `json:"index"`
+	Type          string  `json:"type"` // video, audio, subtitle
+	Codec         string  `json:"codec"`
+	Profile       string  `json:"profile,omitempty"`
+	Language      string  `json:"language,omitempty"`
+	Title         string  `json:"title,omitempty"`
+	Default       bool    `json:"default,omitempty"`
+	Forced        bool    `json:"forced,omitempty"`
+	Width         int     `json:"width,omitempty"`
+	Height        int     `json:"height,omitempty"`
+	FrameRate     float64 `json:"frameRate,omitempty"`
+	BitDepth      int     `json:"bitDepth,omitempty"`
+	ColorTransfer string  `json:"colorTransfer,omitempty"` // smpte2084 = HDR10, arib-std-b67 = HLG
+	DolbyVision   bool    `json:"dolbyVision,omitempty"`
+	Channels      int     `json:"channels,omitempty"`
+	ChannelLayout string  `json:"channelLayout,omitempty"`
+	SampleRate    int     `json:"sampleRate,omitempty"`
+	BitrateKbps   int     `json:"bitrateKbps,omitempty"`
+	External      bool    `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
+	ExternalURL   string  `json:"externalUrl,omitempty"`
 }
 
 type MediaInfo struct {
@@ -339,23 +357,23 @@ type DecisionKind string
 
 const (
 	DecisionDirectPlay DecisionKind = "directplay"
-	DecisionRemux      DecisionKind = "copy"      // Plex calls this "direct stream"
+	DecisionRemux      DecisionKind = "copy" // Plex calls this "direct stream"
 	DecisionTranscode  DecisionKind = "transcode"
 )
 
 type Decision struct {
-	Kind       DecisionKind `json:"kind"`
-	VideoCopy  bool         `json:"videoCopy"`
-	AudioCopy  bool         `json:"audioCopy"`
-	VideoCodec string       `json:"videoCodec"` // target codec when transcoding
-	AudioCodec string       `json:"audioCodec"`
-	Container  string       `json:"container"` // "mpegts" (HLS) or original
-	MaxHeight  int          `json:"maxHeight"`
-	BitrateKbps int         `json:"bitrateKbps"`
-	AudioStream int         `json:"audioStream"`
-	SubtitleStream int      `json:"subtitleStream"` // -1 none
-	BurnSubtitles bool      `json:"burnSubtitles"`
-	Reason     string       `json:"reason"`
+	Kind           DecisionKind `json:"kind"`
+	VideoCopy      bool         `json:"videoCopy"`
+	AudioCopy      bool         `json:"audioCopy"`
+	VideoCodec     string       `json:"videoCodec"` // target codec when transcoding
+	AudioCodec     string       `json:"audioCodec"`
+	Container      string       `json:"container"` // "mpegts" (HLS) or original
+	MaxHeight      int          `json:"maxHeight"`
+	BitrateKbps    int          `json:"bitrateKbps"`
+	AudioStream    int          `json:"audioStream"`
+	SubtitleStream int          `json:"subtitleStream"` // -1 none
+	BurnSubtitles  bool         `json:"burnSubtitles"`
+	Reason         string       `json:"reason"`
 }
 
 type HWAccel struct {

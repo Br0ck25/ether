@@ -38,12 +38,12 @@ const (
 
 const keyBase = 1_000_000_000_000_000 // 10^15
 
-func MovieKey(tmdb int64) RatingKey      { return RatingKey(int64(KindMovie)*keyBase + tmdb) }
-func ShowKey(tmdb int64) RatingKey       { return RatingKey(int64(KindShow)*keyBase + tmdb) }
-func CollectionKey(id int64) RatingKey   { return RatingKey(int64(KindCollection)*keyBase + id) }
-func SmartKey(id int64) RatingKey        { return RatingKey(int64(KindSmart)*keyBase + id) }
-func PlaylistKey(id int64) RatingKey     { return RatingKey(int64(KindPlaylist)*keyBase + id) }
-func LocalKey(id int64) RatingKey        { return RatingKey(int64(KindLocal)*keyBase + id) }
+func MovieKey(tmdb int64) RatingKey    { return RatingKey(int64(KindMovie)*keyBase + tmdb) }
+func ShowKey(tmdb int64) RatingKey     { return RatingKey(int64(KindShow)*keyBase + tmdb) }
+func CollectionKey(id int64) RatingKey { return RatingKey(int64(KindCollection)*keyBase + id) }
+func SmartKey(id int64) RatingKey      { return RatingKey(int64(KindSmart)*keyBase + id) }
+func PlaylistKey(id int64) RatingKey   { return RatingKey(int64(KindPlaylist)*keyBase + id) }
+func LocalKey(id int64) RatingKey      { return RatingKey(int64(KindLocal)*keyBase + id) }
 func SeasonKey(show int64, season int) RatingKey {
 	return RatingKey(int64(KindSeason)*keyBase + show*10_000 + int64(season))
 }

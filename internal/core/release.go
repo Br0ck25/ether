@@ -6,15 +6,15 @@ import "time"
 type Source string
 
 const (
-	SourceUnknown Source = ""
-	SourceCam     Source = "cam"     // CAM, TS, TC, HDCAM, telesync
+	SourceUnknown  Source = ""
+	SourceCam      Source = "cam" // CAM, TS, TC, HDCAM, telesync
 	SourceScreener Source = "screener"
-	SourceDVD     Source = "dvd"
-	SourceHDTV    Source = "hdtv"
-	SourceWEBRip  Source = "webrip"
-	SourceWEBDL   Source = "webdl"
-	SourceBluRay  Source = "bluray"
-	SourceRemux   Source = "remux"
+	SourceDVD      Source = "dvd"
+	SourceHDTV     Source = "hdtv"
+	SourceWEBRip   Source = "webrip"
+	SourceWEBDL    Source = "webdl"
+	SourceBluRay   Source = "bluray"
+	SourceRemux    Source = "remux"
 )
 
 // ReleaseInfo is what can be parsed from a release name.
@@ -41,18 +41,18 @@ type ReleaseInfo struct {
 
 // Release is an indexer search result for a title.
 type Release struct {
-	ID        string      `json:"id"`        // stable: sha1(indexer + guid)
-	GUID      string      `json:"guid"`      // indexer guid
-	Indexer   string      `json:"indexer"`   // indexer name
-	Name      string      `json:"name"`      // release name
-	NZBURL    string      `json:"nzbUrl"`
-	Size      int64       `json:"size"`
-	PubDate   time.Time   `json:"pubDate"`
-	Grabs     int         `json:"grabs,omitempty"`
-	Password  bool        `json:"password,omitempty"` // indexer flagged passworded
-	Category  int         `json:"category,omitempty"`
-	Info      ReleaseInfo `json:"info"`
-	Score     float64     `json:"score"`
+	ID       string      `json:"id"`      // stable: sha1(indexer + guid)
+	GUID     string      `json:"guid"`    // indexer guid
+	Indexer  string      `json:"indexer"` // indexer name
+	Name     string      `json:"name"`    // release name
+	NZBURL   string      `json:"nzbUrl"`
+	Size     int64       `json:"size"`
+	PubDate  time.Time   `json:"pubDate"`
+	Grabs    int         `json:"grabs,omitempty"`
+	Password bool        `json:"password,omitempty"` // indexer flagged passworded
+	Category int         `json:"category,omitempty"`
+	Info     ReleaseInfo `json:"info"`
+	Score    float64     `json:"score"`
 }
 
 // Resolution is the resolver's answer for a title and client: the winning
@@ -68,16 +68,16 @@ type Resolution struct {
 // QualityProfile is an owner-editable rule set ranking releases for a class
 // of client.
 type QualityProfile struct {
-	Name            string   `json:"name"`
-	MaxHeight       int      `json:"maxHeight"`       // cap, e.g. 1080
-	MinHeight       int      `json:"minHeight"`       // floor, e.g. 720
-	AllowHDR        bool     `json:"allowHdr"`        // only applied when the client also supports it
-	AllowDolbyVision bool    `json:"allowDolbyVision"`
-	PreferredSources []Source `json:"preferredSources"` // best first
-	PreferredCodecs  []string `json:"preferredCodecs"`  // best first; codecs the client can't play are dropped anyway
-	PreferredAudio   []string `json:"preferredAudio"`
-	MinSizeMBPerMin  float64  `json:"minSizeMbPerMin"` // size sanity, per minute of runtime
-	MaxSizeMBPerMin  float64  `json:"maxSizeMbPerMin"`
+	Name               string   `json:"name"`
+	MaxHeight          int      `json:"maxHeight"` // cap, e.g. 1080
+	MinHeight          int      `json:"minHeight"` // floor, e.g. 720
+	AllowHDR           bool     `json:"allowHdr"`  // only applied when the client also supports it
+	AllowDolbyVision   bool     `json:"allowDolbyVision"`
+	PreferredSources   []Source `json:"preferredSources"` // best first
+	PreferredCodecs    []string `json:"preferredCodecs"`  // best first; codecs the client can't play are dropped anyway
+	PreferredAudio     []string `json:"preferredAudio"`
+	MinSizeMBPerMin    float64  `json:"minSizeMbPerMin"` // size sanity, per minute of runtime
+	MaxSizeMBPerMin    float64  `json:"maxSizeMbPerMin"`
 	PreferredLanguages []string `json:"preferredLanguages"`
-	AllowCam         bool     `json:"allowCam"` // also gated by the owner's global cam setting
+	AllowCam           bool     `json:"allowCam"` // also gated by the owner's global cam setting
 }

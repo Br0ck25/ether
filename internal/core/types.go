@@ -93,12 +93,12 @@ func (t *Title) IsReleased(now time.Time) bool {
 }
 
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrNotAvailable  = errors.New("not available yet") // no acceptable release exists
-	ErrArticleMissing = errors.New("article missing on all providers")
+	ErrNotFound        = errors.New("not found")
+	ErrNotAvailable    = errors.New("not available yet") // no acceptable release exists
+	ErrArticleMissing  = errors.New("article missing on all providers")
 	ErrBudgetExhausted = errors.New("indexer daily budget exhausted")
-	ErrStreamLimit   = errors.New("stream limit reached")
-	ErrUnauthorized  = errors.New("unauthorized")
+	ErrStreamLimit     = errors.New("stream limit reached")
+	ErrUnauthorized    = errors.New("unauthorized")
 )
 
 // User is a Plex account with access to this server: the owner or a friend
@@ -113,11 +113,11 @@ type User struct {
 	Thumb    string `json:"thumb,omitempty"`
 	IsOwner  bool   `json:"isOwner"`
 
-	StreamLimit        int      `json:"streamLimit"`        // 0 = server default
-	MaxContentRating   string   `json:"maxContentRating"`   // "" = unrestricted, e.g. "PG-13", "TV-14"
-	SubtitleLanguages  []string `json:"subtitleLanguages"`  // ISO 639-1, preference order
-	AudioLanguages     []string `json:"audioLanguages"`
-	AllowedSections    []int    `json:"allowedSections"`    // empty = all
+	StreamLimit       int      `json:"streamLimit"`       // 0 = server default
+	MaxContentRating  string   `json:"maxContentRating"`  // "" = unrestricted, e.g. "PG-13", "TV-14"
+	SubtitleLanguages []string `json:"subtitleLanguages"` // ISO 639-1, preference order
+	AudioLanguages    []string `json:"audioLanguages"`
+	AllowedSections   []int    `json:"allowedSections"` // empty = all
 }
 
 // ClientCaps is what a Plex client can play, derived from X-Plex-* headers,
@@ -134,15 +134,15 @@ type ClientCaps struct {
 	MaxHeight      int      `json:"maxHeight"` // 2160, 1080, 720...
 	HDR10          bool     `json:"hdr10"`
 	DolbyVision    bool     `json:"dolbyVision"`
-	VideoCodecs    []string `json:"videoCodecs"` // h264, hevc, av1, vp9
-	AudioCodecs    []string `json:"audioCodecs"` // aac, ac3, eac3, truehd, dts, opus, flac
-	Containers     []string `json:"containers"`  // mp4, mkv, mpegts
+	VideoCodecs    []string `json:"videoCodecs"`    // h264, hevc, av1, vp9
+	AudioCodecs    []string `json:"audioCodecs"`    // aac, ac3, eac3, truehd, dts, opus, flac
+	Containers     []string `json:"containers"`     // mp4, mkv, mpegts
 	MaxBitrateKbps int      `json:"maxBitrateKbps"` // 0 = unlimited
 	Remote         bool     `json:"remote"`         // not on the server's LAN
 }
 
-func (c ClientCaps) SupportsVideo(codec string) bool { return contains(c.VideoCodecs, codec) }
-func (c ClientCaps) SupportsAudio(codec string) bool { return contains(c.AudioCodecs, codec) }
+func (c ClientCaps) SupportsVideo(codec string) bool  { return contains(c.VideoCodecs, codec) }
+func (c ClientCaps) SupportsAudio(codec string) bool  { return contains(c.AudioCodecs, codec) }
 func (c ClientCaps) SupportsContainer(ct string) bool { return contains(c.Containers, ct) }
 
 func contains(xs []string, x string) bool {
