@@ -39,9 +39,12 @@ func (c *clock) Set(t time.Time) {
 
 var testGenres = []string{"Science Fiction", "Drama", "Comedy", "Horror", "Animation", "Family", "Thriller", "Romance", "Documentary", "Crime"}
 
-// fakeCatalog is a synthetic, deterministic catalogue.
+// fakeCatalog is a synthetic, deterministic catalogue. Engine background
+// workers read it while tests add titles, so its data is guarded by dataMu
+// (mu only guards call counts).
 type fakeCatalog struct {
 	mu     sync.Mutex
+	dataMu sync.RWMutex
 	titles map[core.RatingKey]core.Title
 	order  []core.RatingKey
 	colls  map[int64][]core.RatingKey
@@ -172,8 +175,24 @@ func newFakeCatalog(now time.Time) *fakeCatalog {
 }
 
 func (c *fakeCatalog) add(t core.Title) {
+	c.dataMu.Lock()
+	defer c.dataMu.Unlock()
 	c.titles[t.Key] = t
 	c.order = append(c.order, t.Key)
+}
+
+// set replaces or inserts a title without changing browse order.
+func (c *fakeCatalog) set(t core.Title) {
+	c.dataMu.Lock()
+	defer c.dataMu.Unlock()
+	c.titles[t.Key] = t
+}
+
+// prependList puts k at the front of a list ("trending_week:movie").
+func (c *fakeCatalog) prependList(name string, k core.RatingKey) {
+	c.dataMu.Lock()
+	defer c.dataMu.Unlock()
+	c.lists[name] = append([]core.RatingKey{k}, c.lists[name]...)
 }
 
 func (c *fakeCatalog) count(name string) {
@@ -188,6 +207,7 @@ func (c *fakeCatalog) callCount(name string) int {
 	return c.calls[name]
 }
 
+// resolve maps keys to titles; the caller holds dataMu.
 func (c *fakeCatalog) resolve(keys []core.RatingKey) []core.Title {
 	var out []core.Title
 	for _, k := range keys {
@@ -200,6 +220,8 @@ func (c *fakeCatalog) resolve(keys []core.RatingKey) []core.Title {
 
 func (c *fakeCatalog) Get(_ context.Context, k core.RatingKey) (*core.Title, error) {
 	c.count("get")
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
 	if t, ok := c.titles[k]; ok {
 		return &t, nil
 	}
@@ -214,6 +236,8 @@ func (c *fakeCatalog) Grandchildren(context.Context, core.RatingKey) ([]core.Tit
 
 func (c *fakeCatalog) Browse(_ context.Context, q core.BrowseQuery) (core.Page, error) {
 	c.count("browse")
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
 	f := q.Filter
 	var items []core.Title
 	for _, k := range c.order {
@@ -274,7 +298,9 @@ func (c *fakeCatalog) Search(context.Context, string, []core.MediaType, int) ([]
 }
 func (c *fakeCatalog) List(_ context.Context, name string, t core.MediaType, limit int) ([]core.Title, error) {
 	c.count("list")
+	c.dataMu.RLock()
 	items := c.resolve(c.lists[name+":"+string(t)])
+	c.dataMu.RUnlock()
 	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}
@@ -284,6 +310,8 @@ func (c *fakeCatalog) List(_ context.Context, name string, t core.MediaType, lim
 // Similar: same primary genre, by popularity.
 func (c *fakeCatalog) Similar(_ context.Context, k core.RatingKey, limit int) ([]core.Title, error) {
 	c.count("similar")
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
 	src, ok := c.titles[k]
 	if !ok || len(src.Genres) == 0 {
 		return nil, nil
@@ -303,6 +331,8 @@ func (c *fakeCatalog) Similar(_ context.Context, k core.RatingKey, limit int) ([
 }
 func (c *fakeCatalog) Collection(_ context.Context, id int64) (string, []core.Title, error) {
 	if id == sagaCollection {
+		c.dataMu.RLock()
+		defer c.dataMu.RUnlock()
 		return "Star Saga Collection", c.resolve(c.colls[id]), nil
 	}
 	return "", nil, core.ErrNotFound
@@ -312,6 +342,8 @@ func (c *fakeCatalog) Facet(context.Context, core.MediaType, string) ([]core.Fac
 }
 func (c *fakeCatalog) NextEpisode(_ context.Context, ep core.RatingKey) (*core.Title, error) {
 	next := core.EpisodeKey(ep.TMDB(), ep.Season(), ep.Episode()+1)
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
 	if t, ok := c.titles[next]; ok {
 		return &t, nil
 	}

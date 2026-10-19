@@ -20,8 +20,8 @@ func addObscure(cat *fakeCatalog, now time.Time) (inflated, unknown, panned core
 		Rating: 4.1, VoteCount: 900, Popularity: 400, Runtime: 90 * time.Minute, Released: now.AddDate(0, 0, -10), ContentRating: "PG-13", Language: "en"}
 	for _, t := range []core.Title{inflated, unknown, panned} {
 		cat.add(t)
-		cat.lists["trending_week:movie"] = append([]core.RatingKey{t.Key}, cat.lists["trending_week:movie"]...)
-		cat.lists["top_rated:movie"] = append([]core.RatingKey{t.Key}, cat.lists["top_rated:movie"]...)
+		cat.prependList("trending_week:movie", t.Key)
+		cat.prependList("top_rated:movie", t.Key)
 	}
 	return
 }
