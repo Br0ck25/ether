@@ -532,7 +532,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		// An MDE client got "direct play OK" from the decision, judged the
 		// media unplayable itself and now asks for a stream: decide again
 		// without direct play so a needed transcode isn't a plain remux.
-		applySelections(&p, ps.Info, pr.User)
+		applySelections(&p, ps.Info, s.audioLanguages(pr.User))
 		dec = s.d.Transcoder.Decide(ps.Info, p.caps, p.opts)
 	}
 	if dec.Kind == core.DecisionDirectPlay {
