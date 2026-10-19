@@ -274,6 +274,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.closers = append(a.closers, func() { a.media.Close() })
 	a.sources = debrid.NewIndexer(a.indexers, a.debrid)
 	a.resolver = resolver.New(a.sources, a.media, a.db, cfg, resolver.Options{Logger: log.With("component", "resolver")})
+	a.resolver.SetSourceSignals(a.debrid)
 	a.closers = append(a.closers, func() { a.resolver.Close() })
 
 	// Transcoder. A missing ffmpeg is not fatal: direct play still works.

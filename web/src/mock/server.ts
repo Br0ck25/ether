@@ -1293,6 +1293,12 @@ export function createFakeServer(opts: FakeOptions = {}) {
           sync: { running: false, titlesSeen: 63500 },
         },
         debrid: debridStatus(),
+        sources: {
+          startup: [
+            { protocol: "usenet", average: 2_140_000_000, last: 1_980_000_000, samples: 37 },
+            { protocol: "torrent", average: 410_000_000, last: 380_000_000, samples: 22 },
+          ],
+        },
         hwaccel: {
           ffmpeg: "8.0.1",
           hwaccel: { name: "videotoolbox", encoders: ["h264_videotoolbox", "hevc_videotoolbox"] },

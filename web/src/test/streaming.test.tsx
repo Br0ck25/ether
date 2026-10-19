@@ -144,6 +144,21 @@ describe("Releases", () => {
   });
 });
 
+describe("Source routing", () => {
+  it("shows measured startup per source and saves the preference", async () => {
+    const { fake } = renderApp("/releases/startup");
+    expect(await screen.findByText(/debrid 410 ms \(22 plays\)/, {}, WAIT)).toBeInTheDocument();
+    expect(screen.getByText(/Usenet 2\.1 s \(37 plays\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Source for equal-quality releases" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Prefer Usenet" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/resolver")).toHaveLength(1));
+    expect(calls(fake, "PUT", "/config/resolver")[0]!.body).toMatchObject({
+      sourcePreference: "usenet",
+    });
+  });
+});
+
 describe("Release traces", () => {
   it("normalizes typed and loosely shaped traces", () => {
     const t = normalizeTraces([

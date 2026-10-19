@@ -60,6 +60,8 @@ export interface ConsoleRelease {
   formatScore: number;
   customFormats?: FormatMatch[] | null;
   compatibility?: string;
+  /** Why source routing moved this release (faster source, or the hedge). */
+  route?: string;
   rejected: boolean;
   reason?: string;
   /** Position in the order Ether tries releases (the pin first); 0 when rejected. */

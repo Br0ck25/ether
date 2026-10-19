@@ -173,9 +173,19 @@ produce a timestamp discontinuity.
 ## Sources, history and live television
 
 Torrent releases from Torznab indexers stream through owner-configured debrid
-services; only torrents a service already holds are used, nothing is downloaded
-in full, and "not cached" skips a release without marking it bad
-(see docs/debrid.md).
+services over HTTPS range requests; Ether never joins a swarm. Only torrents a
+service already holds are used, nothing is downloaded in full, and "not cached"
+skips a release without marking it bad. Torrents a service holds stay on the
+owner's account and are reused, and detail-page preparation obtains the link and
+reads the file's head and tail, so Play needs no provider request.
+
+Source routing never trades quality for speed. Among candidates in the leading
+quality tier whose scores are within a margin of the leader, the source with the
+lower measured startup goes first: NZB or payload fetch plus a health check that
+actually ran, averaged per source. Until both sources have enough samples,
+popular titles prefer torrents known to be cached; an owner may instead always
+prefer one source. The best candidate of the other source is validated alongside
+and both remain failover alternates.
 
 Local media can supplement the catalogue and takes precedence when selected.
 Owners may supply M3U playlists and XMLTV guides or assemble virtual channels.

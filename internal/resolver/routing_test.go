@@ -1,0 +1,173 @@
+package resolver
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+)
+
+type cachedSet map[string]bool
+
+func (c cachedSet) KnownCached(h string) bool { return c[h] }
+
+const hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+// routingReleases: a well-grabbed Usenet 1080p leads on score; a torrent of
+// the same quality tier sits a few points behind.
+func routingReleases(torrentName string) []core.Release {
+	u := rel("usenet", "The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)
+	u.Grabs = 5000
+	tr := rel("torrent", torrentName, 8000)
+	tr.Grabs = 0
+	tr.Protocol = core.ProtocolTorrent
+	tr.InfoHash = hashA
+	return []core.Release{u, tr}
+}
+
+func routingTitle(popular bool) *core.Title {
+	t := matrixTitle()
+	if popular {
+		t.Popularity = 120
+	}
+	return t
+}
+
+func resolveOrder(t *testing.T, svc *Service, title *core.Title) []string {
+	t.Helper()
+	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: title, Client: webCaps()})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	ids := []string{res.Release.ID}
+	for _, a := range res.Alternates {
+		ids = append(ids, a.ID)
+	}
+	return ids
+}
+
+func TestRoutingPopularTitlePrefersCachedDebridAndHedgesUsenet(t *testing.T) {
+	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	svc.SetSourceSignals(cachedSet{hashA: true})
+	if got := resolveOrder(t, svc, routingTitle(true)); got[0] != "torrent" || got[1] != "usenet" {
+		t.Fatalf("order %v, want cached torrent first and usenet as the hedge", got)
+	}
+	tr := svc.Traces()[0]
+	if !strings.Contains(tr.Routing, "debrid first: popular title") {
+		t.Fatalf("routing %q", tr.Routing)
+	}
+	notes := map[string]string{}
+	for _, c := range tr.Candidates {
+		notes[c.ReleaseID] = c.Route
+	}
+	if !strings.Contains(notes["torrent"], "cached on debrid") || !strings.HasPrefix(notes["usenet"], "hedge") {
+		t.Fatalf("route notes %v", notes)
+	}
+}
+
+func TestRoutingLeavesOrderAloneWithoutReason(t *testing.T) {
+	for name, tc := range map[string]struct {
+		popular bool
+		cached  bool
+	}{
+		"unpopular, no measurements":   {popular: false, cached: true},
+		"popular but not known cached": {popular: true, cached: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+			svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+			svc.SetSourceSignals(cachedSet{hashA: tc.cached})
+			if got := resolveOrder(t, svc, routingTitle(tc.popular)); got[0] != "usenet" {
+				t.Fatalf("order %v, want the higher-scored usenet release first", got)
+			}
+		})
+	}
+}
+
+func TestRoutingNeverTradesQualityForSpeed(t *testing.T) {
+	// The cached torrent is 720p; the Usenet leader is 1080p.
+	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.720p.BluRay.x264-OTHER")}
+	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	svc.SetSourceSignals(cachedSet{hashA: true})
+	cfg := testCfg()
+	cfg.Resolver.SourcePreference = PreferDebrid
+	svc.UpdateConfig(cfg)
+	if got := resolveOrder(t, svc, routingTitle(true)); got[0] != "usenet" {
+		t.Fatalf("order %v: a lower quality tier must not lead for speed", got)
+	}
+}
+
+func TestRoutingFollowsMeasuredStartup(t *testing.T) {
+	feed := func(svc *Service, usenet, debrid time.Duration) {
+		for i := 0; i < minStartupSamples; i++ {
+			svc.noteStartup(core.Release{}, usenet)
+			svc.noteStartup(core.Release{Protocol: core.ProtocolTorrent}, debrid)
+		}
+	}
+	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+
+	// Debrid measured faster: wins even for an unpopular title.
+	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	svc.SetSourceSignals(cachedSet{hashA: true})
+	feed(svc, 2*time.Second, 300*time.Millisecond)
+	if got := resolveOrder(t, svc, routingTitle(false)); got[0] != "torrent" {
+		t.Fatalf("order %v, want measured-faster debrid first", got)
+	}
+	if r := svc.Traces()[0].Routing; !strings.Contains(r, "measured debrid") {
+		t.Fatalf("routing %q", r)
+	}
+
+	// Usenet measured faster: keeps the lead even for a popular title.
+	svc = New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	svc.SetSourceSignals(cachedSet{hashA: true})
+	feed(svc, 300*time.Millisecond, 2*time.Second)
+	if got := resolveOrder(t, svc, routingTitle(true)); got[0] != "usenet" {
+		t.Fatalf("order %v, want measured-faster usenet first", got)
+	}
+
+	// Too close to call: popularity decides.
+	svc = New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	svc.SetSourceSignals(cachedSet{hashA: true})
+	feed(svc, 500*time.Millisecond, 400*time.Millisecond)
+	if got := resolveOrder(t, svc, routingTitle(true)); got[0] != "torrent" {
+		t.Fatalf("order %v, want popularity to break a near tie", got)
+	}
+}
+
+func TestRoutingOwnerPreferenceUsenet(t *testing.T) {
+	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+	cfg := testCfg()
+	cfg.Resolver.SourcePreference = PreferUsenet
+	svc := New(idx, fakeHealth{}, nil, cfg, Options{})
+	svc.SetSourceSignals(cachedSet{hashA: true})
+	for i := 0; i < minStartupSamples; i++ {
+		svc.noteStartup(core.Release{Protocol: core.ProtocolTorrent}, 100*time.Millisecond)
+		svc.noteStartup(core.Release{}, 3*time.Second)
+	}
+	if got := resolveOrder(t, svc, routingTitle(true)); got[0] != "usenet" || got[1] != "torrent" {
+		t.Fatalf("order %v, want usenet first with the torrent as hedge", got)
+	}
+}
+
+func TestStartupMeasuredFromRealChecksOnly(t *testing.T) {
+	idx := &fakeIndexer{releases: movieReleases()}
+	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	ctx := context.Background()
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: webCaps()}); err != nil {
+		t.Fatal(err)
+	}
+	st := svc.SourceStartups()
+	if len(st) != 1 || st[0].Protocol != core.ProtocolUsenet || st[0].Samples != 1 {
+		t.Fatalf("startups %+v", st)
+	}
+	// The second resolution is answered by the verified cache: no sample.
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: webCaps(), Exclude: []string{"nope"}}); err != nil {
+		t.Fatal(err)
+	}
+	if st := svc.SourceStartups(); st[0].Samples != 1 {
+		t.Fatalf("verified-cache answer was measured: %+v", st)
+	}
+}

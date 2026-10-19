@@ -40,7 +40,14 @@ export default function Releases() {
           endpoint="resolver"
           groups={S.RESOLVER}
           label="Release selection"
-          omit={["optimisticStart", "healthRace", "customFormats", "customFormatScores"]}
+          omit={[
+            "optimisticStart",
+            "healthRace",
+            "sourcePreference",
+            "sourceScoreMargin",
+            "customFormats",
+            "customFormatScores",
+          ]}
         />
       ) : null}
       {tab === "scoring" ? <ScoringTab /> : null}

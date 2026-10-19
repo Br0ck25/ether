@@ -10,9 +10,48 @@ cache folder and budget. Configure quality profiles for your network and remote
 connections. Ether supplies no media, provider accounts or indexer access.
 
 You can also stream torrents that your own debrid account (Real-Debrid, TorBox,
-AllDebrid or Premiumize) already holds. Add Torznab indexers under **Sources ›
-Indexers** and your debrid account under **Sources › Debrid**. See
-[debrid.md](debrid.md) for how it works.
+AllDebrid or Premiumize) already holds.
+
+## Stream torrents through debrid
+
+1. Under **Sources › Indexers**, add a Torznab indexer and set its protocol to
+   **Torrent (Torznab)**, or import torrent indexers from Prowlarr.
+2. Under **Sources › Debrid**, add your debrid account with its API key and use
+   **Test** to check it. Lower priority numbers are tried first.
+
+Without an enabled debrid account, torrent results are ignored. Ether streams
+the file over HTTPS from your debrid service; it never joins a torrent swarm and
+never downloads a whole file.
+
+- **Cached torrents only** (on by default): a torrent is used only if your
+  service can serve it now, so playback never waits for a download.
+- **Remove uncached torrents** (on by default): torrents Ether added that turn
+  out not to be cached are removed again. Cached torrents stay on your account,
+  so the next play of that title starts straight away.
+- **Season packs:** for an episode, Ether streams that episode's file from a
+  torrent season pack. Pins, blocks and health checks apply to the episode.
+
+Torrents whose video is inside RAR archives are skipped. A result that only
+offers a `.torrent` link costs one indexer download to read its hash.
+
+### Which source plays
+
+Ether never trades quality for speed. Among releases of the same quality, it
+puts the source that starts faster first. Set this under **Releases › Playback
+start › Source for equal-quality releases**:
+
+- **Fastest (automatic):** once both sources have enough plays, the one with
+  the lower measured start time goes first. Until then, popular titles use
+  cached debrid first. The measured times are shown beside the setting.
+- **Prefer Usenet** or **Prefer debrid:** always try that source first.
+
+The best release from the other source is checked at the same time, and both
+remain available for failover. **Releases › Search** and **History** show when
+routing moved a release, and why.
+
+The debrid integrations were built from each service's public API
+documentation and tested against simulated services, not live accounts. If a
+service misbehaves, check **Logs** and its status on **Sources › Debrid**.
 
 ## Share with viewers
 

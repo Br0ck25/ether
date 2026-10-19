@@ -159,6 +159,7 @@ function verdict(r: ConsoleRelease) {
       <Badge variant={r.winner ? "success" : "secondary"}>
         {r.winner ? "Plays first" : `Fallback #${r.rank ?? "?"}`}
       </Badge>
+      {r.route ? <span className="mt-1 block text-[11px] text-fg-subtle">{r.route}</span> : null}
       {r.compatibility ? (
         <span className="mt-1 block text-[11px] text-fg-subtle">{r.compatibility}</span>
       ) : null}

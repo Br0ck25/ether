@@ -304,6 +304,8 @@ type ConsoleRelease struct {
 	BlockReason string        `json:"blockReason,omitempty"`
 	Pinned      bool          `json:"pinned,omitempty"`
 	Health      *HealthResult `json:"health,omitempty"`
+	// Route explains a move by source routing (routing.go).
+	Route string `json:"route,omitempty"`
 }
 
 // ConsoleSearch is an interactive search answer.
@@ -314,7 +316,8 @@ type ConsoleSearch struct {
 	Cached     bool             `json:"cached"`
 	SearchedAt time.Time        `json:"searchedAt"`
 	Duration   time.Duration    `json:"duration"`
-	Winner     string           `json:"winner,omitempty"` // release Resolve would try first
+	Winner     string           `json:"winner,omitempty"`  // release Resolve would try first
+	Routing    string           `json:"routing,omitempty"` // source-routing decision, if any
 	Pin        *Pin             `json:"pin,omitempty"`
 	PinNote    string           `json:"pinNote,omitempty"`
 	Releases   []ConsoleRelease `json:"releases"`
@@ -369,12 +372,13 @@ func (s *Service) SearchReleases(ctx context.Context, t *core.Title, opts Search
 	if len(cands) > 0 {
 		out.Winner = cands[0].rel.ID
 	}
+	out.Routing = trace.Routing
 	// rankCandidates writes one trace row per result, in result order.
 	for i, ct := range trace.Candidates {
 		rel := results[i]
 		cr := ConsoleRelease{Release: rel, Score: ct.Score, CustomFormats: ct.CustomFormats,
 			Compatibility: ct.CompatibilityReason, Rejected: ct.Rejected, Reason: ct.Reason,
-			Rank: rank[rel.ID], Winner: rel.ID == out.Winner && !ct.Rejected, Pinned: ct.Pinned}
+			Rank: rank[rel.ID], Winner: rel.ID == out.Winner && !ct.Rejected, Pinned: ct.Pinned, Route: ct.Route}
 		// Rejected releases are scored too, so the owner can compare.
 		if sc, err := s.scoreRelease(rel, profile, caps, t); err == nil {
 			cr.FormatScore = sc.format

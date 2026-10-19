@@ -162,6 +162,14 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	if cfg.Resolver.HealthSamples < 0 {
 		v.add("resolver.healthSamples", "must be >= 0")
 	}
+	switch cfg.Resolver.SourcePreference {
+	case "", "auto", "usenet", "debrid":
+	default:
+		v.add("resolver.sourcePreference", `must be "auto", "usenet" or "debrid"`)
+	}
+	if cfg.Resolver.SourceScoreMargin < 0 {
+		v.add("resolver.sourceScoreMargin", "must be >= 0")
+	}
 	if cfg.Resolver.MaxCandidates < 0 {
 		v.add("resolver.maxCandidates", "must be >= 0")
 	}

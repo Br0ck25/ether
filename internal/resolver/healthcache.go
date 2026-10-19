@@ -20,17 +20,24 @@ CREATE TABLE resolver_verified (
 // that was fine an hour ago almost always still is; if it isn't, playback
 // fails over mid-stream and MarkBad drops it from the cache.
 func (s *Service) checkHealth(ctx context.Context, releaseID string, nzb []byte) (bool, error) {
+	ok, _, err := s.checkHealthCached(ctx, releaseID, nzb)
+	return ok, err
+}
+
+// checkHealthCached is checkHealth that also reports whether the answer
+// came from the verified cache rather than a check that just ran.
+func (s *Service) checkHealthCached(ctx context.Context, releaseID string, nzb []byte) (ok, cached bool, err error) {
 	if s.health == nil {
-		return true, nil
+		return true, true, nil
 	}
 	if s.recentlyVerified(ctx, releaseID) {
-		return true, nil
+		return true, true, nil
 	}
-	ok, err := s.health.Check(ctx, nzb)
+	ok, err = s.health.Check(ctx, nzb)
 	if ok && err == nil {
 		s.markVerified(ctx, releaseID)
 	}
-	return ok, err
+	return ok, false, err
 }
 
 // markVerified records a passed health check for the verified cache.

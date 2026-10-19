@@ -62,6 +62,7 @@ function normalizeTrace(t: Record<string, unknown>, i: number): ResolverTrace {
           : undefined,
         compatibilityReason:
           typeof c.compatibilityReason === "string" ? c.compatibilityReason : undefined,
+        route: typeof c.route === "string" ? c.route : undefined,
       })),
     winner: typeof t.winner === "string" ? t.winner : undefined,
     err: typeof t.err === "string" ? t.err : typeof t.error === "string" ? t.error : undefined,
@@ -70,6 +71,7 @@ function normalizeTrace(t: Record<string, unknown>, i: number): ResolverTrace {
     pinned: typeof t.pinned === "string" ? t.pinned : undefined,
     pinStatus: typeof t.pinStatus === "string" ? t.pinStatus : undefined,
     omitted: Number(t.omitted ?? 0) || undefined,
+    routing: typeof t.routing === "string" ? t.routing : undefined,
   };
 }
 
@@ -297,6 +299,9 @@ export function TraceDetail({ trace, titleKey }: { trace: ResolverTrace; titleKe
         {flags({ failover: trace.failover, pinned: trace.pinStatus === "used" })}
         {trace.err ? <span className="text-sm text-danger">{trace.err}</span> : null}
       </div>
+      {trace.routing ? (
+        <p className="text-sm text-fg-muted">Source routing: {trace.routing}</p>
+      ) : null}
       {trace.pinStatus && trace.pinStatus !== "used" ? (
         <p className="text-sm text-fg-muted">
           <PinIcon size={13} className="mr-1 inline" aria-hidden />
@@ -377,6 +382,9 @@ export function TraceDetail({ trace, titleKey }: { trace: ResolverTrace; titleKe
                     <span className="mt-1 block text-[11px] text-fg-subtle">
                       {c.compatibilityReason}
                     </span>
+                  ) : null}
+                  {c.route ? (
+                    <span className="mt-1 block text-[11px] text-fg-subtle">{c.route}</span>
                   ) : null}
                 </TableCell>
               </TableRow>

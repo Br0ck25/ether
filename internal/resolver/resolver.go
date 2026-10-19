@@ -48,14 +48,17 @@ type CandidateTrace struct {
 	Score               float64       `json:"score"`
 	CustomFormats       []FormatMatch `json:"customFormats,omitempty"`
 	CompatibilityReason string        `json:"compatibilityReason,omitempty"`
-	Rejected            bool          `json:"rejected"`
-	Reason              string        `json:"reason,omitempty"`
-	Size                int64         `json:"size,omitempty"`
-	Pinned              bool          `json:"pinned,omitempty"` // the owner's pin for the title
-	HealthChecked       bool          `json:"healthChecked"`
-	Healthy             bool          `json:"healthy"`
-	FetchDuration       time.Duration `json:"fetchDuration"`
-	HealthDuration      time.Duration `json:"healthDuration"`
+	// Route explains a move by source routing (routing.go), e.g. "faster
+	// source: cached on debrid".
+	Route          string        `json:"route,omitempty"`
+	Rejected       bool          `json:"rejected"`
+	Reason         string        `json:"reason,omitempty"`
+	Size           int64         `json:"size,omitempty"`
+	Pinned         bool          `json:"pinned,omitempty"` // the owner's pin for the title
+	HealthChecked  bool          `json:"healthChecked"`
+	Healthy        bool          `json:"healthy"`
+	FetchDuration  time.Duration `json:"fetchDuration"`
+	HealthDuration time.Duration `json:"healthDuration"`
 }
 
 // Trace is one recorded resolution attempt, for the admin UI.
@@ -76,6 +79,8 @@ type Trace struct {
 	PinStatus string `json:"pinStatus,omitempty"`
 	// Omitted counts candidates dropped from a persisted trace.
 	Omitted int `json:"omitted,omitempty"`
+	// Routing summarises the source-routing decision (routing.go).
+	Routing string `json:"routing,omitempty"`
 }
 
 type searchCacheEntry struct {
@@ -124,6 +129,8 @@ type Service struct {
 
 	flightMu sync.Mutex
 	flights  map[string]*inflight
+
+	route routingState // source routing: startup measurements and signals
 
 	con consoleState // pins, release memory, health results, history (console.go)
 }
@@ -619,6 +626,7 @@ func (s *Service) rankCandidates(req core.ResolveRequest, sreq core.SearchReques
 		cands = append(cands, candidate{rel: rel, trace: tr})
 	}
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rel.Score > cands[j].rel.Score })
+	cands = s.routeSources(cands, req.Title, trace)
 	return cands, clientRejected, nil
 }
 

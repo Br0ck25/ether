@@ -161,6 +161,16 @@ type Resolver struct {
 	MaxCandidates        int                 `json:"maxCandidates"`
 	BlockedGroups        []string            `json:"blockedGroups"`
 	BlockedTerms         []string            `json:"blockedTerms"`
+	// SourcePreference orders releases of equivalent quality by source:
+	// "auto" (or empty) puts the source that measurably starts faster
+	// first, and cached debrid first for popular titles until both
+	// sources have measurements; "usenet" or "debrid" always prefer one.
+	// Quality is never traded for speed (see resolver/routing.go).
+	SourcePreference string `json:"sourcePreference,omitempty"`
+	// SourceScoreMargin is how far below the leader's score a release of
+	// the same quality tier may be and still be moved first for its
+	// source (0 = 25).
+	SourceScoreMargin float64 `json:"sourceScoreMargin,omitempty"`
 }
 
 type Quality struct {

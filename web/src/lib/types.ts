@@ -303,6 +303,8 @@ export interface CandidateTrace {
   pinned?: boolean;
   customFormats?: { id: string; name: string; score: number }[] | null;
   compatibilityReason?: string;
+  /** Why source routing moved this candidate. */
+  route?: string;
 }
 export interface ResolverTrace {
   titleKey: string;
@@ -320,4 +322,15 @@ export interface ResolverTrace {
   pinStatus?: string;
   /** Candidates left out of a stored trace. */
   omitted?: number;
+  /** The source-routing decision, e.g. "debrid first: popular title". */
+  routing?: string;
+}
+
+/** A source's measured startup (NZB or payload fetch plus a real health check). */
+export interface SourceStartup {
+  protocol: "usenet" | "torrent";
+  /** Exponentially weighted average, nanoseconds. */
+  average: number;
+  last: number;
+  samples: number;
 }

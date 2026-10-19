@@ -32,6 +32,7 @@ import type {
   Indexer,
   LogEntry,
   SetupStatus,
+  SourceStartup,
   TestResult,
   UsenetProvider,
 } from "./types";
@@ -191,6 +192,9 @@ export const api = {
   dashboard: () => apiFetch<DashboardData>("/dashboard"),
   debridStatus: async () =>
     (await apiFetch<{ value: DebridStatus | null }>("/status/debrid")).value,
+  sourceStartup: async () =>
+    (await apiFetch<{ value: { startup: SourceStartup[] } | null }>("/status/sources")).value
+      ?.startup ?? [],
   disk: (path: string) => apiFetch<DiskInfo>(`/disk${qs({ path })}`),
   logs: (params: { limit?: number; level?: string; q?: string }) =>
     apiFetch<{ entries: LogEntry[]; total: number }>(`/logs${qs(params)}`),
