@@ -108,7 +108,7 @@ func eventPlaylist(done []int, segDur time.Duration, container string, ended boo
 }
 
 // SegmentName is the default playlist URI of segment n: "00042.ts" or
-// "00042.m4s" (relative, so it resolves next to index.m3u8).
+// "00042.m4s" or "00042.mkv" (relative to index.m3u8).
 func SegmentName(n int, container string) string {
 	return segmentFile(n, segmentExt(container))
 }
@@ -123,7 +123,7 @@ func ParseSegmentName(name string) (int, bool) {
 		return InitSegment, true
 	}
 	base, ext, ok := strings.Cut(name, ".")
-	if !ok || (ext != "ts" && ext != "m4s") || base == "" {
+	if !ok || (ext != "ts" && ext != "m4s" && ext != "mkv") || base == "" {
 		return 0, false
 	}
 	n, err := strconv.Atoi(base)

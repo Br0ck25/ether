@@ -342,7 +342,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	}
 	if proto == core.ProtocolDASH {
 		d.Container = ContainerFMP4
-	} else if d.Container != ContainerFMP4 && d.Container != ContainerMPEGTS {
+	} else if d.Container != ContainerFMP4 && d.Container != ContainerMPEGTS && d.Container != ContainerMatroska {
 		d.Container = segmentContainer(d.VideoCodec, d.AudioCodec)
 	}
 	segDur := req.SegmentDuration
