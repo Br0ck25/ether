@@ -24,6 +24,27 @@ completions and ratings inform each viewer's taste independently. Continue
 Watching reflects current state. Optional Trakt and model integrations supplement
 the experience; unavailable services must not prevent browsing.
 
+Detail pages can offer a version picker of distinct candidate releases (the
+automatic choice first, then quality tiers and editions such as an extended or
+director's cut) and a per-viewer decision header combining match, the strongest
+taste reason and the local finish time. Post-play suggestions rank by taste fit,
+similarity to what just finished and runtime fit for the hour. Titles a viewer
+opens without playing briefly lift related genres, decades and people on Home and
+section rows; the signal is in memory only and fades over about an hour.
+
+Search also understands descriptive queries such as decades, genres, runtimes,
+ratings, languages, people and studios. It returns matching titles together with
+a generated collection the viewer can open as a grid; rating that collection saves
+it as a personal collection. Generated collections are viewer-owned, in memory and
+expire. Plain title searches behave as before.
+
+When the owner enables extras, trailers appear as extras, and before a feature as
+Cinema Trailers, only when a source can play them: an owner-configured resolver
+for TMDB trailer videos, or a local trailer file. While a trailer plays, the
+feature is warmed so it can start without a resolution delay. Preview thumbnails for scrubbing are generated progressively
+during playback. Permitted viewers can download titles for offline viewing; the
+Download button also depends on plex.tv entitlements that Ether does not control.
+
 ## Owner experience
 
 The browser UI groups related controls into tabs and subtabs. Lists and previews
@@ -70,16 +91,22 @@ invalid media from a temporary provider outage. Timeouts, network errors and
 missing configuration do not permanently blacklist releases or hide titles for a
 long cooling-off period.
 
-Primary NNTP pools retain a small warm connection floor. Idle connections receive
-keepalive commands; excess connections expire. Reads have a short inactivity
+Primary NNTP pools keep an owner-configurable warm connection floor (two per
+non-backfill provider by default). The floor is restored in the background, with
+backoff and respect for the circuit breaker, when connections are dropped. Idle
+connections receive keepalive commands; excess connections expire. Reads have a short inactivity
 deadline in addition to their absolute operation deadline. Healthy read progress
 renews the inactivity window. Repeated connection or command failures open the
 provider circuit breaker, allowing another provider to answer promptly.
 
-Detail-page preparation caches a resolution and media probe for ten minutes,
-keyed by viewer, client, title and selected quality profile. Playback rechecks
-that the selected profile still matches. Health checks inspect archive headers
-and sample actual article bodies as well as article existence.
+Detail-page preparation caches a resolution, media probe and keyframe index for
+ten minutes per viewer, client and title. Play reuses it when the release is still
+acceptable for the quality profile and capabilities of the actual Play request.
+A trailer before a feature, or the end of a film, may warm the next title under a
+separate bounded budget at background priority. Warm-ups never reserve a stream
+or write history. Health checks inspect archive headers, read the yEnc headers of
+mid-file article bodies as well as testing article existence, and stop as soon as
+one sampled article is confirmed missing on every provider.
 
 The media decision chooses direct play, copy-only remux, or transcoding. HLS and
 DASH use output containers appropriate to the selected codecs. Apple HLS includes
@@ -89,18 +116,40 @@ Matroska receives independent Matroska fragments; direct-play support for MKV
 alone does not enable that transport. Hardware encoding is used when available;
 software encoding remains a fallback.
 
+HLS and DASH sessions advertise lower renditions sharing one segment timeline;
+a lower rendition is encoded only when the client switches to it. Copy sessions
+may open with short, quickly decoded segments and continue as stream copy after a
+discontinuity. Bitrate-capped transcodes use constant-quality encoding bounded by
+a VBV buffer steered by measured delivery goodput. An optional governor can clamp
+upcoming copy segments whose bitrate exceeds the client's measured goodput.
+
+Offline downloads use the Plex download queue. A compact, mobile-compatible SDR
+release of at most 1080p is stream-copied to a temporary faststart MP4, served
+with byte ranges while the viewer may still see the title, and deleted when it is
+released or expires. Codecs that cannot be copied fail the download decision;
+there is no offline transcoding.
+
 Missing or corrupt articles, stalled reads, and premature source termination can
 trigger bounded failover attempts. HLS/DASH restart the input at the mapped media
 time, giving the player new container headers. Non-spliceable direct-play media
-such as MKV and MP4 restrict replacement candidates to the original file size;
+such as MKV and MP4 prefer replacement candidates of the original file size;
 size equality is a conservative filter and does not establish byte identity.
-Arbitrary different encodes are not safe to splice into an existing byte-range
-response. Copy-only streaming is preferred for supported on-demand clients.
+Arbitrary different encodes are not spliced into an existing byte-range response:
+without a same-size candidate, the session switches release and the client's next
+request is served as copy-only remux from the mapped time. Copy-only streaming is
+preferred for supported on-demand clients. A source fetched slower than real time
+during HLS or DASH playback can fail over to a lower-bitrate acceptable candidate;
+the slow release is excluded for that session but not marked bad.
 
-MP4 sync-sample tables and Matroska cues provide bounded keyframe time indexes
-when available. Without a usable index, byte/time mapping is approximate.
-Different edits or cuts can still produce a timestamp discontinuity during
-failover.
+MP4 sync-sample tables, fragmented-MP4 segment indexes and Matroska cues provide
+bounded keyframe time indexes when available. They are read in the background
+after playback starts and kept with resume records. Without a usable index,
+byte/time mapping is approximate. When subtitle timing is available for both
+releases, failover and intro/credits markers align timestamps by dialogue,
+accounting for offsets, PAL speed-up and inserted or removed scenes; otherwise
+duration-based alignment applies. Credits markers end before a detected mid- or
+post-credits scene. Different cuts without usable subtitle timing can still
+produce a timestamp discontinuity.
 
 ## Sources, history and live television
 
