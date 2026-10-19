@@ -175,6 +175,7 @@ func buildCodecArgs(s runSpec) []string {
 			}
 		} else {
 			args = append(args, vp.encodeArgs...)
+			args = append(args, videotoolboxCaptionArgs(v, vp.encodeArgs)...)
 			args = append(args, "-force_key_frames", "expr:gte(t,n_forced*"+secs(segDur)+")")
 		}
 	}
