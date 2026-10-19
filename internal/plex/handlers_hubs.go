@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -239,11 +240,56 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{}))
 		}
 	}
+	if len(sections) == 0 {
+		if h, ok := s.playlistsHub(ctx, pr, count); ok {
+			mc.Hub = append(mc.Hub, h)
+		}
+	}
 	if ids := q["identifier"]; len(ids) > 0 {
 		mc.Hub = filterHubs(mc.Hub, ids)
 	}
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
+}
+
+// playlistsHub is PMS's "Recent Playlists" Home row (home.playlists): the
+// user's playlists, most recently updated first. Omitted when there are
+// none.
+func (s *Server) playlistsHub(ctx context.Context, pr *Request, count int) (model.Hub, bool) {
+	if s.d.Playlists == nil || pr.User == nil {
+		return model.Hub{}, false
+	}
+	pls, err := s.d.Playlists.List(ctx, pr.User.ID)
+	if err != nil {
+		s.log.Warn("playlists hub", "err", err)
+		return model.Hub{}, false
+	}
+	if len(pls) == 0 {
+		return model.Hub{}, false
+	}
+	sort.SliceStable(pls, func(i, j int) bool { return pls[i].UpdatedAt.After(pls[j].UpdatedAt) })
+	more := len(pls) > count
+	if more {
+		pls = pls[:count]
+	}
+	h := model.Hub{
+		Key:           "/playlists/all?type=15&sort=lastViewedAt:desc&playlistType=video,audio",
+		Title:         "Recent Playlists",
+		Type:          "playlist",
+		HubIdentifier: "home.playlists",
+		Context:       "hub.home.playlists",
+		More:          more,
+		Style:         "shelf",
+		Promoted:      model.Ptr(true),
+	}
+	keys := make([]string, 0, len(pls))
+	for i := range pls {
+		h.Metadata = append(h.Metadata, s.playlistMetadata(ctx, &pls[i]))
+		keys = append(keys, pls[i].Key.String())
+	}
+	h.Size = len(h.Metadata)
+	h.HubKey = "/library/metadata/" + strings.Join(keys, ",")
+	return h, true
 }
 
 func filterHubs(hs []model.Hub, ids []string) []model.Hub {

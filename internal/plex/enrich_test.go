@@ -19,6 +19,24 @@ import (
 	"github.com/ether-media/ether/internal/store"
 )
 
+func TestPlaylistsHomeHub(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	if strings.Contains(f.get(t, "/hubs").Body.String(), "home.playlists") {
+		t.Fatal("no playlists hub without playlists")
+	}
+	pl, _ := f.pls.Create(context.Background(), ownerUser.ID, "Heist Night", []core.RatingKey{fightClub.Key})
+	body := f.get(t, "/hubs").Body.String()
+	for _, want := range []string{`hubIdentifier="home.playlists"`, `context="hub.home.playlists"`, `type="playlist"`, `hubKey="/library/metadata/` + pl.Key.String() + `"`, `<Playlist ratingKey="` + pl.Key.String() + `"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("hubs lack %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(f.get(t, "/hubs?contentDirectoryID=1").Body.String(), "home.playlists") {
+		t.Error("section-filtered home hubs must not include playlists")
+	}
+}
+
 func TestSlugify(t *testing.T) {
 	for in, want := range map[string]string{
 		"The 'Burbs":             "the-burbs",

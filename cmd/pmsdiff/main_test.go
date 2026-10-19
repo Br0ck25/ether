@@ -7,12 +7,33 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ether-media/ether/internal/pmsconform"
 )
+
+func TestFilterReport(t *testing.T) {
+	r := pmsconform.Report{Differences: []pmsconform.Difference{
+		{Path: "/MediaContainer/Video/@contentRatingAge", Kind: pmsconform.KindMissing, Blocking: true},
+		{Path: "/MediaContainer/Video/@slug", Kind: pmsconform.KindMissing, Blocking: true},
+		{Path: "$status", Kind: pmsconform.KindStatus, Blocking: true},
+	}}
+	got := filterReport(r, regexp.MustCompile(`(@|/)contentRatingAge$|status$`))
+	if len(got.Differences) != 2 || got.Differences[0].Path != "/MediaContainer/Video/@slug" || got.Differences[1].Kind != pmsconform.KindStatus {
+		t.Fatalf("filtered: %+v", got.Differences)
+	}
+	// The shipped data-gap list must compile.
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "pms", "data-gaps.regexp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := regexp.Compile(strings.TrimSpace(string(b))); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestCorpusFilter(t *testing.T) {
 	all := corpus("")

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ func run(args []string) error {
 	timeout := f.Duration("timeout", 90*time.Second, "per-request timeout")
 	concurrency := f.Int("concurrency", 2, "maximum concurrent requests")
 	only := f.String("only", "", "only requests whose path contains this substring (record keeps the saved discovery IDs)")
+	ignore := f.String("ignore", "", "drop differences whose schema path matches this regexp (known data gaps)")
 	if e := f.Parse(args[1:]); e != nil {
 		return e
 	}
@@ -82,12 +84,37 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if *ignore != "" {
+		re, e := regexp.Compile(*ignore)
+		if e != nil {
+			return fmt.Errorf("--ignore: %w", e)
+		}
+		report = filterReport(report, re)
+	}
 	emit(os.Stdout, report, *format, *summary, *values)
 	if n := report.Blocking(); n > 0 {
 		return fmt.Errorf("report contains %d errors or blocking differences", n)
 	}
 	return nil
 }
+
+// filterReport drops schema differences whose path matches re (request
+// errors, status and header differences are always kept).
+func filterReport(r pmsconform.Report, re *regexp.Regexp) pmsconform.Report {
+	kept := r.Differences[:0:0]
+	for _, d := range r.Differences {
+		switch d.Kind {
+		case pmsconform.KindMissing, pmsconform.KindExtra, pmsconform.KindType, pmsconform.KindValue:
+			if re.MatchString(d.Path) {
+				continue
+			}
+		}
+		kept = append(kept, d)
+	}
+	r.Differences = kept
+	return r
+}
+
 func profiles(sel string) []string {
 	if sel == "all" || sel == "" {
 		return []string{"web", "ios", "appletv"}
