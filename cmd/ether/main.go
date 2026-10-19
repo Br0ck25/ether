@@ -4,6 +4,7 @@
 //	ether                         run (in the foreground, or under the OS service manager)
 //	ether --spike movie.mp4 ...   run the spike: serve local files as a library
 //	ether service install|uninstall|start|stop|restart|status [--data-dir DIR]
+//	ether cluster init|token|join ...  (see cluster.go)
 //	ether version
 package main
 
@@ -38,6 +39,9 @@ func main() {
 	logLevel := fs.String("log-level", "", "debug, info, warn or error (default from config)")
 
 	_ = fs.Parse(os.Args[1:])
+	if fs.Arg(0) == "cluster" {
+		os.Exit(runCluster(fs.Args()[1:], *dataDir, os.Stdout, os.Stderr))
+	}
 	if fs.Arg(0) == "service" {
 		// `ether [flags] service <cmd> [flags]`: flags may follow the
 		// subcommand, e.g. `ether service install --data-dir X`.

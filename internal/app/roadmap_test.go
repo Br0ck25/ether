@@ -28,7 +28,7 @@ func TestRoadmapOwnerAPIsAreWiredAndPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	paths := []string{"/stats/summary", "/notifications/", "/livetv/channels", "/adoption/libraries/", "/adoption/backups/", "/safety/invites/", "/stream-preferences/0", "/safety/policies/1", "/discovery/settings", "/discovery/overlays/settings", "/discovery/ratings/settings", "/subtitle-sync/", "/playback/policy", "/status"}
+	paths := []string{"/stats/summary", "/notifications/", "/livetv/channels", "/adoption/libraries/", "/adoption/backups/", "/safety/invites/", "/stream-preferences/0", "/safety/policies/1", "/discovery/settings", "/discovery/overlays/settings", "/discovery/ratings/settings", "/subtitle-sync/", "/playback/policy", "/status", "/cluster/"}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			r := httptest.NewRequest("GET", "http://localhost/ether/api"+path, nil)
