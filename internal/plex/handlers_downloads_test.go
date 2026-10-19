@@ -397,6 +397,9 @@ func TestDownloadsPermissionAndAllowSync(t *testing.T) {
 	if mc := decodeContainer(t, rec); mc["allowSync"] != true {
 		t.Fatalf("root allowSync = %v", mc["allowSync"])
 	}
+	if mc := decodeContainer(t, rec); mc["sync"] != true || mc["offlineTranscode"] != float64(1) {
+		t.Fatalf("root download capabilities = sync:%v offlineTranscode:%v", mc["sync"], mc["offlineTranscode"])
+	}
 	rec = f.do(t, http.MethodGet, "/library/sections", ownerToken, nil)
 	if !strings.Contains(rec.Body.String(), `"allowSync":true`) {
 		t.Fatalf("sections missing allowSync true: %s", rec.Body.String())
@@ -421,6 +424,9 @@ func TestDownloadsDisabledKeepsAllowSyncOff(t *testing.T) {
 	rec := f.do(t, http.MethodGet, "/", ownerToken, nil)
 	if mc := decodeContainer(t, rec); mc["allowSync"] != false {
 		t.Fatalf("root allowSync = %v, want false", mc["allowSync"])
+	}
+	if mc := decodeContainer(t, rec); mc["sync"] != false || mc["offlineTranscode"] != float64(0) {
+		t.Fatalf("disabled root download capabilities = sync:%v offlineTranscode:%v", mc["sync"], mc["offlineTranscode"])
 	}
 	rec = f.do(t, http.MethodPost, "/downloadQueue", ownerToken, nil)
 	if rec.Code != http.StatusNotFound {

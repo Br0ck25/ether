@@ -37,6 +37,10 @@ func (s *Server) serverInfoAttrs(providers bool) []model.Attr {
 		}
 	}
 	canTranscode := s.d.Transcoder != nil
+	offlineTranscode := 0
+	if s.downloadsEnabled() {
+		offlineTranscode = 1
+	}
 	attrs := []model.Attr{
 		model.A("allowCameraUpload", false),
 		model.A("allowChannelAccess", false),
@@ -70,7 +74,7 @@ func (s *Server) serverInfoAttrs(providers bool) []model.Attr {
 		model.A("myPlexSigninState", signIn),
 		model.A("myPlexSubscription", id.MyPlexSubscription),
 		model.A("myPlexUsername", c.Plex.OwnerUsername),
-		model.A("offlineTranscode", 0),
+		model.A("offlineTranscode", offlineTranscode),
 		model.A("ownerFeatures", strings.Join(id.OwnerFeatures, ",")),
 		model.A("platform", id.Platform),
 		model.A("platformVersion", id.PlatformVersion),
@@ -79,7 +83,7 @@ func (s *Server) serverInfoAttrs(providers bool) []model.Attr {
 		model.A("readOnlyLibraries", false),
 		model.A("streamingBrainABRVersion", 3),
 		model.A("streamingBrainVersion", 2),
-		model.A("sync", false),
+		model.A("sync", s.downloadsEnabled()),
 		model.A("transcoderActiveVideoSessions", active),
 		model.A("transcoderAudio", canTranscode),
 		model.A("transcoderLyrics", false),
