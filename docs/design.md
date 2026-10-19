@@ -153,9 +153,13 @@ node never closes or alters another live node's sessions at startup.
 Nodes publish heartbeats with their addresses, capabilities and load. Session
 lists, stream limits and termination apply across the cluster. Cache
 invalidations, timeline updates and termination requests reach every node
-promptly. Usenet connection limits and indexer and metadata request budgets are
-account-wide, so the cluster divides them among live nodes and redistributes a
-departed node's share.
+promptly. Usenet connection limits, debrid provider concurrency and API
+budgets, and indexer and metadata request budgets are account-wide, so the
+cluster divides them among live nodes and redistributes a departed node's share.
+A rate-limit or authentication back-off observed by one node applies to all.
+Adding a torrent to a debrid account is claimed by one node, and a torrent is
+removed from the account only when no node is streaming from it. Owners are
+warned when nodes reach a provider from different public addresses.
 
 When a node fails, clients reconnect through another published connection.
 Playback resumes from the last reported position; an interrupted response is
