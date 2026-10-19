@@ -95,7 +95,7 @@ func TestAvailabilityIsHealthyReleasedViewerScopedAndOnce(t *testing.T) {
 		t.Fatalf("resolve/warm/notify %d/%d/%d", res.calls, eng.calls, note.calls)
 	}
 	h, e := s.Hubs(ctx, u, 12)
-	if e != nil || len(h) != 2 || h[0].Title != "Now available" || len(h[0].Items) != 1 || h[1].Items[0].Title != "Soon" {
+	if e != nil || len(h) != 1 || h[0].Title != "Now available" || len(h[0].Items) != 1 {
 		t.Fatalf("hubs %#v %v", h, e)
 	}
 	other, e := s.Items(ctx, &core.User{ID: 2})

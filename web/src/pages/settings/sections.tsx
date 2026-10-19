@@ -1,5 +1,9 @@
+import { SettingsRow } from "../../components/SettingsRow";
+import { Drawer } from "../../components/Drawer";
+import { useViewers } from "../../components/pickers";
+import { EditPanel } from "../../components/EditPanel";
 import {
-  Avatar, Badge, Button, Drawer, EmptyState, Input, PagedTable, SearchSelect, SettingsRow, SettingsSection, Switch,
+  Avatar, Badge, Button, EmptyState, Input, PagedTable, SearchSelect,  SettingsSection, Switch,
 } from "@braedonsaunders/appkit-ui";
 import { ArrowDown, ArrowUp, Plus, Trash2, Users } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -52,8 +56,8 @@ function OrderButtons({ label, i, n, onMove }: { label: string; i: number; n: nu
 
 // ---- Usenet -------------------------------------------------------------------------
 
-export function UsenetSection({ value, onChange, errors, tests, runTest, status, footer }: {
-  value: EtherConfig["usenet"]; onChange: (v: EtherConfig["usenet"]) => void; errors: Errors; tests: Record<string, TestState>; runTest: RunTest; status: unknown; footer: ReactNode;
+export function UsenetSection({ value, onChange, errors, tests, runTest, status, footer, onDiscard, onCommit }: {
+  value: EtherConfig["usenet"]; onChange: (v: EtherConfig["usenet"]) => void; errors: Errors; tests: Record<string, TestState>; runTest: RunTest; status: unknown; footer: ReactNode; onDiscard?: () => void; onCommit: (value: EtherConfig["usenet"]) => Promise<void>;
 }) {
   const providers = value.providers ?? [];
   const live = Array.isArray(status) ? status.filter(isPlainObject) : [];
@@ -70,12 +74,12 @@ export function UsenetSection({ value, onChange, errors, tests, runTest, status,
         const stat = live.find((s) => s.id === p.id);
         const name = p.name || p.host || `Provider ${i + 1}`;
         return (
-          <SettingsSection key={p.id || i} title={name} description={i === 0 ? "Tried first" : p.backfill ? "Backfill: only for articles missing elsewhere" : `Priority ${i + 1}`}
+          <EditPanel onDiscard={onDiscard} key={p.id} initialOpen={!p.host} title={name} description={i === 0 ? "Primary provider" : p.backfill ? "Backfill provider" : "Additional provider"} action="Edit provider" footer={<div className="flex justify-end gap-2">{footer}</div>}><SettingsSection key={p.id || i} title={name} description={i === 0 ? "Tried first" : p.backfill ? "Backfill: only for articles missing elsewhere" : `Priority ${i + 1}`}
             footer={<>
               <TestButton state={tests[p.id] ?? { status: "idle" }} onTest={() => runTest(p.id, () => api.testUsenet(p))} disabled={!p.host} />
               <span className="flex-1" />
               <OrderButtons label={name} i={i} n={providers.length} onMove={(d) => set(swap(providers, i, i + d))} />
-              <Button variant="ghost" size="sm" className="text-danger" onClick={() => set(providers.filter((_, j) => j !== i))}><Trash2 size={14} /> Remove</Button>
+              <Button variant="ghost" size="sm" className="text-danger" onClick={() => void onCommit({...value,providers:providers.filter((_,j)=>j!==i).map((p,priority)=>({...p,priority}))})}><Trash2 size={14} /> Remove</Button>
             </>}>
             {stat ? (
               <SettingsRow title="Live" description={`${Number(stat.activeConnections ?? 0)} of ${Number(stat.configuredConnections ?? p.connections)} connections busy${stat.bytes ? ` · ${formatBytes(stat.bytes)} fetched` : ""}`}
@@ -90,12 +94,11 @@ export function UsenetSection({ value, onChange, errors, tests, runTest, status,
             <NumRow label="Connections" value={p.connections} min={0} max={500} error={errors[`${f}.connections`]} help="Your plan's connection limit." onChange={(n) => set(providers.map((x, j) => (j === i ? { ...x, connections: n } : x)))} />
             <BoolRow label="Backfill only" value={p.backfill} help="Use for block accounts: only consulted when an article is missing elsewhere." onChange={(v) => set(providers.map((x, j) => (j === i ? { ...x, backfill: v } : x)))} />
             <BoolRow label="Enabled" value={p.enabled} onChange={(v) => set(providers.map((x, j) => (j === i ? { ...x, enabled: v } : x)))} />
-          </SettingsSection>
+          </SettingsSection></EditPanel>
         );
       })}
       <div className="flex items-center justify-between gap-2">
         <Button variant="outline" onClick={() => set([...providers, { id: newId("prov"), name: "", host: "", port: 563, tls: true, username: "", password: "", connections: 20, priority: providers.length, backfill: false, enabled: true }])}><Plus size={15} /> Add provider</Button>
-        <div className="flex gap-2">{footer}</div>
       </div>
     </>
   );
@@ -103,8 +106,8 @@ export function UsenetSection({ value, onChange, errors, tests, runTest, status,
 
 // ---- Indexers --------------------------------------------------------------------------
 
-export function IndexersSection({ value, onChange, errors, tests, runTest, status, footer }: {
-  value: Indexer[]; onChange: (v: Indexer[]) => void; errors: Errors; tests: Record<string, TestState>; runTest: RunTest; status: unknown; footer: ReactNode;
+export function IndexersSection({ value, onChange, errors, tests, runTest, status, footer, onDiscard, onCommit }: {
+  value: Indexer[]; onChange: (v: Indexer[]) => void; errors: Errors; tests: Record<string, TestState>; runTest: RunTest; status: unknown; footer: ReactNode; onDiscard?: () => void; onCommit: (value: EtherConfig["indexers"]) => Promise<void>;
 }) {
   const live = Array.isArray(status) ? status.filter(isPlainObject) : [];
   const set = (list: Indexer[]) => onChange(list.map((x, i) => ({ ...x, priority: i })));
@@ -121,12 +124,12 @@ export function IndexersSection({ value, onChange, errors, tests, runTest, statu
         const stat = live.find((s) => s.indexer === ix.name || s.id === ix.id);
         const used = Number(stat?.hitsUsed ?? 0);
         return (
-          <SettingsSection key={ix.id || i} title={name} description={i === 0 ? "Searched first" : `Priority ${i + 1}`}
+          <EditPanel onDiscard={onDiscard} key={ix.id} initialOpen={!ix.url} title={name} description={"Newznab indexer"} action="Edit indexer" footer={<div className="flex justify-end gap-2">{footer}</div>}><SettingsSection key={ix.id || i} title={name} description={i === 0 ? "Searched first" : `Priority ${i + 1}`}
             footer={<>
               <TestButton state={tests[ix.id] ?? { status: "idle" }} onTest={() => runTest(ix.id, () => api.testIndexer(ix))} disabled={!ix.url} />
               <span className="flex-1" />
               <OrderButtons label={name} i={i} n={value.length} onMove={(d) => set(swap(value, i, i + d))} />
-              <Button variant="ghost" size="sm" className="text-danger" onClick={() => set(value.filter((_, j) => j !== i))}><Trash2 size={14} /> Remove</Button>
+              <Button variant="ghost" size="sm" className="text-danger" onClick={() => void onCommit(value.filter((_,j)=>j!==i).map((ix,priority)=>({...ix,priority})))}><Trash2 size={14} /> Remove</Button>
             </>}>
             {stat && ix.dailyLimit > 0 ? (
               <SettingsRow stacked title="Searches today">
@@ -145,12 +148,11 @@ export function IndexersSection({ value, onChange, errors, tests, runTest, statu
               <ListInput numeric ariaLabel={`${name} TV categories`} value={ix.tvCategories} onChange={(v) => set(value.map((x, j) => (j === i ? { ...x, tvCategories: v.length ? (v as number[]) : null } : x)))} placeholder="5000, 5040" />
             </SettingsRow>
             <BoolRow label="Enabled" value={ix.enabled} onChange={(v) => set(value.map((x, j) => (j === i ? { ...x, enabled: v } : x)))} />
-          </SettingsSection>
+          </SettingsSection></EditPanel>
         );
       })}
       <div className="flex items-center justify-between gap-2">
         <Button variant="outline" onClick={() => set([...value, { id: newId("idx"), name: "", url: "", apiKey: "", dailyLimit: 0, dailyGrabs: 0, priority: value.length, enabled: true, movieCategories: null, tvCategories: null }])}><Plus size={15} /> Add indexer</Button>
-        <div className="flex gap-2">{footer}</div>
       </div>
     </>
   );
@@ -175,7 +177,8 @@ function PreferenceList({ label, all, value, onChange }: { label: string; all: s
   );
 }
 
-export function QualitySection({ value, onChange, errors, footer }: { value: EtherConfig["quality"]; onChange: (v: EtherConfig["quality"]) => void; errors: Errors; footer: ReactNode }) {
+export function QualitySection({ value, onChange, errors, footer, onDiscard, onCommit, view = "profiles" }: { value: EtherConfig["quality"]; onChange: (v: EtherConfig["quality"]) => void; errors: Errors; footer: ReactNode; onDiscard?: () => void; onCommit: (value: EtherConfig["quality"]) => Promise<void>; view?: "profiles" | "rules" | "defaults" }) {
+  const { viewers } = useViewers();
   const profiles = value.profiles ?? [];
   const rules = value.rules ?? [];
   const names = profiles.map((p) => ({ value: p.name, label: p.name }));
@@ -196,18 +199,18 @@ export function QualitySection({ value, onChange, errors, footer }: { value: Eth
   };
   return (
     <>
-      <SettingsSection title="Defaults" description="Which profile a client gets when no rule matches.">
+      {view === "defaults" && <EditPanel onDiscard={onDiscard} title="Default quality" description="The profile used on your network and when watching remotely." action="Edit defaults" summary={`${value.default || "Not selected"} locally · ${value.remote || value.default || "Not selected"} remotely`} footer={footer}><SettingsSection title="Defaults" description="Which profile a client gets when no rule matches.">
         <SettingsRow title="On your network" description={errors["quality.default"]} control={<div className="w-48"><SearchSelect value={value.default} onChange={(v) => onChange({ ...value, default: v })} options={names} ariaLabel="Default profile" searchable={false} /></div>} />
         <SettingsRow title="Remote" description={errors["quality.remote"]} control={<div className="w-48"><SearchSelect value={value.remote} onChange={(v) => onChange({ ...value, remote: v })} options={names} ariaLabel="Remote profile" searchable={false} /></div>} />
-      </SettingsSection>
+      </SettingsSection></EditPanel>}
 
-      <SettingsSection title="Rules" description="The first matching rule picks the profile. Match on the Plex product (e.g. “Plex for Apple TV”), platform, or a viewer.">
+      {view === "rules" && <EditPanel onDiscard={onDiscard} title="Client rules" description="The first matching rule chooses a quality profile. Match a device, platform or named viewer." action="Edit client rules" summary={<div className="space-y-1">{rules.length ? rules.map((r,i)=><p key={i}>{i+1}. {r.product||"Any device"}{r.platform?` · ${r.platform}`:""}{r.userId?` · ${viewers?.find(v=>v.id===r.userId)?.title||viewers?.find(v=>v.id===r.userId)?.username||"Unavailable viewer"}`:""} → {r.profile}</p>) : "No rules. All devices follow the defaults."}</div>} footer={footer}><SettingsSection title="Rules" description="The first matching rule picks the profile. Match on the Plex product (e.g. “Plex for Apple TV”), platform, or a viewer.">
         {rules.length === 0 ? <SettingsRow title="No rules" description="Every client uses the defaults above." /> : null}
         {rules.map((r, i) => (
           <div key={i} className="flex flex-wrap items-end gap-2 px-5 py-3" role="group" aria-label={`Quality rule ${i + 1}`}>
-            <label className="min-w-36 flex-1 text-xs text-fg-muted">Product<Input value={r.product ?? ""} placeholder="Any" onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, product: e.currentTarget.value || undefined } : x)))} aria-label={`Rule ${i + 1} product`} className="mt-1" /></label>
+            <div className="min-w-48 flex-1 space-y-2 text-xs text-fg-muted">Device<SearchSelect value={!["", "Plex for Apple TV", "Plex Web", "Plex for iOS", "Plex for Android", "Roku", "Fire TV", "LG", "Samsung", "Xbox", "PlayStation"].includes(r.product ?? "") ? "__custom__" : r.product ?? ""} onChange={v=>setRules(rules.map((x,j)=>j===i?{...x,product:v==="__custom__"?"Custom device":v||undefined}:x))} options={[{value:"",label:"Any device"},...["Plex for Apple TV", "Plex Web", "Plex for iOS", "Plex for Android", "Roku", "Fire TV", "LG", "Samsung", "Xbox", "PlayStation"].map(v=>({value:v,label:v})),{value:"__custom__",label:"Custom product name…"}]} ariaLabel={`Rule ${i+1} device`}/>{r.product && !["Plex for Apple TV", "Plex Web", "Plex for iOS", "Plex for Android", "Roku", "Fire TV", "LG", "Samsung", "Xbox", "PlayStation"].includes(r.product) && <Input value={r.product} onChange={e=>setRules(rules.map((x,j)=>j===i?{...x,product:e.currentTarget.value}:x))} aria-label={`Rule ${i+1} custom product`} placeholder="Product name contains…"/>}</div>
             <label className="min-w-28 flex-1 text-xs text-fg-muted">Platform<Input value={r.platform ?? ""} placeholder="Any" onChange={(e) => setRules(rules.map((x, j) => (j === i ? { ...x, platform: e.currentTarget.value || undefined } : x)))} aria-label={`Rule ${i + 1} platform`} className="mt-1" /></label>
-            <label className="w-24 text-xs text-fg-muted">Viewer id<NumberInput value={r.userId ?? 0} min={0} onChange={(n) => setRules(rules.map((x, j) => (j === i ? { ...x, userId: n > 0 ? Math.round(n) : undefined } : x)))} aria-label={`Rule ${i + 1} viewer id`} className="mt-1" /></label>
+            <div className="min-w-40 flex-1 text-xs text-fg-muted">Viewer<div className="mt-1"><SearchSelect value={String(r.userId ?? 0)} onChange={v => setRules(rules.map((x,j)=>j===i?{...x,userId:Number(v)||undefined}:x))} options={[{value:"0",label:"Everyone"},...(viewers??[]).map(v=>({value:String(v.id),label:v.title||v.username}))]} ariaLabel={`Rule ${i+1} viewer`} /></div></div>
             <div className="w-40 text-xs text-fg-muted">Profile<div className="mt-1"><SearchSelect value={r.profile} onChange={(v) => setRules(rules.map((x, j) => (j === i ? { ...x, profile: v } : x)))} options={names} ariaLabel={`Rule ${i + 1} profile`} searchable={false} /></div></div>
             <OrderButtons label={`rule ${i + 1}`} i={i} n={rules.length} onMove={(d) => setRules(swap(rules, i, i + d))} />
             <Button variant="ghost" size="icon" className="size-8 text-danger" onClick={() => setRules(rules.filter((_, j) => j !== i))} aria-label={`Remove rule ${i + 1}`}><Trash2 size={14} /></Button>
@@ -215,13 +218,13 @@ export function QualitySection({ value, onChange, errors, footer }: { value: Eth
           </div>
         ))}
         <div className="px-5 py-3"><Button variant="outline" size="sm" onClick={() => setRules([...rules, { profile: value.default || profiles[0]?.name || "" }])} disabled={!profiles.length}><Plus size={14} /> Add rule</Button></div>
-      </SettingsSection>
+      </SettingsSection></EditPanel>}
 
-      {profiles.map((p, i) => {
+      {view === "profiles" && profiles.map((p, i) => {
         const f = `quality.profiles[${i}]`;
         return (
-          <SettingsSection key={i} title={p.name || `Profile ${i + 1}`} description="How releases are ranked for clients using this profile."
-            footer={<Button variant="ghost" size="sm" className="text-danger" onClick={() => setProfiles(profiles.filter((_, j) => j !== i))} disabled={profiles.length <= 1}><Trash2 size={14} /> Remove profile</Button>}>
+          <EditPanel onDiscard={onDiscard} key={i} initialOpen={p.name.startsWith("Profile ")} title={p.name || `Profile ${i + 1}`} description="Resolution, HDR, source and language preferences for matching clients." action="Edit profile" summary={`${p.minHeight || "Any"}–${p.maxHeight || "Any"}p · ${p.allowHdr ? "HDR allowed" : "SDR"}`} footer={footer}><SettingsSection key={i} title={p.name || `Profile ${i + 1}`} description="How releases are ranked for clients using this profile."
+            footer={<Button variant="ghost" size="sm" className="text-danger" onClick={() => void onCommit({...value,profiles:profiles.filter((_,j)=>j!==i)})} disabled={profiles.length <= 1}><Trash2 size={14} /> Remove profile</Button>}>
             <TextRow label="Name" value={p.name} error={errors[`${f}.name`]} onChange={(v) => patch(i, { name: v })} />
             <SettingsRow title="Resolution" description={errors[`${f}.minHeight`] ? <span className="text-danger">{errors[`${f}.minHeight`]}</span> : "Lowest and highest acceptable."}
               control={<span className="flex items-center gap-2">
@@ -245,12 +248,11 @@ export function QualitySection({ value, onChange, errors, footer }: { value: Eth
                 <NumberInput aria-label={`${p.name} maximum MB per minute`} value={p.maxSizeMbPerMin} min={0} className="w-20" onChange={(n) => patch(i, { maxSizeMbPerMin: n })} />
                 <span className="text-sm text-fg-muted">MB</span>
               </span>} />
-          </SettingsSection>
+          </SettingsSection></EditPanel>
         );
       })}
       <div className="flex items-center justify-between gap-2">
-        <Button variant="outline" onClick={() => setProfiles([...profiles, blankProfile(profiles.length + 1)])}><Plus size={15} /> Add profile</Button>
-        <div className="flex gap-2">{footer}</div>
+        {view === "profiles" && <Button variant="outline" onClick={() => setProfiles([...profiles, blankProfile(profiles.length + 1)])}><Plus size={15} /> Add profile</Button>}
       </div>
     </>
   );

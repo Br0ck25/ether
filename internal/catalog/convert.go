@@ -155,6 +155,24 @@ func (c *Catalog) movieToTitle(ctx context.Context, m tmdb.Movie) core.Title {
 
 func (c *Catalog) movieDetailsToTitle(ctx context.Context, d *tmdb.MovieDetails) core.Title {
 	t := c.movieToTitle(ctx, d.Movie)
+	// Ignore festival premieres and home-video windows when theatrical dates exist.
+	if d.ReleaseDates != nil {
+		var theatrical time.Time
+		for _, country := range d.ReleaseDates.Results {
+			for _, release := range country.ReleaseDate {
+				if release.Type != 2 && release.Type != 3 {
+					continue
+				}
+				date := tmdb.ParseDate(strings.SplitN(release.ReleaseDate, "T", 2)[0])
+				if !date.IsZero() && (theatrical.IsZero() || date.Before(theatrical)) {
+					theatrical = date
+				}
+			}
+		}
+		if !theatrical.IsZero() {
+			t.Released, t.Year = theatrical, theatrical.Year()
+		}
+	}
 	t.Keywords = keywordNames(d.Keywords)
 	t.Tagline = d.Tagline
 	t.Status = d.Status

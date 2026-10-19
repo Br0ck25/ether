@@ -11,6 +11,7 @@ it("opens an empty installation with nullable language lists and saves preferenc
   return new Response(JSON.stringify(data),{status:200});
  }));
  render(<StreamPreferences/>);
+ fireEvent.click(screen.getByRole("button",{name:"Edit preferences"}));
  const audio=screen.getByLabelText("Audio languages, in preference order");
  await waitFor(()=>expect(audio).toBeEnabled());expect(audio).toHaveValue("");
  fireEvent.change(audio,{target:{value:"en, fr"}});fireEvent.click(screen.getByRole("button",{name:"Save preferences"}));
@@ -31,6 +32,7 @@ it("loads viewer languages and restores both language fields from owner defaults
   return new Response(JSON.stringify(data),{status:200});
  }));
  render(<StreamPreferences/>);
+ fireEvent.click(screen.getByRole("button",{name:"Edit preferences"}));
  const audio=screen.getByLabelText("Audio languages, in preference order");
  const subtitles=screen.getByLabelText("Subtitle languages, in preference order");
  await waitFor(()=>expect(audio).toHaveValue("en"));

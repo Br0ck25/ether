@@ -1,69 +1,57 @@
-# Ether
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/ether-logo-dark.svg" />
+    <img src=".github/assets/ether-logo.svg" alt="Ether" width="440" />
+  </picture>
+</p>
 
-Ether is an open-source server that presents itself to Plex apps as a
-Plex Media Server, but holds no media. Its library is a filtered TMDB
-catalogue; when someone presses play, Ether finds a release on Usenet
-and streams it in about five seconds.
+<p align="center">
+  <strong>Your Plex. Beyond your library.</strong><br />
+  A TMDB catalogue, on-demand streaming and a Home that learns your taste.
+</p>
 
-You use the official Plex apps you already have. Ether answers as the
-server, and Plex thinks it is talking to PMS.
 
-See [docs/design.md](docs/design.md) for the design.
+Ether is a self-hosted media server for your Plex apps. Browse movies and TV,
+get recommendations that learn each viewer's taste, and stream through your
+own Usenet providers and indexers.
 
 ## Features
 
-- **Plex apps, unchanged** — Plex Web, iOS, Apple TV and friends talk to
-  Ether as if it were Plex Media Server (libraries, hubs, Continue
-  Watching, search, watch state, shared users via plex.tv).
-- **A TMDB catalogue as the library** — popular/trending/top-rated rows,
-  franchise collections, smart rules; search reaches all of TMDB.
-- **Streaming from Usenet on play** — release search and ranking over
-  your Newznab indexers, health checks (NNTP STAT sampling), NZB/RAR/7z
-  unwrapping, byte-range streaming, backfill providers, failover to the
-  next release mid-stream, and an LRU segment cache so resumes and
-  re-watches are instant.
-- **Quality profiles per client** — pick the best release the device can
-  actually play (4K/HDR/Dolby Vision, codec and bitrate aware); bundled
-  ffmpeg remuxes or transcodes (QuickSync/NVENC/VAAPI/VideoToolbox, CPU
-  fallback) only when it must.
-- **Prefetch** — next-episode and resume points kept warm at background
-  priority.
-- **Per-user everything** — stream limits, content-rating caps,
-  subtitle/audio preferences, playlists, Trakt sync, OpenSubtitles,
-  optional LLM-curated rows.
-- **Installs like PMS** — one installer, background service, tray icon,
-  browser setup wizard, signed auto-updates.
+- **Your Plex apps** — browse, search, watch and resume from the apps you use.
+- **A broad catalogue** — TMDB artwork and metadata, franchise collections,
+  smart collections and released movies and TV.
+- **Personal recommendations** — separate history, ratings, playlists and Home
+  rows for each viewer, with optional Trakt and AI integrations.
+- **Playback that fits your devices** — quality profiles, hardware transcoding,
+  audio and subtitle preferences, next-episode prefetch and resume caching.
+- **Local libraries and migration** — include existing media, import Plex
+  history and lists, and back up your configuration and watch state.
+- **Live TV** — build virtual channels or add an M3U playlist and XMLTV guide.
+- **Owner controls** — manage Home layouts, viewer restrictions, stream limits,
+  notifications and activity from the browser.
 
-## Install
+## Get started
 
-Per-platform instructions (Windows setup.exe, macOS DMG, Linux
-`.deb`/`.rpm`, Docker) are in [docs/install.md](docs/install.md). Short
-version: install, open <http://localhost:32400/ether/>, sign in to
-plex.tv, add your Usenet provider(s) and indexer(s), done.
+**Pre-release:** there are no published installer downloads yet. Packaging is
+configured for Windows, macOS and Linux; available downloads will appear on the
+[Releases page](https://github.com/braedonsaunders/ether/releases).
 
-## Status
+See [installation](docs/install.md) and the [user guide](docs/user-guide.md).
+Once Ether is running, open <http://localhost:32400/ether/> to sign in to Plex
+and configure your providers and indexers. Share the server through Plex to add
+viewers.
 
-Ether is under active initial development. The gating milestone is the
-**spike**: a minimal server official Plex apps accept end-to-end (the
-design doc has the pass bar and the fallback plan). Component status is
-tracked in the design doc and issues; expect rough edges until the
-spike passes. Current tagged builds, once they exist, come from the
-release workflow described in [docs/development.md](docs/development.md).
+## Support
 
-## Develop
+For a bug report, include your Ether version, operating system, Plex app and
+version, what you did and what happened. Remove credentials and personal details
+from any logs you attach.
 
-```sh
-make build && make test && make ffmpeg   # see docs/development.md
-```
+## Licence and services
 
-[CONTRIBUTING.md](CONTRIBUTING.md) has the rules (package ownership,
-pure-Go builds, offline tests).
+Ether ships no media, providers, indexers or accounts. Owners supply their own
+services and are responsible for what they access. Ether is independent of Plex
+and TMDB. See [LEGAL.md](LEGAL.md).
 
-## Legal
-
-Ether ships no content, no Usenet providers and no indexers. Owners supply
-every account and are responsible for what they access. See
-[LEGAL.md](LEGAL.md).
-
-Licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE).
-Third-party attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Licensed under the [GNU General Public License v3.0](LICENSE).
+[Third-party notices](THIRD_PARTY_NOTICES.md).

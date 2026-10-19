@@ -1,5 +1,6 @@
-import { Input, SearchSelect, SettingsRow, SettingsSection, Switch, Textarea } from "@braedonsaunders/appkit-ui";
-import type { ReactNode } from "react";
+import { SettingsRow } from "../../components/SettingsRow";
+import { Input, SearchSelect,  SettingsSection, SubtabNav, Switch, Textarea } from "@braedonsaunders/appkit-ui";
+import { useEffect, useState, type ReactNode } from "react";
 import { ListInput, NumberInput, SecretInput } from "../../components/fields";
 import { humanizeKey, isPlainObject } from "../../lib/format";
 import { REDACTED } from "../../lib/types";
@@ -64,18 +65,21 @@ export function SchemaField({ def, value, onChange, error, path }: { def: FieldD
 export function SchemaGroups({ groups, value, onChange, errors, prefix, footer }: {
   groups: FieldGroup[]; value: Obj; onChange: (v: Obj) => void; errors: Record<string, string>; prefix: string; footer?: ReactNode;
 }) {
+  const [active,setActive]=useState("0");
+  useEffect(()=>{const at=groups.findIndex(g=>g.fields.some(f=>errors[`${prefix}.${f.key}`]));if(at>=0)setActive(String(at))},[errors,groups,prefix]);
   const known = new Set(groups.flatMap((g) => g.fields.map((f) => f.key)));
   const extra = Object.keys(value).filter((k) => !known.has(k));
   return (
     <>
-      {groups.map((g, i) => (
-        <SettingsSection key={g.title ?? i} title={g.title} description={g.description} footer={i === groups.length - 1 && !extra.length ? footer : undefined}>
+      {(groups.length + (extra.length?1:0)) > 1 && <SubtabNav ariaLabel="Settings categories" active={active} onSelect={setActive} tabs={[...groups.map((g,i)=>({key:String(i),label:g.title||"General"})),...(extra.length?[{key:"advanced",label:"Advanced"}]:[])]} />}
+      {groups.filter((_,i)=>String(i)===active).map((g) => (
+        <SettingsSection key={g.title ?? "general"} title={g.title} description={g.description} footer={footer}>
           {g.fields.map((f) => (
             <SchemaField key={f.key} def={f} value={value[f.key]} path={`${prefix}.${f.key}`} error={errors[`${prefix}.${f.key}`]} onChange={(v) => onChange({ ...value, [f.key]: v })} />
           ))}
         </SettingsSection>
       ))}
-      {extra.length ? (
+      {extra.length && (active === "advanced" || groups.length === 0) ? (
         <SettingsSection title="Advanced" description="Additional options this server supports." footer={footer}>
           <GenericFields value={value} keys={extra} onChange={onChange} errors={errors} prefix={prefix} />
         </SettingsSection>

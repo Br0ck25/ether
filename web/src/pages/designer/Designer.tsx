@@ -1,4 +1,4 @@
-import { Alert, AlertDescription, AlertTitle, Badge, Button, EmptyState, PageHeader, Spinner, toast } from "@braedonsaunders/appkit-ui";
+import { Alert, AlertDescription, AlertTitle, Badge, Button, EmptyState, PageHeader, SubtabNav, Spinner, toast } from "@braedonsaunders/appkit-ui";
 import { RefreshCw, Save, Undo2, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ErrorPanel } from "../../components/feedback";
@@ -34,6 +34,7 @@ export default function Designer() {
   const [ctx, setCtx] = useState<ViewContext>(initialContext);
   const [saving, setSaving] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const [tools,setTools]=useState("layout");
   const [focusRow, setFocusRow] = useState<string | null>(null);
   const wide = useMediaQuery("(min-width: 1024px)");
 
@@ -110,16 +111,17 @@ export default function Designer() {
                     <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Context</h2>
                     <ContextBar ctx={ctx} onChange={setCtx} />
                   </section>
-                  <PageSettings {...editing} defaults={defaults} />
-                  <AnchoredSlots {...editing} available={available} />
-                  <RowPool {...editing} available={available} focusRow={focusRow} onFocusRow={setFocusRow} />
-                  <OverrideList {...editing} onOpenLayer={(l) => { setLayer(l); setFocusRow(null); }} />
+                  <div className="border-b border-border"><SubtabNav ariaLabel="Designer tools" active={tools} onSelect={setTools} tabs={[{key:"layout",label:"Layout"},{key:"rows",label:"Rows"},{key:"overrides",label:"Overrides"}]} /></div>
+                  {tools === "layout" && <><PageSettings {...editing} defaults={defaults} />
+                  <AnchoredSlots {...editing} available={available} /></>}
+                  {tools === "rows" && <RowPool {...editing} available={available} focusRow={focusRow} onFocusRow={setFocusRow} />}
+                  {tools === "overrides" && <OverrideList {...editing} onOpenLayer={(l) => { setLayer(l); setFocusRow(null); }} />}
                 </aside>
                 <main className="app-scroll min-w-0 bg-bg p-3 sm:p-6 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto" aria-label="Home preview">
                   <HomeCanvas
                     draft={draft} dirty={dirty} saved={saved} layer={layer} layerName={layerName} ctx={ctx} viewers={viewers}
                     viewerId={viewerId} onSpotCheck={setSpotCheck} refreshNonce={nonce} onChange={setDraft}
-                    onEditRow={(row) => setFocusRow(row)}
+                    onEditRow={(row) => {setTools("rows");setFocusRow(row)}}
                   />
                 </main>
               </div>

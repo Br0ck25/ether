@@ -1,7 +1,7 @@
 import { Alert, AlertDescription, Button, Card, Input, Label } from "@braedonsaunders/appkit-ui";
 import { ChevronRight, KeyRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { EtherMark } from "../components/brand";
+import { EtherLogo } from "../components/brand";
 import { api, ApiError, errorMessage, getToken, setToken } from "../lib/api";
 import type { Bootstrap } from "../lib/types";
 
@@ -53,7 +53,7 @@ export default function Login({ boot, onReady }: { boot: Bootstrap; onReady: () 
     <main className="grid min-h-screen place-items-center bg-bg-subtle p-4">
       <Card className="reveal w-full max-w-sm p-7 shadow-lg">
         <div className="mb-6 flex flex-col items-center text-center">
-          <EtherMark size={44} />
+          <EtherLogo className="w-48" />
           <h1 className="mt-4 text-xl font-semibold text-fg">{boot.serverName || "Ether"}</h1>
           <p className="mt-1 text-sm text-fg-muted">Sign in with the Plex account that owns this server.</p>
         </div>

@@ -1,9 +1,17 @@
 # Installing Ether
 
-Ether installs like Plex Media Server: one installer, a background
-service, a tray/menu-bar icon, and a web UI at
-<http://localhost:32400/ether/> for setup and settings. It bundles its
-own ffmpeg — there is nothing else to install.
+Ether is currently pre-release. **No desktop installers or release packages
+have been published yet.** Check the [Releases page](https://github.com/braedonsaunders/ether/releases)
+for available downloads before following the package instructions below.
+
+The planned package formats are a Windows setup EXE, a macOS DMG, Linux DEB/RPM
+and Docker images. Packaging configuration exists; this is not a claim that
+these packages have been built, signed or tested on your device.
+
+If you already have an Ether executable, run it and open
+<http://localhost:32400/ether/>. The setup wizard walks you through Plex sign-in,
+provider and indexer configuration, and cache settings. A standalone executable
+needs access to FFmpeg and FFprobe for media processing.
 
 After any install, open the web UI and finish the setup wizard (sign in
 to plex.tv, add your Usenet providers and Newznab indexers, pick a cache
@@ -35,8 +43,8 @@ from an elevated prompt, or from the tray menu.
 3. Data lives in `~/Library/Application Support/Ether`, logs in
    `~/Library/Logs/Ether`.
 
-Requires macOS 13+. Release DMGs are signed and notarised; dev builds
-need a right-click → Open the first time.
+Requires macOS 13+. Signing and notarisation depend on the published package;
+check its release notes before installing.
 
 ## Linux (.deb / .rpm)
 
@@ -102,11 +110,11 @@ on macOS, `%LOCALAPPDATA%\Ether` on Windows).
 
 ## Remote access / port forwarding
 
-Ether speaks for a Plex Media Server on **TCP 32400**. For remote access
+Ether uses **TCP 32400** for playback. For remote access
 outside your LAN:
 
 - Easiest: enable *Remote access* in the web UI — Ether asks your router
-  for a UPnP mapping and publishes the address to plex.tv, like PMS.
+  for a UPnP mapping and publishes the address to plex.tv, for Plex clients.
 - Manual: forward one external TCP port (e.g. 32400) to the Ether host's
   32400, then set that public port in the web UI.
 - LAN discovery additionally uses UDP 32410–32414 (GDM) — only relevant

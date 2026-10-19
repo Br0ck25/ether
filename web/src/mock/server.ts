@@ -47,7 +47,7 @@ function defaultConfig(): EtherConfig {
       { id: "i2", name: "Indexer Two", url: "https://indexer-two.example.com", apiKey: "••••", dailyLimit: 25, dailyGrabs: 10, priority: 1, enabled: true, movieCategories: null, tvCategories: null },
     ],
     cache: { dir: "/var/lib/ether/cache", budgetBytes: 200 * 1024 ** 3, prefetchNextEpisode: true, prefetchBytes: 64 * 1024 ** 2, keepInProgressWarm: true, nextEpisodeAt: 0.8 },
-    catalog: { tmdbKey: "", language: "en-US", region: "US", minPopularity: 5, minVotes: 100, includeAdult: false, refreshInterval: "24h0m0s", showUnreleased: true },
+    catalog: { tmdbKey: "", language: "en-US", region: "US", minPopularity: 5, minVotes: 100, includeAdult: false, refreshInterval: "24h0m0s", showUnreleased: false },
     resolver: { allowCam: false, healthSamples: 12, searchCacheTtl: "6h0m0s", unavailableCooloff: "24h0m0s", maxCandidates: 3, blockedGroups: null, blockedTerms: null },
     quality: {
       profiles: [

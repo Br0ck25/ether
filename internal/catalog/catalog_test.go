@@ -324,38 +324,36 @@ func TestRatingRankOrdering(t *testing.T) {
 
 func TestUnreleasedVisibility(t *testing.T) {
 	ctx := context.Background()
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	_ = now
-	seed := func(c *catalog.Catalog) {
-		future := core.Title{Key: core.MovieKey(9001), Type: core.TypeMovie, IDs: core.IDs{TMDB: 9001},
-			Title: "Future Film", Released: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Popularity: 50, VoteCount: 10}
-		if err := c.UpsertTitle(ctx, future, true); err != nil {
-			t.Fatal(err)
+	for _, legacyFlag := range []bool{false, true} {
+		c := newTestCatalogCfg(t, nil, config.Catalog{ShowUnreleased: legacyFlag})
+		for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
+			for i, date := range []time.Time{time.Now().AddDate(1, 0, 0), {}} {
+				key := core.MovieKey(int64(9000 + i))
+				if typ == core.TypeShow {
+					key = core.ShowKey(int64(9000 + i))
+				}
+				title := core.Title{Key: key, Type: typ, Title: "Unreleased", Released: date, Popularity: 50}
+				if err := c.UpsertTitle(ctx, title, true); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := c.Get(ctx, key); !errors.Is(err, core.ErrNotFound) {
+					t.Fatalf("Get returned unreleased title: %v", err)
+				}
+				if catalog.MeetsThreshold(config.Catalog{ShowUnreleased: legacyFlag}, title, time.Now()) {
+					t.Fatal("legacy flag bypassed release gate")
+				}
+			}
 		}
-	}
-	shown := newTestCatalog(t, fakeTMDB(t)) // ShowUnreleased true
-	seed(shown)
-	page, err := shown.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie}})
-	if err != nil || page.Total != 1 {
-		t.Fatalf("unreleased shown: %+v %v", page, err)
-	}
-	hidden := newTestCatalogCfg(t, fakeTMDB(t), config.Catalog{Language: "en-US", Region: "US", MinPopularity: 5, MinVotes: 100, ShowUnreleased: false})
-	seed(hidden)
-	page, err = hidden.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie}})
-	if err != nil || page.Total != 0 {
-		t.Fatalf("unreleased hidden: %+v %v", page, err)
-	}
-	page, err = hidden.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, IncludeUnreleased: true}})
-	if err != nil || page.Total != 1 {
-		t.Fatalf("includeUnreleased override: %+v %v", page, err)
-	}
-	// Threshold logic agrees.
-	future := core.Title{Type: core.TypeMovie, Released: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC), Popularity: 50}
-	if catalog.MeetsThreshold(config.Catalog{MinPopularity: 5, ShowUnreleased: false}, future, time.Now()) {
-		t.Fatal("future title must not meet threshold when unreleased hidden")
-	}
-	if !catalog.MeetsThreshold(config.Catalog{MinPopularity: 5, ShowUnreleased: true}, future, time.Now()) {
-		t.Fatal("future title should meet pop threshold when unreleased shown")
+		for _, override := range []bool{false, true} {
+			page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{IncludeUnreleased: override}})
+			if err != nil || page.Total != 0 || len(page.Items) != 0 {
+				t.Fatalf("browse %+v: %v", page, err)
+			}
+		}
+		titles, err := c.Search(ctx, "Unreleased", nil, 20)
+		if err != nil || len(titles) != 0 {
+			t.Fatalf("search returned unreleased: %+v %v", titles, err)
+		}
 	}
 }
 

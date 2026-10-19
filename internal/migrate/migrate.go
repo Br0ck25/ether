@@ -39,15 +39,17 @@ func New(db *sql.DB, catalog core.Catalog) *Service {
 }
 
 type Viewer struct {
-	LocalUserID int64  `json:"localUserId"`
-	PlexID      int64  `json:"plexId"`
-	Name        string `json:"name"`
-	Token       string `json:"token,omitempty"`
+	LocalUserID     int64  `json:"localUserId"`
+	PlexID          int64  `json:"plexId"`
+	Name            string `json:"name"`
+	Token           string `json:"token,omitempty"`
+	SourceAccountID int64  `json:"sourceAccountId,omitempty"`
 }
 type Request struct {
-	URL     string   `json:"url"`
-	Token   string   `json:"token"`
-	Viewers []Viewer `json:"viewers"`
+	URL         string   `json:"url"`
+	Token       string   `json:"token"`
+	Viewers     []Viewer `json:"viewers"`
+	HistoryOnly bool     `json:"historyOnly,omitempty"`
 }
 type Item struct {
 	External  string         `json:"external"`
@@ -92,11 +94,16 @@ type media struct {
 	Rating      float64 `xml:"userRating,attr"`
 	ViewedAt    int64   `xml:"lastViewedAt,attr"`
 	HistoryAt   int64   `xml:"viewedAt,attr"`
+	AccountID   int64   `xml:"accountID,attr"`
 	Grandparent string  `xml:"grandparentRatingKey,attr"`
 	Season      int     `xml:"parentIndex,attr"`
 	Episode     int     `xml:"index,attr"`
 }
 type container struct {
+	Accounts []struct {
+		ID   int64  `xml:"id,attr"`
+		Name string `xml:"name,attr"`
+	} `xml:"Account"`
 	Machine     string `xml:"machineIdentifier,attr"`
 	Total       int    `xml:"totalSize,attr"`
 	Size        int    `xml:"size,attr"`
@@ -123,6 +130,13 @@ func (s *Service) get(ctx context.Context, base, token, path string) (container,
 	}
 	req.Header.Set("X-Plex-Token", token)
 	req.Header.Set("Accept", "application/xml")
+	// PMS accepts these pagination controls as headers. Some versions silently
+	// ignore the identically named query parameters and return the whole library.
+	for _, name := range []string{"X-Plex-Container-Start", "X-Plex-Container-Size"} {
+		if value := req.URL.Query().Get(name); value != "" {
+			req.Header.Set(name, value)
+		}
+	}
 	resp, e := s.client.Do(req)
 	if e != nil {
 		return c, errors.New("PMS connection failed")
@@ -266,8 +280,14 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 			token = q.Token
 		}
 		v.Token = ""
+		accountID, accountErr := s.sourceAccount(ctx, base, token, v)
+		if accountErr != nil && q.HistoryOnly {
+			return p, accountErr
+		}
+		v.SourceAccountID = accountID
 		p.Viewers = append(p.Viewers, v)
 		keyMap := map[string]core.RatingKey{}
+		mapper := sourceMapper{service: s, base: base, token: token, keys: keyMap, parents: map[string]core.RatingKey{}, missing: map[string]bool{}}
 		for _, section := range sections.Directories {
 			if section.Type != "movie" && section.Type != "show" {
 				continue
@@ -276,12 +296,19 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 			if section.Type == "show" {
 				typ = "4"
 			}
-			ms, e := s.pages(ctx, base, token, "/library/sections/"+url.PathEscape(section.Key)+"/all?type="+typ)
+			sectionPath := "/library/sections/" + url.PathEscape(section.Key) + "/all?type=" + typ
+			if q.HistoryOnly {
+				sectionPath += "&unwatched=0"
+			}
+			ms, e := s.pages(ctx, base, token, sectionPath)
 			if e != nil {
 				return p, e
 			}
 			for _, m := range ms {
-				k, me := s.mapMedia(ctx, base, token, m)
+				if q.HistoryOnly && m.Views == 0 {
+					continue
+				}
+				k, me := mapper.resolve(ctx, m, false)
 				if me != nil {
 					p.Warnings = append(p.Warnings, "Unmatched: "+m.Title)
 					continue
@@ -290,6 +317,9 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 				if m.Views > 0 || m.Offset > 0 || m.Rating > 0 {
 					p.Items = append(p.Items, Item{External: m.Key, Key: k, Title: m.Title, Viewer: v.LocalUserID, Views: m.Views, Offset: m.Offset, Duration: m.Duration, Rating: m.Rating, ViewedAt: m.ViewedAt})
 				}
+			}
+			if q.HistoryOnly {
+				continue
 			}
 			cs, ce := s.pages(ctx, base, token, "/library/sections/"+url.PathEscape(section.Key)+"/collections")
 			if ce != nil {
@@ -305,23 +335,37 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 				}
 			}
 		}
-		history, he := s.pages(ctx, base, token, "/status/sessions/history/all?sort=viewedAt:asc")
+		var history []media
+		he := accountErr
+		if he == nil {
+			history, he = s.pages(ctx, base, token, "/status/sessions/history/all?sort=viewedAt:asc&accountID="+strconv.FormatInt(accountID, 10))
+		}
 		if he != nil {
 			p.Warnings = append(p.Warnings, "Detailed watch history unavailable for "+v.Name+"; last-viewed summaries will be imported")
 		} else {
 			for _, h := range history {
+				// Defend against a server ignoring the account filter.
+				if h.AccountID != accountID {
+					continue
+				}
 				k := keyMap[h.Key]
 				if k == 0 {
-					k, _ = s.mapMedia(ctx, base, token, h)
+					k, _ = mapper.resolve(ctx, h, false)
 				}
 				at := h.HistoryAt
 				if at == 0 {
 					at = h.ViewedAt
 				}
+				if k == 0 {
+					p.Warnings = append(p.Warnings, "Unmatched history: "+h.Title)
+				}
 				if k != 0 && at > 0 {
 					p.History = append(p.History, Item{Key: k, Viewer: v.LocalUserID, ViewedAt: at, Views: 1, Title: h.Title})
 				}
 			}
+		}
+		if q.HistoryOnly {
+			continue
 		}
 		pls, pe := s.pages(ctx, base, token, "/playlists")
 		if pe != nil {

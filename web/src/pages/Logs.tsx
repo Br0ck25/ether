@@ -1,6 +1,6 @@
 import { Badge, Button, EmptyState, Input, ListPageLayout, PageHeader, Switch, confirmDialog, toast, cn } from "@braedonsaunders/appkit-ui";
 import { RefreshCw, ScrollText, Search, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ErrorPanel, LoadingRows } from "../components/feedback";
 import { Segmented } from "../components/fields";
 import { api, errorMessage } from "../lib/api";
@@ -24,12 +24,11 @@ export default function Logs() {
   const query = useDebouncedValue(q, 250);
   const [follow, setFollow] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const endRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     try {
       const r = await api.logs({ limit: 1000, level, q: query });
-      setEntries(r.entries ?? []); setTotal(r.total); setError(null);
+      setEntries([...(r.entries ?? [])].reverse().sort((a,b)=>Date.parse(b.time)-Date.parse(a.time))); setTotal(r.total); setError(null);
     } catch (e) { setError(e); }
   }, [level, query]);
 
@@ -39,7 +38,6 @@ export default function Logs() {
     const t = window.setInterval(() => void load(), 2000);
     return () => window.clearInterval(t);
   }, [follow, load]);
-  useEffect(() => { if (follow) endRef.current?.scrollIntoView({ block: "end" }); }, [entries, follow]);
 
   const clear = async () => {
     if (!(await confirmDialog({ title: "Clear logs?", message: "The in-memory log buffer is emptied. Log files on disk are not affected.", confirmLabel: "Clear", tone: "danger" }))) return;
@@ -51,7 +49,7 @@ export default function Logs() {
     <ListPageLayout
       header={
         <>
-          <PageHeader title="Logs" description={`What the server has been doing. ${total.toLocaleString()} entries retained in memory.`}
+          <PageHeader title="Logs" description={`Newest entries first. ${total.toLocaleString()} entries retained in memory.`}
             actions={<><Button variant="outline" size="sm" onClick={() => void load()}><RefreshCw size={14} /> Reload</Button><Button variant="ghost" size="sm" onClick={() => void clear()}><Trash2 size={14} /> Clear</Button></>} />
           <div className="flex flex-wrap items-center gap-3" role="search">
             <div className="relative min-w-52 flex-1 sm:max-w-sm">
@@ -59,7 +57,7 @@ export default function Logs() {
               <Input type="search" className="h-9 pl-8" placeholder="Filter messages…" value={q} onChange={(e) => setQ(e.currentTarget.value)} aria-label="Filter logs" />
             </div>
             <Segmented ariaLabel="Minimum level" size="sm" value={level} onChange={setLevel} options={LEVELS} />
-            <label className="flex items-center gap-2 text-sm text-fg-muted"><Switch checked={follow} onChange={(e) => setFollow(e.currentTarget.checked)} /> Follow</label>
+            <label className="flex items-center gap-2 text-sm text-fg-muted"><Switch checked={follow} onChange={(e) => setFollow(e.currentTarget.checked)} /> Live updates</label>
           </div>
         </>
       }
@@ -79,7 +77,6 @@ export default function Logs() {
                 ) : null}
               </div>
             ))}
-            <div ref={endRef} />
           </div>
         </div>
       )}

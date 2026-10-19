@@ -1,4 +1,5 @@
-import { Alert, AlertDescription, AlertTitle, Badge, Button, Dialog, Textarea } from "@braedonsaunders/appkit-ui";
+import { Drawer } from "../../components/Drawer";
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Textarea } from "@braedonsaunders/appkit-ui";
 import { Sparkles, Wand2 } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
@@ -43,7 +44,7 @@ export function DescribeDialog({ open, onClose, onApply, applyLabel = "Open as d
   const llmOff = error instanceof ApiError && error.status === 501;
 
   return (
-    <Dialog open={open} onClose={close} size="lg" title={<span className="flex items-center gap-2"><Sparkles size={18} className="text-primary" /> Describe a collection</span>}
+    <Drawer open={open} onClose={close} size="lg" title={<span className="flex items-center gap-2"><Sparkles size={18} className="text-primary" /> Describe a collection</span>}
       description="Say what you want in plain English. Ether drafts the sources and rules; you review them before anything is saved."
       footer={
         <div className="flex w-full flex-wrap justify-end gap-2">
@@ -91,6 +92,6 @@ export function DescribeDialog({ open, onClose, onApply, applyLabel = "Open as d
           </div>
         ) : null}
       </div>
-    </Dialog>
+    </Drawer>
   );
 }

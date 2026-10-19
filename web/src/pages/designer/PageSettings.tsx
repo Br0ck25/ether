@@ -1,3 +1,4 @@
+import { EditPanel } from "../../components/EditPanel";
 import { Button, Input, cn } from "@braedonsaunders/appkit-ui";
 import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
 import { useState } from "react";
@@ -58,7 +59,7 @@ export function PageSettings({ draft, onChange, layer, section, defaults }: {
     );
   };
   return (
-    <section className="space-y-2" aria-label="Page length">
+    <EditPanel title="Page length" description="Changes update the Home draft. Save the layout to apply them." action="Edit page length" size="lg"><section className="space-y-2" aria-label="Page length">
       <div>
         <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Page length</h2>
         <p className="mt-0.5 text-xs text-fg-muted">All rows on {sectionLabel}, including Plex and discovery rows.{layer !== "global" ? " Empty fields follow Global." : ""}</p>
@@ -71,6 +72,6 @@ export function PageSettings({ draft, onChange, layer, section, defaults }: {
         </button>
         {showDevices ? DEVICES.map((d) => row(d.value, d.label)) : null}
       </div>
-    </section>
+    </section></EditPanel>
   );
 }

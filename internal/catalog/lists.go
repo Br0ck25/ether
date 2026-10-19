@@ -59,7 +59,7 @@ func (c *Catalog) Search(ctx context.Context, query string, types []core.MediaTy
 	var out []core.Title
 	add := func(ts []core.Title) {
 		for _, t := range ts {
-			if t.Adult || t.Key == 0 || seen[t.Key] {
+			if t.Adult || !t.IsReleased(c.now()) || t.Key == 0 || seen[t.Key] {
 				continue
 			}
 			seen[t.Key] = true
@@ -179,7 +179,7 @@ func (c *Catalog) List(ctx context.Context, list string, t core.MediaType, limit
 	if e, ok := c.listCache[cacheKey]; ok && c.now().Before(e.expires) {
 		items := append([]core.Title(nil), e.items...)
 		c.listMu.Unlock()
-		return items, nil
+		return c.releasedTitles(items), nil
 	}
 	c.listMu.Unlock()
 	if c.client == nil {
@@ -210,7 +210,7 @@ func (c *Catalog) List(ctx context.Context, list string, t core.MediaType, limit
 			out = append(out, it)
 		}
 	}
-	out = limitTitles(out, limit)
+	out = limitTitles(c.releasedTitles(out), limit)
 	c.listMu.Lock()
 	c.listCache[cacheKey] = listEntry{items: append([]core.Title(nil), out...), expires: c.now().Add(c.listTTL)}
 	c.listMu.Unlock()
@@ -374,7 +374,7 @@ func (c *Catalog) Similar(ctx context.Context, key core.RatingKey, limit int) ([
 	default:
 		return nil, fmt.Errorf("%w: key %s", core.ErrNotFound, key)
 	}
-	out = limitTitles(out, limit)
+	out = limitTitles(c.releasedTitles(out), limit)
 	if err := c.upsertSummaries(ctx, out, false); err != nil {
 		return nil, err
 	}
@@ -386,7 +386,7 @@ func (c *Catalog) Similar(ctx context.Context, key core.RatingKey, limit int) ([
 			reloaded = append(reloaded, it)
 		}
 	}
-	return reloaded, nil
+	return c.releasedTitles(reloaded), nil
 }
 
 // Collection returns a TMDB franchise and its parts sorted by release date.
@@ -419,7 +419,7 @@ func (c *Catalog) Collection(ctx context.Context, tmdbCollection int64) (string,
 					out = append(out, it)
 				}
 			}
-			return d.Name, out, nil
+			return d.Name, c.releasedTitles(out), nil
 		} else if isNotFound(err) {
 			return "", nil, err
 		}
@@ -502,4 +502,15 @@ func (c *Catalog) ByExternalID(ctx context.Context, source, id string) (*core.Ti
 		}
 	}
 	return nil, core.ErrNotFound
+}
+
+// Apply the same release rule to remote lists and cached responses as SQL reads.
+func (c *Catalog) releasedTitles(items []core.Title) []core.Title {
+	out := make([]core.Title, 0, len(items))
+	for _, t := range items {
+		if !t.Adult && t.IsReleased(c.now()) {
+			out = append(out, t)
+		}
+	}
+	return out
 }

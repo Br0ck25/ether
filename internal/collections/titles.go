@@ -127,7 +127,7 @@ func loadTitles(ctx context.Context, db *sql.DB, keys []core.RatingKey) ([]core.
 	}
 	out := make([]core.Title, 0, len(keys))
 	for _, k := range keys {
-		if t := byKey[k]; t != nil {
+		if t := byKey[k]; t != nil && t.IsReleased(time.Now()) {
 			out = append(out, *t)
 		}
 	}

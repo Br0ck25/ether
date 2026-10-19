@@ -218,10 +218,7 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 			c.assured = as
 		}
 	}
-	// Like browsing, collections hold released titles only, unless the
-	// owner shows unreleased titles or the spec asks for future releases
-	// (Coming Soon).
-	hideUnreleased := !(s.catCfg != nil && s.catCfg().ShowUnreleased) && !wantsUnreleased(&sp, rules, ec.now)
+	// Release dates are mandatory, including explicit upcoming sources.
 	nowUnix := ec.now.Unix()
 
 	// Filter.
@@ -239,7 +236,7 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 		if !want(c.e) {
 			continue
 		}
-		if hideUnreleased && (c.e.released == 0 || c.e.released > nowUnix) {
+		if c.e.released == 0 || c.e.released > nowUnix {
 			continue
 		}
 		if !matchesRules(c, rules, sp.Match, ec) {
@@ -275,32 +272,6 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	}
 	res.hash = buildHash(sp, res.keys)
 	return res, nil
-}
-
-// wantsUnreleased reports whether a spec asks for titles not out yet: an
-// upcoming list, or a release-date rule reaching into the future.
-func wantsUnreleased(sp *core.CollectionSpec, rules []*rule, now time.Time) bool {
-	for _, src := range sp.Sources {
-		if src.Kind == "tmdbList" && src.List == "upcoming" {
-			return true
-		}
-	}
-	for _, r := range rules {
-		if r.field != "released" {
-			continue
-		}
-		switch r.op {
-		case "gte":
-			if !r.from.at(now).Before(now.Add(-24 * time.Hour)) {
-				return true
-			}
-		case "lte", "between":
-			if r.to.set && r.to.at(now).After(now) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func splitPersonal(rs []*rule, personal *[]*rule) []*rule {

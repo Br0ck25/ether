@@ -1,3 +1,4 @@
+import { EditPanel } from "../../components/EditPanel";
 import { Badge, Button, SearchSelect } from "@braedonsaunders/appkit-ui";
 import { Anchor, Plus, X } from "lucide-react";
 import { useState } from "react";
@@ -33,7 +34,7 @@ export function AnchoredSlots({ draft, onChange, layer, section, available }: {
     .filter((a) => !own.some((p) => p.row === a.hubId))
     .map((a) => ({ value: a.hubId, label: a.title, hint: a.description }));
   return (
-    <section className="space-y-2" aria-label="Anchored slots">
+    <EditPanel title="Page structure" description="Changes update the Home draft. Save the layout to apply them." action="Edit anchored slots" size="lg"><section className="space-y-2" aria-label="Anchored slots">
       <div>
         <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Page structure</h2>
         <p className="mt-0.5 text-xs text-fg-muted">Anchored rows hold their slot{layer === "global" ? " for everyone" : " for this viewer"}; personalization fills the slots between them. Drag to swap.</p>
@@ -77,6 +78,6 @@ export function AnchoredSlots({ draft, onChange, layer, section, available }: {
           <Plus size={14} /><Anchor size={13} /> Anchor
         </Button>
       </div>
-    </section>
+    </section></EditPanel>
   );
 }
