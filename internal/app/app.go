@@ -223,6 +223,15 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Collections: a.collections, // owner collections as targeted Home/section rows
 		ServerName:  func() string { return a.cfg.Get().Server.FriendlyName },
 		Logger:      log.With("component", "personalize"),
+		// Netflix-style hooks (#31/#32) follow the owner's live switches.
+		IntentEnabled: func() bool { return a.cfg.Get().Personalize.SessionIntent },
+		ClockFormat: func() string {
+			c := a.cfg.Get()
+			if c.Personalize.ClockFormat != "" {
+				return c.Personalize.ClockFormat
+			}
+			return c.Catalog.Language
+		},
 	}); err != nil {
 		return fmt.Errorf("personalization: %w", err)
 	}
@@ -368,10 +377,22 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger: log.With("component", "gdm"),
 	})
 
+	// Post-play pre-buffering (#30): prewarm through the playback manager
+	// once it implements core.Prewarmer; until then prefetch resolves and
+	// pulls the opening bytes itself.
+	var prewarmer core.Prewarmer
+	if pw, ok := any(a.playback).(core.Prewarmer); ok {
+		prewarmer = pw
+	}
 	a.prefetch, err = prefetch.New(prefetch.Deps{
 		Catalog: a.catalog, Resolver: a.resolver, Engine: a.engine,
 		State: a.state, Auth: a.users, Hints: a.playback,
-		Logger: log.With("component", "prefetch"),
+		Logger:   log.With("component", "prefetch"),
+		PostPlay: a.personalize, Prewarmer: prewarmer, Markers: a.markers,
+		PostPlayEnabled: func() bool {
+			c := a.cfg.Get().Personalize
+			return c.PostPlay && c.PostPlayPrebuffer
+		},
 	}, cfg.Cache, prefetch.Options{})
 	if err != nil {
 		return fmt.Errorf("prefetch: %w", err)

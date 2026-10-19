@@ -20,6 +20,9 @@ func Defaults(dataDir string) Config {
 	return Config{
 		Usenet:  Usenet{MinIdle: 2},
 		Markers: Markers{TheIntroDB: true, DetectCached: true},
+		Personalize: Personalize{
+			PostPlay: true, PostPlayPrebuffer: true, MicroReasons: true, SessionIntent: true,
+		},
 		Extras:  Extras{LocalTrailers: true, PrewarmBytes: 48 << 20, ResolverTimeout: Duration(20 * time.Second)},
 		Server: Server{
 			Port:               32400,

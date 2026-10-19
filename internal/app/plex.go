@@ -35,6 +35,11 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		OnTimeline: func(u *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
 			if u != nil {
 				a.playback.Timeline(u.ID, key, state)
+				// Session intent (#32): a detail open that just turned
+				// into this playback was a conversion, not browsing.
+				if state == "playing" {
+					a.personalize.NotePlayback(u, key)
+				}
 			}
 			a.prefetch.OnTimeline(u, key, offset, duration, state)
 		},

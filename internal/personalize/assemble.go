@@ -27,6 +27,7 @@ type assembly struct {
 	maxRows int
 	explore float64
 	day     int
+	intent  *intentSnapshot // live session intent (#32); nil = none
 }
 
 // rankedRow is a candidate row during assembly.
@@ -94,6 +95,8 @@ func (a *assembly) run() []core.HomeRow {
 		if rr.d.boost {
 			rr.score *= 1.5
 		}
+		// Live session intent also reorders rows, not just items.
+		rr.score *= a.intent.liftFor(items)
 		rows = append(rows, rr)
 	}
 
@@ -404,6 +407,12 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 		case a.hc.Device == core.DeviceMobile || (!a.hc.Weekend && a.hc.Daypart == core.DaypartLate):
 			adj += 0.05 * fitR
 		}
+	}
+	// What the viewer is browsing tonight (session intent, #32): a
+	// bounded lift for matching genres/decades/people. Never a vetoed
+	// title; restrictions were already applied by typeOK.
+	if a.intent.active() && !genreVetoed(a.model.taste, t) {
+		adj += a.intent.boostFor(t)
 	}
 	// Daily rotation: a small, stable-per-day nudge so near-ties reorder.
 	adj += 0.06 * (unit(a.user.ID, a.day, t.Key) - 0.5)

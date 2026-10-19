@@ -33,6 +33,7 @@ type Config struct {
 	Spike         Spike         `json:"spike"`
 	Downloads     Downloads     `json:"downloads"`
 	Markers       Markers       `json:"markers"`
+	Personalize   Personalize   `json:"personalize"`
 	Extras        Extras        `json:"extras"`
 	SetupComplete bool          `json:"setupComplete"`
 }
