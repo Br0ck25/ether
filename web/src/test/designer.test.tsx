@@ -13,8 +13,18 @@ function lastPreview(fake: Parameters<typeof calls>[0]): PreviewBody {
 function savedLayout(fake: Parameters<typeof calls>[0]): HomeLayout {
   return (calls(fake, "PUT", "/layout").at(-1)!.body as { layout: HomeLayout }).layout;
 }
-const status = (title: string, value: "Always" | "Eligible" | "Off") =>
-  within(within(screen.getByRole("listitem", { name: `Row ${title}` })).getByRole("radiogroup", { name: `Status of ${title}` })).getByRole("radio", { name: value });
+async function closeEditor() {
+  const dialog=screen.getByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button",{name:"Close"}));
+  await waitFor(()=>expect(screen.queryByRole("dialog")).toBeNull());
+}
+async function setStatus(title:string,value:"Always"|"Eligible"|"Off") {
+  fireEvent.click(screen.getByRole("tab",{name:"Rows"}));
+  fireEvent.click(screen.getByRole("button",{name:`Constraints for ${title}`}));
+  const editor=await screen.findByRole("dialog",{name:title});
+  fireEvent.click(within(within(editor).getByRole("radiogroup",{name:`Status of ${title}`})).getByRole("radio",{name:value}));
+  await closeEditor();
+}
 
 describe("Home Designer", () => {
   it("previews the typical viewer's Global Home with each row's provenance", async () => {
@@ -39,7 +49,7 @@ describe("Home Designer", () => {
   it("edits Global: the server previews the draft and reports the impact across viewers", async () => {
     const { fake } = renderApp("/designer");
     await screen.findByRole("region", { name: /Top 10 on Living Room Ether Today/ }, WAIT);
-    fireEvent.click(status("Top 10 Today", "Off"));
+    await setStatus("Top 10 Today", "Off");
 
     // Previewed server-side from the unsaved draft.
     const hidden = await screen.findByRole("listitem", { name: "Not shown: Top 10 on Living Room Ether Today" }, WAIT);
@@ -68,24 +78,29 @@ describe("Home Designer", () => {
     await screen.findByRole("region", { name: /Hidden Gems for You/ }, WAIT);
     await waitFor(() => expect(lastPreview(fake).viewerId).toBe(2));
 
-    fireEvent.click(status("Hidden Gems for You", "Off"));
+    await setStatus("Hidden Gems for You", "Off");
     const hidden = await screen.findByRole("listitem", { name: "Not shown: Hidden Gems for You" }, WAIT);
     expect(within(hidden).getByText("Off in override layer")).toBeInTheDocument();
     expect(within(hidden).getByText("Override for Sam Rivera")).toBeInTheDocument();
     expect(lastPreview(fake).layout?.viewers).toContainEqual({ userId: 2, pages: [{ section: "home", rows: [{ row: "hidden-gems", status: "off" }] }] });
     expect(within(screen.getByRole("listitem", { name: "Row Hidden Gems for You" })).getByText("Override")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Sam Rivera/ })).toHaveTextContent("1 override");
+    fireEvent.click(screen.getByRole("tab",{name:"Overrides"}));
     expect(screen.getByRole("region", { name: "Overrides for Sam Rivera" })).toHaveTextContent("hidden-gems");
 
     // Reset to global: the row comes back, the override is gone.
+    fireEvent.click(screen.getByRole("tab",{name:"Rows"}));
+    fireEvent.click(screen.getByRole("button",{name:"Constraints for Hidden Gems for You"}));
     fireEvent.click(screen.getByRole("button", { name: "Reset to global: Hidden Gems for You" }));
+    await closeEditor();
     await waitFor(() => expect(screen.queryByRole("listitem", { name: "Not shown: Hidden Gems for You" })).toBeNull(), WAIT);
     expect(screen.queryByText("Unsaved changes")).toBeNull();
 
     // An override that sticks: always show it for Sam, anchored to slot 2.
-    fireEvent.click(status("Hidden Gems for You", "Always"));
+    await setStatus("Hidden Gems for You", "Always");
     fireEvent.click(screen.getByRole("button", { name: "Constraints for Hidden Gems for You" }));
     fireEvent.change(screen.getByLabelText("Anchor slot for Hidden Gems for You"), { target: { value: "2" } });
+    await closeEditor();
     const gems = await screen.findByRole("region", { name: "Slot 2: Hidden Gems for You" }, WAIT);
     expect(within(gems).getByText(/override anchor at slot 2/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Save layout/ }));
@@ -100,8 +115,11 @@ describe("Home Designer", () => {
     fireEvent.click(within(row).getByRole("button", { name: `Anchor New Releases to slot ${slot}` }));
     await waitFor(() => expect(screen.getByRole("region", { name: `Slot ${slot}: New Releases` })).toHaveTextContent("Global anchor"), WAIT);
     expect(lastPreview(fake).layout?.global[0]?.rows).toContainEqual({ row: "new-releases", status: "always", slot: Number(slot) });
+    fireEvent.click(screen.getByRole("button",{name:"Edit anchored slots"}));
     expect(within(screen.getByRole("region", { name: "Anchored slots" })).getAllByRole("button", { name: /Move anchored row/ })).toHaveLength(2);
 
+    await closeEditor();
+    fireEvent.click(screen.getByRole("button",{name:"Edit page length"}));
     fireEvent.change(screen.getByLabelText("Home rows"), { target: { value: "3" } });
     const cut = await screen.findByRole("region", { name: "Not on this page" }, WAIT);
     await waitFor(() => expect(cut).toHaveTextContent("Page length, frequency cap or position constraints"), WAIT);
@@ -111,7 +129,7 @@ describe("Home Designer", () => {
   it("discards unsaved edits", async () => {
     const { fake } = renderApp("/designer");
     await screen.findByRole("region", { name: /Top 10 on Living Room Ether Today/ }, WAIT);
-    fireEvent.click(status("New Releases", "Off"));
+    await setStatus("New Releases", "Off");
     expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Discard/ }));
     await waitFor(() => expect(screen.queryByText("Unsaved changes")).toBeNull());

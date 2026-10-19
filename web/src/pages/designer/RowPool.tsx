@@ -1,3 +1,5 @@
+import { Drawer } from "../../components/Drawer";
+import { EditPanel } from "../../components/EditPanel";
 import { Badge, Button, Input, cn } from "@braedonsaunders/appkit-ui";
 import { ChevronDown, Plus, RotateCcw, Search, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -56,7 +58,7 @@ export function RowPool({ draft, onChange, layer, section, viewers, available, f
             open={focusRow === e.row} onToggle={() => onFocusRow(focusRow === e.row ? null : e.row)} />
         ))}
       </ul>
-      <form className="flex gap-2" onSubmit={(ev) => {
+      <EditPanel title="Custom row pattern" description="Advanced: target row IDs, kinds or glob patterns." action="Add custom pattern" size="md"><form className="flex gap-2" onSubmit={(ev) => {
         ev.preventDefault();
         const row = custom.trim();
         if (!row) return;
@@ -66,7 +68,7 @@ export function RowPool({ draft, onChange, layer, section, viewers, available, f
       }}>
         <Input value={custom} onChange={(e) => setCustom(e.currentTarget.value)} placeholder="Pattern, e.g. because.*" aria-label="Custom row pattern" className="h-8 flex-1 font-mono text-xs" />
         <Button type="submit" variant="outline" size="sm" className="h-8" disabled={!custom.trim()}><Plus size={14} /> Add</Button>
-      </form>
+      </form></EditPanel>
     </section>
   );
 }
@@ -103,7 +105,14 @@ function PoolItem({ entry, draft, onChange, layer, section, viewers, open, onTog
           {open ? <ChevronDown size={15} /> : <SlidersHorizontal size={14} />}
         </Button>
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <p className="mt-2 text-xs text-fg-muted">{STATUS_LABEL[effective.status]}</p>
+      {layer === "global" && own ? (
+        <p className="mt-1.5 text-[11px] text-fg-muted">
+          Affects {plural(viewers.length - overriding.length, "viewer")}
+          {overriding.length ? ` · ${plural(overriding.length, "viewer")} ${overriding.length === 1 ? "overrides" : "override"} it` : ""}
+        </p>
+      ) : null}
+      <Drawer open={open} onClose={onToggle} title={entry.title} description="Adjust this row in the current Home draft. Save the Home layout to apply it." size="lg">      <div className="mt-2 flex flex-wrap items-center gap-2">
         <Segmented ariaLabel={`Status of ${entry.title}`} size="sm" value={effective.status}
           onChange={(s) => edit({ ...effective, status: s, slot: s === "off" ? undefined : effective.slot })}
           options={statuses.map((s) => ({ value: s, label: <span title={STATUS_HINT[s]}>{STATUS_LABEL[s]}</span> }))} />
@@ -113,13 +122,7 @@ function PoolItem({ entry, draft, onChange, layer, section, viewers, open, onTog
           </Button>
         ) : null}
       </div>
-      {layer === "global" && own ? (
-        <p className="mt-1.5 text-[11px] text-fg-muted">
-          Affects {plural(viewers.length - overriding.length, "viewer")}
-          {overriding.length ? ` · ${plural(overriding.length, "viewer")} ${overriding.length === 1 ? "overrides" : "override"} it` : ""}
-        </p>
-      ) : null}
-      {open ? <div className="mt-2"><PolicyEditor policy={effective} title={entry.title} onChange={edit} /></div> : null}
+<PolicyEditor policy={effective} title={entry.title} onChange={edit} /></Drawer>
     </li>
   );
 }

@@ -1,4 +1,5 @@
-import { Button, SearchSelect, SettingsRow, SettingsSection, toast } from "@braedonsaunders/appkit-ui";
+import { SettingsRow } from "./SettingsRow";
+import { Button, SearchSelect,  SettingsSection, toast } from "@braedonsaunders/appkit-ui";
 import { Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, errorMessage } from "../lib/api";

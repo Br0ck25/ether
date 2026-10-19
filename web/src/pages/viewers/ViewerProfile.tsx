@@ -1,3 +1,4 @@
+import { EditPanel } from "../../components/EditPanel";
 import { Avatar, Badge, Button, DetailPageLayout, EmptyState, Spinner, SubtabNav, toast } from "@braedonsaunders/appkit-ui";
 import { ArrowLeft, CheckCircle2, History, LayoutTemplate, RefreshCw } from "lucide-react";
 import { useState } from "react";
@@ -139,7 +140,7 @@ function Limits({ id }: { id: number }) {
   if (!u) return <EmptyState title="No limits to set" description="This viewer has no user record on the server yet." />;
   return (
     <div className="max-w-3xl">
-      <UserLimitsForm user={u} defaultStreamLimit={config.data?.server.defaultStreamLimit} onSaved={(saved) => users.setData((list) => (list ?? []).map((x) => (x.id === saved.id ? saved : x)))} />
+      <EditPanel title="Viewer limits" description="Control concurrent playback, content rating and language preferences." action="Edit viewer limits"><UserLimitsForm user={u} defaultStreamLimit={config.data?.server.defaultStreamLimit} onSaved={(saved) => users.setData((list) => (list ?? []).map((x) => (x.id === saved.id ? saved : x)))} /></EditPanel>
     </div>
   );
 }

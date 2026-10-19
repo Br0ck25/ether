@@ -22,9 +22,11 @@ describe("Live TV owner programming", () => {
   await screen.findByRole("button", { name: "Create channel" });
   fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Movie night" } });
+  fireEvent.click(screen.getByRole("tab",{name:"Programming"}));
   fireEvent.change(screen.getByLabelText("Search titles"), { target: { value: "Adventure" } });
   fireEvent.click(await screen.findByRole("button", { name: /Adventure/ }));
   expect(await screen.findByRole("button", { name: "Remove Adventure" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab",{name:"Viewers"}));
   fireEvent.click(await screen.findByLabelText("Sam"));
   fireEvent.click(screen.getByRole("button", { name: "Save channel" }));
   await waitFor(() => expect(channelSave(calls)).toBeDefined());
@@ -37,6 +39,7 @@ describe("Live TV owner programming", () => {
   await waitFor(() => expect(calls.some(c => c.url.endsWith("/collections"))).toBe(true));
   fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Family TV" } });
+  fireEvent.click(screen.getByRole("tab",{name:"Programming"}));
   fireEvent.change(screen.getByLabelText("Programming source"), { target: { value: "collection" } });
   fireEvent.change(await screen.findByLabelText(/^Collection/), { target: { value: "6000000000000042" } });
   expect(screen.getByRole("option", { name: "Family favourites · 8 titles" })).toBeInTheDocument();
@@ -47,6 +50,7 @@ describe("Live TV owner programming", () => {
  it("explains an empty time block and lets its programming be selected visually", async () => {
   const calls = backend(); render(<LiveTV />);
   fireEvent.click(screen.getByRole("button", { name: "80s action template" }));
+  fireEvent.click(screen.getByRole("tab",{name:"Schedule"}));
   fireEvent.click(screen.getByRole("button", { name: "Add time block" }));
   fireEvent.click(screen.getByRole("button", { name: "Preview six hours" }));
   expect(await screen.findByRole("status")).toHaveTextContent("Add at least one movie to each time block");
@@ -65,6 +69,7 @@ describe("Live TV owner programming", () => {
   fireEvent.click(screen.getByRole("tab", { name: "Viewer access" }));
   await screen.findByRole("option", { name: "Sam" });
   fireEvent.change(screen.getByLabelText("Viewer"), { target: { value: "12" } });
+  fireEvent.click(await screen.findByRole("button",{name:"Edit Live TV access"}));
   fireEvent.click(await screen.findByLabelText("Disable Live TV for this viewer"));
   fireEvent.click(screen.getByRole("button", { name: "Save viewer access" }));
   await waitFor(() => expect(calls.some(c => c.url.endsWith("/livetv/policies/12") && c.init?.method === "PUT" && JSON.parse(String(c.init.body)).disabled)).toBe(true));

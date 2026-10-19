@@ -269,3 +269,54 @@ increase by one, boost/bury become priority weights. No core fields were removed
 
 Additions to `internal/core` and `internal/config` stay additive. Each backend
 work package adds its own fields to `admin.Deps` in a clearly separated block.
+
+## Owner navigation and editing
+
+The owner UI separates browsing from editing. Pages show saved summaries, current
+activity or lists. An explicit Add, Create, Configure or Edit action opens the
+existing AppKit Drawer; collection editing opens its full-width variant. The
+setup wizard remains a guided first-run flow. Filters, context selectors and
+operational actions such as Refresh, Scan and Stop stream stay on their page.
+
+AppKit SubtabNav provides underlined tabs, horizontal overflow on narrow screens
+and keyboard navigation. Use it for independent tasks rather than stacking their
+forms. Keep advanced options beside the feature they affect, with specific names
+such as Advanced scoring, Schedule or Device capabilities. Unknown server config
+fields remain available under Advanced inside the settings drawer.
+
+| Area | Task organization | Editing entry point |
+| --- | --- | --- |
+| Collections | Your collections, Templates, Built-in; Build, Schedule, Artwork, Audience inside the editor | New collection or open a collection; Describe it opens a nested drawer |
+| Home Designer | Layout, Rows, Overrides | Edit page length, page structure or row constraints; preview and layout save remain in the workspace |
+| Viewers | Taste, Activity, Their Home, Limits; taste has Overview, Genres, People & eras, Themes & languages, Corrections | Click a genre, Edit taste corrections or Edit viewer limits |
+| Discovery | Watchlists, Ratings, Artwork, Search & recaps | Edit monitoring, Add reminder, Edit rating sources, Edit artwork preferences or Configure search & recaps |
+| Live TV | Channels, IPTV sources, Guide preview, Viewer access | Create/Edit channel or source, Edit Live TV access; channel drawer has Basics, Programming, Schedule and Viewers |
+| Insights | Now playing, History, Viewing stats, Providers & indexers, Notifications, Weekly report, Delivery history, Hardware | Edit plan price, New/Edit channel, Configure weekly report |
+| Libraries & backups | Migration, Local libraries, Backups | Start Plex import, Open CSV tools, Add folder, Match file, Edit backup schedule, Restore backup |
+| Playback | Quality profiles, Client rules, Defaults, Playback start, Advanced scoring, Device capabilities | Edit profile, Edit client rules, Edit defaults, Edit startup behavior, Edit custom formats |
+| Audio & subtitles | Preferences, Show memory, Intro & credits, Subtitle timing | Edit preferences, Adjust subtitle timing |
+| Episode ordering | Search for a show | Select a show to open its ordering drawer |
+| Safety & sharing | Viewer policies, Invitations, Clean Home, Remote & security | Edit viewer policy or Invite a friend; policy drawer has Content, Playback limits and Allowed times |
+| Settings | Feature navigation; categories inside each editor | Edit the feature, provider or indexer; Prowlarr import belongs with indexers |
+| Logs & resolver traces | Latest logs first; traces list | Open a trace for details |
+
+Client rules are edited at **Playback → Client rules → Edit client rules**. Rules
+match a device product, an optional platform and an optional named viewer, then
+choose an existing quality profile. The first match wins. Owners can choose
+common products or enter a custom product name and reorder rules. Device
+capabilities is reference information; codec support is still checked at playback.
+
+Import previews and their explicit Import action stay in the import drawer. CSV
+imports and exports have a separate viewer selector. Previewing never applies a
+migration. Viewer policy requests are cancelled when selection changes, and
+invitations copy the selected viewer's saved policy after it has loaded.
+
+Logs sort newest first, retain arrival order for identical timestamps and place
+newer arrivals above earlier entries. Live updates refresh without forcing a
+scroll to the bottom. History, local media and backup snapshots use AppKit's
+searchable, paginated table. The app shell owns the viewport; pages, drawer bodies
+and the Designer's two columns each retain their appropriate vertical scroll area.
+
+AppKit still owns drawer animation, focus restoration, Escape handling and scroll
+locking. A small Ether wrapper associates each visible title with its dialog name
+and automatically selects AppKit's stacked mode for nested editors.

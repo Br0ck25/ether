@@ -1,4 +1,6 @@
-import { Button, SettingsShell, Spinner, toast, type SettingsNavGroup } from "@braedonsaunders/appkit-ui";
+import { ProwlarrImport } from "../../components/ProwlarrImport";
+import { EditPanel } from "../../components/EditPanel";
+import { Button, SettingsShell, Spinner, toast, SubtabNav, type SettingsNavGroup } from "@braedonsaunders/appkit-ui";
 import {
   ArrowDownToLine, Bot, Captions, Cpu, Film, Gauge, HardDrive, Layers, Network, Puzzle, RotateCcw, Save, Search,
   Server, ShieldCheck, SlidersHorizontal, Tv, Users,
@@ -66,6 +68,7 @@ export default function Settings() {
     ...(extraSections.length ? [{ label: "More", items: extraSections.map((s) => ({ key: s.id, label: s.label, icon: s.icon })) }] : []),
   ];
 
+  const [qualityTab,setQualityTab]=useState<"profiles"|"rules"|"defaults">("profiles");
   const [draft, setDraft] = useState<unknown>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState<unknown>(null);
@@ -84,12 +87,12 @@ export default function Settings() {
     );
   }, []);
 
-  const save = async () => {
+  const save = async (next = draft) => {
     if (!cfg) return;
     setSaving(true); setSaveError(null); setErrors({});
     try {
-      if (SECTION_ENDPOINT.has(section.id)) await api.putSection(section.id, draft);
-      else await api.putConfig({ ...cfg, [section.key]: draft } as EtherConfig);
+      if (SECTION_ENDPOINT.has(section.id)) await api.putSection(section.id, next);
+      else await api.putConfig({ ...cfg, [section.key]: next } as EtherConfig);
       toast.success("Settings saved", { description: section.label });
       await config.reload();
       void refreshDashboard();
@@ -101,7 +104,7 @@ export default function Settings() {
   };
 
   const footer = (
-    <>
+    <><MutationError error={saveError} />
       <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setErrors({}); setSaveError(null); }} disabled={!dirty || saving}><RotateCcw size={14} /> Discard</Button>
       <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}><Save size={14} /> {saving ? "Saving…" : "Save changes"}</Button>
     </>
@@ -112,9 +115,9 @@ export default function Settings() {
   if (config.error) body = <ErrorPanel error={config.error} onRetry={() => void config.reload()} />;
   else if (!cfg || (section.key && draft === null && stored !== null)) body = <div className="py-10 text-center"><Spinner size={20} label="Loading settings" /></div>;
   else if (section.id === "users") body = <UsersSection defaultStreamLimit={cfg.server.defaultStreamLimit} />;
-  else if (section.id === "usenet") body = <UsenetSection value={draft as EtherConfig["usenet"]} onChange={setDraft} errors={errors} tests={tests} runTest={runTest} status={sections.providers} footer={footer} />;
-  else if (section.id === "indexers") body = <IndexersSection value={(draft as EtherConfig["indexers"]) ?? []} onChange={setDraft} errors={errors} tests={tests} runTest={runTest} status={sections.indexers} footer={footer} />;
-  else if (section.id === "quality") body = <QualitySection value={draft as EtherConfig["quality"]} onChange={setDraft} errors={errors} footer={footer} />;
+  else if (section.id === "usenet") body = <UsenetSection value={draft as EtherConfig["usenet"]} onChange={setDraft} errors={errors} tests={tests} runTest={runTest} status={sections.providers} footer={footer} onCommit={save} onDiscard={()=>setDraft(stored)} />;
+  else if (section.id === "indexers") body = <><EditPanel title="Import from Prowlarr" description="Reuse the Usenet indexers you already manage." action="Connect Prowlarr"><ProwlarrImport /></EditPanel><IndexersSection value={(draft as EtherConfig["indexers"]) ?? []} onChange={setDraft} errors={errors} tests={tests} runTest={runTest} status={sections.indexers} footer={footer} onCommit={save} onDiscard={()=>setDraft(stored)} /></>;
+  else if (section.id === "quality") body = <><SubtabNav ariaLabel="Quality settings" active={qualityTab} onSelect={v=>setQualityTab(v as typeof qualityTab)} tabs={[{key:"profiles",label:"Profiles"},{key:"rules",label:"Client rules"},{key:"defaults",label:"Defaults"}]} /><QualitySection view={qualityTab} value={draft as EtherConfig["quality"]} onChange={setDraft} errors={errors} footer={footer} onCommit={save} onDiscard={()=>setDraft(stored)} /></>;
   else {
     const prefix = section.key;
     const testFor: Record<string, ReactNode> = {
@@ -128,7 +131,7 @@ export default function Settings() {
         {section.id === "plex" ? <PlexStatus cfg={cfg} remote={sections.remote} onReopen={async () => { try { await api.setupReopen(); await reloadBoot(); navigate("/setup"); } catch (e) { toast.error("Couldn't reopen setup", { description: (e as Error).message }); } }} /> : null}
         {section.id === "cache" ? <CacheStatus dir={String(asObj(draft).dir ?? cfg.cache.dir)} budget={Number(asObj(draft).budgetBytes ?? cfg.cache.budgetBytes)} status={sections.cache} /> : null}
         {section.id === "transcode" ? <TranscodeStatus status={sections.hwaccel} /> : null}
-        <SchemaGroups groups={section.schema ?? []} value={asObj(draft)} onChange={setDraft} errors={errors} prefix={prefix} footer={<>{testFor[section.id] ? <span className="mr-auto">{testFor[section.id]}</span> : null}{footer}</>} />
+        <EditPanel key={section.id} title={section.label} description={section.description} action={`Edit ${section.label.toLowerCase()}`} summary={<dl className="space-y-1">{(section.schema??[]).flatMap(g=>g.fields).filter(f=>f.kind!=="secret"&&f.kind!=="readonly").slice(0,3).map(f=><div key={f.key} className="flex flex-wrap gap-x-3"><dt>{f.label}</dt><dd className="font-medium text-fg">{typeof asObj(stored)[f.key]==="boolean"?(asObj(stored)[f.key]?"On":"Off"):String(asObj(stored)[f.key]??"Automatic")||"Automatic"}</dd></div>)}</dl>} onOpen={()=>{setDraft(stored);setErrors({});setSaveError(null)}} onDiscard={()=>{setDraft(stored);setErrors({});setSaveError(null)}}><MutationError error={saveError} /><SchemaGroups groups={section.schema ?? []} value={asObj(draft)} onChange={setDraft} errors={errors} prefix={prefix} footer={<>{testFor[section.id] ? <span className="mr-auto">{testFor[section.id]}</span> : null}{footer}</>} /></EditPanel>
       </>
     );
   }

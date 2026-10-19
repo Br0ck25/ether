@@ -19,11 +19,6 @@ export const SERVER: FieldGroup[] = [
 ];
 
 export const PLEX: FieldGroup[] = [
- {title:"Compatibility",fields:[
- {key:"disableVersionTracking",label:"Keep the current compatibility version",kind:"bool",help:"Disable automatic public Plex release tracking."},
- {key:"compatibilityVersion",label:"Compatibility version override",kind:"text",help:"Leave empty to use the tracked public PMS version."},
- {key:"latestCompatibilityVersion",label:"Latest public PMS version",kind:"readonly"},
- ]},
   {
     title: "Remote access", description: "Let Plex apps reach Ether from outside your network.", fields: [
       { key: "remoteAccess", label: "Allow remote access", kind: "bool", help: "Publishes your public address to plex.tv." },
@@ -49,7 +44,12 @@ export const PLEX: FieldGroup[] = [
       { key: "ownerPlexId", label: "Owner Plex ID", kind: "readonly" },
       { key: "certHash", label: "plex.direct hash", kind: "readonly" },
     ],
-  },
+  }, {title:"Compatibility",fields:[
+ {key:"disableVersionTracking",label:"Keep the current compatibility version",kind:"bool",help:"Disable automatic public Plex release tracking."},
+ {key:"compatibilityVersion",label:"Compatibility version override",kind:"text",help:"Leave empty to use the tracked public PMS version."},
+ {key:"latestCompatibilityVersion",label:"Latest public PMS version",kind:"readonly"},
+ ]},
+
 ];
 
 export const CACHE: FieldGroup[] = [

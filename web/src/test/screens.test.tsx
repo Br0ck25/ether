@@ -41,6 +41,7 @@ describe("Settings", () => {
   it("round-trips redacted secrets and saves one section", async () => {
     const { fake } = renderApp("/settings/usenet");
     expect(await screen.findByRole("heading", { name: "Usenet providers" }, WAIT)).toBeInTheDocument();
+    fireEvent.click((await screen.findAllByRole("button",{name:"Edit provider"}))[0]!);
     const host = (await screen.findAllByLabelText("Host"))[0]!;
     fireEvent.change(host, { target: { value: "eu.news.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
@@ -52,6 +53,7 @@ describe("Settings", () => {
 
   it("shows server validation errors next to the field", async () => {
     const { fake } = renderApp("/settings/server");
+    fireEvent.click(await screen.findByRole("button",{name:"Edit server"}));
     const name = await screen.findByLabelText("Server name", {}, WAIT);
     const original = fake.fetch;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -62,7 +64,7 @@ describe("Settings", () => {
     }));
     fireEvent.change(name, { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
-    expect(await screen.findByText("Please fix the highlighted fields", {}, WAIT)).toBeInTheDocument();
+    expect((await screen.findAllByText("Please fix the highlighted fields", {}, WAIT)).length).toBeGreaterThan(0);
     expect(screen.getAllByText("is required").length).toBeGreaterThan(0);
   });
 
@@ -71,6 +73,7 @@ describe("Settings", () => {
       f.state.config = { ...f.state.config, personalize: { enabled: true, explore: 0.2 } } as never;
     });
     expect(await screen.findByRole("heading", { name: "Personalize" }, WAIT)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button",{name:"Edit personalize"}));
     fireEvent.change(await screen.findByLabelText("Explore"), { target: { value: "0.4" } });
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
     await waitFor(() => expect(calls(fake, "PUT", "/config")).toHaveLength(1), WAIT);

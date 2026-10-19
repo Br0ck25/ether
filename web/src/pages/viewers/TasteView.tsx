@@ -1,5 +1,7 @@
+import { Drawer } from "../../components/Drawer";
+import { EditPanel } from "../../components/EditPanel";
 import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
-import { Avatar, Badge, Button, EmptyState, Slider, toast, cn } from "@braedonsaunders/appkit-ui";
+import { Avatar, Badge, Button, EmptyState, Slider, SubtabNav, toast, cn } from "@braedonsaunders/appkit-ui";
 import { Brain, CalendarRange, Clapperboard, Clock3, Languages, Plus, Save, Sparkles, Tags, Undo2, UserRound, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Columns, DivergingBars, HourStrip, Meter } from "../../components/charts";
@@ -26,6 +28,7 @@ function confidenceText(c: number): string {
  * genre = genre name, keyword = keyword name, person = TMDB person id.
  */
 export function TasteView({ userId, taste, onChange }: { userId: number; taste: TasteProfile; onChange: (t: TasteProfile) => void }) {
+  const [tab,setTab]=useState("overview");
   const [overrides, setOverrides] = useState<TasteOverride[]>(taste.overrides ?? []);
   const [names, setNames] = useState<Record<string, string>>({});
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
@@ -63,7 +66,8 @@ export function TasteView({ userId, taste, onChange }: { userId: number; taste: 
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-3">
+      <SubtabNav ariaLabel="Taste details" active={tab} onSelect={setTab} tabs={[{key:"overview",label:"Overview"},{key:"genres",label:"Genres"},{key:"people",label:"People & eras"},{key:"themes",label:"Themes & languages"},{key:"corrections",label:"Corrections"}]} />
+      {tab === "overview" && <div className="grid gap-6 lg:grid-cols-3">
         <DashboardPanel title="What Ether has learned" icon={<Brain size={16} />} className="lg:col-span-1">
           <Meter value={taste.confidence} label="Confidence" valueLabel={`${Math.round(taste.confidence * 100)}%`} />
           <p className="mt-3 text-sm text-fg-muted">{confidenceText(taste.confidence)}</p>
@@ -83,16 +87,16 @@ export function TasteView({ userId, taste, onChange }: { userId: number; taste: 
           </div>
           <div className="mt-4"><p className="mb-1.5 text-xs text-fg-muted">When they watch</p><HourStrip peaks={taste.habits.peakHours ?? []} ariaLabel="Peak viewing hours" /></div>
         </DashboardPanel>
-      </div>
+      </div>}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <DashboardPanel title="Genres" icon={<Clapperboard size={16} />}
+      <div className="grid gap-6">
+        {tab === "genres" && <DashboardPanel title="Genres" icon={<Clapperboard size={16} />}
           actions={<span className="text-xs text-fg-subtle">Click a genre to correct it</span>}>
           {genreData.length ? (
             <DivergingBars data={genreData} ariaLabel="Genre affinity from dislike to like" onSelect={(d) => setSelectedGenre(d.key === selectedGenre ? null : d.key)} selectedKey={selectedGenre ?? undefined} />
           ) : <p className="text-sm text-fg-muted">No genre signal yet.</p>}
           {sel ? (
-            <div className="mt-4 rounded-lg border border-border bg-bg-subtle p-3" aria-live="polite">
+            <Drawer open onClose={()=>{setSelectedGenre(null);setOverrides(taste.overrides??[])}} title={sel.name} footer={<Button disabled={saving||!dirty} onClick={()=>void save()}>Save correction</Button>}><div className="mt-4 rounded-lg border border-border bg-bg-subtle p-3" aria-live="polite">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium text-fg">{sel.name}</p>
                 <span className="text-xs text-fg-muted">Learned {sel.weight > 0 ? "+" : ""}{sel.weight.toFixed(2)}</span>
@@ -108,12 +112,12 @@ export function TasteView({ userId, taste, onChange }: { userId: number; taste: 
                   onChange={(e) => setOverride("genre", sel.name, e.currentTarget.valueAsNumber)} className="flex-1" />
                 <span className="w-10 text-right tabular-nums text-fg">{(selOverride?.weight ?? sel.weight).toFixed(2)}</span>
               </label>
-            </div>
+            </div></Drawer>
           ) : null}
-        </DashboardPanel>
+        </DashboardPanel>}
 
         <div className="space-y-6">
-          <DashboardPanel title="People they follow" icon={<UserRound size={16} />}>
+          {tab === "people" && <DashboardPanel title="People they follow" icon={<UserRound size={16} />}>
             {taste.people.length === 0 ? <p className="text-sm text-fg-muted">No favourite people yet.</p> : (
               <ul className="space-y-2">
                 {[...taste.people].sort((a, b) => b.weight - a.weight).slice(0, 8).map((p) => (
@@ -125,15 +129,15 @@ export function TasteView({ userId, taste, onChange }: { userId: number; taste: 
                 ))}
               </ul>
             )}
-          </DashboardPanel>
-          <DashboardPanel title="Eras" icon={<CalendarRange size={16} />}>
+          </DashboardPanel>}
+          {tab === "people" && <DashboardPanel title="Eras" icon={<CalendarRange size={16} />}>
             {decades.length ? <Columns ariaLabel="Affinity by decade" data={decades.map((d) => ({ key: String(d.decade), label: `’${String(d.decade).slice(2)}s`, value: d.weight, hint: `${d.decade}s` }))} /> : <p className="text-sm text-fg-muted">No era preference yet.</p>}
-          </DashboardPanel>
+          </DashboardPanel>}
         </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <DashboardPanel title="Themes" icon={<Tags size={16} />}>
+        {tab === "themes" && <DashboardPanel title="Themes" icon={<Tags size={16} />}>
           {taste.keywords.length === 0 ? <p className="text-sm text-fg-muted">No themes yet.</p> : (
             <div className="flex flex-wrap gap-1.5">
               {[...taste.keywords].sort((a, b) => b.weight - a.weight).map((k) => (
@@ -145,15 +149,15 @@ export function TasteView({ userId, taste, onChange }: { userId: number; taste: 
               ))}
             </div>
           )}
-        </DashboardPanel>
-        <DashboardPanel title="Languages" icon={<Languages size={16} />}>
+        </DashboardPanel>}
+        {tab === "themes" && <DashboardPanel title="Languages" icon={<Languages size={16} />}>
           {taste.languages.length === 0 ? <p className="text-sm text-fg-muted">No language preference yet.</p> : (
             <DivergingBars ariaLabel="Language affinity" data={[...taste.languages].sort((a, b) => b.weight - a.weight).map((l) => ({ key: l.code, label: langName(l.code), weight: l.weight }))} />
           )}
-        </DashboardPanel>
+        </DashboardPanel>}
       </div>
 
-      <DashboardPanel title="Your corrections" icon={<Sparkles size={16} />}
+      {tab === "corrections" && <EditPanel onOpen={()=>setOverrides(taste.overrides??[])} onDiscard={()=>setOverrides(taste.overrides??[])} title="Taste corrections" description="Fine-tune recommendations without changing what the viewer has watched." action="Edit taste corrections" summary={`${overrides.length} owner corrections`}><DashboardPanel title="Your corrections" icon={<Sparkles size={16} />}
         actions={
           <div className="flex gap-2">
             <Button variant="ghost" size="sm" onClick={() => setOverrides(taste.overrides ?? [])} disabled={!dirty || saving}><Undo2 size={14} /> Discard</Button>
@@ -180,7 +184,7 @@ export function TasteView({ userId, taste, onChange }: { userId: number; taste: 
           </ul>
         )}
         <AddOverride onAdd={(kind, value, weight, name) => { if (name) setNames((n) => ({ ...n, [value]: name })); setOverride(kind, value, weight); }} />
-      </DashboardPanel>
+      </DashboardPanel></EditPanel>}
     </div>
   );
 }

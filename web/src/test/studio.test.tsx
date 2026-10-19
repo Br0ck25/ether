@@ -20,7 +20,7 @@ describe("Collection Studio editor", () => {
 
     // The initial preview arrives without any rules.
     await waitFor(() => expect(previewBodies(fake).length).toBeGreaterThan(0), WAIT);
-    expect(await screen.findByText(/\d+ titles/, {}, WAIT)).toBeInTheDocument();
+    expect(await within(screen.getByRole("dialog",{name:"Collection Studio"})).findByText(/\d+ titles/, {}, WAIT)).toBeInTheDocument();
 
     // Add a rating rule from the field menu.
     fireEvent.click(screen.getByRole("button", { name: /Add rule/ }));
@@ -48,7 +48,7 @@ describe("Collection Studio editor", () => {
     expect(created.rules).toEqual([{ field: "rating", op: "gte", value: 7 }]);
     // The editor now shows the saved collection.
     await waitFor(() => expect(calls(fake, "GET", "/collections/c").length).toBeGreaterThan(0), WAIT);
-    expect(await screen.findByText("Draft", {}, WAIT)).toBeInTheDocument();
+    expect(await within(screen.getByRole("dialog",{name:"Collection Studio"})).findByText("Draft", {}, WAIT)).toBeInTheDocument();
   });
 
   it("refuses to save an incomplete collection and says why", async () => {

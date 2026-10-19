@@ -1,3 +1,4 @@
+import { Drawer } from "./components/Drawer";
 import {
   AppShell, Button, ConfirmRoot, Popover, PromptRoot, Spinner, ThemeProvider, ThemeToggle, Toaster, UiLinkProvider,
   type LinkRender, type SidebarNavGroup,
@@ -6,7 +7,7 @@ import {
   Activity, Gauge, LayoutTemplate, Layers, LogOut, ScrollText, Settings as SettingsIcon, Sparkles, Users,
 } from "lucide-react";
 import { forwardRef, lazy, Suspense, useCallback, useEffect, useState, type AnchorHTMLAttributes } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { AppProvider, useApp } from "./app-context";
 import { Brand, EtherMark } from "./components/brand";
 import { ErrorPanel } from "./components/feedback";
@@ -66,7 +67,7 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
     { href: "/traces", label: "Resolver traces", icon: <Activity size={18} /> },
   ];
   if (!setupComplete) items.unshift({ href: "/setup", label: "Finish setup", icon: <Sparkles size={18} />, mobile: true });
-  return items.map((item) => ({ label: item.label, items: [item] }));
+  return [{label:"Library",items:items.filter(item=>["/setup","/","/collections","/designer","/viewers","/discovery","/livetv","/metadata"].includes(item.href))},{label:"Playback & access",items:items.filter(item=>["/playback","/streams","/safety"].includes(item.href))},{label:"Server",items:items.filter(item=>["/insights","/adoption","/settings","/logs","/traces"].includes(item.href))}];
 }
 
 function HealthIndicator() {
@@ -112,6 +113,11 @@ function versionLabel(v: string): string {
 }
 
 /** A fresh editor per new-collection draft (each navigation carries its own draft id). */
+function CollectionDrawer({fresh=false}:{fresh?:boolean}) {
+  const navigate=useNavigate();
+  return <><div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col"><CollectionsGallery/></div><Drawer open onClose={()=>navigate("/collections")} title="Collection Studio" size="2xl" initialFullscreen bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0">{fresh?<NewCollection/>:<CollectionEditor/>}</Drawer></>;
+}
+
 function NewCollection() {
   const [search] = useSearchParams();
   return <CollectionEditor key={search.get("draft") ?? "new"} />;
@@ -153,8 +159,8 @@ function Shell() {
           <Route path="/" element={boot.setupComplete ? <Home /> : <Navigate to="/setup" replace />} />
           <Route path="/setup" element={<Setup />} />
           <Route path="/collections" element={<CollectionsGallery />} />
-          <Route path="/collections/new" element={<NewCollection />} />
-          <Route path="/collections/:id" element={<CollectionEditor />} />
+          <Route path="/collections/new" element={<CollectionDrawer fresh />} />
+          <Route path="/collections/:id" element={<CollectionDrawer />} />
           <Route path="/designer" element={<Designer />} />
           <Route path="/viewers" element={<ViewersList />} />
           <Route path="/viewers/:id" element={<ViewerProfile />} />
