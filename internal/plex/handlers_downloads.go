@@ -677,8 +677,14 @@ func (s *Server) handleDownloadItemMedia(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.downloads.mu.Lock()
-	status, p, readyAt, title := it.status, it.path, it.readyAt, it.title
+	status, p, readyAt, title, key := it.status, it.path, it.readyAt, it.title, it.key
 	s.downloads.mu.Unlock()
+	// Restrictions can change after an item was queued: serve the cached
+	// file only while the viewer may still see the title.
+	if t, err := s.d.Catalog.Get(r.Context(), key); err != nil || !s.visibleTitle(r.Context(), FromContext(r.Context()).User, t) {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
 	switch status {
 	case downloadDeciding, downloadWaiting, downloadProcessing:
 		w.Header().Set("Retry-After", "-1")

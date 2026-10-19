@@ -66,6 +66,7 @@ type downloadFixture struct {
 	srv      *Server
 	remux    *fakeRemuxer
 	playback *fakePlayback
+	auth     *fakeAuth
 	now      time.Time
 	mu       sync.Mutex
 }
@@ -83,6 +84,7 @@ func newDownloadFixture(t *testing.T, downloadsOn bool) *downloadFixture {
 	f := &downloadFixture{
 		remux:    &fakeRemuxer{dir: t.TempDir(), payload: strings.Repeat("0123456789", 100)},
 		playback: newFakePlayback(sampleInfo),
+		auth:     &fakeAuth{users: map[string]core.User{ownerToken: ownerUser, friendToken: friendUser}},
 		now:      fixedNow,
 	}
 	cfg := func() config.Config {
@@ -100,7 +102,7 @@ func newDownloadFixture(t *testing.T, downloadsOn bool) *downloadFixture {
 	f.srv = NewServer(Deps{
 		Catalog:   cat,
 		State:     newFakeState(),
-		Auth:      &fakeAuth{users: map[string]core.User{ownerToken: ownerUser, friendToken: friendUser}},
+		Auth:      f.auth,
 		Playback:  f.playback,
 		Downloads: f.remux,
 		Config:    cfg,
@@ -443,5 +445,27 @@ func TestDownloadQueueIsPerClient(t *testing.T) {
 	rec = f.do(t, http.MethodPost, "/downloadQueue/"+itoa(qid)+"/add?keys=/library/metadata/"+core.MovieKey(424242).String(), ownerToken, nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("add unknown: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDownloadMediaRechecksTitleVisibility(t *testing.T) {
+	f := newDownloadFixture(t, true)
+	qid := f.queue(t)
+	key := "/library/metadata/" + fightClub.Key.String()
+	rec := f.do(t, http.MethodPost, "/downloadQueue/"+itoa(qid)+"/add?keys="+key, ownerToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("add: %d %s", rec.Code, rec.Body.String())
+	}
+	it := f.waitStatus(t, qid, downloadAvailable)
+	media := "/downloadQueue/" + itoa(qid) + "/item/" + itoa(int64(it["id"].(float64))) + "/media"
+	if rec = f.do(t, http.MethodGet, media, ownerToken, nil); rec.Code != http.StatusOK {
+		t.Fatalf("media before restriction: %d", rec.Code)
+	}
+	// The viewer is restricted to PG-13 after the R-rated file was made.
+	restricted := ownerUser
+	restricted.MaxContentRating = "PG-13"
+	f.auth.users[ownerToken] = restricted
+	if rec = f.do(t, http.MethodGet, media, ownerToken, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("media after restriction: %d, want 404", rec.Code)
 	}
 }
