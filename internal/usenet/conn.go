@@ -44,6 +44,11 @@ type DialOptions struct {
 	BytesRead *atomic.Int64
 	// OnPhase receives durations for tcp, tls, greeting, and auth setup phases.
 	OnPhase func(string, time.Duration)
+	// OnStatus receives the raw server status line for trace diagnostics.
+	OnStatus func(string)
+	// OnCommand receives a protocol command before it is sent. AUTHINFO
+	// credentials are redacted so trace logging cannot expose them.
+	OnCommand func(string)
 }
 
 // Conn is one NNTP client connection. It is not safe for concurrent use;
@@ -54,6 +59,8 @@ type Conn struct {
 	w              *bufio.Writer
 	commandTimeout time.Duration
 	onPhase        func(string, time.Duration)
+	onStatus       func(string)
+	onCommand      func(string)
 
 	// PostingAllowed reports a 200 (vs 201) greeting.
 	PostingAllowed bool
@@ -145,6 +152,8 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 		w:              bufio.NewWriterSize(nc, 4096),
 		commandTimeout: o.CommandTimeout,
 		onPhase:        o.OnPhase,
+		onStatus:       o.OnStatus,
+		onCommand:      o.OnCommand,
 		created:        now,
 		used:           now,
 	}
@@ -278,6 +287,15 @@ func (c *Conn) cmd(ctx context.Context, verb, line string) (int, string, error) 
 }
 
 func (c *Conn) roundTrip(line string) (int, string, error) {
+	if c.onCommand != nil {
+		if strings.HasPrefix(line, "AUTHINFO USER ") {
+			c.onCommand("AUTHINFO USER [redacted]")
+		} else if strings.HasPrefix(line, "AUTHINFO PASS ") {
+			c.onCommand("AUTHINFO PASS [redacted]")
+		} else {
+			c.onCommand(line)
+		}
+	}
 	if _, err := c.w.WriteString(line); err != nil {
 		return 0, "", err
 	}
@@ -302,6 +320,9 @@ func (c *Conn) readStatus() (int, string, error) {
 			return 0, "", fmt.Errorf("nntp: status line too long")
 		}
 		return 0, "", err
+	}
+	if c.onStatus != nil {
+		c.onStatus(strings.TrimRight(string(line), "\r\n"))
 	}
 	s := strings.TrimRight(string(line), "\r\n")
 	if len(s) < 3 {
@@ -377,6 +398,9 @@ func (c *Conn) StatMany(ctx context.Context, messageIDs []string) (map[string]bo
 	}
 	start := time.Now()
 	for _, id := range ids {
+		if c.onCommand != nil {
+			c.onCommand("STAT " + id)
+		}
 		if _, err = c.w.WriteString("STAT " + id + "\r\n"); err != nil {
 			break
 		}

@@ -78,6 +78,8 @@ type Options struct {
 	UseGroup bool
 	// MaxArticleSize caps a decoded article; 0 = yenc.DefaultMaxSize.
 	MaxArticleSize int64
+	// TraceProtocol emits raw NNTP status lines at debug level.
+	TraceProtocol bool
 }
 
 func (o *Options) withDefaults() {
@@ -422,20 +424,17 @@ func (f *Fetcher) Warm(ctx context.Context, perProvider int) error {
 	var mu sync.Mutex
 	var first error
 	for _, p := range pools {
-		n := min(perProvider, p.size)
-		for i := 0; i < n; i++ {
-			wg.Add(1)
-			go func(p *pool) {
-				defer wg.Done()
-				if err := p.warm(ctx); err != nil {
-					mu.Lock()
-					if first == nil {
-						first = fmt.Errorf("usenet: warm %s: %w", providerLabel(p.cfg), err)
-					}
-					mu.Unlock()
+		wg.Add(1)
+		go func(p *pool) {
+			defer wg.Done()
+			if err := p.warm(ctx, perProvider); err != nil {
+				mu.Lock()
+				if first == nil {
+					first = fmt.Errorf("usenet: warm %s: %w", providerLabel(p.cfg), err)
 				}
-			}(p)
-		}
+				mu.Unlock()
+			}
+		}(p)
 	}
 	wg.Wait()
 	return first

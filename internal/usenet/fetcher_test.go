@@ -590,6 +590,73 @@ func TestStatManyPipelinesAndFallsBackToBlockProvider(t *testing.T) {
 	}
 }
 
+func TestPooledStatManyThenBodyAndTimeoutRecovery(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{Username: "user", Password: "pass"})
+	addSeg(t, s, "present@x", []byte("stream body"))
+	p := s.Provider("primary", 1)
+	f := New([]config.UsenetProvider{p}, Options{CommandTimeout: 40 * time.Millisecond, Retries: 0})
+	t.Cleanup(func() { _ = f.Close() })
+	if err := f.Warm(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.StatMany(context.Background(), []string{"present@x", "missing@x"})
+	if err != nil || !got["<present@x>"] || got["<missing@x>"] {
+		t.Fatalf("STAT result=%v err=%v", got, err)
+	}
+	body, _, err := f.BodyPart(context.Background(), "present@x", nil, core.PriorityLive)
+	if err != nil || string(body) != "stream body" {
+		t.Fatalf("BODY=%q err=%v", body, err)
+	}
+	if dials := f.Stats()[0].Dials; dials != 1 {
+		t.Fatalf("STAT->BODY should reuse one pooled connection, dials=%d", dials)
+	}
+
+	s.SetFault(func(cmd, _ string) nntptest.Fault {
+		if cmd == "STAT" {
+			return nntptest.Fault{Delay: 150 * time.Millisecond}
+		}
+		return nntptest.Fault{}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, err = f.StatMany(ctx, []string{"present@x", "missing@x", "present@x"})
+	cancel()
+	if err == nil {
+		t.Fatal("expected STAT pipeline timeout")
+	}
+	s.SetFault(nil)
+	time.Sleep(180 * time.Millisecond) // let the fake server drain the abandoned pipeline
+	body, _, err = f.BodyPart(context.Background(), "present@x", nil, core.PriorityLive)
+	if err != nil || string(body) != "stream body" {
+		t.Fatalf("BODY after pipeline timeout=%q err=%v", body, err)
+	}
+	if dials := f.Stats()[0].Dials; dials != 2 {
+		t.Fatalf("timed-out pipeline connection should be discarded; dials=%d want 2", dials)
+	}
+}
+
+func TestConcurrentWarmDoesNotMultiplyPerProviderLimit(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{MaxConns: 8})
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("primary", 8)}, Options{})
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := f.Warm(context.Background(), 4); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	stats := s.Stats()
+	if stats.MaxActive > 4 {
+		t.Fatalf("concurrent Warm opened %d connections, limit is 4", stats.MaxActive)
+	}
+	if stats.Active != 4 {
+		t.Fatalf("expected four warm idle connections, active=%d", stats.Active)
+	}
+}
+
 func TestHotReload(t *testing.T) {
 	s1 := nntptest.Start(t, nntptest.Options{})
 	s2 := nntptest.Start(t, nntptest.Options{})

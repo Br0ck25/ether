@@ -15,6 +15,7 @@ search results and saved NZBs. No DOGnzb requests were made.
 | NNTP batching, Apple TV attempt | 4K profile, cached search/NZBs | 5.32 s | — | — | — | — | No acceptable healthy candidate |
 | NNTP batching, Plex Web retry | cached search/NZBs | 14.70 s | — | — | — | — | No acceptable healthy candidate |
 | NNTP batching, Apple TV retry | cached search/NZBs | 42.75 s | — | — | — | — | No acceptable healthy candidate |
+| Pooled STAT/BODY trace after warm cap | Plex Web, cached search/NZBs | 20.238 s | — | — | — | — | No acceptable healthy candidate; best completed health check 5.65 s |
 
 The earlier warm measurement met the target but predates the latest NNTP work.
 The latest cached Apple TV attempt completed its two leading health checks but
@@ -25,6 +26,16 @@ responses even where sample STATs succeeded. This is a provider/content
 availability failure path that correctly rejects those releases, and means
 the ≤6 s cold / ≤4 s warm goals have not been demonstrated with the current
 live results.
+
+The protocol trace now records each command and raw status line with a
+connection ID. In the reproduced failure, each logged `451 0 <message-id>`
+followed a `BODY <same-message-id>` on that connection; it did not appear as
+an unread `223` STAT reply. The offline pooled regression test verifies that a
+successful `StatMany` is followed by BODY on the same connection, and that a
+timed-out partial STAT pipeline is discarded before a later BODY. The live
+trace has not established the cause of the provider's 451s; the regression
+remains unresolved until a healthy cached candidate can be played and the
+same provider/account behavior is compared against current main.
 
 The detailed trace showed 1 ms cached search. In the slow Plex Web run the
 health STAT wall time was 5.18 s for 12 spread samples; the largest provider

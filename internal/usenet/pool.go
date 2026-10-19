@@ -28,6 +28,7 @@ type pool struct {
 	brk *breaker
 
 	mu     sync.Mutex
+	warmMu sync.Mutex
 	idle   []*Conn // LIFO: the most recently used connection is reused first
 	live   int     // idle + in use + being dialled
 	closed bool
@@ -44,6 +45,7 @@ type pool struct {
 	misses        atomic.Int64
 	errs          atomic.Int64
 	dials         atomic.Int64
+	connSeq       atomic.Int64
 	tcpTime       atomic.Int64
 	tlsTime       atomic.Int64
 	greetingTime  atomic.Int64
@@ -102,6 +104,7 @@ func providerLabel(cfg config.UsenetProvider) string {
 }
 
 func (p *pool) dialOptions() DialOptions {
+	connID := p.connSeq.Add(1)
 	return DialOptions{
 		Host:           p.cfg.Host,
 		Port:           p.cfg.Port,
@@ -123,6 +126,16 @@ func (p *pool) dialOptions() DialOptions {
 				p.greetingTime.Add(int64(d))
 			case "auth":
 				p.authTime.Add(int64(d))
+			}
+		},
+		OnStatus: func(line string) {
+			if p.o.TraceProtocol {
+				p.log.Debug("nntp status", "connection", connID, "line", line)
+			}
+		},
+		OnCommand: func(line string) {
+			if p.o.TraceProtocol {
+				p.log.Debug("nntp command", "connection", connID, "line", line)
 			}
 		},
 	}
@@ -486,13 +499,44 @@ func (p *pool) statMany(ctx context.Context, ids []string) (map[string]bool, err
 }
 
 // warm opens and authenticates one connection and returns it to the idle pool.
-func (p *pool) warm(ctx context.Context) error {
-	c, err := p.get(ctx, core.PriorityLive)
-	if err != nil {
-		return err
+func (p *pool) warm(ctx context.Context, n int) error {
+	// Multiple concurrent health checks may all request a warm pool. Serialize
+	// each provider's warming pass so they share the same bounded idle set.
+	p.warmMu.Lock()
+	defer p.warmMu.Unlock()
+	n = min(n, 4, p.size)
+	if n <= 0 {
+		return nil
 	}
-	p.put(c, core.PriorityLive)
-	return nil
+	type acquired struct {
+		c   *Conn
+		err error
+	}
+	ready := make(chan acquired, n)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, err := p.get(ctx, core.PriorityLive)
+			ready <- acquired{c: c, err: err}
+			if c != nil {
+				<-release
+				p.put(c, core.PriorityLive)
+			}
+		}()
+	}
+	var first error
+	for i := 0; i < n; i++ {
+		got := <-ready
+		if got.err != nil && first == nil {
+			first = got.err
+		}
+	}
+	close(release)
+	wg.Wait()
+	return first
 }
 
 // failed classifies and records an error from a request on this pool.

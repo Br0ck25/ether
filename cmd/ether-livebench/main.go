@@ -53,7 +53,11 @@ func main() {
 	trace := flag.Bool("trace", false, "print coarse phase timing breakdown")
 	retry := flag.Bool("retry", false, "bypass a persisted unavailable result while reusing cached indexer results")
 	flag.Parse()
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	logLevel := slog.LevelWarn
+	if *trace {
+		logLevel = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 	var r ref
 	b, _ := os.ReadFile(*refPath)
 	json.Unmarshal(b, &r)
@@ -70,7 +74,11 @@ func main() {
 	ctx := context.Background()
 	cfg := config.Defaults(dir)
 	for i, s := range r.Servers {
-		cfg.Usenet.Providers = append(cfg.Usenet.Providers, config.UsenetProvider{ID: fmt.Sprint(i), Name: s.Name, Host: s.Host, Port: s.Port, TLS: s.TLS, Username: s.Username, Password: s.Password, Connections: 16, Priority: i, Enabled: true})
+		connections := s.Connections
+		if connections <= 0 {
+			connections = 4
+		}
+		cfg.Usenet.Providers = append(cfg.Usenet.Providers, config.UsenetProvider{ID: fmt.Sprint(i), Name: s.Name, Host: s.Host, Port: s.Port, TLS: s.TLS, Username: s.Username, Password: s.Password, Connections: connections, Priority: i, Enabled: true})
 	}
 	for i, x := range r.Indexers {
 		if filepath.Base(x.URL) != *indexer && x.Name != *indexer {
@@ -80,7 +88,7 @@ func main() {
 	}
 	db, err := store.Open(ctx, dir)
 	must(err)
-	fetcher := usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log})
+	fetcher := usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log, TraceProtocol: *trace})
 	defer fetcher.Close()
 	cache, err := segcache.Open(filepath.Join(dir, "cache"), 2<<30, log)
 	must(err)
