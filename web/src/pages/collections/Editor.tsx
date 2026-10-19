@@ -323,7 +323,7 @@ export default function CollectionEditor() {
 
   if (source.error) {
     return (
-      <div className="p-6">
+      <div className="app-scroll min-h-0 flex-1 overflow-y-auto p-6">
         <Link
           to="/collections"
           className="mb-4 inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"
@@ -350,15 +350,23 @@ export default function CollectionEditor() {
   const targets = describeTargets(spec);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <section aria-label="Collection Studio" className="flex min-h-0 flex-1 flex-col">
       <header className="shrink-0 border-b border-border bg-surface px-3 py-3 sm:px-6">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <Link
-            to="/collections"
-            className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"
-          >
-            <ArrowLeft size={14} /> Collections
-          </Link>
+          <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
+            <Link
+              to="/collections"
+              className="inline-flex items-center gap-1 text-fg-muted hover:text-fg"
+            >
+              <ArrowLeft size={14} /> Collections
+            </Link>
+            <span className="text-fg-subtle" aria-hidden>
+              /
+            </span>
+            <span className="truncate font-medium text-fg" aria-current="page">
+              {isNew ? "New collection" : "Edit collection"}
+            </span>
+          </nav>
           <span className="flex flex-wrap gap-1.5">
             {readOnly ? (
               <Badge variant="secondary">Built-in</Badge>
@@ -705,6 +713,6 @@ export default function CollectionEditor() {
           onApply: (g) => navigate(newCollectionHref(), { state: { spec: g } }),
         }}
       />
-    </div>
+    </section>
   );
 }

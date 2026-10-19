@@ -75,7 +75,7 @@ export default function Home() {
   return (
     <PageContainer>
       <PageHeader
-        title="Home"
+        title="Overview"
         description={`${greeting()}. Here's how ${boot.serverName || "Ether"} is doing.`}
         actions={
           <Button
@@ -107,6 +107,8 @@ export default function Home() {
           <ErrorPanel error={dashboardError} onRetry={() => void refreshDashboard()} />
         ) : null}
 
+        {dashboard ? <NeedsAttention items={health} /> : null}
+
         <KpiRow
           days={activity.data}
           unavailable={isUnavailable(activity.error)}
@@ -120,11 +122,19 @@ export default function Home() {
               title="Now playing"
               icon={<PlayCircle size={16} />}
               actions={
-                sessions.length ? (
-                  <Badge variant="info">
-                    {sessions.length} {sessions.length === 1 ? "stream" : "streams"}
-                  </Badge>
-                ) : null
+                <span className="flex items-center gap-2">
+                  {sessions.length ? (
+                    <Badge variant="info">
+                      {sessions.length} {sessions.length === 1 ? "stream" : "streams"}
+                    </Badge>
+                  ) : null}
+                  <Link
+                    to="/activity/now"
+                    className="text-xs font-medium text-primary hover:underline"
+                  >
+                    Activity
+                  </Link>
+                </span>
               }
             >
               {!dashboard ? (
@@ -318,13 +328,48 @@ function SessionCard({ s }: { s: NowPlaying }) {
   );
 }
 
+/** Problems first, each one link away from the screen that fixes it. */
+function NeedsAttention({ items }: { items: HealthItem[] }) {
+  const problems = items.filter((h) => h.level === "error" || h.level === "warn");
+  if (problems.length === 0) return null;
+  const severe = problems.some((h) => h.level === "error");
+  return (
+    <Alert variant={severe ? "destructive" : "warning"} role="region" aria-label="Needs attention">
+      <AlertTitle>
+        {problems.length === 1
+          ? "1 thing needs attention"
+          : `${problems.length} things need attention`}
+      </AlertTitle>
+      <AlertDescription>
+        <ul className="mt-2 space-y-1.5">
+          {problems.map((h) => (
+            <li key={h.id} className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-2">
+                <StatusDot level={h.level} />
+                <span className="font-medium text-fg">{h.label}</span>
+                <span className="truncate text-fg-muted">{h.summary}</span>
+              </span>
+              <Link
+                to={h.href}
+                className="shrink-0 text-sm font-medium text-primary hover:underline"
+              >
+                Fix
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 function HealthList({ items }: { items: HealthItem[] }) {
   return (
     <ul className="-mx-1 space-y-0.5">
       {items.map((h) => (
         <li key={h.id}>
           <Link
-            to={`/settings/${h.settings}`}
+            to={h.href}
             className="group flex items-start gap-3 rounded-lg px-2 py-2 hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             title={h.details.join("\n")}
           >
@@ -464,8 +509,8 @@ function RowsPanel({ state }: { state: ReturnType<typeof useAsync<RowInsight[]>>
       title="Best-performing rows"
       icon={<TrendingUp size={16} />}
       actions={
-        <Link to="/designer" className="text-xs font-medium text-primary hover:underline">
-          Home Designer
+        <Link to="/home-screens" className="text-xs font-medium text-primary hover:underline">
+          Home screens
         </Link>
       }
     >

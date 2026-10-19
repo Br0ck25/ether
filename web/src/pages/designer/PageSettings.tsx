@@ -1,4 +1,3 @@
-import { EditPanel } from "../../components/EditPanel";
 import { Button, Input, cn } from "@braedonsaunders/appkit-ui";
 import { ChevronDown, ChevronRight, RotateCcw } from "lucide-react";
 import { useState } from "react";
@@ -97,36 +96,29 @@ export function PageSettings({
     );
   };
   return (
-    <EditPanel
-      title="Page length"
-      description="Changes update the Home draft. Save the layout to apply them."
-      action="Edit page length"
-      size="lg"
-    >
-      <section className="space-y-2" aria-label="Page length">
-        <div>
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-            Page length
-          </h2>
-          <p className="mt-0.5 text-xs text-fg-muted">
-            All rows on {sectionLabel}, including Plex and discovery rows.
-            {layer !== "global" ? " Empty fields follow Global." : ""}
-          </p>
-        </div>
-        <div className="space-y-1.5 rounded-lg border border-border bg-surface p-2.5">
-          {row(null, "All devices")}
-          <button
-            type="button"
-            className="flex items-center gap-1 text-[11px] font-medium text-fg-muted hover:text-fg disabled:opacity-60"
-            aria-expanded={showDevices}
-            disabled={anyDevice}
-            onClick={() => setPerDevice((o) => !o)}
-          >
-            {showDevices ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Per device
-          </button>
-          {showDevices ? DEVICES.map((d) => row(d.value, d.label)) : null}
-        </div>
-      </section>
-    </EditPanel>
+    <section className="space-y-2" aria-label="Page length">
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+          Page length
+        </h2>
+        <p className="mt-0.5 text-xs text-fg-muted">
+          All rows on {sectionLabel}, including Plex and discovery rows.
+          {layer !== "global" ? " Empty fields follow Global." : ""}
+        </p>
+      </div>
+      <div className="space-y-1.5 rounded-lg border border-border bg-surface p-2.5">
+        {row(null, "All devices")}
+        <button
+          type="button"
+          className="flex items-center gap-1 text-[11px] font-medium text-fg-muted hover:text-fg disabled:opacity-60"
+          aria-expanded={showDevices}
+          disabled={anyDevice}
+          onClick={() => setPerDevice((o) => !o)}
+        >
+          {showDevices ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Per device
+        </button>
+        {showDevices ? DEVICES.map((d) => row(d.value, d.label)) : null}
+      </div>
+    </section>
   );
 }
