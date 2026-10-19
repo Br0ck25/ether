@@ -1,0 +1,770 @@
+package plextv
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ether-media/ether/internal/config"
+	"github.com/ether-media/ether/internal/core"
+	"github.com/ether-media/ether/internal/remote"
+)
+
+const testMachineID = "0123456789abcdef0123456789abcdef01234567"
+
+func testConfig() config.Config {
+	cfg := config.Defaults(os.TempDir())
+	cfg.Server.MachineIdentifier = testMachineID
+	cfg.Server.FriendlyName = "Living Room"
+	cfg.Plex.ClientIdentifier = "app-client-id"
+	return cfg
+}
+
+func newServerClient(t *testing.T, f *fakePlexTV) *Client {
+	c, err := New(Options{BaseURL: f.srv.URL, Identity: ServerIdentity(testConfig(), ""), RetryBackoff: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func owner() Account {
+	return Account{ID: 42, UUID: "uuid-42", Username: "owner", Title: "The Owner", Email: "o@example.com",
+		Subscription: Subscription{Active: true, Status: "Active", Plan: "lifetime"}}
+}
+
+func TestIdentities(t *testing.T) {
+	cfg := testConfig()
+	s := ServerIdentity(cfg, "")
+	if s.Product != "Plex Media Server" || s.ClientIdentifier != testMachineID || s.Provides != "server" ||
+		s.Version != DefaultServerVersion || s.DeviceName != "Living Room" {
+		t.Fatalf("%+v", s)
+	}
+	a := AppIdentity(cfg, "")
+	if a.Product != "Ether" || a.ClientIdentifier != "app-client-id" || a.Provides != "" {
+		t.Fatalf("%+v", a)
+	}
+}
+
+func TestPINFlow(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("user-token", owner())
+	c := newServerClient(t, f).WithIdentity(AppIdentity(testConfig(), "1.0"))
+	ctx := context.Background()
+	pin, err := c.CreatePIN(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin.ID == 0 || pin.Code == "" || pin.ExpiresAt.Before(time.Now()) || pin.ClientIdentifier != "app-client-id" {
+		t.Fatalf("%+v", pin)
+	}
+	h := f.header("/api/v2/pins")
+	if h.Get("X-Plex-Product") != "Ether" || h.Get("X-Plex-Client-Identifier") != "app-client-id" || h.Get("Accept") != "application/json" {
+		t.Fatalf("headers %v", h)
+	}
+
+	authURL := c.AuthURL(pin, "http://localhost:32400/setup")
+	frag := authURL[strings.Index(authURL, "#?")+2:]
+	q, err := url.ParseQuery(frag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(authURL, DefaultAuthAppURL+"#?") || q.Get("clientID") != "app-client-id" || q.Get("code") != pin.Code ||
+		q.Get("context[device][product]") != "Ether" || q.Get("forwardUrl") != "http://localhost:32400/setup" {
+		t.Fatalf("auth url %s", authURL)
+	}
+
+	p, err := c.CheckPIN(ctx, pin.ID, pin.Code)
+	if err != nil || p.AuthToken != "" {
+		t.Fatal(p, err)
+	}
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		f.approvePIN(pin.ID, "user-token")
+	}()
+	tok, err := c.WaitPIN(ctx, pin, 10*time.Millisecond)
+	if err != nil || tok != "user-token" {
+		t.Fatal(tok, err)
+	}
+	acct, err := c.User(ctx, tok)
+	if err != nil || acct.ID != 42 || acct.DisplayName() != "The Owner" || !acct.Subscription.Active {
+		t.Fatal(acct, err)
+	}
+}
+
+func TestPINExpiredAndCancel(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	c := newServerClient(t, f).WithIdentity(AppIdentity(testConfig(), ""))
+	_, err := c.WaitPIN(context.Background(), &PIN{ID: 1, Code: "gone"}, time.Millisecond)
+	if !errors.Is(err, ErrPINExpired) {
+		t.Fatalf("got %v", err)
+	}
+	pin, err := c.CreatePIN(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := c.WaitPIN(ctx, pin, 5*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestUserUnauthorized(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	c := newServerClient(t, f)
+	_, err := c.User(context.Background(), "bogus")
+	if !errors.Is(err, core.ErrUnauthorized) {
+		t.Fatalf("got %v", err)
+	}
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Code != 1001 || ae.Message != "User could not be authenticated" {
+		t.Fatalf("%+v", ae)
+	}
+	if _, err := c.User(context.Background(), ""); !errors.Is(err, core.ErrUnauthorized) {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimExchange(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("user-token", owner())
+	c := newServerClient(t, f)
+	res, err := c.Claim(context.Background(), "user-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Method != ClaimExchange || res.ServerToken != "server-token-42" || res.Owner.ID != 42 {
+		t.Fatalf("%+v", res)
+	}
+	h := f.header("/api/claim/exchange")
+	if h.Get("X-Plex-Product") != "Plex Media Server" || h.Get("X-Plex-Provides") != "server" || h.Get("X-Plex-Client-Identifier") != testMachineID {
+		t.Fatalf("exchange headers %v", h)
+	}
+	// The exchange needs the server identity.
+	if _, err := c.WithIdentity(AppIdentity(testConfig(), "")).ExchangeClaim(context.Background(), "claim-x"); err == nil {
+		t.Fatal("exchange with app identity")
+	}
+}
+
+func TestClaimFallbackToOwnerToken(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("user-token", owner())
+	f.exchangeErr = 422
+	c := newServerClient(t, f)
+	res, err := c.Claim(context.Background(), "user-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Method != ClaimOwnerToken || res.ServerToken != "user-token" {
+		t.Fatalf("%+v", res)
+	}
+	if _, err := c.Claim(context.Background(), "bad"); !errors.Is(err, core.ErrUnauthorized) {
+		t.Fatalf("bad token: %v", err)
+	}
+}
+
+func TestExtractAuthToken(t *testing.T) {
+	cases := map[string]string{
+		`<user><authentication-token> abc </authentication-token></user>`: "abc",
+		`<user authenticationToken="def"/>`:                               "def",
+		`{"authToken":"ghi"}`:                                             "ghi",
+		`{"user":{"authToken":"jkl"}}`:                                    "jkl",
+		`<user/>`:                                                         "",
+	}
+	for in, want := range cases {
+		if got := extractAuthToken([]byte(in)); got != want {
+			t.Errorf("%s: got %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestPublishAndResources(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	c := newServerClient(t, f)
+	ctx := context.Background()
+	uris := []string{"http://192.168.1.5:32400", "http://203.0.113.7:32400"}
+	if err := c.PublishConnections(ctx, "server-token-42", uris); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(f.published, ",") != strings.Join(uris, ",") {
+		t.Fatal(f.published)
+	}
+	h := f.header("/devices/" + testMachineID)
+	if h.Get("X-Plex-Token") != "server-token-42" || h.Get("X-Plex-Provides") != "server" {
+		t.Fatal(h)
+	}
+	if err := c.PublishConnections(ctx, "server-token-42", nil); err != nil || len(f.published) != 1 || f.published[0] != "" {
+		t.Fatalf("empty publish: %v %v", f.published, err)
+	}
+	if err := c.PublishConnections(ctx, "server-token-42", uris); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RegisterServer(ctx, "server-token-42", ServerRegistration{Name: "Ether", Address: "203.0.113.7", Port: 32400,
+		Version: "1.42", LocalAddresses: []string{"192.168.1.5"}, MappingState: "mapped"}); err != nil {
+		t.Fatal(err)
+	}
+	reg, _ := url.ParseQuery(f.registered[0])
+	if reg.Get("address") != "203.0.113.7" || reg.Get("port") != "32400" || reg.Get("machineIdentifier") != testMachineID || reg.Get("localAddresses") != "192.168.1.5" {
+		t.Fatal(reg)
+	}
+	res, err := c.FindServer(ctx, "server-token-42", strings.ToUpper(testMachineID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.ProvidesServer() || !res.Owned || len(res.Connections) != 4 || res.Connections[0].URI != "https://192-168-1-5."+fakeHash+".plex.direct:32400" {
+		t.Fatalf("%+v", res)
+	}
+	f.addUser("stranger", Account{ID: 7, Username: "stranger"})
+	if _, err := c.FindServer(ctx, "stranger", testMachineID); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+const accessTokensXML = `<?xml version="1.0" encoding="UTF-8"?>
+<access_tokens>
+  <access_token token="owner-access" owned="1" username="owner" title="The Owner" id="42"/>
+  <access_token token="friend-a" owned="0" username="alice" title="Alice" id="100" home="0" all_libraries="0">
+    <sections><section key="1"/><section key="/library/sections/2"/></sections>
+  </access_token>
+  <access_token token="friend-b" owned="0" username="bob" id="101" all_libraries="1"/>
+  <access_token owned="0" username="notoken" id="102"/>
+</access_tokens>`
+
+const usersXML = `<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer friendlyName="myPlex" identifier="com.plexapp.plugins.myplex" machineIdentifier="x" totalSize="2" size="2">
+  <User id="100" title="Alice" username="alice" email="alice@example.com" thumb="https://plex.tv/users/a/avatar" home="0" restricted="0">
+    <Server id="1" serverId="9" machineIdentifier="` + testMachineID + `" name="Ether" lastSeenAt="1" numLibraries="2" allLibraries="0" owned="0" pending="0"/>
+  </User>
+  <User id="101" title="Bob B" username="bob" email="bob@example.com" thumb="" home="1" restricted="1"/>
+</MediaContainer>`
+
+const sharedServersXML = `<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer friendlyName="myPlex" identifier="com.plexapp.plugins.myplex" machineIdentifier="` + testMachineID + `" size="2">
+  <SharedServer id="1" username="carol" email="carol@example.com" userID="200" accessToken="friend-c" name="Ether" acceptedAt="1700000000" invitedAt="1690000000" allowSync="1" owned="0">
+    <Section id="10" key="1" title="Movies" type="movie" shared="1"/>
+    <Section id="11" key="2" title="TV Shows" type="show" shared="0"/>
+  </SharedServer>
+  <SharedServer id="2" username="dave" email="dave@example.com" userID="201" accessToken="friend-d" name="Ether" acceptedAt="" invitedAt="1690000000" owned="0"/>
+</MediaContainer>`
+
+func TestFriendsAccessTokens(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.accessXML = accessTokensXML
+	f.usersXML = usersXML
+	f.accessFail = 1 // first attempt 500s; the client retries
+	c := newServerClient(t, f)
+	friends, err := c.Friends(context.Background(), "server-token-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(friends) != 3 {
+		t.Fatalf("%+v", friends)
+	}
+	if !friends[0].Owned || friends[0].Token != "owner-access" {
+		t.Fatalf("%+v", friends[0])
+	}
+	a := friends[1]
+	if a.PlexID != 100 || a.Token != "friend-a" || a.Email != "alice@example.com" || a.Thumb == "" ||
+		strings.Join(a.Sections, ",") != "1,/library/sections/2" || a.AllLibs {
+		t.Fatalf("%+v", a)
+	}
+	b := friends[2]
+	if b.Title != "Bob B" || !b.Home || !b.Restricted || !b.AllLibs {
+		t.Fatalf("%+v", b)
+	}
+	if f.count("GET /servers/") != 2 {
+		t.Fatalf("expected one retry, requests %d", f.count("GET /servers/"))
+	}
+}
+
+func TestFriendsSharedServersFallback(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.accessFail = 10
+	f.sharedXML = sharedServersXML
+	c := newServerClient(t, f)
+	friends, err := c.Friends(context.Background(), "server-token-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(friends) != 2 {
+		t.Fatalf("%+v", friends)
+	}
+	if friends[0].PlexID != 200 || friends[0].Token != "friend-c" || friends[0].Pending || strings.Join(friends[0].Sections, ",") != "1" {
+		t.Fatalf("%+v", friends[0])
+	}
+	if !friends[1].Pending {
+		t.Fatalf("dave should be pending: %+v", friends[1])
+	}
+}
+
+func TestRequestPlexDirectCertificate(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.pendingDL = 2
+	c := newServerClient(t, f)
+	b, err := c.RequestPlexDirectCertificate(context.Background(), "server-token-42", CertRequest{PollInterval: 5 * time.Millisecond, Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Hash != fakeHash || b.Subject != "*."+fakeHash+".plex.direct" {
+		t.Fatalf("%+v", b)
+	}
+	if err := b.Leaf.VerifyHostname("192-168-1-5." + fakeHash + ".plex.direct"); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(b.CertPEM, b.KeyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pair.Certificate) != 2 {
+		t.Fatalf("chain length %d", len(pair.Certificate))
+	}
+	if _, err := keyFromPEM(b.KeyPEM); err != nil {
+		t.Fatal(err)
+	}
+	if f.count("GET /api/v2/devices/"+testMachineID+"/certificate/download") != 3 {
+		t.Fatal("expected two 202 polls before success")
+	}
+
+	// A device plex.tv will not certify.
+	f.mu.Lock()
+	f.machineID = "other"
+	f.mu.Unlock()
+	if _, err := c.RequestPlexDirectCertificate(context.Background(), "server-token-42", CertRequest{}); !errors.Is(err, ErrCertUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCertificateDownloadTimeout(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	f.pendingDL = 1 << 30
+	c := newServerClient(t, f)
+	_, err := c.RequestPlexDirectCertificate(context.Background(), "server-token-42", CertRequest{PollInterval: 5 * time.Millisecond, Timeout: 50 * time.Millisecond})
+	if err == nil || !strings.Contains(err.Error(), "not issued within") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCertManager(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	c := newServerClient(t, f)
+	dir := t.TempDir()
+	now := time.Now()
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	newMgr := func() *CertManager {
+		m, err := NewCertManager(CertManagerOptions{Dir: dir, Client: c, Now: clock,
+			Request: CertRequest{PollInterval: time.Millisecond, Timeout: time.Second}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	m := newMgr()
+	ctx := context.Background()
+
+	// Unclaimed: self-signed fallback.
+	info, err := m.Ensure(ctx, "", []string{"192.168.1.5"}, false)
+	if err == nil || !info.Present || !info.SelfSigned {
+		t.Fatalf("info=%+v err=%v", info, err)
+	}
+	if _, err := m.GetCertificate(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rate limited: keeps the self-signed certificate and backs off.
+	f.mu.Lock()
+	f.csrStatus = 429
+	f.mu.Unlock()
+	info, err = m.Ensure(ctx, "server-token-42", nil, false)
+	if !errors.Is(err, ErrRateLimited) || !info.SelfSigned || info.LastError == "" || info.NextAttempt.IsZero() {
+		t.Fatalf("info=%+v err=%v", info, err)
+	}
+	n := f.count("PUT /api/v2/devices/")
+	if _, err := m.Ensure(ctx, "server-token-42", nil, false); err == nil || f.count("PUT /api/v2/devices/") != n {
+		t.Fatal("expected back-off without a request")
+	}
+	// The back-off survives a restart.
+	m = newMgr()
+	if _, err := m.Ensure(ctx, "server-token-42", nil, false); err == nil || f.count("PUT /api/v2/devices/") != n {
+		t.Fatal("back-off lost on restart")
+	}
+
+	// After the back-off, a plex.direct certificate replaces it.
+	f.mu.Lock()
+	f.csrStatus = 0
+	f.mu.Unlock()
+	advance(25 * time.Hour)
+	info, err = m.Ensure(ctx, "server-token-42", nil, false)
+	if err != nil || info.SelfSigned || info.Hash != fakeHash || info.LastError != "" {
+		t.Fatalf("info=%+v err=%v", info, err)
+	}
+	if m.NeedsRenewal() {
+		t.Fatal("fresh certificate needs renewal")
+	}
+	fp := info.Fingerprint
+
+	// Reload from disk.
+	m = newMgr()
+	if got := m.Info(); got.Fingerprint != fp || got.Hash != fakeHash {
+		t.Fatalf("reloaded %+v", got)
+	}
+	// Close to expiry it renews with reason=expiring.
+	advance(80 * 24 * time.Hour)
+	if !m.NeedsRenewal() {
+		t.Fatal("should need renewal")
+	}
+	info, err = m.Ensure(ctx, "server-token-42", nil, false)
+	if err != nil || info.Fingerprint == fp {
+		t.Fatalf("renewal: %+v %v", info, err)
+	}
+	if q := f.header("/api/v2/devices/" + testMachineID + "/certificate/csr"); q == nil {
+		t.Fatal("no csr request recorded")
+	}
+	// TLS handshake with the served certificate.
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", m.TLSConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			conn.(*tls.Conn).Handshake()
+			conn.Close()
+		}
+	}()
+	pool := x509.NewCertPool()
+	pool.AddCert(f.caCert)
+	conn, err := tls.Dial("tcp", ln.Addr().String(), &tls.Config{RootCAs: pool, ServerName: "192-168-1-5." + fakeHash + ".plex.direct"})
+	if err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	conn.Close()
+}
+
+func TestCertManagerCustom(t *testing.T) {
+	b, err := GenerateSelfSigned([]string{"plex.example.com"}, "", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cf, kf := filepath.Join(dir, "custom.crt"), filepath.Join(dir, "custom.key")
+	os.WriteFile(cf, b.CertPEM, 0o600)
+	os.WriteFile(kf, b.KeyPEM, 0o600)
+	m, err := NewCertManager(CertManagerOptions{Dir: filepath.Join(dir, "managed"), CustomCertFile: cf, CustomKeyFile: kf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := m.Ensure(context.Background(), "tok", nil, true)
+	if err != nil || !info.Custom || info.CertFile != cf || m.NeedsRenewal() {
+		t.Fatalf("%+v %v", info, err)
+	}
+}
+
+func TestGenerateSelfSigned(t *testing.T) {
+	b, err := GenerateSelfSigned([]string{"192.168.1.5", "ether.lan", "192.168.1.5"}, "ABC", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Hash != "ABC" && b.Hash != "abc" {
+		t.Fatal(b.Hash)
+	}
+	for _, h := range []string{"192.168.1.5", "ether.lan", "localhost", "1-2-3-4.abc.plex.direct"} {
+		if err := b.Leaf.VerifyHostname(h); err != nil {
+			t.Errorf("%s: %v", h, err)
+		}
+	}
+	if !isSelfSigned(b.Leaf) {
+		t.Fatal("not self-signed")
+	}
+}
+
+func TestParseCertificates(t *testing.T) {
+	b, _ := GenerateSelfSigned(nil, "", time.Hour)
+	der := b.Leaf.Raw
+	for name, in := range map[string][]byte{
+		"pem":  b.CertPEM,
+		"der":  der,
+		"json": []byte(`{"certificate":` + quoteJSON(string(b.CertPEM)) + `}`),
+	} {
+		cs, err := parseCertificates(in)
+		if err != nil || len(cs) != 1 {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := parseCertificates([]byte("nope")); err == nil {
+		t.Fatal("parsed garbage")
+	}
+}
+
+func quoteJSON(s string) string {
+	r := strings.NewReplacer("\n", `\n`, `"`, `\"`)
+	return `"` + r.Replace(s) + `"`
+}
+
+// --- registrar ---
+
+type memConfig struct {
+	mu  sync.Mutex
+	cfg config.Config
+}
+
+func (m *memConfig) Get() config.Config { m.mu.Lock(); defer m.mu.Unlock(); return m.cfg }
+func (m *memConfig) Update(fn func(*config.Config) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	next := m.cfg
+	if err := fn(&next); err != nil {
+		return err
+	}
+	m.cfg = next
+	return nil
+}
+
+type fakeUsers struct {
+	mu      sync.Mutex
+	owner   Account
+	token   string
+	friends []Friend
+}
+
+func (u *fakeUsers) SetOwner(ctx context.Context, a Account, tok string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.owner, u.token = a, tok
+	return nil
+}
+
+func (u *fakeUsers) SyncFriends(ctx context.Context, fs []Friend) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.friends = fs
+	return nil
+}
+
+type fakeWAN struct {
+	mu sync.Mutex
+	ip string
+}
+
+func (w *fakeWAN) Detect(ctx context.Context) (net.IP, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.ip == "" {
+		return nil, remote.ErrNoWANIP
+	}
+	return net.ParseIP(w.ip), nil
+}
+
+func (w *fakeWAN) set(ip string) { w.mu.Lock(); w.ip = ip; w.mu.Unlock() }
+
+type fakeMapper struct {
+	mu      sync.Mutex
+	st      remote.MappingStatus
+	ensures int
+	closed  int
+}
+
+func (m *fakeMapper) Ensure(ctx context.Context, internal, external int) (remote.MappingStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensures++
+	m.st = remote.MappingStatus{Active: true, Method: remote.MethodUPnP, ExternalPort: external, InternalPort: internal, ExternalIP: "203.0.113.7"}
+	return m.st, nil
+}
+func (m *fakeMapper) Status() remote.MappingStatus { m.mu.Lock(); defer m.mu.Unlock(); return m.st }
+func (m *fakeMapper) Close(ctx context.Context) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed++
+	m.st = remote.MappingStatus{}
+}
+
+func TestRegistrar(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("user-token", owner())
+	f.accessXML = accessTokensXML
+	f.usersXML = usersXML
+	cfg := testConfig()
+	cfg.Plex.RemoteAccess = true
+	cfg.Plex.UseUPnP = true
+	cfg.Plex.CustomURLs = []string{"https://plex.example.com"}
+	store := &memConfig{cfg: cfg}
+	users := &fakeUsers{}
+	wan := &fakeWAN{ip: "198.51.100.1"}
+	mapper := &fakeMapper{}
+	var lanMu sync.Mutex
+	lan := []net.IP{net.ParseIP("192.168.1.5")}
+	certs, err := NewCertManager(CertManagerOptions{Dir: t.TempDir(), Client: newServerClient(t, f),
+		Request: CertRequest{PollInterval: time.Millisecond, Timeout: time.Second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewRegistrar(RegistrarOptions{
+		Config: store, Client: newServerClient(t, f), Users: users, WAN: wan, Mapper: mapper, Certs: certs,
+		Reach: &remote.ReachabilityChecker{Client: &http.Client{}, Timeout: 50 * time.Millisecond},
+		LAN:   func() ([]net.IP, error) { lanMu.Lock(); defer lanMu.Unlock(); return lan, nil },
+		Tick:  10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if st := r.Status(); st.Claimed {
+		t.Fatal("claimed before claim")
+	}
+	if r.SignInClient().Identity().Product != "Ether" {
+		t.Fatal("sign-in identity")
+	}
+
+	// Unclaimed loop: mapping and certificate (self-signed) run, no plex.tv publishing.
+	r.runDue(ctx)
+	if f.count("PUT /devices/") != 0 {
+		t.Fatal("published while unclaimed")
+	}
+	if st := r.Status(); !st.Cert.SelfSigned || st.PublicIP != "203.0.113.7" || !st.UPnP.Active {
+		t.Fatalf("%+v", st)
+	}
+
+	res, err := r.Claim(ctx, "user-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := store.Get().Plex
+	if !got.Claimed || got.Token != res.ServerToken || got.OwnerPlexID != 42 || got.OwnerUsername != "owner" {
+		t.Fatalf("config not persisted: %+v", got)
+	}
+	if users.owner.ID != 42 || users.token != "server-token-42" {
+		t.Fatalf("users sink: %+v", users)
+	}
+
+	r.runDue(ctx)
+	st := r.Status()
+	if !st.Claimed || st.LastPublishError != "" || !st.Listed || !st.PlexPass {
+		t.Fatalf("%+v", st)
+	}
+	// plex.direct certificate obtained after claiming; http URIs published
+	// (LAN, WAN from the UPnP mapping, custom).
+	if st.Cert.SelfSigned || st.Cert.Hash != fakeHash || store.Get().Plex.CertHash != fakeHash {
+		t.Fatalf("cert %+v", st.Cert)
+	}
+	want := "http://192.168.1.5:32400,http://203.0.113.7:32400,https://plex.example.com"
+	if strings.Join(st.PublishedURIs, ",") != want {
+		t.Fatalf("published %v", st.PublishedURIs)
+	}
+	var plexDirect bool
+	for _, c := range st.Connections {
+		if c.URI == "https://192-168-1-5."+fakeHash+".plex.direct:32400" {
+			plexDirect = true
+		}
+	}
+	if !plexDirect {
+		t.Fatalf("connections %+v", st.Connections)
+	}
+	if st.Reachability == nil || st.Reachability.Reachable || len(st.Reachability.Results) == 0 {
+		t.Fatalf("reachability %+v", st.Reachability)
+	}
+	if len(f.registered) == 0 || st.Friends != 2 || len(users.friends) != 3 {
+		t.Fatalf("registered=%d friends=%d synced=%d", len(f.registered), st.Friends, len(users.friends))
+	}
+
+	// Nothing changed: no republish on the next pass.
+	puts := f.count("PUT /devices/")
+	r.runDue(ctx)
+	if f.count("PUT /devices/") != puts {
+		t.Fatal("republished without change")
+	}
+
+	// LAN address change triggers a republish through the running loop.
+	lanMu.Lock()
+	lan = []net.IP{net.ParseIP("192.168.1.9")}
+	lanMu.Unlock()
+	if err := r.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(ctx); err == nil {
+		t.Fatal("double start")
+	}
+	r.Trigger()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if strings.Contains(strings.Join(r.Status().PublishedURIs, ","), "192.168.1.9") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no republish: %+v", r.Status())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	r.Stop()
+	r.Stop()
+	if mapper.closed == 0 {
+		t.Fatal("mapping not removed on stop")
+	}
+
+	// Turning remote access off publishes LAN + custom only.
+	store.Update(func(c *config.Config) error { c.Plex.RemoteAccess = false; return nil })
+	if err := r.PublishNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(r.Status().PublishedURIs, ","); got != "http://192.168.1.9:32400,https://plex.example.com" {
+		t.Fatalf("lan-only publish %s", got)
+	}
+
+	if err := r.Unclaim(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.Status(); st.Claimed || store.Get().Plex.Token != "" {
+		t.Fatalf("unclaim: %+v", st)
+	}
+}
+
+func TestRegistrarPublishBackoff(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	cfg := testConfig()
+	cfg.Plex.Token = "revoked"
+	cfg.Plex.Claimed = true
+	now := time.Now()
+	r, err := NewRegistrar(RegistrarOptions{
+		Config: &memConfig{cfg: cfg}, Client: newServerClient(t, f), WAN: &fakeWAN{}, Mapper: &fakeMapper{},
+		LAN: func() ([]net.IP, error) { return []net.IP{net.ParseIP("192.168.1.5")}, nil },
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	r.runDue(ctx)
+	st := r.Status()
+	if st.LastPublishError == "" || st.FriendSyncError == "" {
+		t.Fatalf("%+v", st)
+	}
+	puts := f.count("PUT /devices/")
+	r.runDue(ctx) // within back-off
+	if f.count("PUT /devices/") != puts {
+		t.Fatal("retried inside back-off")
+	}
+	now = now.Add(2 * time.Minute)
+	r.runDue(ctx)
+	if f.count("PUT /devices/") == puts {
+		t.Fatal("no retry after back-off")
+	}
+}
