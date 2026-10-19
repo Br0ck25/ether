@@ -131,9 +131,7 @@ func buildCodecArgs(s runSpec) []string {
 	}
 	vp := planVideo(s, v)
 	args = append(args, vp.inputArgs...)
-	// Keep source timestamps so segment n always carries media time
-	// Start+n*SegDur no matter where a run starts.
-	args = append(args, "-start_at_zero", "-copyts")
+	args = append(args, inputTimestampArgs(s)...)
 	if s.Start > 0 {
 		args = append(args, "-ss", secs(s.Start))
 	}
