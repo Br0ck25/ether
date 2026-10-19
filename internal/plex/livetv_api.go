@@ -565,6 +565,7 @@ type liveSubscriptionContainer struct {
 	Metadata     []model.Metadata   `plex:"Metadata"`
 	Subscription []liveSubscription `plex:"MediaSubscription"`
 	Operation    *liveOperation     `plex:"MediaGrabOperation,object"`
+	Extra        []model.Attr
 }
 
 func (s *Server) liveSubscriptionFor(info livetv.SessionInfo) liveSubscription {
@@ -607,6 +608,12 @@ func (s *Server) writeLiveSubscription(w http.ResponseWriter, r *http.Request, i
 	// Native players consume the documented analyzed-media tune response.
 	// Plex Web additionally needs its subscription/operation bootstrap.
 	if pr := FromContext(r.Context()); strings.Contains(strings.ToLower(pr.Product), "apple") || strings.EqualFold(pr.Platform, "tvos") || strings.EqualFold(pr.Platform, "ios") {
+		major, _, _ := strings.Cut(pr.Version, ".")
+		year, _ := strconv.Atoi(major)
+		if year >= 2025 {
+			s.writeModernLiveTune(w, r, info)
+			return
+		}
 		// The native contract is an analysis result identified by UUID. The
 		// client constructs the live-session MDE request from that UUID; a
 		// fabricated HLS transport/Part key changes its interpretation.
@@ -619,16 +626,7 @@ func (s *Server) writeLiveSubscription(w http.ResponseWriter, r *http.Request, i
 			}
 		}
 		payload := &liveTuneContainer{Size: 1, Metadata: []liveTuneVideo{{Live: true, Genuine: info.MediaInfo != nil, Media: []liveTuneMedia{{UUID: info.ID, Part: []liveTunePart{{Stream: streams}}}}}}}
-		// The modern Plex app also needs the active subscription and grab
-		// operation used to bootstrap its live player. Keep the documented
-		// analysis result alongside that state, under the same session UUID.
-		major, _, _ := strings.Cut(pr.Version, ".")
-		year, _ := strconv.Atoi(major)
-		if year >= 2025 {
-			payload.Subscription = []liveSubscription{s.liveSubscriptionFor(info)}
-		} else {
-			w.Header().Del("X-Plex-Activity")
-		}
+		w.Header().Del("X-Plex-Activity")
 		s.write(w, r, payload)
 		return
 	}

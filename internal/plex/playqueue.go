@@ -39,6 +39,7 @@ type playQueue struct {
 	playlistTitle string
 	version       int
 	updatedAt     time.Time
+	liveSession   string // live queues resolve through LiveTV, never the catalogue
 }
 
 type playQueueStore struct {
@@ -338,6 +339,10 @@ func (s *Server) handlePlayQueueMutate(op string) http.HandlerFunc {
 		ctx := r.Context()
 		pr := FromContext(ctx)
 		q := r.URL.Query()
+		if existing, found := s.queues.get(id, u.ID); found && existing.liveSession != "" {
+			writeHTTPError(w, http.StatusBadRequest)
+			return
+		}
 		var addKeys []core.RatingKey
 		if op == "add" {
 			var err error
@@ -426,6 +431,10 @@ func indexOfItem(items []pqItem, id int64) int {
 
 // writePlayQueue renders a queue window around the selected item.
 func (s *Server) writePlayQueue(w http.ResponseWriter, r *http.Request, pq playQueue) {
+	if pq.liveSession != "" {
+		s.writeLivePlayQueue(w, r, pq)
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	q := r.URL.Query()
