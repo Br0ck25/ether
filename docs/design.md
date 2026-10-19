@@ -116,16 +116,66 @@ atomically. After commit, ordinary state events update recommendations and
 optional Trakt history synchronization. Imports do not simulate active playback
 sessions. Repeating a completed import does not duplicate history events.
 
+## Clustering and high availability
+
+A standalone server stores its state in SQLite and needs nothing else. An owner
+may instead run two or more Ether nodes on one network against an
+owner-supplied PostgreSQL database. Ether ships no database and does not manage
+PostgreSQL availability; a highly available PostgreSQL deployment is the owner's
+responsibility.
+
+Every node shares one server identity: machine identifier, plex.tv
+registration, plex.direct certificate and credential key. Plex apps see a
+single server whose published connections are the union of the healthy nodes'
+addresses. A node joins with a one-time token issued from an existing node; the
+credential key travels in that token and is never stored in the database in the
+clear. Node-specific settings such as bind address, port, cache location and
+size, and hardware transcoding stay in that node's local configuration; all
+other settings are shared.
+
+PostgreSQL is the single source of shared state. Any node serves any request,
+and every node streams, caches segments and transcodes locally. Shared state
+includes accounts, tokens, watch state and history, playlists, play queues,
+collections, invites, policies, settings, live TV configuration, the indexer
+result cache and active playback sessions. Segment caches, transcode output and
+local scan state remain on the node. Writes that check and then modify shared
+state are atomic across nodes; an in-process lock never guards a shared
+invariant.
+
+At most one node at a time holds leadership, through a PostgreSQL session lock.
+Only the leader runs singleton work: plex.tv publication and certificate
+renewal, catalogue synchronization, collection refresh, Trakt and watchlist
+synchronization, scheduled backups and newsletters. Leadership passes to another
+node within seconds of the holder losing its database session. Queued work such
+as notifications and imports is claimed with row locks and delivered once. A
+node never closes or alters another live node's sessions at startup.
+
+Nodes publish heartbeats with their addresses, capabilities and load. Session
+lists, stream limits and termination apply across the cluster. Cache
+invalidations, timeline updates and termination requests reach every node
+promptly. Usenet connection limits and indexer and metadata request budgets are
+account-wide, so the cluster divides them among live nodes and redistributes a
+departed node's share.
+
+When a node fails, clients reconnect through another published connection.
+Playback resumes from the last reported position; an interrupted response is
+not spliced. Brief database outages do not end active streams; progress reports
+are retained in memory and written once the database returns. Nodes update one
+at a time; a node joins the rotation only after its schema migrations, applied
+under a cluster-wide lock, are compatible with the running cluster.
+
 ## Component contracts and delivery
 
-Ether runs as one Go process with an embedded browser UI and SQLite storage.
+Ether runs as one Go process with an embedded browser UI and SQLite storage, or
+PostgreSQL storage in a cluster.
 Domain interfaces are defined in `internal/core`. Components own their schemas,
 migrations and query APIs; orchestration wires dependencies without querying
 another component's tables. Catalogue readers support batched local snapshots
 and hydrated title reads without triggering remote requests.
 
 The backend supports pure Go builds with `CGO_ENABLED=0`. Package tests run
-offline using local fixtures and fake services. Release scripts inject the
+offline using local fixtures and fake services; the same database tests can also
+run against an owner-provided PostgreSQL instance when one is configured. Release scripts inject the
 bundled TMDB key through the exported build symbol `tmdb.BundledKey`; a linker
 smoke test verifies the symbol. Owner-provided credentials take precedence.
 
