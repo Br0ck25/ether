@@ -1,0 +1,238 @@
+// Package admin is Ether's owner-facing HTTP surface: the JSON API under
+// /ether/api/ and the embedded React SPA (setup wizard, dashboard,
+// settings, logs, resolver traces) served under /ether/.
+//
+// The package deliberately depends only on internal/config, internal/core
+// (for types) and the small interfaces/funcs declared in Deps. Every other
+// component is built concurrently; the integrator wires real implementations
+// into Deps. Nil deps degrade gracefully (endpoints answer 501) so the UI
+// can run against a partially wired server.
+//
+// Mounting:
+//
+//	mux.Handle("/ether/", admin.New(admin.Deps{Config: store, ...}))
+//
+// The handler accepts both "/ether/..." paths and paths already stripped
+// of the prefix (http.StripPrefix style).
+//
+// Logging: pass a shared ring buffer so the Logs page can tail the server:
+//
+//	buf := admin.NewLogBuffer(2000)
+//	logger := slog.New(admin.TeeHandler(slog.NewTextHandler(os.Stderr, nil), buf))
+//	h := admin.New(admin.Deps{Config: store, Logs: buf, Logger: logger})
+package admin
+
+import (
+	"context"
+	"embed"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/ether-media/ether/internal/config"
+	"github.com/ether-media/ether/internal/core"
+)
+
+//go:embed all:dist
+var distFS embed.FS
+
+// RedactedSecret is the placeholder shown in place of a stored secret.
+// A PUT that sends it back unchanged preserves the stored value.
+const RedactedSecret = "••••"
+
+// PlexAuth is the plex.tv sign-in/claim surface the wizard needs.
+// Implemented by internal/plextv.
+type PlexAuth interface {
+	// StartPIN begins the PIN flow: id is the poll handle, code is the
+	// 4-character code shown to the owner, authURL is the plex.tv page to open.
+	StartPIN(ctx context.Context) (id, code, authURL string, err error)
+	// PollPIN reports whether the owner has approved the PIN yet. When done
+	// is true the implementation has stored the owner token in config.
+	PollPIN(ctx context.Context, id string) (done bool, err error)
+	// Claim claims this server to the signed-in account.
+	Claim(ctx context.Context) error
+	// Status returns a JSON-able snapshot (claimed, owner, connections...).
+	Status() any
+}
+
+// UserStore is the user-administration surface (satisfied by core.Auth
+// implementations; only the two admin methods are required here).
+type UserStore interface {
+	Users(ctx context.Context) ([]core.User, error)
+	UpdateUser(ctx context.Context, u core.User) error
+}
+
+// StatusFunc returns a JSON-able status blob for a dashboard card. It may
+// return (any, error) shaped values via StatusFuncE; StatusFunc never fails.
+type StatusFunc func(ctx context.Context) any
+
+// StatusFuncE is a StatusFunc that can fail.
+type StatusFuncE func(ctx context.Context) (any, error)
+
+// Deps are the dependencies of the admin handler. Config is required;
+// everything else is optional and degrades to 501/empty responses.
+type Deps struct {
+	// Config is the owner settings store. Required.
+	Config *config.Store
+	// Logger defaults to slog.Default().
+	Logger *slog.Logger
+	// Logs is the in-memory log ring served at /ether/api/logs. A fresh
+	// 2000-entry buffer is created when nil (retrieve it via
+	// Handler.Logs()); pass a shared one to tail server logs.
+	Logs *LogBuffer
+	// Version is reported by /ether/api/bootstrap ("dev" when empty).
+	Version string
+
+	// PlexAuth drives wizard step 1. Nil → pinned endpoints answer 501.
+	PlexAuth PlexAuth
+
+	// IsOwnerToken reports whether a bearer token belongs to the owner.
+	// When nil, the stored Plex owner token (config.Plex.Token) is the
+	// only accepted credential.
+	IsOwnerToken func(ctx context.Context, token string) bool
+
+	// Provider/integration testers used by the wizard. Nil → 501.
+	TestUsenet        func(ctx context.Context, p config.UsenetProvider) error
+	TestIndexer       func(ctx context.Context, ix config.Indexer) error
+	TestTMDB          func(ctx context.Context, key string) error
+	TestOpenSubtitles func(ctx context.Context, cfg config.OpenSubtitles) error
+	TestLLM           func(ctx context.Context, cfg config.LLM) error
+	TestTrakt         func(ctx context.Context, cfg config.Trakt) error
+
+	// Dashboard status providers. Each non-nil provider appears on the
+	// dashboard and at /ether/api/status/{name}.
+	SessionsStatus  StatusFunc // "sessions" — now playing
+	CacheStatus     StatusFunc // "cache" — usage; {used,budget} renders as a bar
+	ProvidersStatus StatusFunc // "providers" — Usenet provider health
+	IndexersStatus  StatusFunc // "indexers" — budgets remaining
+	CatalogStatus   StatusFunc // "catalog" — catalogue sync/stats
+	RemoteStatus    StatusFunc // "remote" — remote access
+	HWAccelStatus   StatusFunc // "hwaccel" — transcoding hardware
+	UpdatesStatus   StatusFunc // "updates" — update feed state
+	TracesStatus    StatusFunc // "traces" — recent resolver traces
+	// ExtraStatus adds/overrides named status providers generically.
+	ExtraStatus map[string]StatusFunc
+
+	// ResolverTraces, when set, backs GET /ether/api/traces with a typed
+	// error path (preferred over TracesStatus for the traces page).
+	ResolverTraces StatusFuncE
+
+	// Users backs the user-administration endpoints. Nil → 501.
+	Users UserStore
+
+	// TestTimeout bounds each wizard test call (default 20s).
+	TestTimeout time.Duration
+	// StatusTimeout bounds each status provider call (default 5s).
+	StatusTimeout time.Duration
+
+	// DiskUsage overrides free-space reporting (tests). Nil → OS statfs.
+	DiskUsage func(path string) (total, free int64, err error)
+}
+
+// Handler is the admin HTTP handler. Use NewHandler when you need access
+// to the log buffer the handler created.
+type Handler struct {
+	deps    Deps
+	log     *slog.Logger
+	logs    *LogBuffer
+	mux     *http.ServeMux
+	version string
+}
+
+// New returns the admin handler per the work-package contract.
+func New(deps Deps) http.Handler { return NewHandler(deps) }
+
+// NewHandler builds the admin handler. It panics when Deps.Config is nil.
+func NewHandler(deps Deps) *Handler {
+	if deps.Config == nil {
+		panic("admin: Deps.Config is required")
+	}
+	if deps.Logger == nil {
+		deps.Logger = slog.Default()
+	}
+	if deps.Logs == nil {
+		deps.Logs = NewLogBuffer(2000)
+	}
+	if deps.TestTimeout <= 0 {
+		deps.TestTimeout = 20 * time.Second
+	}
+	if deps.StatusTimeout <= 0 {
+		deps.StatusTimeout = 5 * time.Second
+	}
+	version := deps.Version
+	if version == "" {
+		version = "dev"
+	}
+	h := &Handler{deps: deps, log: deps.Logger, logs: deps.Logs, version: version}
+	h.mux = h.routes()
+	return h
+}
+
+// Logs returns the log ring served by this handler.
+func (h *Handler) Logs() *LogBuffer { return h.logs }
+
+// ServeHTTP implements http.Handler.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Accept both /ether/... and prefix-stripped paths.
+	if p := r.URL.Path; len(p) >= 6 && p[:6] == "/ether" && (len(p) == 6 || p[6] == '/') {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = p[6:]
+		if r2.URL.Path == "" {
+			r2.URL.Path = "/"
+		}
+		r = r2
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "same-origin")
+	h.mux.ServeHTTP(w, r)
+}
+
+func (h *Handler) routes() *http.ServeMux {
+	mux := http.NewServeMux()
+	api := func(pattern string, fn http.HandlerFunc) {
+		mux.HandleFunc(pattern, h.requireAuth(fn))
+	}
+	// Public bootstrap: minimal, non-sensitive; the SPA needs it before auth.
+	mux.HandleFunc("GET /api/bootstrap", h.handleBootstrap)
+	mux.HandleFunc("GET /api/health", h.handleBootstrap)
+
+	api("GET /api/config", h.handleGetConfig)
+	api("PUT /api/config", h.handlePutConfig)
+	api("GET /api/config/{section}", h.handleGetSection)
+	api("PUT /api/config/{section}", h.handlePutSection)
+	api("PATCH /api/config/{section}", h.handlePutSection)
+
+	api("GET /api/setup/status", h.handleSetupStatus)
+	api("POST /api/setup/complete", h.handleSetupComplete)
+	api("POST /api/setup/reopen", h.handleSetupReopen)
+
+	api("POST /api/plex/pin", h.handlePINStart)
+	api("GET /api/plex/pin/{id}", h.handlePINPoll)
+	api("POST /api/plex/claim", h.handleClaim)
+	api("GET /api/plex/status", h.handlePlexStatus)
+
+	api("POST /api/test/usenet", h.handleTestUsenet)
+	api("POST /api/test/indexer", h.handleTestIndexer)
+	api("POST /api/test/tmdb", h.handleTestTMDB)
+	api("POST /api/test/opensubtitles", h.handleTestOpenSubtitles)
+	api("POST /api/test/llm", h.handleTestLLM)
+	api("POST /api/test/trakt", h.handleTestTrakt)
+
+	api("GET /api/dashboard", h.handleDashboard)
+	api("GET /api/status/{name}", h.handleStatus)
+	api("GET /api/traces", h.handleTraces)
+	api("GET /api/disk", h.handleDisk)
+
+	api("GET /api/users", h.handleListUsers)
+	api("PUT /api/users/{id}", h.handleUpdateUser)
+	api("PATCH /api/users/{id}", h.handleUpdateUser)
+
+	api("GET /api/logs", h.handleLogs)
+	api("DELETE /api/logs", h.handleClearLogs)
+
+	mux.HandleFunc("/api/", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "not_found", "no such API endpoint")
+	}))
+	mux.HandleFunc("/", h.handleSPA)
+	return mux
+}
