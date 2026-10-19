@@ -2,6 +2,7 @@ package pmsconform
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -72,5 +73,53 @@ func TestCorpusFetchesSameTemplatedIDsForServers(t *testing.T) {
 	}
 	if len(paths) != 2 || paths[0] != paths[1] || !strings.Contains(paths[0], "/3/all") {
 		t.Fatalf("request paths not consistent: %v", paths)
+	}
+}
+
+func TestDiscoverAlignsSameTitlesAcrossDifferentServerIDs(t *testing.T) {
+	server := func(movieFirst, movieShared, showFirst, showShared, season, episode string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			switch {
+			case r.URL.Path == "/library/sections":
+				fmt.Fprint(w, `<MediaContainer><Directory key="1" type="movie"/><Directory key="2" type="show"/></MediaContainer>`)
+			case strings.HasSuffix(r.URL.Path, "/all") && strings.Contains(r.URL.Path, "/1/"):
+				firstMovieGuid, sharedMovieGuid := "tmdb://999", "tmdb://111"
+				if movieFirst == "99" {
+					firstMovieGuid, sharedMovieGuid = "tmdb://000", "tmdb://999"
+				}
+				fmt.Fprintf(w, `<MediaContainer><Video ratingKey="%s"><Guid id="%s"/></Video><Video ratingKey="%s"><Guid id="%s"/></Video></MediaContainer>`, movieFirst, firstMovieGuid, movieShared, sharedMovieGuid)
+			case strings.HasSuffix(r.URL.Path, "/all"):
+				firstShowGuid, sharedShowGuid := "imdb://tt0000001", "tmdb://222"
+				if showFirst == "98" {
+					firstShowGuid, sharedShowGuid = "tmdb://000", "imdb://tt0000001"
+				}
+				fmt.Fprintf(w, `<MediaContainer><Directory ratingKey="%s"><Guid id="%s"/></Directory><Directory ratingKey="%s"><Guid id="%s"/></Directory></MediaContainer>`, showFirst, firstShowGuid, showShared, sharedShowGuid)
+			case (r.URL.Path == "/library/metadata/"+showFirst+"/children" || r.URL.Path == "/library/metadata/"+showShared+"/children"):
+				fmt.Fprintf(w, `<MediaContainer><Directory ratingKey="%s" index="1"/></MediaContainer>`, season)
+			case r.URL.Path == "/library/metadata/"+season+"/children":
+				fmt.Fprintf(w, `<MediaContainer><Video ratingKey="%s" index="1"/></MediaContainer>`, episode)
+			case strings.HasPrefix(r.URL.Path, "/library/metadata/"):
+				fmt.Fprintf(w, `<MediaContainer><Video ratingKey="%s" index="1"/></MediaContainer>`, episode)
+			case r.URL.Path == "/library/collections":
+				fmt.Fprint(w, `<MediaContainer><Directory ratingKey="88"/></MediaContainer>`)
+			case r.URL.Path == "/playlists":
+				fmt.Fprint(w, `<MediaContainer><Playlist ratingKey="77"/></MediaContainer>`)
+			default:
+				fmt.Fprint(w, `<MediaContainer/>`)
+			}
+		}))
+	}
+	a := server("10", "11", "20", "21", "30", "31")
+	b := server("99", "12", "98", "22", "40", "41")
+	defer a.Close()
+	defer b.Close()
+	ctx := context.Background()
+	left := Discover(ctx, a.Client(), a.URL, "", "web", nil)
+	right := Discover(ctx, b.Client(), b.URL, "", "web", &left)
+	for k, want := range map[string]string{"movieKey": "12", "showKey": "22", "seasonKey": "40", "episodeKey": "41", "collectionKey": "88", "playlistKey": "77"} {
+		if right.Values[k] != want {
+			t.Errorf("%s = %q, want %q (left=%v right=%v)", k, right.Values[k], want, left.Values, right.Values)
+		}
 	}
 }

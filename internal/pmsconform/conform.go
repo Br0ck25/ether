@@ -53,7 +53,7 @@ type Request struct {
 
 // Corpus returns probes used when a Plex application connects and browses a server.
 func Corpus() []Request {
-	paths := []string{"/", "/identity", "/library/sections", "/library/sections/{{section}}/all?X-Plex-Container-Start=0&X-Plex-Container-Size=50", "/library/metadata/{{ratingKey}}", "/library/metadata/{{ratingKey}}/children", "/library/metadata/{{ratingKey}}/grandchildren", "/hubs", "/hubs/sections/{{section}}", "/hubs/search?query=", "/library/onDeck", "/hubs/continueWatching", "/media/providers", "/library/collections", "/playlists", "/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F{{ratingKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&X-Plex-Client-Profile-Extra=", "/status/sessions", "/myplex/account", "/:/prefs"}
+	paths := []string{"/", "/identity", "/library/sections", "/library/sections/{{section}}/all?X-Plex-Container-Start=0&X-Plex-Container-Size=50", "/library/metadata/{{movieKey}}", "/library/metadata/{{showKey}}/children", "/library/metadata/{{seasonKey}}/children", "/library/metadata/{{episodeKey}}", "/hubs", "/hubs/sections/{{section}}", "/hubs/search?query=", "/library/onDeck", "/hubs/continueWatching", "/media/providers", "/library/collections/{{collectionKey}}", "/playlists/{{playlistKey}}", "/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&X-Plex-Client-Profile-Extra=", "/status/sessions", "/myplex/account", "/:/prefs"}
 	clients := Clients()
 	out := make([]Request, 0, len(paths))
 	for _, p := range paths {
@@ -90,6 +90,226 @@ type Difference struct {
 // Report is the result of comparing two responses.
 type Report struct {
 	Differences []Difference `json:"differences"`
+	Discovery   []string     `json:"discovery,omitempty"`
+}
+
+// DiscoveredIDs holds per-server identifiers used to make templated probes target real items.
+type DiscoveredIDs struct {
+	Values   map[string]string `json:"values"`
+	Warnings []string          `json:"warnings,omitempty"`
+}
+
+type xmlNode struct {
+	XMLName  xml.Name
+	Attrs    []xml.Attr `xml:"-"`
+	Children []xmlNode  `xml:"-"`
+}
+
+func (n *xmlNode) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
+	n.XMLName = start.Name
+	n.Attrs = start.Attr
+	for {
+		t, e := d.Token()
+		if e != nil {
+			return e
+		}
+		switch x := t.(type) {
+		case xml.StartElement:
+			var c xmlNode
+			if e := d.DecodeElement(&c, &x); e != nil {
+				return e
+			}
+			n.Children = append(n.Children, c)
+		case xml.EndElement:
+			if x.Name == start.Name {
+				return nil
+			}
+		}
+	}
+}
+func (n xmlNode) attr(k string) string {
+	for _, a := range n.Attrs {
+		if a.Name.Local == k {
+			return a.Value
+		}
+	}
+	return ""
+}
+func (n xmlNode) descendants(name string) []xmlNode {
+	var out []xmlNode
+	for _, c := range n.Children {
+		if c.XMLName.Local == name {
+			out = append(out, c)
+		}
+		out = append(out, c.descendants(name)...)
+	}
+	return out
+}
+func (n xmlNode) first(names ...string) xmlNode {
+	for _, name := range names {
+		for _, c := range n.Children {
+			if c.XMLName.Local == name {
+				return c
+			}
+		}
+	}
+	return xmlNode{}
+}
+func parsePlexXML(b []byte) (xmlNode, error) { var n xmlNode; e := xml.Unmarshal(b, &n); return n, e }
+
+// Discover reads sections and representative items on one server. If align is non-nil,
+// matching item GUIDs from that server are preferred; absent matches use the first item.
+func Discover(ctx context.Context, client *http.Client, base, token, profile string, align *DiscoveredIDs) DiscoveredIDs {
+	out := DiscoveredIDs{Values: map[string]string{}}
+	get := func(path string) (xmlNode, error) {
+		req := Request{Method: http.MethodGet, Path: path, Headers: map[string]http.Header{}}
+		c := Clients()[profile]
+		h := c.Headers.Clone()
+		h.Set("Accept", "application/xml")
+		req.Headers[profile] = h
+		r, e := Fetch(ctx, client, base, token, req, profile, nil, false)
+		if e != nil {
+			return xmlNode{}, e
+		}
+		if r.Status < 200 || r.Status >= 300 {
+			return xmlNode{}, fmt.Errorf("HTTP %d", r.Status)
+		}
+		return parsePlexXML(r.Body)
+	}
+	root, e := get("/library/sections")
+	if e != nil {
+		out.Warnings = append(out.Warnings, "sections discovery failed: "+e.Error())
+		return out
+	}
+	sections := root.descendants("Directory")
+	sectionByType := map[string]string{}
+	for _, s := range sections {
+		typ := strings.ToLower(s.attr("type"))
+		if typ == "movie" || typ == "show" {
+			if sectionByType[typ] == "" {
+				sectionByType[typ] = s.attr("key")
+			}
+		}
+	}
+	for _, typ := range []string{"movie", "show"} {
+		sid := sectionByType[typ]
+		if sid == "" {
+			out.Warnings = append(out.Warnings, "no "+typ+" section; using fallback section ID 1")
+			continue
+		}
+		out.Values[typ+"Section"] = sid
+		listing, err := get("/library/sections/" + sid + "/all?X-Plex-Container-Start=0&X-Plex-Container-Size=50")
+		if err != nil {
+			out.Warnings = append(out.Warnings, typ+" listing failed: "+err.Error())
+			continue
+		}
+		items := listing.descendants("Video")
+		if len(items) == 0 {
+			items = listing.descendants("Directory")
+		}
+		if len(items) == 0 {
+			out.Warnings = append(out.Warnings, "no "+typ+" item; using fallback ratingKey 1")
+			continue
+		}
+		chosen := selectByGuid(items, alignedGuid(align, typ))
+		key := nodeKey(chosen)
+		if key == "" {
+			key = "1"
+			out.Warnings = append(out.Warnings, typ+" item has no key; using fallback ratingKey 1")
+		}
+		out.Values[typ+"Key"] = key
+		out.Values[typ+"Guid"] = nodeGuid(chosen)
+		if typ == "show" {
+			seasons, err := get("/library/metadata/" + key + "/children")
+			if err != nil {
+				out.Warnings = append(out.Warnings, "season discovery failed: "+err.Error())
+				continue
+			}
+			ss := seasons.descendants("Directory")
+			if len(ss) > 0 {
+				season := ss[0]
+				sk := nodeKey(season)
+				if sk != "" {
+					out.Values["seasonKey"] = sk
+					eps, er := get("/library/metadata/" + sk + "/children")
+					if er == nil {
+						es := eps.descendants("Video")
+						if len(es) > 0 {
+							out.Values["episodeKey"] = nodeKey(es[0])
+						}
+					} else {
+						out.Warnings = append(out.Warnings, "episode discovery failed: "+er.Error())
+					}
+				}
+			}
+		}
+	}
+	for _, entry := range []struct{ key, path, tag string }{{"collectionKey", "/library/collections", "Directory"}, {"playlistKey", "/playlists", "Playlist"}} {
+		n, er := get(entry.path)
+		if er != nil {
+			out.Warnings = append(out.Warnings, entry.key+" discovery failed: "+er.Error())
+			continue
+		}
+		xs := n.descendants(entry.tag)
+		if len(xs) > 0 {
+			v := nodeKey(xs[0])
+			if v != "" {
+				out.Values[entry.key] = v
+			}
+		}
+	}
+	for k, v := range map[string]string{"section": "1", "ratingKey": "1", "movieKey": "1", "showKey": "1", "seasonKey": "1", "episodeKey": "1", "collectionKey": "1", "playlistKey": "1"} {
+		if out.Values[k] == "" {
+			out.Values[k] = v
+			if k == "section" || k == "ratingKey" {
+				out.Warnings = append(out.Warnings, "using fallback "+k+" ID "+v)
+			}
+		}
+	}
+	if out.Values["section"] == "1" {
+		if out.Values["movieSection"] != "" {
+			out.Values["section"] = out.Values["movieSection"]
+		} else if out.Values["showSection"] != "" {
+			out.Values["section"] = out.Values["showSection"]
+		}
+	}
+	return out
+}
+func nodeKey(n xmlNode) string {
+	for _, k := range []string{"key", "ratingKey", "id"} {
+		if v := n.attr(k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+func nodeGuid(n xmlNode) string {
+	g := n.first("Guid")
+	if v := g.attr("id"); v != "" {
+		return v
+	}
+	for _, g := range n.descendants("Guid") {
+		if v := g.attr("id"); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+func alignedGuid(d *DiscoveredIDs, typ string) string {
+	if d == nil {
+		return ""
+	}
+	return d.Values[typ+"Guid"]
+}
+func selectByGuid(xs []xmlNode, guid string) xmlNode {
+	if guid != "" {
+		for _, x := range xs {
+			if nodeGuid(x) == guid {
+				return x
+			}
+		}
+	}
+	return xs[0]
 }
 
 // Compare checks status, selected headers and response structure while tolerating volatile values.
