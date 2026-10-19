@@ -1,0 +1,269 @@
+package playback
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"time"
+
+	"github.com/ether-media/ether/internal/core"
+)
+
+var (
+	// errRetired: the generation was swapped out between two reads.
+	errRetired = errors.New("playback: source retired")
+	// errEndResponse: a failover happened mid-response in a container that
+	// cannot be spliced; the response ends early and the client re-requests.
+	errEndResponse = errors.New("playback: response ended for failover")
+	// errShortSource: the (failed-over) source ended before the range did.
+	errShortSource = errors.New("playback: source shorter than requested range")
+)
+
+// ServeRange serves the session's media to a client (direct play) with
+// Range and If-Range support. Offsets are in the coordinates of the file the
+// session started with; after a failover they are mapped by timestamp into
+// the current release. When articles go missing mid-response the session
+// fails over: an MPEG-TS response continues from the new release at the same
+// moment, any other container ends the response so the client re-requests
+// (a brief rebuffer) and that request is served from the new release.
+func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID string) {
+	s := m.lookup(sessionID)
+	if s == nil {
+		http.Error(w, "unknown playback session", http.StatusNotFound)
+		return
+	}
+	s.touch(m.now())
+	s.markDirectPlay()
+	s.mu.Lock()
+	rep := representation{
+		size:        s.virtual.Size,
+		etag:        s.etag,
+		modTime:     s.modTime,
+		contentType: s.contentType,
+	}
+	s.mu.Unlock()
+	rep.body = func(w io.Writer, start, length int64) error {
+		return m.streamClient(r.Context(), w, s, start, length)
+	}
+	if err := serveRepresentation(w, r, rep); err != nil && r.Context().Err() == nil {
+		m.log.Debug("direct play response ended early", "session", s.id, "err", err)
+	}
+}
+
+// streamClient writes [vstart, vstart+length) of the session's virtual file.
+func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vstart, length int64) error {
+	vend := vstart + length
+	vpos := vstart
+	g := s.current()
+	srcpos := s.toSource(g, vpos)
+	count := func(n int) { s.addBytes(n, m.now()) }
+	for vpos < vend {
+		n, rerr, werr := m.copyFrom(ctx, w, g, srcpos, vend-vpos, count)
+		vpos += n
+		srcpos += n
+		if werr != nil {
+			return werr
+		}
+		if rerr == nil {
+			continue
+		}
+		var at time.Duration
+		switch {
+		case errors.Is(rerr, errRetired):
+			// Another reader failed over while we were between chunks.
+			ng := s.current()
+			if ng == g || ng == nil {
+				return rerr
+			}
+			at = g.tmap.TimeAt(srcpos)
+			if vpos == vstart {
+				g, srcpos = ng, s.toSource(ng, vpos)
+				continue
+			}
+			if !spliceable(s.container, s.name) {
+				return errEndResponse
+			}
+			srcpos = alignPacket(ng.tmap.OffsetAt(AlignTime(at, g.info.Duration, ng.info.Duration)))
+			g = ng
+			continue
+		case errors.Is(rerr, core.ErrArticleMissing):
+			g.articleMissing.Store(true)
+			at = g.tmap.TimeAt(srcpos)
+			ng, err := m.failover(ctx, s, g, at, "articles missing during direct play")
+			if err != nil {
+				return err
+			}
+			if vpos == vstart {
+				// Nothing of this range was written yet: map the whole range.
+				g, srcpos = ng, s.toSource(ng, vpos)
+				continue
+			}
+			if !spliceable(s.container, s.name) {
+				return errEndResponse
+			}
+			srcpos = alignPacket(ng.tmap.OffsetAt(AlignTime(at, g.info.Duration, ng.info.Duration)))
+			g = ng
+			continue
+		case errors.Is(rerr, io.EOF):
+			return errShortSource
+		default:
+			return rerr
+		}
+	}
+	return nil
+}
+
+type chunk struct {
+	buf *[]byte
+	n   int
+	err error
+}
+
+// copyFrom copies up to length bytes of g's source starting at off into w,
+// reading ahead of the writer in ChunkSize pieces. It returns the bytes
+// written, the read error that stopped it (nil when length was copied) and
+// any write error. A read error is reported only after every byte before
+// the failure has been written.
+func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off, length int64, onWrite func(int)) (written int64, rerr, werr error) {
+	if length <= 0 {
+		return 0, nil, nil
+	}
+	if !g.acquire() {
+		return 0, errRetired, nil
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := make(chan chunk, m.opts.ReadAhead)
+	go func() {
+		defer g.release()
+		defer close(ch)
+		pos, rem := off, length
+		for rem > 0 {
+			if ctx.Err() != nil {
+				return
+			}
+			bp := m.bufs.Get().(*[]byte)
+			want := int64(len(*bp))
+			if rem < want {
+				want = rem
+			}
+			n, err := g.src.ReadAt((*bp)[:want], pos)
+			if int64(n) == want && errors.Is(err, io.EOF) {
+				err = nil
+			}
+			if err == nil && n == 0 {
+				err = io.ErrNoProgress
+			}
+			select {
+			case ch <- chunk{bp, n, err}:
+			case <-ctx.Done():
+				m.bufs.Put(bp)
+				return
+			}
+			if err != nil {
+				return
+			}
+			pos += int64(n)
+			rem -= int64(n)
+		}
+	}()
+	for c := range ch {
+		if c.n > 0 {
+			k, err := w.Write((*c.buf)[:c.n])
+			written += int64(k)
+			onWrite(k)
+			if err == nil && k < c.n {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				m.bufs.Put(c.buf)
+				cancel()
+				for c := range ch {
+					m.bufs.Put(c.buf)
+				}
+				return written, nil, err
+			}
+		}
+		m.bufs.Put(c.buf)
+		if c.err != nil {
+			return written, c.err, nil
+		}
+	}
+	if err := ctx.Err(); err != nil && written < length {
+		return written, err, nil
+	}
+	return written, nil, nil
+}
+
+// serveLoopback serves /src/{session}/{token}: one generation's source,
+// byte for byte, to ffmpeg on 127.0.0.1. A read that hits missing articles
+// ends the response and, for a live session, fails over in the background
+// so the HLS session restarts on the next release.
+func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
+	m.mu.Lock()
+	g := m.tokens[r.PathValue("session")+"/"+r.PathValue("token")]
+	m.mu.Unlock()
+	if g == nil {
+		http.Error(w, "gone", http.StatusGone)
+		return
+	}
+	s := g.sess
+	s.mu.Lock()
+	registered := s.registered
+	s.mu.Unlock()
+	if registered {
+		s.touch(m.now())
+	}
+	size := g.src.Size()
+	sum := g.releaseID()
+	rep := representation{
+		size:        size,
+		etag:        `"` + sum + "-" + g.token[:8] + `"`,
+		contentType: contentTypeFor("", g.src.Name()),
+	}
+	count := func(n int) {
+		if registered {
+			s.addBytes(n, m.now())
+		}
+	}
+	rep.body = func(w io.Writer, start, length int64) error {
+		n, rerr, werr := m.copyFrom(r.Context(), w, g, start, length, count)
+		if werr != nil {
+			return werr
+		}
+		if rerr != nil && errors.Is(rerr, core.ErrArticleMissing) {
+			g.articleMissing.Store(true)
+			if registered {
+				g.mu.Lock()
+				tm := g.tmap
+				g.mu.Unlock()
+				m.backgroundFailover(s, g, tm.TimeAt(start+n))
+			}
+		}
+		return rerr
+	}
+	if err := serveRepresentation(w, r, rep); err != nil && r.Context().Err() == nil {
+		m.log.Debug("loopback response ended early", "session", s.id, "err", err)
+	}
+}
+
+// backgroundFailover fails a session over outside any request, for errors
+// seen by ffmpeg on the loopback server.
+func (m *Manager) backgroundFailover(s *session, g *generation, at time.Duration) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.wg.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.wg.Done()
+		ctx, cancel := context.WithTimeout(m.ctx, m.opts.FailoverTimeout)
+		defer cancel()
+		if _, err := m.failover(ctx, s, g, at, "articles missing while transcoding"); err != nil {
+			m.log.Error("background failover failed", "session", s.id, "err", err)
+		}
+	}()
+}

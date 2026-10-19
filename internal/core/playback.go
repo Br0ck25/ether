@@ -67,6 +67,17 @@ type PlaySession struct {
 	Source     MediaSource // swaps on failover; read through Playback.Source
 	Info       MediaInfo
 	StartedAt  time.Time
+
+	// Status for the admin dashboard and /status/sessions, filled on the
+	// snapshots Playback returns.
+	TitleName   string       // "Movie (2024)" or "Show - S01E02 - Episode"
+	Username    string       // user display name
+	Client      ClientCaps   // the client's product, device and limits
+	Decision    DecisionKind // directplay once bytes go straight to the client; "" until known
+	BytesServed int64        // source bytes delivered (direct play and ffmpeg input)
+	SpeedBps    int64        // recent delivery rate, bytes per second
+	LastActive  time.Time
+	Failovers   int // mid-stream release swaps so far
 }
 
 type Playback interface {
