@@ -61,8 +61,11 @@ type CertManagerOptions struct {
 	SelfSignedValidity time.Duration
 	// Request overrides the download timing (tests).
 	Request CertRequest
-	Logger  *slog.Logger
-	Now     func() time.Time
+	// Shared, on a cluster node, holds the certificate for every node
+	// (see certshared.go). Nil: a standalone server keeps it in Dir only.
+	Shared SharedCertStore
+	Logger *slog.Logger
+	Now    func() time.Time
 }
 
 // CertManager obtains, stores and renews the server's TLS certificate:
@@ -77,6 +80,12 @@ type CertManager struct {
 	mu   sync.RWMutex
 	cert *tls.Certificate
 	info CertInfo
+
+	// Cluster sharing (certshared.go), guarded by mu.
+	allowRenew func() bool
+	sharedVer  int64
+	bus        EventBus
+	unsubs     []func()
 }
 
 type certState struct {
@@ -111,6 +120,13 @@ func NewCertManager(o CertManagerOptions) (*CertManager, error) {
 	}
 	if err := m.load(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		o.Logger.Warn("stored certificate unusable", "err", err)
+	}
+	if o.Shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if _, err := m.SyncShared(ctx); err != nil {
+			o.Logger.Warn("shared certificate unavailable; using the local copy", "err", err)
+		}
+		cancel()
 	}
 	return m, nil
 }
@@ -265,6 +281,12 @@ func (m *CertManager) Ensure(ctx context.Context, serverToken string, hosts []st
 		}
 		return m.Info(), nil
 	}
+	if m.o.Shared != nil {
+		// Another node may have renewed (or failed and backed off) since.
+		if _, err := m.syncSharedLocked(ctx); err != nil {
+			m.o.Logger.Warn("sync shared certificate", "err", err)
+		}
+	}
 	now := m.o.Now()
 	cur := m.Info()
 	var reqErr error
@@ -278,6 +300,8 @@ func (m *CertManager) Ensure(ctx context.Context, serverToken string, hosts []st
 	case !needPlex:
 	case serverToken == "" || m.o.Client == nil:
 		reqErr = errors.New("plextv: not claimed; cannot request a plex.direct certificate")
+	case !m.renewalAllowed():
+		reqErr = ErrRenewalDeferred
 	case throttled:
 		reqErr = fmt.Errorf("plextv: certificate request deferred until %s after: %s", cur.LastAttempt.Add(retryAfter).Format(time.RFC3339), cur.LastError)
 	default:
@@ -322,6 +346,7 @@ func (m *CertManager) requestPlexDirect(ctx context.Context, token string, cur C
 		m.info.LastAttempt, m.info.LastError, m.info.RetryAfter = st.LastAttempt, st.LastError, st.RetryAfter
 		m.mu.Unlock()
 		m.o.Logger.Warn("plex.direct certificate request failed", "err", err)
+		m.shareState(ctx, st)
 		return err
 	}
 	st.Hash = bundle.Hash
@@ -334,6 +359,7 @@ func (m *CertManager) requestPlexDirect(ctx context.Context, token string, cur C
 	m.mu.Lock()
 	m.info.LastAttempt, m.info.LastError, m.info.RetryAfter = st.LastAttempt, "", 0
 	m.mu.Unlock()
+	m.shareState(ctx, certState{LastAttempt: st.LastAttempt, Hash: st.Hash})
 	m.o.Logger.Info("plex.direct certificate installed", "subject", bundle.Subject, "expires", bundle.Leaf.NotAfter)
 	return nil
 }
@@ -352,7 +378,24 @@ func (m *CertManager) installSelfSigned(hosts []string, hash string) error {
 func (m *CertManager) Install(b *CertBundle) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	return m.write(b)
+	if err := m.write(b); err != nil {
+		return err
+	}
+	if !isSelfSigned(b.Leaf) {
+		m.shareState(context.Background(), m.currentState())
+	}
+	return nil
+}
+
+// shareState stores the certificate and request state for the cluster;
+// failures are logged (the local copy keeps serving).
+func (m *CertManager) shareState(ctx context.Context, st certState) {
+	if m.o.Shared == nil {
+		return
+	}
+	if err := m.pushSharedLocked(ctx, st); err != nil {
+		m.o.Logger.Warn("store certificate for the cluster", "err", err)
+	}
 }
 
 func (m *CertManager) write(b *CertBundle) error {

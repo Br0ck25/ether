@@ -82,6 +82,9 @@ type App struct {
 	logs *admin.LogBuffer
 	cfg  *config.Store
 	db   *sql.DB
+	// databaseURL is the cluster database, placed in join tokens
+	// (cluster_settings.go); empty on a standalone server.
+	databaseURL string
 
 	// cluster is Solo on SQLite and Postgres on a shared database; peers
 	// caches the other nodes' URIs for the plex.tv publisher.
@@ -198,10 +201,18 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	} else if imported {
 		a.log.Info("database: imported restored backup")
 	}
+	if dialect == store.Postgres {
+		if err := a.attachCluster(ctx, dbCfg.URL); err != nil {
+			a.Close()
+			return nil, err
+		}
+		cfg = a.cfg.Get()
+	}
 	if err := a.build(ctx, cfg); err != nil {
 		a.Close()
 		return nil, err
 	}
+	a.connectClusterHooks()
 	a.initUpdates()
 	return a, nil
 }
@@ -364,6 +375,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Client:         a.plextv,
 		CustomCertFile: cfg.Plex.CertFile,
 		CustomKeyFile:  cfg.Plex.KeyFile,
+		Shared:         a.sharedCerts(),
 		Logger:         log.With("component", "certs"),
 	}); err != nil {
 		return fmt.Errorf("certificates: %w", err)
@@ -518,6 +530,7 @@ func (a *App) Run(ctx context.Context) error {
 		a.localmedia.Watch(ctx, time.Minute, func(err error) { a.log.Warn("local library scan", "err", err) })
 	})
 	background.start(func() { a.runUpdates(ctx, cancel) })
+	background.start(func() { a.runClusterSync(ctx) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)

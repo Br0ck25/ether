@@ -199,7 +199,7 @@ type clusterStatus struct {
 
 func (a *App) clusterHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		st := clusterStatus{Mode: a.cluster.Mode(), Self: a.cluster.Self(), Epoch: a.cluster.Epoch()}
 		nodes, err := a.cluster.AllNodes(r.Context())
 		if err != nil {
@@ -221,5 +221,9 @@ func (a *App) clusterHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)
 	})
+	settings := a.clusterSettingsHandler()
+	mux.Handle("/settings", settings)
+	mux.Handle("/join-tokens", settings)
+	mux.Handle("/join-tokens/", settings)
 	return mux
 }

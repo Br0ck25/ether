@@ -4,7 +4,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -128,4 +130,83 @@ func clone(c Config) Config {
 	var out Config
 	_ = json.Unmarshal(b, &out)
 	return out
+}
+
+// KeyFingerprint identifies a credential key without revealing it. Cluster
+// nodes compare fingerprints to prove they hold the same key.
+func KeyFingerprint(key []byte) string {
+	h := sha256.New()
+	h.Write([]byte("ether-credential-key-fingerprint:v1\x00"))
+	h.Write(key)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// sealBytes encrypts plain with key, binding it to aad (a name that must
+// match when opening). The result is printable.
+func sealBytes(key []byte, aad string, plain []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	return sealedPrefix + base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, plain, []byte(aad))), nil
+}
+
+func openBytes(key []byte, aad, sealed string) ([]byte, error) {
+	if !strings.HasPrefix(sealed, sealedPrefix) {
+		return nil, errors.New("config: value is not sealed")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(sealed, sealedPrefix))
+	if err != nil || len(payload) < aead.NonceSize() {
+		return nil, errors.New("config: invalid sealed value")
+	}
+	plain, err := aead.Open(nil, payload[:aead.NonceSize()], payload[aead.NonceSize():], []byte(aad))
+	if err != nil {
+		return nil, fmt.Errorf("config: decrypt %s: key mismatch or damaged value", aad)
+	}
+	return plain, nil
+}
+
+// InstallCredentialKey writes key as dir's credential key. It refuses to
+// replace an existing key file: a node joining a cluster moves its old
+// configuration aside first.
+func InstallCredentialKey(dir string, key []byte) error {
+	if len(key) != 32 {
+		return errors.New("config: credential key must be 32 bytes")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, CredentialKeyFile)
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("config: %s already exists", path)
+	}
+	return writeFileAtomic(path, key, 0o600)
+}
+
+// ReadCredentialKey returns dir's credential key, or os.ErrNotExist.
+func ReadCredentialKey(dir string) ([]byte, error) {
+	key, err := os.ReadFile(filepath.Join(dir, CredentialKeyFile))
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != 32 {
+		return nil, errors.New("invalid credential key")
+	}
+	return key, nil
 }
