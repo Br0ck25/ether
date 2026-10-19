@@ -18,7 +18,7 @@ type validation struct {
 	index                         int
 	nzb                           []byte
 	err                           error
-	healthy                       bool
+	healthy, healthChecked        bool
 	fetchDuration, healthDuration time.Duration
 }
 
@@ -94,6 +94,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				if v.err == nil {
 					v.healthy = true
 					if s.health != nil {
+						v.healthChecked = true
 						phase = time.Now()
 						v.healthy, v.err = s.checkHealth(workCtx, cands[i].rel.ID, v.nzb)
 						v.healthDuration = time.Since(phase)
@@ -115,7 +116,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			ct := &tr.Candidates[cands[v.index].trace]
 			ct.FetchDuration = v.fetchDuration
 			ct.HealthDuration = v.healthDuration
-			ct.HealthChecked = s.health != nil && v.fetchDuration > 0
+			ct.HealthChecked = v.healthChecked
 			ct.Healthy = v.healthy && v.err == nil
 			if ctx.Err() != nil {
 				cancel()

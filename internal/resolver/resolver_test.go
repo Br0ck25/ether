@@ -47,9 +47,15 @@ func (f *fakeIndexer) FetchNZB(ctx context.Context, r core.Release) ([]byte, err
 	return []byte("nzb:" + r.ID), nil
 }
 
-type fakeHealth struct{ unhealthy map[string]bool }
+type fakeHealth struct {
+	unhealthy map[string]bool
+	checks    *atomic.Int64
+}
 
 func (f fakeHealth) Check(ctx context.Context, nzb []byte) (bool, error) {
+	if f.checks != nil {
+		f.checks.Add(1)
+	}
 	for id := range f.unhealthy {
 		if strings.Contains(string(nzb), id) {
 			return false, nil
@@ -179,6 +185,34 @@ func TestResolveHealthFailoverAndTraces(t *testing.T) {
 	}
 	if !sawUnhealthy {
 		t.Errorf("trace candidates %+v", traces[0].Candidates)
+	}
+}
+
+type failingFetchIndexer struct{ *fakeIndexer }
+
+func (f failingFetchIndexer) FetchNZB(context.Context, core.Release) ([]byte, error) {
+	return nil, errors.New("NZB unavailable")
+}
+
+func TestResolveFetchFailureDoesNotReportHealthCheck(t *testing.T) {
+	idx := failingFetchIndexer{&fakeIndexer{releases: movieReleases()[:1]}}
+	var checks atomic.Int64
+	svc := New(idx, fakeHealth{checks: &checks}, nil, testCfg(), Options{})
+	t.Cleanup(func() { _ = svc.Close() })
+	_, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
+	if !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("error = %v; want unavailable", err)
+	}
+	if checks.Load() != 0 {
+		t.Fatal("health checker ran after an NZB fetch failure")
+	}
+	traces := svc.Traces()
+	if len(traces) != 1 || len(traces[0].Candidates) != 1 {
+		t.Fatalf("traces %+v", traces)
+	}
+	c := traces[0].Candidates[0]
+	if c.HealthChecked || c.Healthy || !c.Rejected || !strings.Contains(c.Reason, "NZB unavailable") {
+		t.Fatalf("fetch failure trace %+v", c)
 	}
 }
 
