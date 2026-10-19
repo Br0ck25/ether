@@ -8,7 +8,7 @@ export function Field({ label, hint, error, children, className, htmlFor }: {
 }) {
   return (
     <div className={cn("space-y-1.5", className)}>
-      <Label htmlFor={htmlFor} className="text-sm font-medium text-fg">{label}</Label>
+      <Label htmlFor={htmlFor} className="block text-sm font-medium text-fg">{label}</Label>
       {children}
       {error ? <p className="text-xs text-danger" role="alert">{error}</p> : hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
     </div>

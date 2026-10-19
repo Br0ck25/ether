@@ -243,7 +243,7 @@ export default function CollectionEditor() {
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Input value={spec.name} onChange={(e) => update({ name: e.currentTarget.value }, "name")} placeholder="Name your collection"
             aria-label="Collection name" disabled={readOnly}
-            className="h-11 min-w-0 flex-1 border-transparent bg-transparent px-1 text-xl font-semibold shadow-none hover:border-border focus-visible:border-primary sm:text-xl" />
+            className="h-11 min-w-0 flex-1 basis-full border-transparent sm:min-w-64 sm:basis-0 bg-transparent px-1 text-xl font-semibold shadow-none hover:border-border focus-visible:border-primary sm:text-xl" />
           <div className="flex flex-wrap items-center gap-1.5">
             <Button variant="ghost" size="icon" className="size-9" onClick={history.undo} disabled={!history.canUndo || readOnly} aria-label="Undo" title="Undo (⌘Z)"><Undo2 size={16} /></Button>
             <Button variant="ghost" size="icon" className="size-9" onClick={history.redo} disabled={!history.canRedo || readOnly} aria-label="Redo" title="Redo (⇧⌘Z)"><Redo2 size={16} /></Button>
@@ -316,7 +316,7 @@ export default function CollectionEditor() {
           <section className="app-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg-subtle" aria-label="Live preview">
             <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
               <div className="flex flex-wrap items-start gap-4 rounded-xl border border-border bg-surface p-4">
-                <ArtworkPreview spec={spec} items={preview?.items ?? []} className="w-20 shrink-0 sm:w-24" />
+                <ArtworkPreview spec={spec} items={preview?.items ?? []} size="sm" className="w-20 shrink-0 sm:w-24" />
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium uppercase tracking-wider text-fg-subtle">How it appears in Plex</p>
                   <p className="mt-1 truncate text-lg font-semibold text-fg">{spec.name.trim() || "Untitled collection"}</p>

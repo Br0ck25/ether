@@ -7,8 +7,22 @@
 @source "./";
 
 :root {
-  /* Drawers open beneath the 56px AppShell header on desktop. */
+  /* Drawers cover the full height (AppShell header included). */
   --drawer-top: 0px;
+  /* Text and marks drawn over artwork scrims (which use the overlay token). */
+  --on-scrim: rgb(var(--ch-bg));
+}
+.dark {
+  --on-scrim: rgb(var(--ch-fg));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --on-scrim: rgb(var(--ch-fg));
+  }
+}
+
+@theme inline {
+  --color-on-scrim: var(--on-scrim);
 }
 
 @layer utilities {
@@ -58,12 +72,6 @@
   }
   .scrim-left {
     background: linear-gradient(to right, rgb(var(--ch-overlay) / 0.95), rgb(var(--ch-overlay) / 0.55) 55%, transparent);
-  }
-  .text-on-scrim {
-    color: rgb(var(--ch-bg) / 1);
-  }
-  .dark .text-on-scrim {
-    color: rgb(var(--ch-fg) / 1);
   }
 
   @media (prefers-reduced-motion: reduce) {

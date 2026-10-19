@@ -157,7 +157,7 @@ export function ArtworkPanel({ spec, update, preview }: { spec: CollectionSpec; 
 }
 
 /** Client-side approximation of the server's generated poster, from the preview titles. */
-export function ArtworkPreview({ spec, items, className }: { spec: CollectionSpec; items: TitleCard[]; className?: string }) {
+export function ArtworkPreview({ spec, items, className, size = "md" }: { spec: CollectionSpec; items: TitleCard[]; className?: string; size?: "sm" | "md" }) {
   const posters = items.filter((i) => i.poster);
   const mode = spec.artwork.mode === "auto" ? (posters.length >= 4 ? "collage" : "backdrop") : spec.artwork.mode;
   const accentStyle = spec.artwork.accent ? { backgroundColor: spec.artwork.accent } : undefined;
@@ -176,10 +176,10 @@ export function ArtworkPreview({ spec, items, className }: { spec: CollectionSpe
         <Artwork src={spec.artwork.url || undefined} alt="" title="Add an image URL" className="size-full" eager />
       )}
       {mode !== "tmdb" && mode !== "custom" ? (
-        <div className="scrim-bottom absolute inset-x-0 bottom-0 px-3 pb-3 pt-10">
-          <div className={cn("mb-2 h-1 w-8 rounded-full", !accentStyle && "bg-primary")} style={accentStyle} />
-          <p className="text-on-scrim line-clamp-3 text-base font-bold leading-tight">{name}</p>
-          {items.length ? <p className="text-on-scrim mt-0.5 text-[10px] opacity-75">{spec.mediaType === "show" ? "Series" : "Collection"}</p> : null}
+        <div className={cn("scrim-bottom absolute inset-x-0 bottom-0", size === "sm" ? "px-1.5 pb-1.5 pt-6" : "px-3 pb-3 pt-10")}>
+          <div className={cn("rounded-full", size === "sm" ? "mb-1 h-0.5 w-4" : "mb-2 h-1 w-8", !accentStyle && "bg-primary")} style={accentStyle} />
+          <p className={cn("text-on-scrim line-clamp-3 font-bold leading-tight", size === "sm" ? "text-[10px]" : "text-base")}>{name}</p>
+          {items.length && size !== "sm" ? <p className="text-on-scrim mt-0.5 text-[10px] opacity-75">{spec.mediaType === "show" ? "Series" : "Collection"}</p> : null}
         </div>
       ) : null}
     </div>
@@ -236,7 +236,7 @@ export function AudiencePanel({ spec, update }: { spec: CollectionSpec; update: 
               options={WEEKDAYS.map((d, i) => ({ value: i, label: d }))} />
             <div className="flex gap-1.5">
               <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSchedule({ days: [1, 2, 3, 4] })}>Weeknights</Button>
-              <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSchedule({ days: [0, 5, 6] })}>Weekends</Button>
+              <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSchedule({ days: [0, 6] })}>Weekends</Button>
               <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setSchedule({ days: undefined })}>Every day</Button>
             </div>
           </div>

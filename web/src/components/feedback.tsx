@@ -42,8 +42,8 @@ export function ErrorPanel({ error, onRetry, feature, className }: {
       <EmptyState
         className={className}
         icon={<CloudOff />}
-        title={`${feature} isn't available on this server`}
-        description="Update Ether to the latest version to use it. Everything else keeps working in the meantime."
+        title="Not available on this server yet"
+        description={`${feature} comes with a newer version of Ether. Update Ether to use it; everything else keeps working in the meantime.`}
         action={onRetry ? <Button variant="outline" size="sm" onClick={onRetry}><RefreshCw size={14} /> Check again</Button> : undefined}
       />
     );

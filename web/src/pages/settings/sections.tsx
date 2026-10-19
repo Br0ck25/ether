@@ -78,7 +78,7 @@ export function UsenetSection({ value, onChange, errors, tests, runTest, status,
               <Button variant="ghost" size="sm" className="text-danger" onClick={() => set(providers.filter((_, j) => j !== i))}><Trash2 size={14} /> Remove</Button>
             </>}>
             {stat ? (
-              <SettingsRow title="Live" description={`${Number(stat.activeConnections ?? 0)} of ${Number(stat.configuredConnections ?? p.connections)} connections busy · ${formatBytes(stat.bytes)} fetched`}
+              <SettingsRow title="Live" description={`${Number(stat.activeConnections ?? 0)} of ${Number(stat.configuredConnections ?? p.connections)} connections busy${stat.bytes ? ` · ${formatBytes(stat.bytes)} fetched` : ""}`}
                 control={<Badge variant={stat.state === "ok" ? "success" : "warning"}>{String(stat.state ?? "unknown")}</Badge>} />
             ) : null}
             <TextRow label="Name" value={p.name} onChange={(v) => set(providers.map((x, j) => (j === i ? { ...x, name: v } : x)))} />
@@ -264,7 +264,7 @@ export function PlexStatus({ cfg, remote, onReopen }: { cfg: EtherConfig; remote
   const conns = isPlainObject(remote) && Array.isArray(remote.connections) ? remote.connections.filter(isPlainObject) : [];
   return (
     <SettingsSection title="Status">
-      <SettingsRow title="Plex account" description={cfg.plex.claimed ? `Claimed by ${cfg.plex.ownerUsername || "your account"}.` : "Not claimed yet. Run the setup wizard to sign in."}
+      <SettingsRow title="Plex account" description={cfg.plex.claimed && cfg.plex.token ? `Claimed by ${cfg.plex.ownerUsername || "your account"}.` : "Not signed in to plex.tv. Run the setup wizard to sign in and claim this server."}
         control={<Button variant="outline" size="sm" onClick={onReopen}>Reopen setup wizard</Button>} />
       <SettingsRow title="Remote access" description={r.details.join(" · ") || r.summary} control={<LevelBadge level={r.level} label={r.summary} />} />
       <SettingsRow title="plex.direct certificate" description={c.details.join(" · ") || c.summary} control={<LevelBadge level={c.level} label={c.summary} />} />

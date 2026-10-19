@@ -100,6 +100,11 @@ function HealthIndicator() {
   );
 }
 
+/** "v1.2.3" for releases, the raw string ("dev") otherwise. */
+function versionLabel(v: string): string {
+  return /^\d/.test(v) ? `v${v}` : v;
+}
+
 /** A fresh editor per new-collection draft (each navigation carries its own draft id). */
 function NewCollection() {
   const [search] = useSearchParams();
@@ -121,7 +126,7 @@ function Shell() {
       navigationMode="sidebar"
       linkRender={linkRender}
       brand={<Link to="/" aria-label="Ether home" className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"><Brand serverName={boot.serverName} /></Link>}
-      headerMiddle={<span className="hidden truncate text-sm text-fg-muted lg:block">{boot.serverName}<span className="text-fg-subtle"> · v{boot.version}</span></span>}
+      headerMiddle={<span className="hidden truncate text-sm text-fg-muted lg:block">{boot.serverName}<span className="text-fg-subtle"> · {versionLabel(boot.version)}</span></span>}
       header={
         <>
           <HealthIndicator />
@@ -133,7 +138,7 @@ function Shell() {
           ) : null}
         </>
       }
-      sidebarFooter={<p className="px-1 text-xs text-fg-subtle">Ether v{boot.version}</p>}
+      sidebarFooter={<p className="px-1 text-xs text-fg-subtle">Ether {versionLabel(boot.version)}</p>}
       sidebarCollapsedFooter={<div className="flex justify-center"><EtherMark size={20} /></div>}
       mobileTabCount={4}
     >

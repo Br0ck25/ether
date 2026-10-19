@@ -9,6 +9,8 @@ import { api, errorMessage } from "../../lib/api";
 import type { OverrideKind, TasteOverride, TasteProfile } from "../../lib/contract";
 import { formatMinutes, relativeTime } from "../../lib/format";
 
+const DEVICE_NAMES: Record<string, string> = { tv: "TV", mobile: "Phone or tablet", web: "Web browser", desktop: "Desktop app" };
+
 const langName = (code: string) => {
   try { return new Intl.DisplayNames(undefined, { type: "language" }).of(code) ?? code; } catch { return code; }
 };
@@ -72,7 +74,7 @@ export function TasteView({ userId, taste, onChange }: { userId: number; taste: 
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
               <dt className="text-fg-muted">Weeknights</dt><dd className="tabular-nums text-fg">{formatMinutes(taste.habits.weeknightMinutes)} a night</dd>
               <dt className="text-fg-muted">Weekends</dt><dd className="tabular-nums text-fg">{formatMinutes(taste.habits.weekendMinutes)} a day</dd>
-              <dt className="text-fg-muted">Usually on</dt><dd className="capitalize text-fg">{taste.habits.preferredDevice || "—"}</dd>
+              <dt className="text-fg-muted">Usually on</dt><dd className="text-fg">{DEVICE_NAMES[taste.habits.preferredDevice] ?? (taste.habits.preferredDevice || "—")}</dd>
             </dl>
             <div className="space-y-2.5">
               <Meter value={taste.habits.bingeScore} label="Binge watching" />

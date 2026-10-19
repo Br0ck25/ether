@@ -15,7 +15,7 @@ import { ErrorPanel, LoadingRows } from "../components/feedback";
 import { LevelBadge, StatusDot } from "../components/status";
 import { api, isUnavailable } from "../lib/api";
 import type { ActivityDay, RowInsight } from "../lib/contract";
-import { formatBytes, formatNumber, formatPercent, formatRate, relativeTime } from "../lib/format";
+import { formatBytes, formatNumber, formatPercent, formatRate, plural, relativeTime } from "../lib/format";
 import { normalizeSessions, type HealthItem, type NowPlaying } from "../lib/health";
 import { useAsync } from "../lib/hooks";
 import { useTitle } from "../lib/titles";
@@ -55,24 +55,25 @@ export default function Home() {
 
         <KpiRow days={activity.data} unavailable={isUnavailable(activity.error)} nowPlaying={sessions.length} loading={activity.loading && !activity.data} />
 
-        <div className="grid gap-6 xl:grid-cols-3">
-          <DashboardPanel title="Now playing" icon={<PlayCircle size={16} />} className="xl:col-span-2"
-            actions={sessions.length ? <Badge variant="info">{sessions.length} {sessions.length === 1 ? "stream" : "streams"}</Badge> : null}>
-            {!dashboard ? <LoadingRows rows={2} /> : sessions.length === 0 ? (
-              <EmptyState icon={<MonitorPlay />} title="Nothing playing" description="Streams appear here the moment someone presses play in Plex." className="py-10" />
-            ) : (
-              <ul className="space-y-3">{sessions.map((s) => <SessionCard key={s.id || s.key} s={s} />)}</ul>
-            )}
-          </DashboardPanel>
-          <DashboardPanel title="Health" icon={<HeartPulse size={16} />}
-            actions={hw?.hwaccel?.name ? <Badge variant="secondary" title={hw.ffmpeg ? `ffmpeg ${hw.ffmpeg}` : undefined}>{hw.hwaccel.name}</Badge> : null}>
-            {!dashboard ? <LoadingRows rows={4} /> : <HealthList items={health} />}
-          </DashboardPanel>
-        </div>
-
-        <div className="grid gap-6 xl:grid-cols-3">
-          <ActivityPanel state={activity} />
-          <RowsPanel state={rows} />
+        <div className="grid items-start gap-6 xl:grid-cols-3">
+          <div className="space-y-6 xl:col-span-2">
+            <DashboardPanel title="Now playing" icon={<PlayCircle size={16} />} className="h-auto"
+              actions={sessions.length ? <Badge variant="info">{sessions.length} {sessions.length === 1 ? "stream" : "streams"}</Badge> : null}>
+              {!dashboard ? <LoadingRows rows={2} /> : sessions.length === 0 ? (
+                <EmptyState icon={<MonitorPlay />} title="Nothing playing" description="Streams appear here the moment someone presses play in Plex." className="py-10" />
+              ) : (
+                <ul className="space-y-3">{sessions.map((s) => <SessionCard key={s.id || s.key} s={s} />)}</ul>
+              )}
+            </DashboardPanel>
+            <ActivityPanel state={activity} />
+          </div>
+          <div className="space-y-6">
+            <DashboardPanel title="Health" icon={<HeartPulse size={16} />} className="h-auto"
+              actions={hw?.hwaccel?.name ? <Badge variant="secondary" title={hw.ffmpeg ? `ffmpeg ${hw.ffmpeg}` : undefined}>{hw.hwaccel.name}</Badge> : null}>
+              {!dashboard ? <LoadingRows rows={4} /> : <HealthList items={health} />}
+            </DashboardPanel>
+            <RowsPanel state={rows} />
+          </div>
         </div>
       </div>
     </PageContainer>
@@ -91,16 +92,16 @@ function KpiRow({ days, unavailable, nowPlaying, loading }: { days?: ActivityDay
     return { plays, hours, peakViewers, change: earlier > 0 ? (recent - earlier) / earlier : null };
   }, [days]);
   if (loading) {
-    return <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}</div>;
+    return <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">{Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}</div>;
   }
   const spark = (key: "plays" | "hours") => days && days.length > 1
     ? <Sparkline points={days.map((d) => d[key])} tone="neutral" area ariaLabel={`${key} per day, last 30 days`} />
     : undefined;
   const na = unavailable ? "—" : undefined;
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <DashboardMetricCard label="Plays · 30 days" value={na ?? formatNumber(totals.plays, 0)} icon={<PlayCircle size={18} />}
-        detail={totals.change === null ? "Across every viewer" : `${totals.change >= 0 ? "+" : ""}${formatPercent(totals.change)} vs. the previous 15 days`} trend={spark("plays")} />
+        detail={totals.change === null ? "Across every viewer" : `${totals.change >= 0 ? "+" : "−"}${formatPercent(Math.abs(totals.change))} vs. prior`} trend={spark("plays")} />
       <DashboardMetricCard label="Hours watched" value={na ?? formatNumber(totals.hours, 0)} icon={<Clock size={18} />} tone="info" detail="Last 30 days" trend={spark("hours")} />
       <DashboardMetricCard label="Busiest day" value={na ?? `${totals.peakViewers} ${totals.peakViewers === 1 ? "viewer" : "viewers"}`} icon={<Users size={18} />} tone="success" detail="Most people watching in a day" />
       <DashboardMetricCard label="Streaming now" value={String(nowPlaying)} icon={<Tv size={18} />} tone={nowPlaying ? "warning" : "primary"} detail={nowPlaying ? "Live sessions" : "All quiet"} />
@@ -128,9 +129,9 @@ function SessionCard({ s }: { s: NowPlaying }) {
           </div>
           <div className="mt-3 max-w-md">
             {s.progress !== null ? (
-              <Meter value={s.progress} label={`Started ${relativeTime(s.startedAt)}`} valueLabel={`${Math.round(s.progress * 100)}% watched`} />
+              <Meter onScrim value={s.progress} label={`Started ${relativeTime(s.startedAt)}`} valueLabel={`${Math.round(s.progress * 100)}% watched`} />
             ) : delivered !== null ? (
-              <Meter value={delivered} label={`Started ${relativeTime(s.startedAt)}`} valueLabel={`${formatBytes(s.bytesServed)} of ${formatBytes(s.size)} delivered`} />
+              <Meter onScrim value={delivered} label={`Started ${relativeTime(s.startedAt)}`} valueLabel={`${formatBytes(s.bytesServed)} of ${formatBytes(s.size)} delivered`} />
             ) : (
               <p className="text-xs opacity-80">Started {relativeTime(s.startedAt)} · {formatBytes(s.bytesServed)} delivered</p>
             )}
@@ -173,10 +174,12 @@ function ActivityPanel({ state }: { state: ReturnType<typeof useAsync<ActivityDa
     key: d.date,
     label: new Date(`${d.date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
     value: d[metric],
-    detail: metric === "plays" ? `${formatNumber(d.hours, 1)} h · ${d.uniqueViewers} viewers` : `${d.plays} plays · ${d.uniqueViewers} viewers`,
+    detail: metric === "plays"
+      ? `${formatNumber(d.hours, 1)} h · ${plural(d.uniqueViewers, "viewer")}`
+      : `${plural(d.plays, "play")} · ${plural(d.uniqueViewers, "viewer")}`,
   }));
   return (
-    <DashboardPanel title="Activity · last 30 days" icon={<BarChart3 size={16} />} className="xl:col-span-2"
+    <DashboardPanel title="Activity · last 30 days" icon={<BarChart3 size={16} />} className="h-auto"
       actions={
         <div className="flex items-center gap-1">
           <div role="radiogroup" aria-label="Metric" className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5">
@@ -216,7 +219,7 @@ function RowsPanel({ state }: { state: ReturnType<typeof useAsync<RowInsight[]>>
   const rows = [...(state.data ?? [])].sort((a, b) => b.playRate - a.playRate).slice(0, 6);
   const maxRate = Math.max(0.0001, ...rows.map((r) => r.playRate));
   return (
-    <DashboardPanel title="Best-performing rows" icon={<TrendingUp size={16} />}
+    <DashboardPanel title="Best-performing rows" icon={<TrendingUp size={16} />} className="h-auto"
       actions={<Link to="/designer" className="text-xs font-medium text-primary hover:underline">Home Designer</Link>}>
       {state.error ? <ErrorPanel error={state.error} feature="Row insights" onRetry={() => void state.reload()} /> : state.loading && !state.data ? <LoadingRows rows={4} /> : rows.length === 0 ? (
         <EmptyState icon={<Film />} title="No row data yet" description="Once viewers browse Plex Home, the rows that lead to plays rank here." className="py-8" />

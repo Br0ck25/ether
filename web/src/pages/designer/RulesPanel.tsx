@@ -105,10 +105,12 @@ function RowRuleEditor({ rr, title, label, onChange, onRemove }: { rr: LayoutRow
   const hours = [{ value: "", label: "Any" }, ...Array.from({ length: 25 }, (_, h) => ({ value: String(h), label: h === 24 ? "Midnight" : formatHour(h) }))];
   return (
     <li className="rounded-lg border border-border-subtle bg-bg-subtle p-2.5">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-fg" title={rr.hubId}>{title}</span>
-        <Segmented ariaLabel={`${label} action`} size="sm" value={rr.action} onChange={(a) => onChange({ ...rr, action: a, position: a === "pin" ? rr.position : undefined })} options={ACTION_OPTIONS} />
         <Button variant="ghost" size="icon" className="size-7" onClick={onRemove} aria-label={`Remove ${label}`}><X size={14} /></Button>
+      </div>
+      <div className="mt-1.5">
+        <Segmented ariaLabel={`${label} action`} size="sm" value={rr.action} onChange={(a) => onChange({ ...rr, action: a, position: a === "pin" ? rr.position : undefined })} options={ACTION_OPTIONS} />
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         {rr.action === "pin" ? (

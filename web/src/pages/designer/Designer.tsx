@@ -31,6 +31,7 @@ export default function Designer() {
   const [nonce, setNonce] = useState(0);
   const [panelOpen, setPanelOpen] = useState(false);
   const wide = useMediaQuery("(min-width: 1280px)");
+  const medium = useMediaQuery("(min-width: 768px)");
 
   useEffect(() => {
     if (viewers?.length && !ctx) {
@@ -79,6 +80,16 @@ export default function Designer() {
     return v ? viewerName(v) : "this viewer";
   }, [viewers, ctx]);
 
+  const actions = (
+    <>
+      {dirty ? <Badge variant="warning" className="self-center">Unsaved layout</Badge> : null}
+      <Button variant="ghost" size="sm" onClick={() => void refreshRows()} disabled={!ctx}><RefreshCw size={14} /> Rebuild rows</Button>
+      {!wide || compare ? <Button variant="outline" size="sm" onClick={() => setPanelOpen(true)}><ListOrdered size={14} /> Rules{rules.length ? ` (${rules.length})` : ""}</Button> : null}
+      <Button variant="outline" size="sm" onClick={() => setRules(saved)} disabled={!dirty || saving}><Undo2 size={14} /> Discard</Button>
+      <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}><Save size={14} /> {saving ? "Saving…" : "Save layout"}</Button>
+    </>
+  );
+
   const rulesPanel = layout.error ? <ErrorPanel error={layout.error} feature="Home Designer" onRetry={() => void layout.reload()} /> : !layout.data ? <Spinner label="Loading rules" /> : (
     <RulesPanel rules={rules} onChange={setRules} available={available} viewers={viewers ?? []} />
   );
@@ -89,16 +100,9 @@ export default function Designer() {
         <PageHeader
           title="Home Designer"
           description="See each viewer's Plex Home exactly as Plex receives it, then shape it."
-          actions={
-            <div className="flex flex-wrap gap-2">
-              {dirty ? <Badge variant="warning" className="self-center">Unsaved layout</Badge> : null}
-              <Button variant="ghost" size="sm" onClick={() => void refreshRows()} disabled={!ctx}><RefreshCw size={14} /> Rebuild rows</Button>
-              {!wide || compare ? <Button variant="outline" size="sm" onClick={() => setPanelOpen(true)}><ListOrdered size={14} /> Rules{rules.length ? ` (${rules.length})` : ""}</Button> : null}
-              <Button variant="outline" size="sm" onClick={() => setRules(saved)} disabled={!dirty || saving}><Undo2 size={14} /> Discard</Button>
-              <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}><Save size={14} /> {saving ? "Saving…" : "Save layout"}</Button>
-            </div>
-          }
+          actions={medium ? <div className="flex flex-wrap gap-2">{actions}</div> : undefined}
         />
+        {!medium ? <div className="mt-3 flex flex-wrap gap-2">{actions}</div> : null}
         {ctx && viewers ? (
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <ContextBar ctx={ctx} onChange={setCtx} viewers={viewers} idPrefix={compare ? "Left" : "Preview"} compact={compare} />

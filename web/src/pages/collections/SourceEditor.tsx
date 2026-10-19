@@ -20,7 +20,7 @@ export function SourceEditor({ source, onChange, onRemove, index, region, remova
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-sm font-medium text-fg">{meta?.label ?? source.kind}</p>
-          <p className="text-xs text-fg-muted">{isSourceComplete(source) ? describeSource(source) : meta?.description}</p>
+          <p className="text-xs text-fg-muted">{isSourceComplete(source) && source.kind !== "catalog" ? describeSource(source) : meta?.description}</p>
         </div>
         {removable ? (
           <Button type="button" variant="ghost" size="icon" className="size-8 shrink-0 text-fg-muted hover:text-danger" onClick={onRemove} aria-label={`Remove ${label.toLowerCase()}`}>

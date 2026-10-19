@@ -141,7 +141,7 @@ export default function Setup() {
     finally { setSaving(false); }
   };
 
-  const plexSigned = pinDone || cfg.plex.claimed;
+  const plexSigned = pinDone || Boolean(cfg.plex.claimed && cfg.plex.token);
   const maxBudget = disk ? Math.max(GIB, disk.freeBytes + cfg.cache.budgetBytes) : 500 * GIB;
 
   return (

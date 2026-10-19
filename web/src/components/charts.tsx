@@ -78,7 +78,7 @@ export function TimeBars({ data, height = 160, ariaLabel, valueFormat = (v) => S
         })}
       </svg>
       {h && hover !== null ? (
-        <div className="pointer-events-none absolute -top-2 z-10 -translate-x-1/2 -translate-y-full rounded-md border border-border bg-elevated px-2.5 py-1.5 text-xs shadow-md"
+        <div className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-border bg-elevated px-2.5 py-1.5 text-xs shadow-md"
           style={{ left: `${((padL + hover * slot + slot / 2) / width) * 100}%` }}>
           <div className="font-medium text-fg">{h.label}</div>
           <div className="tabular-nums text-fg-muted">{valueFormat(h.value)}{h.detail ? ` · ${h.detail}` : ""}</div>
@@ -173,18 +173,22 @@ export function HourStrip({ peaks, ariaLabel }: { peaks: number[]; ariaLabel: st
 }
 
 /** Thin horizontal meter (0..1) with a label and value. */
-export function Meter({ value, label, valueLabel, tone = "primary" }: { value: number; label?: string; valueLabel?: string; tone?: "primary" | "warning" | "danger" }) {
+export function Meter({ value, label, valueLabel, tone = "primary", onScrim = false }: {
+  value: number; label?: string; valueLabel?: string; tone?: "primary" | "warning" | "danger";
+  /** Drawn over artwork: text and track use the on-scrim colour. */
+  onScrim?: boolean;
+}) {
   const id = useId();
   const v = Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
   return (
     <div>
       {label || valueLabel ? (
         <div className="mb-1 flex items-baseline justify-between gap-2 text-xs">
-          <span id={id} className="text-fg-muted">{label}</span>
-          <span className="tabular-nums text-fg">{valueLabel ?? `${Math.round(v * 100)}%`}</span>
+          <span id={id} className={onScrim ? "text-on-scrim/80" : "text-fg-muted"}>{label}</span>
+          <span className={cn("tabular-nums", onScrim ? "text-on-scrim" : "text-fg")}>{valueLabel ?? `${Math.round(v * 100)}%`}</span>
         </div>
       ) : null}
-      <div className="h-1.5 overflow-hidden rounded-full bg-bg-subtle ring-1 ring-inset ring-border-subtle" role="meter" aria-labelledby={label ? id : undefined} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v * 100)}>
+      <div className={cn("h-1.5 overflow-hidden rounded-full", onScrim ? "bg-on-scrim/25" : "bg-bg-subtle ring-1 ring-inset ring-border-subtle")} role="meter" aria-labelledby={label ? id : undefined} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(v * 100)}>
         <div className={cn("h-full rounded-full transition-[width] duration-500", tone === "primary" ? "bg-primary" : tone === "warning" ? "bg-warning" : "bg-danger")} style={{ width: `${v * 100}%` }} />
       </div>
     </div>

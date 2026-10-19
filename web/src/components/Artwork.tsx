@@ -1,6 +1,6 @@
 import { cn } from "@braedonsaunders/appkit-ui";
 import { Film } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { apiBlob, imageNeedsFetch } from "../lib/api";
 import { initials } from "../lib/format";
 
@@ -20,22 +20,23 @@ export function Artwork({ src, alt, title, className, imgClassName, eager, icon 
   eager?: boolean;
   icon?: React.ReactNode;
 }) {
-  const needsAuth = imageNeedsFetch(src);
+  const needsFetch = imageNeedsFetch(src);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  // Load/fail state is keyed by URL so a new src never inherits the old state,
+  // and an image that finished loading before React attached its handler
+  // (cached or data: URLs) is still revealed.
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   const holder = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { setFailed(false); setLoaded(false); }, [src]);
-
   useEffect(() => {
-    if (!needsAuth || !src) return;
+    if (!needsFetch || !src) return;
     let url: string | null = null;
     const ctl = new AbortController();
     const load = () => {
       apiBlob(src, ctl.signal)
         .then((b) => { url = URL.createObjectURL(b); setBlobUrl(url); })
-        .catch(() => { if (!ctl.signal.aborted) setFailed(true); });
+        .catch(() => { if (!ctl.signal.aborted) setFailedSrc(src); });
     };
     const el = holder.current;
     let io: IntersectionObserver | null = null;
@@ -47,21 +48,27 @@ export function Artwork({ src, alt, title, className, imgClassName, eager, icon 
       io.observe(el);
     }
     return () => { ctl.abort(); io?.disconnect(); if (url) URL.revokeObjectURL(url); setBlobUrl(null); };
-  }, [needsAuth, src, eager]);
+  }, [needsFetch, src, eager]);
 
-  const shown = needsAuth ? blobUrl : src;
+  const shown = needsFetch ? blobUrl : src ?? null;
+  const failed = Boolean(src) && failedSrc === src;
+  const imgRef = useCallback((img: HTMLImageElement | null) => {
+    if (img && shown && img.complete && img.naturalWidth > 0) setLoadedSrc(shown);
+  }, [shown]);
+
   return (
     <div ref={holder} className={cn("relative overflow-hidden bg-bg-subtle", className)}>
       {shown && !failed ? (
         <img
+          ref={imgRef}
           src={shown}
           alt={alt}
           loading={eager ? "eager" : "lazy"}
           decoding="async"
           draggable={false}
-          data-loaded={loaded ? "true" : "false"}
-          onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
+          data-loaded={loadedSrc === shown ? "true" : "false"}
+          onLoad={() => setLoadedSrc(shown)}
+          onError={() => setFailedSrc(src ?? null)}
           className={cn("img-fade size-full object-cover", imgClassName)}
         />
       ) : null}

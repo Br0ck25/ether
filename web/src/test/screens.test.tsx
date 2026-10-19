@@ -30,8 +30,8 @@ describe("Home dashboard", () => {
         ? new Response(JSON.stringify({ error: { code: "not_found", message: "no such API endpoint" } }), { status: 404 })
         : original(input, init));
     });
-    expect(await screen.findByText("Activity insights isn't available on this server", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText("Row insights isn't available on this server")).toBeInTheDocument();
+    expect(await screen.findByText(/^Activity insights comes with a newer version of Ether/, {}, WAIT)).toBeInTheDocument();
+    expect(screen.getByText(/^Row insights comes with a newer version of Ether/)).toBeInTheDocument();
     // Live status still works.
     expect(await screen.findByText(/Sam Rivera · Living Room/, {}, WAIT)).toBeInTheDocument();
   });
@@ -71,7 +71,7 @@ describe("Settings", () => {
       f.state.config = { ...f.state.config, personalize: { enabled: true, explore: 0.2 } } as never;
     });
     expect(await screen.findByRole("heading", { name: "Personalize" }, WAIT)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Explore"), { target: { value: "0.4" } });
+    fireEvent.change(await screen.findByLabelText("Explore"), { target: { value: "0.4" } });
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
     await waitFor(() => expect(calls(fake, "PUT", "/config")).toHaveLength(1), WAIT);
     expect((calls(fake, "PUT", "/config")[0]!.body as { personalize: unknown }).personalize).toEqual({ enabled: true, explore: 0.4 });
