@@ -2,7 +2,10 @@ module github.com/ether-media/ether
 
 go 1.27.2
 
-require modernc.org/sqlite v1.60.1
+require (
+	golang.org/x/text v0.42.0
+	modernc.org/sqlite v1.60.1
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

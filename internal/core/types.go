@@ -60,6 +60,7 @@ type Title struct {
 	Status        string        `json:"status,omitempty"` // TMDB status: Released, In Production, Ended...
 
 	Genres        []string `json:"genres,omitempty"`
+	Keywords      []string `json:"keywords,omitempty"` // TMDB keywords (lower-case), for content-based recommendations
 	Studios       []string `json:"studios,omitempty"`
 	Countries     []string `json:"countries,omitempty"`
 	Language      string   `json:"language,omitempty"` // ISO 639-1 original language
