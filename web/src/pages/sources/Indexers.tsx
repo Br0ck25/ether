@@ -158,7 +158,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
     <>
       <Section
         title="Indexers"
-        description="Searched in order. Daily budgets keep Ether inside each plan's API limits."
+        description="Searched in order. Ether handles service limits automatically."
         actions={
           <Button size="sm" onClick={() => open(indexers.length, blankIndexer(indexers.length))}>
             <Plus size={14} /> Add indexer
@@ -186,18 +186,22 @@ export function IndexerList({ version = 0 }: { version?: number }) {
                     i === 0 ? "Searched first" : `Priority ${i + 1}`,
                     ix.dailyLimit > 0
                       ? s
-                        ? `${hits} of ${ix.dailyLimit} searches used today`
-                        : `${ix.dailyLimit} searches a day`
-                      : "Unlimited searches",
-                    ix.dailyGrabs > 0 ? `${ix.dailyGrabs} downloads a day` : "",
+                        ? `${hits} of ${ix.dailyLimit} API requests used today`
+                        : `${ix.dailyLimit} API requests a day`
+                      : "Automatic limits",
+                    ix.dailyGrabs > 0 ? `${ix.dailyGrabs} NZB downloads a day` : "",
                   ]
                     .filter(Boolean)
                     .join(" · ")}
                   meta={
                     <>
                       {!ix.enabled ? <Badge variant="secondary">Off</Badge> : null}
-                      {s && ix.dailyLimit > 0 && hits >= ix.dailyLimit ? (
-                        <Badge variant="destructive">Out of searches</Badge>
+                      {s && Number(s.retryAt ?? 0) > Date.now() / 1000 ? (
+                        <Badge variant="warning">Waiting for service · retries automatically</Badge>
+                      ) : s &&
+                        ((ix.dailyLimit > 0 && hits >= ix.dailyLimit) ||
+                          (ix.dailyGrabs > 0 && Number(s.grabsUsed ?? 0) >= ix.dailyGrabs)) ? (
+                        <Badge variant="warning">Personal cap reached</Badge>
                       ) : null}
                     </>
                   }
@@ -244,7 +248,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
             {stat && draft.dailyLimit > 0 ? (
               <Meter
                 value={used / draft.dailyLimit}
-                label={`${used} searches used today`}
+                label={`${used} API requests used today`}
                 valueLabel={`${Number(stat.hitsRemaining ?? 0)} left of ${draft.dailyLimit}`}
                 tone={
                   used >= draft.dailyLimit
@@ -279,24 +283,32 @@ export function IndexerList({ version = 0 }: { version?: number }) {
                 onChange={(v) => set({ enabled: v })}
               />
             </SettingsSection>
-            <SettingsSection title="Daily budget">
-              <NumRow
-                label="Daily searches"
-                value={draft.dailyLimit}
-                min={0}
-                help="Your plan's API limit. 0 = unlimited."
-                error={errors.dailyLimit}
-                onChange={(n) => set({ dailyLimit: n })}
-              />
-              <NumRow
-                label="Daily downloads"
-                value={draft.dailyGrabs}
-                min={0}
-                help="NZB downloads allowed per day. 0 = unlimited."
-                error={errors.dailyGrabs}
-                onChange={(n) => set({ dailyGrabs: n })}
-              />
-            </SettingsSection>
+            <details className="space-y-3">
+              <summary className="cursor-pointer text-sm font-medium">
+                Advanced: personal caps
+              </summary>
+              <SettingsSection
+                title="Optional daily caps"
+                description="Ether follows service limit responses automatically. Add a lower personal cap only if you want one."
+              >
+                <NumRow
+                  label="API requests per day"
+                  value={draft.dailyLimit}
+                  min={0}
+                  help="0 = automatic. Includes searches and capability checks."
+                  error={errors.dailyLimit}
+                  onChange={(n) => set({ dailyLimit: n })}
+                />
+                <NumRow
+                  label="NZB downloads per day"
+                  value={draft.dailyGrabs}
+                  min={0}
+                  help="0 = automatic. Counts NZB files, not movie data."
+                  error={errors.dailyGrabs}
+                  onChange={(n) => set({ dailyGrabs: n })}
+                />
+              </SettingsSection>
+            </details>
             <SettingsSection title="Categories">
               <SettingsRow
                 stacked

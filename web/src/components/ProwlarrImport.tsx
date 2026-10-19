@@ -12,8 +12,6 @@ type Result = {
 export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
   const [url, setURL] = useState("");
   const [key, setKey] = useState("");
-  const [limit, setLimit] = useState(100);
-  const [grabs, setGrabs] = useState(30);
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   async function run(commit: boolean) {
@@ -22,7 +20,7 @@ export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
       const r = await apiFetch<Result>("/playback/prowlarr", {
         method: "POST",
         body: JSON.stringify({
-          config: { url, apiKey: key, dailyLimit: limit, dailyGrabs: grabs, priority: 0 },
+          config: { url, apiKey: key, dailyLimit: 0, dailyGrabs: 0, priority: 0 },
           import: commit,
         }),
       });
@@ -41,7 +39,7 @@ export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-fg-muted">
-        Connect your existing Usenet indexers. Ether applies its own search and download budgets.
+        Connect your existing Usenet indexers. Prowlarr manages their service limits.
       </p>
       <SettingsSection title="Prowlarr">
         <SettingsRow
@@ -76,34 +74,6 @@ export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
             />
           }
         />
-        <SettingsRow
-          title="Daily searches per indexer"
-          description="0 = unlimited."
-          control={
-            <Input
-              aria-label="Daily searches per indexer"
-              type="number"
-              min={0}
-              className="w-28"
-              value={limit}
-              onChange={(e) => setLimit(Number(e.target.value))}
-            />
-          }
-        />
-        <SettingsRow
-          title="Daily downloads per indexer"
-          description="0 = unlimited."
-          control={
-            <Input
-              aria-label="Daily downloads per indexer"
-              type="number"
-              min={0}
-              className="w-28"
-              value={grabs}
-              onChange={(e) => setGrabs(Number(e.target.value))}
-            />
-          }
-        />
       </SettingsSection>
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy || !url || !key} onClick={() => void run(false)}>
@@ -119,10 +89,7 @@ export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
       {result && (
         <ul className="space-y-2 text-sm">
           {result.indexers.map((i) => (
-            <li key={i.id}>
-              {i.name} · {i.dailyLimit || "unlimited"} searches · {i.dailyGrabs || "unlimited"}{" "}
-              downloads
-            </li>
+            <li key={i.id}>{i.name} · Automatic limits</li>
           ))}
         </ul>
       )}

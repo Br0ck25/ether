@@ -48,7 +48,7 @@ func playbackMessage(err error) string {
 	case errors.Is(err, core.ErrStreamLimit):
 		return msgStreamLimit
 	case errors.Is(err, core.ErrBudgetExhausted):
-		return "Daily indexer limit reached. Ask the server owner to check indexer limits; previously cached releases may still play."
+		return "Indexers are temporarily at their limit. Ether will retry automatically; previously cached releases may still play."
 	}
 	return msgPlayFailed
 }

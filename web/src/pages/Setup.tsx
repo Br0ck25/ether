@@ -487,8 +487,7 @@ export default function Setup() {
       {step === 2 ? (
         <div className="space-y-4">
           <p className="text-sm text-fg-muted">
-            Add at least one indexer. Daily limits keep Ether inside your API allowance (0 =
-            unlimited).
+            Add at least one indexer. Ether handles service limits automatically.
           </p>
           {indexers.map((ix, i) => (
             <fieldset key={ix.id || i} className="rounded-xl border border-border bg-surface p-4">
@@ -514,22 +513,6 @@ export default function Setup() {
                     ariaLabel="API key"
                     value={ix.apiKey}
                     onChange={(v) => patchIndexer(i, { apiKey: v })}
-                  />
-                </Field>
-                <Field label="Daily searches">
-                  <NumberInput
-                    aria-label="Daily searches"
-                    value={ix.dailyLimit}
-                    min={0}
-                    onChange={(n) => patchIndexer(i, { dailyLimit: n })}
-                  />
-                </Field>
-                <Field label="Daily downloads">
-                  <NumberInput
-                    aria-label="Daily downloads"
-                    value={ix.dailyGrabs}
-                    min={0}
-                    onChange={(n) => patchIndexer(i, { dailyGrabs: n })}
                   />
                 </Field>
               </div>

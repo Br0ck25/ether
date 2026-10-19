@@ -62,6 +62,13 @@ providers, indexers, caching, sharing restrictions and integrations. Changes to
 TMDB credentials, locale and model settings apply to new requests without a
 restart. Secrets are redacted in ordinary configuration responses.
 
+Indexer setup requires a URL and API key, not knowledge of an account's quotas.
+Ether follows service limit responses, honors Retry-After when supplied, and
+otherwise pauses briefly before allowing another attempt. Pauses survive server
+restarts and do not prevent cached playback or use of another indexer. Daily
+usage is still recorded. Optional personal caps live under Advanced; an unset
+cap does not imply that the upstream account has an unlimited allowance.
+
 ## Accounts and access
 
 Plex sharing controls viewer membership. Ether resolves Plex account identities,
