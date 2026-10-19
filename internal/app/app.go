@@ -455,6 +455,7 @@ func (a *App) Run(ctx context.Context) error {
 	defer background.Wait()
 	defer cancel()
 	background.start(func() { a.housekeeping(ctx) })
+	background.start(func() { a.maintainDB(ctx) })
 	background.start(func() { a.stats.Run(ctx) })
 	background.start(func() { a.notifications.Run(ctx) })
 	background.start(func() { a.watchlist.Run(ctx) })
