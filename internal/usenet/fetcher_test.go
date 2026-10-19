@@ -890,3 +890,34 @@ func TestServerConnectionLimitBelowConfigured(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// Giganews answers taken-down articles with "451 0 <id>": the article is
+// unavailable there, so the fetcher must fall through to the next provider.
+func TestTakedown451FallsThrough(t *testing.T) {
+	primary := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, primary, "gone@x", []byte("alpha"))
+	primary.SetFault(func(cmd, arg string) nntptest.Fault {
+		if cmd == "BODY" || cmd == "STAT" {
+			return nntptest.Fault{Code: 451, Text: "0 <" + arg + ">"}
+		}
+		return nntptest.Fault{}
+	})
+	second := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, second, "gone@x", []byte("alpha"))
+	p1, p2 := primary.Provider("a", 2), second.Provider("b", 2)
+	p2.Priority = 1
+	f := newFetcher(t, []config.UsenetProvider{p1, p2}, Options{})
+	got, err := f.Body(context.Background(), "gone@x", nil, core.PriorityLive)
+	if err != nil || string(got) != "alpha" {
+		t.Fatalf("body = %q, %v", got, err)
+	}
+	if ok, err := f.Stat(context.Background(), "gone@x"); err != nil || !ok {
+		t.Fatalf("stat = %v, %v", ok, err)
+	}
+
+	// Taken down everywhere reads as missing, which triggers release failover.
+	only := newFetcher(t, []config.UsenetProvider{p1}, Options{})
+	if _, err := only.Body(context.Background(), "gone@x", nil, core.PriorityLive); !errors.Is(err, core.ErrArticleMissing) {
+		t.Fatalf("err = %v, want ErrArticleMissing", err)
+	}
+}
