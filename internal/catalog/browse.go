@@ -193,7 +193,7 @@ func (c *Catalog) Facet(ctx context.Context, t core.MediaType, facet string) ([]
 	case "decade":
 		q = `SELECT CAST((t.year/10)*10 AS TEXT), COUNT(*) FROM catalog_titles t WHERE ` + base + ` AND t.year>0 GROUP BY (t.year/10)*10 ORDER BY (t.year/10)*10 DESC`
 	case "contentRating":
-		q = `SELECT t.content_rating, COUNT(*) FROM catalog_titles t WHERE ` + base + ` AND t.content_rating<>'' GROUP BY t.content_rating ORDER BY t.content_rating_rank ASC, t.content_rating ASC`
+		q = `SELECT t.content_rating, COUNT(*) FROM catalog_titles t WHERE ` + base + ` AND t.content_rating<>'' GROUP BY t.content_rating ORDER BY MIN(t.content_rating_rank) ASC, t.content_rating ASC`
 	default:
 		return nil, fmt.Errorf("catalog: unknown facet %q", facet)
 	}
