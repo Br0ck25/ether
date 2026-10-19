@@ -131,9 +131,12 @@ func (s *Server) handleIndexFrame(w http.ResponseWriter, r *http.Request) {
 func (s *Server) indexPart(r *http.Request) (core.RatingKey, string, bool) {
 	pr := FromContext(r.Context())
 	id, err := strconv.ParseInt(chi.URLParam(r, "part"), 10, 64)
-	key := core.RatingKey(id)
-	if err != nil || pr.User == nil || !key.Valid() || !isPlayableKey(key) ||
+	if err != nil || pr.User == nil ||
 		s.d.Playback == nil || s.d.Catalog == nil {
+		return 0, "", false
+	}
+	key, wantedReleaseID, found := s.partTitle(id)
+	if !found {
 		return 0, "", false
 	}
 	title, err := s.d.Catalog.Get(r.Context(), key)
@@ -147,6 +150,9 @@ func (s *Server) indexPart(r *http.Request) (core.RatingKey, string, bool) {
 	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
 	if !ok || ps == nil || ps.Resolution == nil || ps.Resolution.Release.ID == "" {
+		return 0, "", false
+	}
+	if wantedReleaseID != "" && ps.Resolution.Release.ID != wantedReleaseID {
 		return 0, "", false
 	}
 	return key, ps.Resolution.Release.ID, true

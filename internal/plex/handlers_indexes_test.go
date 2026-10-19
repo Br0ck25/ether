@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,6 +58,11 @@ func TestIndexRoutesPrecedePartRouteAndServeBIFAndFrame(t *testing.T) {
 	rec := f.get(t, "/library/parts/"+fightClub.Key.String()+"/indexes/sd")
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/octet-stream" || !bytes.Equal(rec.Body.Bytes(), provider.bif) {
 		t.Fatalf("BIF response: status=%d content-type=%q body=%q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Bytes())
+	}
+	variantPart := f.srv.variantIDs.idFor(fightClub.Key, "release-1")
+	rec = f.get(t, "/library/parts/"+strconv.FormatInt(variantPart, 10)+"/indexes/sd")
+	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), provider.bif) {
+		t.Fatalf("variant BIF response: status=%d body=%q", rec.Code, rec.Body.Bytes())
 	}
 	rec = f.request(t, http.MethodGet, "/library/parts/"+fightClub.Key.String()+"/indexes/sd", map[string]string{"Range": "bytes=0-2"})
 	if rec.Code != http.StatusPartialContent || !bytes.Equal(rec.Body.Bytes(), provider.bif[:3]) {
