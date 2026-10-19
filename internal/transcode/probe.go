@@ -48,7 +48,7 @@ func httpInputArgs(input string, reconnect bool) []string {
 }
 
 func probeArgs(input string, a probeAttempt) []string {
-	args := []string{"-hide_banner", "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
+	args := []string{"-hide_banner", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters",
 		"-probesize", strconv.FormatInt(a.probesize, 10),
 		"-analyzeduration", strconv.FormatInt(a.analyzeDuration.Microseconds(), 10),
 	}
@@ -120,13 +120,22 @@ func probeComplete(m *core.MediaInfo) bool {
 }
 
 // ffprobe JSON (only what Ether uses).
+type ffprobeChapter struct {
+	ID    int64             `json:"id"`
+	Start string            `json:"start_time"`
+	End   string            `json:"end_time"`
+	Tags  map[string]string `json:"tags"`
+}
+
 type ffprobeOutput struct {
-	Streams []ffprobeStream `json:"streams"`
-	Format  ffprobeFormat   `json:"format"`
+	Chapters []ffprobeChapter `json:"chapters"`
+	Streams  []ffprobeStream  `json:"streams"`
+	Format   ffprobeFormat    `json:"format"`
 }
 
 type ffprobeStream struct {
 	Index          int               `json:"index"`
+	Level          int               `json:"level"`
 	CodecName      string            `json:"codec_name"`
 	CodecType      string            `json:"codec_type"`
 	CodecTagString string            `json:"codec_tag_string"`
@@ -172,6 +181,14 @@ func ParseProbe(b []byte) (*core.MediaInfo, error) {
 		Size:        atoi64(out.Format.Size),
 		BitrateKbps: int(atoi64(out.Format.BitRate) / 1000),
 	}
+	for _, c := range out.Chapters {
+		start, e1 := strconv.ParseFloat(c.Start, 64)
+		end, e2 := strconv.ParseFloat(c.End, 64)
+		if e1 != nil || e2 != nil || math.IsNaN(start) || math.IsNaN(end) || math.IsInf(start, 0) || math.IsInf(end, 0) || start < 0 || end <= start || end >= float64(math.MaxInt64)/float64(time.Second) {
+			continue
+		}
+		m.Chapters = append(m.Chapters, core.Chapter{ID: c.ID, Title: tag(c.Tags, "title"), Start: time.Duration(start * float64(time.Second)), End: time.Duration(end * float64(time.Second))})
+	}
 	for _, s := range out.Streams {
 		si, ok := mapStream(s)
 		if !ok {
@@ -198,6 +215,7 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 	}
 	si.Codec = NormalizeCodec(s.CodecName)
 	si.Profile = s.Profile
+	si.Level = s.Level
 	si.Language = normalizeLanguage(tag(s.Tags, "language"))
 	si.Title = tag(s.Tags, "title")
 	si.Default = s.Disposition["default"] == 1

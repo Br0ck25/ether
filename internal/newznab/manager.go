@@ -20,10 +20,11 @@ import (
 // resolver can treat the fleet as one indexer; FetchNZB routes by
 // the release's Indexer name.
 type Manager struct {
-	db   *sql.DB
-	opts Options
-	log  *slog.Logger
-	par  int
+	events eventBus
+	db     *sql.DB
+	opts   Options
+	log    *slog.Logger
+	par    int
 
 	mu             sync.RWMutex
 	clients        []*Client
@@ -177,6 +178,21 @@ func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	wg.Wait()
 	timings := make([]SearchTiming, 0, len(clients))
 	for i, s := range slots {
+		now := time.Now()
+		var age time.Duration
+		var dated int
+		for _, r := range s.results {
+			if !r.PubDate.IsZero() && now.After(r.PubDate) {
+				age += now.Sub(r.PubDate)
+				dated++
+			}
+		}
+		if dated > 0 {
+			age /= time.Duration(dated)
+		}
+		if !s.skipped || errors.Is(s.err, core.ErrBudgetExhausted) {
+			m.emitEvent(Event{Indexer: clients[i].Name(), Kind: "search", Success: s.err == nil, BudgetExhausted: errors.Is(s.err, core.ErrBudgetExhausted), Results: len(s.results), Duration: s.duration, AverageAge: age, At: now})
+		}
 		if !s.skipped {
 			label := clients[i].Name()
 			e := ""
@@ -241,7 +257,10 @@ func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 func (m *Manager) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 	for _, cl := range m.Clients() {
 		if cl.Name() == r.Indexer {
-			return cl.FetchNZB(ctx, r)
+			started := time.Now()
+			b, err := cl.FetchNZB(ctx, r)
+			m.emitEvent(Event{Indexer: cl.Name(), Kind: "grab", Success: err == nil, BudgetExhausted: errors.Is(err, core.ErrBudgetExhausted), Duration: time.Since(started), At: time.Now()})
+			return b, err
 		}
 	}
 	// Unknown origin (e.g. cached release after a rename): try each
@@ -251,7 +270,9 @@ func (m *Manager) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) 
 		if !cl.Config().Enabled {
 			continue
 		}
+		started := time.Now()
 		b, err := cl.FetchNZB(ctx, r)
+		m.emitEvent(Event{Indexer: cl.Name(), Kind: "grab", Success: err == nil, BudgetExhausted: errors.Is(err, core.ErrBudgetExhausted), Duration: time.Since(started), At: time.Now()})
 		if err == nil {
 			return b, nil
 		}

@@ -1,9 +1,9 @@
 import {
-  AppShell, Button, ConfirmRoot, Popover, PromptRoot, Spinner, ThemeProvider, Toaster, UiLinkProvider,
-  useTheme, type LinkRender, type SidebarNavGroup,
+  AppShell, Button, ConfirmRoot, Popover, PromptRoot, Spinner, ThemeProvider, ThemeToggle, Toaster, UiLinkProvider,
+  type LinkRender, type SidebarNavGroup,
 } from "@braedonsaunders/appkit-ui";
 import {
-  Activity, Gauge, LayoutTemplate, Layers, LogOut, Moon, ScrollText, Settings as SettingsIcon, Sparkles, Sun, Users,
+  Activity, Gauge, LayoutTemplate, Layers, LogOut, ScrollText, Settings as SettingsIcon, Sparkles, Users,
 } from "lucide-react";
 import { forwardRef, lazy, Suspense, useCallback, useEffect, useState, type AnchorHTMLAttributes } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
@@ -13,6 +13,7 @@ import { ErrorPanel } from "./components/feedback";
 import { LEVEL_LABEL, LevelBadge, StatusDot } from "./components/status";
 import { api, getToken, setToken } from "./lib/api";
 import type { Bootstrap } from "./lib/types";
+import { theme } from "./theme";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 
@@ -24,6 +25,14 @@ const ViewerProfile = lazy(() => import("./pages/viewers/ViewerProfile"));
 const Settings = lazy(() => import("./pages/settings/Settings"));
 const Setup = lazy(() => import("./pages/Setup"));
 const Logs = lazy(() => import("./pages/Logs"));
+const Adoption = lazy(() => import("./pages/Adoption"));
+const StreamPreferences = lazy(() => import("./pages/StreamPreferences"));
+const PlaybackPolicy = lazy(() => import("./pages/PlaybackPolicy"));
+const Insights = lazy(() => import("./pages/Insights"));
+const LiveTV = lazy(() => import("./pages/livetv/LiveTV"));
+const Discovery = lazy(() => import("./pages/Discovery"));
+const Metadata = lazy(() => import("./pages/Metadata"));
+const Safety = lazy(() => import("./pages/Safety"));
 const Traces = lazy(() => import("./pages/Traces"));
 
 /** react-router links for every AppKit navigation primitive. */
@@ -44,23 +53,20 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
     { href: "/collections", label: "Collections", icon: <Layers size={18} />, mobile: true },
     { href: "/designer", label: "Home Designer", icon: <LayoutTemplate size={18} />, mobile: true },
     { href: "/viewers", label: "Viewers", icon: <Users size={18} />, mobile: true },
+    { href: "/discovery", label: "Discovery & artwork", icon: <Sparkles size={18} /> },
+    { href: "/livetv", label: "Live TV & IPTV", icon: <Activity size={18} /> },
+    { href: "/insights", label: "Activity & notifications", icon: <Gauge size={18} /> },
+    { href: "/adoption", label: "Libraries & backups", icon: <Layers size={18} /> },
+    { href: "/playback", label: "Playback & releases", icon: <Activity size={18} /> },
+    { href: "/metadata", label: "Episode ordering", icon: <Layers size={18} /> },
+    { href: "/streams", label: "Audio & subtitles", icon: <Activity size={18} /> },
+    { href: "/safety", label: "Safety & sharing", icon: <Users size={18} /> },
     { href: "/settings", label: "Settings", icon: <SettingsIcon size={18} /> },
     { href: "/logs", label: "Logs", icon: <ScrollText size={18} /> },
     { href: "/traces", label: "Resolver traces", icon: <Activity size={18} /> },
   ];
   if (!setupComplete) items.unshift({ href: "/setup", label: "Finish setup", icon: <Sparkles size={18} />, mobile: true });
   return items.map((item) => ({ label: item.label, items: [item] }));
-}
-
-function ThemeButton() {
-  const { resolvedTheme, setTheme } = useTheme();
-  const dark = resolvedTheme === "dark";
-  return (
-    <Button variant="ghost" size="icon" className="size-9" onClick={() => setTheme(dark ? "light" : "dark")}
-      aria-label={dark ? "Switch to light theme" : "Switch to dark theme"} title={dark ? "Light theme" : "Dark theme"}>
-      {dark ? <Sun size={17} /> : <Moon size={17} />}
-    </Button>
-  );
 }
 
 function HealthIndicator() {
@@ -130,7 +136,7 @@ function Shell() {
       header={
         <>
           <HealthIndicator />
-          <ThemeButton />
+          <ThemeToggle collapsed />
           {remoteSession ? (
             <Button variant="ghost" size="sm" onClick={() => { setToken(""); window.location.reload(); }}>
               <LogOut size={15} /> <span className="hidden sm:inline">Sign out</span>
@@ -154,6 +160,14 @@ function Shell() {
           <Route path="/viewers/:id" element={<ViewerProfile />} />
           <Route path="/settings" element={<Navigate to="/settings/server" replace />} />
           <Route path="/settings/:section" element={<Settings />} />
+          <Route path="/insights" element={<Insights />} />
+          <Route path="/livetv" element={<LiveTV />} />
+          <Route path="/discovery" element={<Discovery />} />
+          <Route path="/adoption" element={<Adoption />} />
+          <Route path="/playback" element={<PlaybackPolicy />} />
+          <Route path="/metadata" element={<Metadata />} />
+          <Route path="/streams" element={<StreamPreferences />} />
+          <Route path="/safety" element={<Safety />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/traces" element={<Traces />} />
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -195,7 +209,7 @@ function Gate() {
 
 export default function App() {
   return (
-    <ThemeProvider storageKey="ether-theme">
+    <ThemeProvider {...theme}>
       <UiLinkProvider link={RouterAnchor}>
         <Gate />
         <Toaster richColors closeButton position="bottom-right" />

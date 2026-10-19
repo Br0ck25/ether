@@ -77,7 +77,7 @@ func browseOrder(q core.BrowseQuery) string {
 func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 	var conds []string
 	var args []any
-	conds = append(conds, "t.browsable=1")
+	conds = append(conds, "t.browsable=1", "t.adult=0")
 	switch f.Type {
 	case core.TypeMovie, core.TypeShow:
 		conds = append(conds, "t.type=?")
@@ -133,8 +133,10 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 	}
 	if f.MaxContentRating != "" {
 		if rank := RatingRank(f.MaxContentRating); rank > 0 {
-			conds = append(conds, "t.content_rating_rank<=?")
+			conds = append(conds, "t.content_rating_rank>0 AND t.content_rating_rank<=?")
 			args = append(args, rank)
+		} else {
+			conds = append(conds, "0=1")
 		}
 	}
 	if f.Collection > 0 {

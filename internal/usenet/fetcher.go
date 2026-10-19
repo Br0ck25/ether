@@ -280,7 +280,7 @@ func (f *Fetcher) BodyPart(ctx context.Context, messageID string, groups []strin
 		return nil, ap, err
 	}
 	var part *yenc.Part
-	err = f.each(ctx, id, func(p *pool) error {
+	err = f.each(ctx, id, "body", func(p *pool) error {
 		var e error
 		part, e = p.body(ctx, id, groups, prio)
 		return e
@@ -305,7 +305,7 @@ func (f *Fetcher) Stat(ctx context.Context, messageID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	err = f.each(ctx, id, func(p *pool) error {
+	err = f.each(ctx, id, "stat", func(p *pool) error {
 		ok, e := p.stat(ctx, id)
 		if e == nil && !ok {
 			return ErrNoSuchArticle
@@ -447,20 +447,20 @@ func (f *Fetcher) Warm(ctx context.Context, perProvider int) error {
 
 // each runs op against providers in order until one succeeds, and turns the
 // collected failures into the right error.
-func (f *Fetcher) each(ctx context.Context, id string, op func(*pool) error) error {
+func (f *Fetcher) each(ctx context.Context, id, kind string, op func(*pool) error) error {
 	var swapped bool
-	err := f.eachOnce(ctx, id, op, &swapped)
+	err := f.eachOnce(ctx, id, kind, op, &swapped)
 	if swapped && err != nil && !errors.Is(err, core.ErrArticleMissing) && ctxErr(ctx) == nil {
 		// A pool was replaced by Update while we were using it: go again
 		// over the current providers.
-		err = f.eachOnce(ctx, id, op, &swapped)
+		err = f.eachOnce(ctx, id, kind, op, &swapped)
 	}
 	return err
 }
 
 // eachOnce is one pass over the providers. It sets *swapped when a pool
 // turned out to be closed by a concurrent Update.
-func (f *Fetcher) eachOnce(ctx context.Context, id string, op func(*pool) error, swapped *bool) error {
+func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(*pool) error, swapped *bool) error {
 	pools := f.order()
 	if len(pools) == 0 {
 		return ErrNoProviders
@@ -485,6 +485,9 @@ func (f *Fetcher) eachOnce(ctx context.Context, id string, op func(*pool) error,
 		for attempt := 0; attempt <= f.o.Retries; attempt++ {
 			err := op(p)
 			if err == nil {
+				if kind == "body" && p.cfg.Backfill && missing > 0 {
+					p.backfillSaves.Add(1)
+				}
 				return nil
 			}
 			if cerr := ctxErr(ctx); cerr != nil {

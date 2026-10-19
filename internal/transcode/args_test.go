@@ -230,23 +230,17 @@ func TestBuildArgsBurnPGS(t *testing.T) {
 	}
 }
 
-func TestBuildArgsBurnTextSubtitle(t *testing.T) {
+func TestBuildArgsTextSubtitleStaysSidecar(t *testing.T) {
 	pgs := mustParse(t, "mkv_pgs.json")
 	o := allow()
 	o.SubtitleStream = 5
 	o.BurnSubtitles = true
 	d := Decide(pgs, appleTV, o, Policy{})
-	s := baseSpec(pgs, d)
-	graph := argValue(buildArgs(s), "-filter_complex")
-	// 4th subtitle stream (si=3); URL colons escaped twice.
-	if !strings.Contains(graph, `subtitles=filename=http\\://127.0.0.1\\:32400/ether/source/1:si=3`) {
-		t.Errorf("graph %s", graph)
+	if d.BurnSubtitles || !d.VideoCopy {
+		t.Fatalf("text caused transcode: %+v", d)
 	}
-	// Without libass the subtitle is not burned.
-	s.Features.filters = map[string]bool{"scale": true}
-	graph = argValue(buildArgs(s), "-filter_complex")
-	if strings.Contains(graph, "subtitles") || !strings.HasSuffix(graph, "format=yuv420p[vout]") {
-		t.Errorf("no-libass graph %s", graph)
+	if graph := argValue(buildArgs(baseSpec(pgs, d)), "-filter_complex"); graph != "" {
+		t.Fatalf("unexpected graph %q", graph)
 	}
 }
 

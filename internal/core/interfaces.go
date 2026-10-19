@@ -320,6 +320,7 @@ type StreamInfo struct {
 	Type          string  `json:"type"` // video, audio, subtitle
 	Codec         string  `json:"codec"`
 	Profile       string  `json:"profile,omitempty"`
+	Level         int     `json:"level,omitempty"`
 	Language      string  `json:"language,omitempty"`
 	Title         string  `json:"title,omitempty"`
 	Default       bool    `json:"default,omitempty"`
@@ -342,7 +343,15 @@ type StreamInfo struct {
 	DolbyVisionProfile int `json:"dolbyVisionProfile,omitempty"`
 }
 
+type Chapter struct {
+	ID    int64         `json:"id"`
+	Title string        `json:"title,omitempty"`
+	Start time.Duration `json:"start"`
+	End   time.Duration `json:"end"`
+}
+
 type MediaInfo struct {
+	Chapters    []Chapter     `json:"chapters,omitempty"`
 	Container   string        `json:"container"` // mkv, mp4, avi, mpegts
 	Duration    time.Duration `json:"duration"`
 	Size        int64         `json:"size"`
@@ -381,6 +390,7 @@ type Decision struct {
 	SubtitleStream int          `json:"subtitleStream"` // -1 none
 	BurnSubtitles  bool         `json:"burnSubtitles"`
 	Reason         string       `json:"reason"`
+	AudioFilters   []string     `json:"audioFilters,omitempty"`
 
 	// ToneMap converts HDR (HDR10, HLG, Dolby Vision) video to SDR while
 	// transcoding, for clients without HDR support.

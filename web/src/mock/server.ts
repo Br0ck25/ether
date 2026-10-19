@@ -5,9 +5,10 @@
  * context-aware Home rows so every screen behaves realistically offline.
  */
 import type {
-  ActivityDay, CollectionSpec, HomeRow, LayoutRule, Rule, Source, TasteOverride, TasteProfile, TitleCard, Viewer,
+  ActivityDay, CollectionSpec, Device, HomeLayout, HomeRow, LayoutPage, LayoutSection, Rule, Source, TasteOverride, TasteProfile, TitleCard, Viewer,
 } from "../lib/contract";
-import { previewLayout } from "../lib/layout";
+import { daypartOf, overrideCount, pageOf } from "../lib/layout";
+import { assemble } from "./assemble";
 import { normalizeSpec } from "../lib/rules";
 import type { Bootstrap, EtherConfig, EtherUser, LogEntry } from "../lib/types";
 import {
@@ -98,10 +99,15 @@ export function createFakeServer(opts: FakeOptions = {}) {
     users: VIEWERS.map<EtherUser>((v) => ({ id: v.id, plexId: v.plexId, username: v.username, title: v.title, thumb: avatarFor(v.title), isOwner: v.isOwner, streamLimit: 0, maxContentRating: v.id === 3 ? "PG" : "", subtitleLanguages: [], audioLanguages: [], allowedSections: [] })),
     collections: [] as CollectionSpec[],
     overrides: new Map<number, TasteOverride[]>(),
-    layout: [
-      { id: "lr-1", scope: "all", section: "home", rows: [{ hubId: "continue-watching", action: "pin", position: 0 }] },
-      { id: "lr-2", scope: { userIds: [3] }, section: "home", rows: [{ hubId: "short-on-time", action: "boost", when: { days: [1, 2, 3, 4, 5], fromHour: 16, toHour: 20 } }] },
-    ] as LayoutRule[],
+    layout: {
+      global: [{ section: "home", rows: [
+        { row: "continue-watching", status: "always", slot: 1 },
+        { row: "short-on-time", status: "eligible", when: { days: [1, 2, 3, 4, 5] } },
+        { row: "something-different", status: "eligible", maxDaysPerWeek: 3 },
+      ] }],
+      viewers: [{ userId: 3, pages: [{ section: "home", maxRows: 8, rows: [{ row: "short-on-time", status: "always", maxSlot: 3 }] }] }],
+      updatedAt: new Date(Date.now() - 86400000).toISOString(),
+    } as HomeLayout,
     logs: [] as LogEntry[],
     calls: [] as { method: string; path: string; body: unknown }[],
     llm: opts.llm ?? true,
@@ -260,66 +266,163 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return [...pool].sort((a, b) => (hash(seed + a.key) % 10007) - (hash(seed + b.key) % 10007)).slice(0, n);
   }
 
-  function homeFor(userId: number, device: string, at: Date, section: string) {
+  // ---- Homes (layered Home Designer) ---------------------------------------------------
+
+  const DEFAULT_ROWS: Record<LayoutSection, number> = { home: 10, movies: 8, shows: 8 };
+
+  /** Candidate rows the "engine" proposes for a viewer (null = the typical viewer). */
+  function candidatesFor(userId: number | null, device: string, at: Date, section: LayoutSection, layout: HomeLayout): HomeRow[] {
     const day = at.getDay();
     const hour = at.getHours();
     const weekend = day === 0 || day === 6;
-    const daypart = hour >= 5 && hour < 12 ? "morning" : hour < 17 ? "afternoon" : hour < 22 ? "evening" : "late";
-    const t = taste(userId);
-    const top = t.genres[0]?.name ?? "Drama";
+    const t = userId === null ? null : taste(userId);
+    const top = t?.genres[0]?.name ?? "Drama";
     const media = section === "movies" ? (x: FakeTitle) => x.type === "movie" : section === "shows" ? (x: FakeTitle) => x.type === "show" : () => true;
     const short = device === "mobile" || (!weekend && hour >= 21);
-    const seed = `${userId}-${section}`;
-    const mk = (hubId: string, title: string, kind: string, reason: string, score: number, items: FakeTitle[], source: HomeRow["source"] = "engine", why?: (t: FakeTitle) => string): HomeRow => ({
-      hubId, title, kind, reason, score: Math.round(score * 100) / 100, source, items: items.map(card),
+    const seed = `${userId ?? "typical"}-${section}`;
+    const prefix = section === "movies" ? "movie" : section === "shows" ? "tv" : "home";
+    const mk = (stem: string, title: string, kind: string, reason: string, score: number, items: FakeTitle[], source: HomeRow["source"] = "engine", why?: (t: FakeTitle) => string): HomeRow => ({
+      hubId: `${prefix}.${stem}`, title, kind, reason, score: Math.round(score * 100) / 100, source, items: items.map(card),
       itemReasons: why ? Object.fromEntries(items.map((x) => [x.key, why(x)])) : undefined,
     });
-    const anchor = pickTitles(seed + "anchor", 1, media)[0];
-    const rows: HomeRow[] = [
-      mk("continue-watching", "Continue Watching", "continue-watching", "Titles in progress, most recent first.", 0.98, pickTitles(seed + "cw", 6, media), "plex", () => "Started recently"),
-      mk("top-10", "Top 10 for you", "top-picks", `Ranked by predicted enjoyment; leans on ${top}.`, 0.91, pickTitles(seed + "top", 10, (x) => media(x) && (x.genres ?? []).includes(top)).concat(pickTitles(seed + "top2", 10, media)).slice(0, 10), "engine", (x) => `${(x.genres ?? []).join(", ")} · rated ${x.rating}`),
-      mk("because-you-watched", `Because you watched ${anchor?.title ?? "something"}`, "because-you-watched", `Similar keywords and people to ${anchor?.title}.`, 0.84, pickTitles(seed + "byw", 12, media), "engine", (x) => `Shares ${(x.genres ?? [])[0] ?? "themes"} and keywords with ${anchor?.title}`),
-      mk("more-from", `More from ${PEOPLE[userId]?.name}`, "more-from-person", `You've finished ${2 + userId} titles with ${PEOPLE[userId]?.name}.`, 0.77, pickTitles(seed + "mf", 9, media)),
-      mk("trending-taste", "Trending in your taste", "trending", `Popular this week in ${top} and neighbours.`, 0.72, pickTitles(seed + "tr", 14, media)),
-      mk("hidden-gems", "Hidden gems for you", "hidden-gems", "High ratings, few votes, strong taste match.", 0.66, pickTitles(seed + "hg", 12, (x) => media(x) && (x.rating ?? 0) > 7.5 && x.votes < 6000)),
-      mk("short-on-time", "Short on time", "short-on-time", short ? "Shorter titles: it's a weeknight or a phone." : "Shorter titles for a quick watch.", short ? 0.8 : 0.41, pickTitles(seed + "sh", 12, (x) => media(x) && (x.runtimeMinutes ?? 999) <= 95)),
-      mk("new-this-week", "New this week in genres you like", "new", "Added in the last 7 days.", 0.58, pickTitles(seed + "new", 10, media)),
-      mk("comfort", "Comfort rewatches", "comfort", "Favourites you've watched more than once.", weekend ? 0.61 : 0.47, pickTitles(seed + "cf", 8, media)),
-      mk("something-different", "Something different", "exploration", "Outside your usual genres to keep things fresh.", 0.39, pickTitles(seed + "sd", 10, (x) => media(x) && !(x.genres ?? []).includes(top))),
-    ];
-    for (const c of state.collections) {
-      if (!c.enabled || !c.targets.homeRow || c.builtIn) continue;
-      if (c.targets.users !== "all" && !c.targets.users.includes(userId)) continue;
-      const s = c.targets.schedule;
-      if (s?.days?.length && !s.days.includes(day)) continue;
-      if (s?.devices?.length && !s.devices.includes(device as never)) continue;
-      if (s && (s.fromHour !== undefined || s.toHour !== undefined)) {
-        const f = s.fromHour ?? 0; const to = s.toHour ?? 24;
-        if (!(f <= to ? hour >= f && hour < to : hour >= f || hour < to)) continue;
-      }
-      rows.push({ hubId: `collection:${c.id}`, title: c.name, kind: `collection:${c.id}`, reason: "Owner collection promoted to Home.", score: 0.6, source: "owner", items: evaluate(c).items.slice(0, 12) });
+    const rows: HomeRow[] = [];
+    if (userId === null) {
+      rows.push(
+        mk("top10.today", "Top 10 on Living Room Ether Today", "top-10-today", "Trending now, catalogue popularity and what viewers here watch.", 0.9, pickTitles(seed + "t10", 10, media)),
+        mk("showcase.thriller", "Acclaimed Thrillers", "genre-showcase", "Acclaimed, popular thrillers: what a new viewer plays is the first taste evidence.", 0.74, pickTitles(seed + "sc1", 12, (x) => media(x) && (x.genres ?? []).includes("Thriller"))),
+        mk("showcase.comedy", "Acclaimed Comedies", "genre-showcase", "Acclaimed, popular comedies.", 0.7, pickTitles(seed + "sc2", 12, (x) => media(x) && (x.genres ?? []).includes("Comedy"))),
+        mk("newreleases", "New Releases", "new-releases", "The newest notable releases.", 0.62, pickTitles(seed + "nr", 12, media)),
+        mk("popular.server", "Popular on Living Room Ether", "popular-on-server", "What viewers here watched most this month.", 0.58, pickTitles(seed + "ps", 12, media)),
+        mk("toprated", "Top Rated", "top-rated", "Acclaimed titles with trustworthy ratings.", 0.5, pickTitles(seed + "tr", 12, (x) => media(x) && (x.rating ?? 0) > 7.4)),
+        mk("trending", "Trending This Week", "trending", "What is trending on TMDB this week.", 0.46, pickTitles(seed + "trn", 12, media)),
+        mk("shortontime", "Short on Time", "short-on-time", "Shorter films and episodes.", short ? 0.72 : 0.4, pickTitles(seed + "sh", 12, (x) => media(x) && (x.runtimeMinutes ?? 999) <= 95)),
+      );
+    } else {
+      const anchor = pickTitles(seed + "anchor", 1, media)[0];
+      const person = PEOPLE[userId];
+      rows.push(
+        mk("top10", "Top 10 for You", "top-10", `The ten titles the taste model rates highest; leans on ${top}.`, 0.91, pickTitles(seed + "top", 10, (x) => media(x) && (x.genres ?? []).includes(top)).concat(pickTitles(seed + "top2", 10, media)).slice(0, 10), "engine", (x) => `${(x.genres ?? []).join(", ")} · rated ${x.rating}`),
+        mk(`because.${anchor?.key ?? 0}`, `Because You Watched ${anchor?.title ?? "something"}`, "because-you-watched", `Similar keywords and people to ${anchor?.title}.`, 0.84, pickTitles(seed + "byw", 12, media), "engine", (x) => `Shares ${(x.genres ?? [])[0] ?? "themes"} and keywords with ${anchor?.title}`),
+        mk(`person.${person?.id ?? 0}`, `More from ${person?.name}`, "more-from-person", `You've finished ${2 + userId} titles with ${person?.name}.`, 0.77, pickTitles(seed + "mf", 9, media)),
+        mk("trending.taste", "Trending in Your Taste", "trending-in-your-taste", `Popular this week in ${top} and neighbours.`, 0.72, pickTitles(seed + "tr", 14, media)),
+        mk("hiddengems", "Hidden Gems for You", "hidden-gems", "High ratings, few votes, strong taste match.", 0.66, pickTitles(seed + "hg", 12, (x) => media(x) && (x.rating ?? 0) > 7.5 && x.votes < 6000)),
+        mk("shortontime", "Short on Time", "short-on-time", short ? "Shorter titles: it's a weeknight or a phone." : "Shorter titles for a quick watch.", short ? 0.8 : 0.41, pickTitles(seed + "sh", 12, (x) => media(x) && (x.runtimeMinutes ?? 999) <= 95)),
+        mk("newthisweek", "New This Week", "new-this-week", `Fresh releases in ${top} and other genres you like.`, 0.58, pickTitles(seed + "new", 10, media)),
+        mk("comfort", "Comfort Rewatches", "comfort-rewatches", "Favourites you've watched more than once.", weekend ? 0.61 : 0.47, pickTitles(seed + "cf", 8, media)),
+        mk("different", "Something Different", "something-different", "Outside your usual genres to keep things fresh.", 0.39, pickTitles(seed + "sd", 10, (x) => media(x) && !(x.genres ?? []).includes(top))),
+        mk("top10.today", "Top 10 on Living Room Ether Today", "top-10-today", "Trending now, catalogue popularity and what viewers here watch.", 0.36, pickTitles(seed + "t10", 10, media)),
+      );
     }
-    rows.sort((a, b) => b.score - a.score);
-    const laid = previewLayout(rows, state.layout, { userId, section: (section || "home") as "home", device, day, hour })
-      .map((p) => ({ ...p.row, pinned: p.action === "pin" || undefined, hidden: p.hidden || undefined }))
-      .filter((r) => !r.hidden);
-    return { rows: laid, generatedAt: new Date().toISOString(), context: { device, daypart, weekend } };
+    if (section === "home") {
+      const cw = userId === null ? [] : pickTitles(seed + "cw", 6, media);
+      rows.push({ ...mk("continue", "Continue Watching", "continue-watching", "Titles you're part-way through, most recent first.", cw.length ? 0.95 : 0, cw, "plex", () => "Started recently"), hubId: "home.continue" });
+    }
+    // Owner collections: targeted ones, plus those the layout places on this page.
+    const page = (l: "global" | number) => pageOf(layout, l, section)?.rows ?? [];
+    const placed = new Set([...page("global"), ...(userId === null ? [] : page(userId))].filter((r) => r.status !== "off" && r.row.startsWith("collection:")).map((r) => r.row.slice("collection:".length)));
+    for (const c of state.collections) {
+      if (!c.enabled || c.builtIn) continue;
+      const targeted = c.targets.homeRow && (c.targets.users === "all" || (userId !== null && c.targets.users.includes(userId)));
+      if (!targeted && !placed.has(String(c.id))) continue;
+      const s = c.targets.schedule;
+      if (targeted && !placed.has(String(c.id))) {
+        if (s?.days?.length && !s.days.includes(day)) continue;
+        if (s?.devices?.length && !s.devices.includes(device as never)) continue;
+        if (s && (s.fromHour !== undefined || s.toHour !== undefined)) {
+          const f = s.fromHour ?? 0; const to = s.toHour ?? 24;
+          if (!(f <= to ? hour >= f && hour < to : hour >= f || hour < to)) continue;
+        }
+      }
+      const items = evaluate(c).items.slice(0, 12);
+      if (!items.length) continue;
+      rows.push({ hubId: `collection.${c.id}`, title: c.name, kind: `collection:${c.id}`, score: 0.6, source: "owner", items,
+        reason: targeted ? `Owner collection “${c.name}”, targeted at this viewer.` : `Owner collection “${c.name}”, placed on this page in the Home Designer.` });
+    }
+    return rows;
+  }
+
+  function homeFor(userId: number | null, device: string, at: Date, section: string, layout: HomeLayout = state.layout) {
+    const sec = (["home", "movies", "shows"].includes(section) ? section : "home") as LayoutSection;
+    const day = at.getDay();
+    const hour = at.getHours();
+    const weekend = day === 0 || day === 6 || (day === 5 && hour >= 17);
+    const daypart = daypartOf(hour);
+    const viewer = userId === null ? null : { id: userId, title: VIEWERS.find((v) => v.id === userId)?.title ?? `Viewer ${userId}` };
+    let rows = candidatesFor(userId, device, at, sec, layout);
+    if (sec !== "home") {
+      const prefix = sec === "movies" ? "movie" : "tv";
+      const media = (x: FakeTitle) => (sec === "movies" ? x.type === "movie" : x.type === "show");
+      rows = [
+        { hubId: `${prefix}.inprogress.1`, title: "Continue Watching", kind: "continue-watching", reason: "Titles you're part-way through in this library (Plex's own row).", score: 0, source: "plex", items: (userId === null ? [] : pickTitles(`${userId}cw${sec}`, 5, media)).map(card), placement: "Plex puts its own rows at the top of a library." },
+        { hubId: `${prefix}.recentlyadded.1`, title: "Recently Added", kind: "recently-added", reason: "The newest additions to this library (Plex's own row).", score: 0, source: "plex", items: pickTitles(`ra${sec}`, 12, media).map(card), placement: "Plex puts its own rows at the top of a library." },
+        ...rows,
+      ];
+    }
+    rows = assemble(rows, layout, {viewer,section:sec,device:device as Device,at,defaultRows:DEFAULT_ROWS[sec]});
+    return { rows, generatedAt: new Date().toISOString(), context: { device, daypart, weekend }, viewer };
   }
 
   function availableRows() {
     return [
-      { hubId: "continue-watching", title: "Continue Watching", kind: "continue-watching", description: "In-progress titles" },
-      { hubId: "top-10", title: "Top 10 for you", kind: "top-picks", description: "Highest predicted engagement" },
-      { hubId: "because-you-watched", title: "Because you watched…", kind: "because-you-watched", description: "Similar to a recent favourite" },
-      { hubId: "more-from", title: "More from…", kind: "more-from-person", description: "A director or actor the viewer loves" },
-      { hubId: "trending-taste", title: "Trending in your taste", kind: "trending", description: "Popular now, filtered by taste" },
-      { hubId: "hidden-gems", title: "Hidden gems for you", kind: "hidden-gems", description: "Under-seen, highly rated" },
-      { hubId: "short-on-time", title: "Short on time", kind: "short-on-time", description: "Short runtimes" },
-      { hubId: "new-this-week", title: "New this week", kind: "new", description: "Recently added in liked genres" },
-      { hubId: "comfort", title: "Comfort rewatches", kind: "comfort", description: "Favourites watched again" },
-      { hubId: "something-different", title: "Something different", kind: "exploration", description: "Exploration outside the usual" },
-      ...state.collections.filter((c) => !c.builtIn).map((c) => ({ hubId: `collection:${c.id}`, title: c.name, kind: `collection:${c.id}`, description: "Owner collection" })),
+      { hubId: "continue-watching", title: "Continue Watching", kind: "continue-watching", description: "Titles the viewer is part-way through (built by Plex; the engine only places it)." },
+      { hubId: "top-10", title: "Top 10 for You", kind: "top-10", description: "The ten titles the taste model rates highest right now." },
+      { hubId: "top-10-today", title: "Top 10 Today", kind: "top-10-today", description: "The server's Top 10 today. Leads new viewers' Homes." },
+      { hubId: "genre-showcase", title: "Acclaimed <Genre>", kind: "genre-showcase", description: "Acclaimed, popular titles of one broad genre (new viewers)." },
+      { hubId: "because-you-watched", title: "Because You Watched…", kind: "because-you-watched", description: "Titles similar to something the viewer recently finished." },
+      { hubId: "more-from-person", title: "More from…", kind: "more-from-person", description: "More from a director, writer or actor the viewer loves." },
+      { hubId: "trending-in-your-taste", title: "Trending in Your Taste", kind: "trending-in-your-taste", description: "This week's trending titles, ranked by taste." },
+      { hubId: "hidden-gems", title: "Hidden Gems for You", kind: "hidden-gems", description: "Highly rated, little-known titles that fit the viewer's taste." },
+      { hubId: "short-on-time", title: "Short on Time", kind: "short-on-time", description: "Shorter films and episodes, fitted to the time the viewer has." },
+      { hubId: "new-this-week", title: "New This Week", kind: "new-this-week", description: "Fresh releases in the viewer's favourite genres." },
+      { hubId: "comfort-rewatches", title: "Comfort Rewatches", kind: "comfort-rewatches", description: "Favourites the viewer has not seen in a while." },
+      { hubId: "something-different", title: "Something Different", kind: "something-different", description: "Exploration: acclaimed titles outside the usual genres." },
+      { hubId: "new-releases", title: "New Releases", kind: "new-releases", description: "The newest released titles in the catalogue." },
+      { hubId: "popular-on-server", title: "Popular on This Server", kind: "popular-on-server", description: "What other viewers here watched most." },
+      { hubId: "top-rated", title: "Top Rated", kind: "top-rated", description: "TMDB's top rated titles." },
+      { hubId: "trending", title: "Trending This Week", kind: "trending", description: "What is trending on TMDB this week." },
+      { hubId: "recently-added", title: "Recently Added", kind: "recently-added", description: "Built by Plex at the top of each library section." },
+      { hubId: "playlists", title: "Recent Playlists", kind: "playlists", description: "Built by Plex at the end of Home." },
+      ...state.collections.filter((c) => !c.builtIn).map((c) => ({ hubId: `collection:${c.id}`, title: c.name, kind: `collection:${c.id}`, description: "Owner collection (Collection Studio)." })),
     ];
+  }
+
+  function layoutDoc() {
+    return { layout: state.layout, availableRows: availableRows(), defaults: { maxRows: DEFAULT_ROWS } };
+  }
+
+  /** The server's main validation rules, so the UI's error paths are exercised. */
+  function validateLayout(doc: HomeLayout): { field: string; message: string }[] {
+    const out: { field: string; message: string }[] = [];
+    const pages = (field: string, ps: LayoutPage[]) => ps.forEach((p, i) => {
+      const slots = new Map<number, string>();
+      p.rows.forEach((r, j) => {
+        const f = `${field}[${i}].rows[${j}]`;
+        if (!r.row) out.push({ field: `${f}.row`, message: "is required" });
+        if (r.slot && slots.has(r.slot)) out.push({ field: `${f}.slot`, message: `slot ${r.slot} is already anchored to ${slots.get(r.slot)}` });
+        if (r.slot) slots.set(r.slot, r.row);
+        if (r.minSlot && r.maxSlot && r.minSlot > r.maxSlot) out.push({ field: `${f}.minSlot`, message: `never above slot ${r.minSlot} and never below slot ${r.maxSlot} cannot both hold` });
+        if (r.row === "continue-watching" && r.status === "off") out.push({ field: `${f}.status`, message: "Continue Watching is Plex's own row: it can be anchored or bounded, not turned off" });
+      });
+    });
+    pages("global", doc.global ?? []);
+    (doc.viewers ?? []).forEach((v, i) => pages(`viewers[${i}].pages`, v.pages));
+    return out;
+  }
+
+  function impact(draft: HomeLayout, device: string, at: Date, section: string) {
+    const viewers = VIEWERS.map((v) => {
+      const visible = (l: HomeLayout) => homeFor(v.id, device, at, section, l).rows.filter((r) => !r.hidden && r.source !== "plex" || r.kind === "continue-watching" && !r.hidden);
+      const before = visible(state.layout);
+      const after = visible(draft);
+      const bi = new Map(before.map((r, i) => [r.hubId, i]));
+      const ai = new Map(after.map((r, i) => [r.hubId, i]));
+      const added = after.filter((r) => !bi.has(r.hubId)).map((r) => r.title);
+      const removed = before.filter((r) => !ai.has(r.hubId)).map((r) => r.title);
+      const moved = after.filter((r) => bi.has(r.hubId) && bi.get(r.hubId) !== ai.get(r.hubId)).length;
+      const sec = (section || "home") as LayoutSection;
+      return { viewerId: v.id, title: v.title, overrides: overrideCount(draft, v.id, sec), changed: added.length + removed.length + moved > 0, added, removed, moved };
+    });
+    return { viewers, summary: { viewers: viewers.length, withOverrides: viewers.filter((v) => v.overrides > 0).length, changed: viewers.filter((v) => v.changed).length } };
   }
 
   function activity(): ActivityDay[] {
@@ -445,10 +548,27 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ results: pool.filter((x) => x.name.toLowerCase().includes(needle)).slice(0, 10) });
       }
       case "GET /viewers": return json({ viewers: VIEWERS.map((v, i) => ({ ...v, thumb: avatarFor(v.title), lastActive: new Date(Date.now() - (i * 7 + 1) * 3600_000).toISOString() })) });
-      case "GET /layout": return json({ rules: state.layout, availableRows: availableRows() });
+      case "GET /layout": return json(layoutDoc());
       case "PUT /layout": {
-        state.layout = ((body as { rules: LayoutRule[] }).rules ?? []).map((r, i) => ({ ...r, id: r.id ?? `lr-${Date.now()}-${i}` }));
-        return json({ rules: state.layout, availableRows: availableRows() });
+        const doc = (body as { layout?: HomeLayout }).layout;
+        if (!doc) return json({ error: { code: "validation", message: "layout: is required", fields: [{ field: "layout", message: "is required" }] } }, 400);
+        const problems = validateLayout(doc);
+        if (problems.length) return json({ error: { code: "validation", message: `${problems[0]!.field}: ${problems[0]!.message}`, fields: problems } }, 400);
+        state.layout = { global: doc.global ?? [], viewers: doc.viewers ?? [], updatedAt: new Date().toISOString() };
+        return json(layoutDoc());
+      }
+      case "POST /layout/preview": {
+        const b = body as { viewerId?: number | null; layout?: HomeLayout; device?: string; at?: string; section?: string };
+        if (b.layout) {
+          const problems = validateLayout(b.layout);
+          if (problems.length) return json({ error: { code: "validation", message: `${problems[0]!.field}: ${problems[0]!.message}`, fields: problems } }, 400);
+        }
+        if (b.viewerId != null && !VIEWERS.some((v) => v.id === b.viewerId)) return err(404, "not_found", "no such viewer");
+        return json(homeFor(b.viewerId ?? null, b.device ?? "tv", b.at ? new Date(b.at) : new Date(), b.section ?? "home", b.layout ?? state.layout));
+      }
+      case "POST /layout/impact": {
+        const b = body as { layout: HomeLayout; device?: string; at?: string; section?: string };
+        return json(impact(b.layout, b.device ?? "tv", b.at ? new Date(b.at) : new Date(), b.section ?? "home"));
       }
       case "GET /insights/rows": return json({ rows: availableRows().slice(0, 9).map((r) => {
         const impressions7d = 80 + (hash(r.hubId) % 400);

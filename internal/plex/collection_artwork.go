@@ -32,7 +32,8 @@ func (s *Server) serveCollectionArtwork(w http.ResponseWriter, r *http.Request, 
 	h := w.Header()
 	h.Set("Content-Type", ct)
 	// The URL carries the collection's update stamp, so it is safe to cache.
-	h.Set("Cache-Control", "max-age=86400, public")
+	h.Set("Cache-Control", "max-age=86400, private")
+	h.Add("Vary", "X-Plex-Token")
 	h.Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {

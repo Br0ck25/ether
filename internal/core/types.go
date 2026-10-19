@@ -65,6 +65,7 @@ type Title struct {
 	Countries     []string `json:"countries,omitempty"`
 	Language      string   `json:"language,omitempty"` // ISO 639-1 original language
 	ContentRating string   `json:"contentRating,omitempty"`
+	Adult         bool     `json:"adult,omitempty"`
 
 	Rating     float64 `json:"rating,omitempty"` // TMDB vote average 0-10
 	VoteCount  int     `json:"voteCount,omitempty"`
@@ -132,14 +133,18 @@ type ClientCaps struct {
 	ClientID        string `json:"clientId"` // X-Plex-Client-Identifier
 	Version         string `json:"version"`
 
-	MaxHeight      int      `json:"maxHeight"` // 2160, 1080, 720...
-	HDR10          bool     `json:"hdr10"`
-	DolbyVision    bool     `json:"dolbyVision"`
-	VideoCodecs    []string `json:"videoCodecs"`    // h264, hevc, av1, vp9
-	AudioCodecs    []string `json:"audioCodecs"`    // aac, ac3, eac3, truehd, dts, opus, flac
-	Containers     []string `json:"containers"`     // mp4, mkv, mpegts
-	MaxBitrateKbps int      `json:"maxBitrateKbps"` // 0 = unlimited
-	Remote         bool     `json:"remote"`         // not on the server's LAN
+	MaxHeight      int                 `json:"maxHeight"` // 2160, 1080, 720...
+	HDR10          bool                `json:"hdr10"`
+	DolbyVision    bool                `json:"dolbyVision"`
+	VideoCodecs    []string            `json:"videoCodecs"`              // h264, hevc, av1, vp9
+	AudioCodecs    []string            `json:"audioCodecs"`              // aac, ac3, eac3, truehd, dts, opus, flac
+	Containers     []string            `json:"containers"`               // mp4, mkv, mpegts
+	MaxBitrateKbps int                 `json:"maxBitrateKbps"`           // 0 = unlimited
+	SubtitleCodecs []string            `json:"subtitleCodecs,omitempty"` // native image/text subtitle rendering
+	DVProfiles     []int               `json:"dvProfiles,omitempty"`     // explicit Dolby Vision profiles; empty uses product defaults
+	VideoProfiles  map[string][]string `json:"videoProfiles,omitempty"`
+	VideoLevels    map[string]int      `json:"videoLevels,omitempty"` // codec level in ffprobe units (H.264 51 = 5.1)
+	Remote         bool                `json:"remote"`                // not on the server's LAN
 }
 
 func (c ClientCaps) SupportsVideo(codec string) bool  { return contains(c.VideoCodecs, codec) }

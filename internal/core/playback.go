@@ -73,12 +73,13 @@ type Transcoder interface {
 
 // DecideOptions are per-request choices from the Plex decision request.
 type DecideOptions struct {
-	DirectPlay     bool // client allows direct play
-	DirectStream   bool // client allows remux
-	MaxBitrateKbps int  // client-requested cap (maxVideoBitrate)
-	MaxHeight      int  // from videoResolution
-	AudioStream    int  // selected stream index, -1 default
-	SubtitleStream int  // -1 none
+	DirectPlay     bool     // client allows direct play
+	DirectStream   bool     // client allows remux
+	MaxBitrateKbps int      // client-requested cap (maxVideoBitrate)
+	MaxHeight      int      // from videoResolution
+	AudioStream    int      // selected stream index, -1 default
+	SubtitleStream int      // -1 none
+	AudioFilters   []string // trusted owner/viewer audio processing; forces audio encoding
 	BurnSubtitles  bool
 }
 
@@ -87,25 +88,27 @@ type DecideOptions struct {
 
 // PlaySession binds a user, a title and a client to a resolved, open source.
 type PlaySession struct {
-	ID         string
-	UserID     int64
-	ClientID   string
-	Key        RatingKey
-	Resolution *Resolution
-	Source     MediaSource // swaps on failover; read through Playback.Source
-	Info       MediaInfo
-	StartedAt  time.Time
+	PlaybackGroup string `json:"playbackGroup,omitempty"`
+	ID            string
+	UserID        int64
+	ClientID      string
+	Key           RatingKey
+	Resolution    *Resolution
+	Source        MediaSource // swaps on failover; read through Playback.Source
+	Info          MediaInfo
+	StartedAt     time.Time
 
 	// Status for the admin dashboard and /status/sessions, filled on the
 	// snapshots Playback returns.
-	TitleName   string       // "Movie (2024)" or "Show - S01E02 - Episode"
-	Username    string       // user display name
-	Client      ClientCaps   // the client's product, device and limits
-	Decision    DecisionKind // directplay once bytes go straight to the client; "" until known
-	BytesServed int64        // source bytes delivered (direct play and ffmpeg input)
-	SpeedBps    int64        // recent delivery rate, bytes per second
-	LastActive  time.Time
-	Failovers   int // mid-stream release swaps so far
+	TitleName      string       // "Movie (2024)" or "Show - S01E02 - Episode"
+	Username       string       // user display name
+	Client         ClientCaps   // the client's product, device and limits
+	DecisionReason string       `json:"decisionReason,omitempty"`
+	Decision       DecisionKind // directplay once bytes go straight to the client; "" until known
+	BytesServed    int64        // source bytes delivered (direct play and ffmpeg input)
+	SpeedBps       int64        // recent delivery rate, bytes per second
+	LastActive     time.Time
+	Failovers      int // mid-stream release swaps so far
 }
 
 type Playback interface {

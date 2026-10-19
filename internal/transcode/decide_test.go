@@ -186,11 +186,11 @@ func TestDecide(t *testing.T) {
 				container: "mkv", maxHeight: 800, audioIdx: 1},
 		},
 		{
-			name: "explicit burn of a text subtitle",
+			name: "legacy text burn request stays sidecar",
 			info: pgs, caps: appleTV,
 			opts: func(o *core.DecideOptions) { o.SubtitleStream = 5; o.BurnSubtitles = true },
-			want: want{kind: core.DecisionTranscode, audioCopy: true, videoCodec: "h264", audioCodec: "aac",
-				container: ContainerMPEGTS, maxHeight: 800, burn: true, audioIdx: 1},
+			want: want{kind: core.DecisionDirectPlay, videoCopy: true, audioCopy: true, videoCodec: "h264", audioCodec: "aac",
+				container: "mkv", maxHeight: 800, audioIdx: 1},
 		},
 		{
 			name: "direct play disallowed: remux",

@@ -56,8 +56,8 @@ export default function Home() {
         <KpiRow days={activity.data} unavailable={isUnavailable(activity.error)} nowPlaying={sessions.length} loading={activity.loading && !activity.data} />
 
         <div className="grid items-start gap-6 xl:grid-cols-3">
-          <div className="space-y-6 xl:col-span-2">
-            <DashboardPanel title="Now playing" icon={<PlayCircle size={16} />} className="h-auto"
+          <div className="min-w-0 space-y-6 xl:col-span-2">
+            <DashboardPanel title="Now playing" icon={<PlayCircle size={16} />}
               actions={sessions.length ? <Badge variant="info">{sessions.length} {sessions.length === 1 ? "stream" : "streams"}</Badge> : null}>
               {!dashboard ? <LoadingRows rows={2} /> : sessions.length === 0 ? (
                 <EmptyState icon={<MonitorPlay />} title="Nothing playing" description="Streams appear here the moment someone presses play in Plex." className="py-10" />
@@ -67,8 +67,8 @@ export default function Home() {
             </DashboardPanel>
             <ActivityPanel state={activity} />
           </div>
-          <div className="space-y-6">
-            <DashboardPanel title="Health" icon={<HeartPulse size={16} />} className="h-auto"
+          <div className="min-w-0 space-y-6">
+            <DashboardPanel title="Health" icon={<HeartPulse size={16} />}
               actions={hw?.hwaccel?.name ? <Badge variant="secondary" title={hw.ffmpeg ? `ffmpeg ${hw.ffmpeg}` : undefined}>{hw.hwaccel.name}</Badge> : null}>
               {!dashboard ? <LoadingRows rows={4} /> : <HealthList items={health} />}
             </DashboardPanel>
@@ -136,6 +136,7 @@ function SessionCard({ s }: { s: NowPlaying }) {
               <p className="text-xs opacity-80">Started {relativeTime(s.startedAt)} · {formatBytes(s.bytesServed)} delivered</p>
             )}
           </div>
+          {s.decisionReason ? <p className="mt-2 text-xs opacity-80">{s.decisionReason}</p>:null}
           {s.release ? <p className="mt-2 truncate font-mono text-[11px] opacity-70" title={s.release}>{s.release}</p> : null}
         </div>
       </div>
@@ -179,7 +180,7 @@ function ActivityPanel({ state }: { state: ReturnType<typeof useAsync<ActivityDa
       : `${plural(d.plays, "play")} · ${plural(d.uniqueViewers, "viewer")}`,
   }));
   return (
-    <DashboardPanel title="Activity · last 30 days" icon={<BarChart3 size={16} />} className="h-auto"
+    <DashboardPanel title="Activity · last 30 days" icon={<BarChart3 size={16} />}
       actions={
         <div className="flex items-center gap-1">
           <div role="radiogroup" aria-label="Metric" className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5">
@@ -219,7 +220,7 @@ function RowsPanel({ state }: { state: ReturnType<typeof useAsync<RowInsight[]>>
   const rows = [...(state.data ?? [])].sort((a, b) => b.playRate - a.playRate).slice(0, 6);
   const maxRate = Math.max(0.0001, ...rows.map((r) => r.playRate));
   return (
-    <DashboardPanel title="Best-performing rows" icon={<TrendingUp size={16} />} className="h-auto"
+    <DashboardPanel title="Best-performing rows" icon={<TrendingUp size={16} />}
       actions={<Link to="/designer" className="text-xs font-medium text-primary hover:underline">Home Designer</Link>}>
       {state.error ? <ErrorPanel error={state.error} feature="Row insights" onRetry={() => void state.reload()} /> : state.loading && !state.data ? <LoadingRows rows={4} /> : rows.length === 0 ? (
         <EmptyState icon={<Film />} title="No row data yet" description="Once viewers browse Plex Home, the rows that lead to plays rank here." className="py-8" />

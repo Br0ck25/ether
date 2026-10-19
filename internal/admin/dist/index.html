@@ -1,28 +1,15 @@
 <!doctype html>
 <html lang="en" class="dark">
   <head>
+    <script>(function(){var t="dark";try{var s=localStorage.getItem("ether-theme");if(s==='light'||s==='dark'||(false&&s==='system'))t=s}catch(_){}var d=document.documentElement;d.classList.toggle('dark',t==='dark');d.classList.toggle('light',t==='light')})()</script>
+
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark light" />
     <title>Ether</title>
     <link rel="icon" type="image/svg+xml" href="/ether/favicon.svg" />
-    <script>
-      // Dark is the default; the owner can switch to light from the header.
-      // Runs before paint so there is no flash of the wrong theme.
-      (function () {
-        var key = "ether-theme";
-        var theme = "dark";
-        try {
-          theme = localStorage.getItem(key) === "light" ? "light" : "dark";
-          localStorage.setItem(key, theme);
-        } catch (_) {}
-        var el = document.documentElement;
-        el.classList.toggle("dark", theme === "dark");
-        el.classList.toggle("light", theme === "light");
-      })();
-    </script>
-    <script type="module" crossorigin src="/ether/assets/index-Cg5AuPpX.js"></script>
-    <link rel="stylesheet" crossorigin href="/ether/assets/index-CjYVXxIS.css">
+    <script type="module" crossorigin src="/ether/assets/index-BsBJToh-.js"></script>
+    <link rel="stylesheet" crossorigin href="/ether/assets/index-C7xxlWeN.css">
   </head>
   <body class="bg-bg text-fg antialiased">
     <div id="root"></div>

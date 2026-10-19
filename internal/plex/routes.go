@@ -147,5 +147,7 @@ func (s *Server) routes() chi.Router {
 	r.Put("/library/parts/{part}", s.handlePartSelect)
 	get("/library/streams/{stream}", s.handleStream)
 
+	get("/library/metadata/{id}/discoveryPoster/{version}", s.handleDiscoveryPoster)
+	s.registerLiveTVRoutes(r)
 	return r
 }

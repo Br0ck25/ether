@@ -184,22 +184,72 @@ type HomeRow = {
 | GET | `viewers/{id}/home` | `device=tv\|mobile\|web\|desktop, at=<RFC3339>, section?` | `{ rows: HomeRow[], generatedAt, context: { device, daypart, weekend } }` — exactly what `/hubs` would return to that user in that context |
 | POST | `viewers/{id}/refresh` | | `204` (rebuild their rows now) |
 
-### Home Designer (layout policy)
+### Home Designer (layered layout)
+
+The owner edits Global Home on the left third of the page and sees the
+server-rendered Plex Home on the right two thirds. A viewer layer replaces
+individual global row policies; deleting an override resets that row to global.
+Page lengths inherit separately, with device-specific limits taking precedence.
+Global editing includes a typical new viewer and a viewer switcher for spot checks.
 
 ```ts
-type LayoutRule = {
-  id?: string; scope: "all" | { userIds: number[] };
-  section?: "home" | "movies" | "shows";
-  rows: { hubId: string; action: "pin" | "hide" | "boost" | "bury"; position?: number;
-          when?: { days?: number[]; fromHour?: number; toHour?: number; devices?: string[] } }[];
+type HomeLayout = {
+  global: LayoutPage[];
+  viewers: { userId: number; pages: LayoutPage[] }[];
+  updatedAt?: string; notes?: string[];
+};
+type LayoutPage = {
+  section: "home" | "movies" | "shows";
   maxRows?: number;
+  deviceMaxRows?: Partial<Record<"tv" | "mobile" | "web" | "desktop", number>>;
+  rows: RowPolicy[];
+};
+type RowPolicy = {
+  row: string; // exact hub id, row kind, collection:<id>, or glob
+  status: "always" | "eligible" | "off";
+  slot?: number; minSlot?: number; maxSlot?: number; // 1-based
+  priority?: number; maxPerPage?: number; maxDaysPerWeek?: number;
+  when?: {
+    days?: number[]; fromHour?: number; toHour?: number; devices?: string[];
+    dayparts?: ("morning" | "afternoon" | "evening" | "late")[];
+    months?: number[]; startDate?: string; endDate?: string;
+  };
 };
 ```
 
+Selecting a collection explicitly in a layer can add it for that layer even
+when its default Collection Studio targets do not promote it to Home. Disabled
+collections and private ownership restrictions remain enforced, as do viewer
+content restrictions. The global/override policy controls that row's publishing
+schedule.
+
+Slots and bounds apply to the complete page, including Plex-owned rows and
+additional discovery/Live TV rows. An anchored row is always included when it
+has candidates and matches its schedule; a viewer anchor wins a slot collision
+with a global anchor. Bounds and schedules are hard constraints. Infeasible rows
+appear in the preview's hidden list with an explanation. `maxPerPage` limits rows
+matching the same policy (useful for row-family globs). `maxDaysPerWeek` rotates
+a row across a deterministic subset of the local Monday–Sunday week per viewer,
+so repeated requests do not consume a frequency budget. Date ranges are inclusive.
+
 | Method | Path | Body | Response |
 | --- | --- | --- | --- |
-| GET | `layout` | | `{ rules: LayoutRule[], availableRows: { hubId, title, kind, description }[] }` |
-| PUT | `layout` | `{ rules: LayoutRule[] }` | same as GET |
+| GET | `layout` | | `{ layout: HomeLayout, availableRows: { hubId, title, kind, description }[], defaults: { maxRows: { home, movies, shows } }, rules: LayoutRule[] }` |
+| PUT | `layout` | `{ layout: HomeLayout }` | same as GET |
+| POST | `layout/preview` | `{ viewerId: number|null, layout?: HomeLayout, device?, at?: RFC3339, section?, count? }` | viewer Home response; `viewer` is `{ id, title }` or null for the typical new viewer |
+| POST | `layout/impact` | `{ layout: HomeLayout, device?, at?: RFC3339, section?, count? }` | `{ viewers: { viewerId, title, overrides, changed, added: string[], removed: string[], moved }[], summary: { viewers, withOverrides, changed } }` |
+
+Preview and impact accept unsaved documents and never save them or record
+impressions. Missing `layout` uses the saved document. Home rows additionally
+expose `layer: "global"|"personalized"|"override"`, `slot`, `anchorSlot`,
+`placement`, `hiddenReason`, `policy` and `policyLayer`. The viewer Home endpoint
+uses the same renderer. Impact compares actual row membership and positions for
+each viewer in the selected context; it also counts their explicit override settings.
+
+The legacy `{ rules: LayoutRule[] }` PUT remains supported and converts those
+rules to a layered document. Existing SQLite rules migrate on first engine startup:
+all-user rules become global pages, scoped rules become viewer layers, pin positions
+increase by one, boost/bury become priority weights. No core fields were removed.
 
 ### Insights (dashboard)
 

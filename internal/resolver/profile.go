@@ -74,6 +74,14 @@ func SelectProfile(q config.Quality, caps core.ClientCaps, user *core.User) core
 	prof.PreferredCodecs = append([]string(nil), prof.PreferredCodecs...)
 	prof.PreferredAudio = append([]string(nil), prof.PreferredAudio...)
 	prof.PreferredLanguages = append([]string(nil), prof.PreferredLanguages...)
+	prof.AllowedQualities = append([]string(nil), prof.AllowedQualities...)
+	if prof.CustomFormatScores != nil {
+		copyScores := map[string]int{}
+		for k, v := range prof.CustomFormatScores {
+			copyScores[k] = v
+		}
+		prof.CustomFormatScores = copyScores
+	}
 
 	// Clamp to client capabilities.
 	if caps.MaxHeight > 0 && (prof.MaxHeight == 0 || prof.MaxHeight > caps.MaxHeight) {

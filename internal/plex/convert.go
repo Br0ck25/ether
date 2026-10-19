@@ -363,10 +363,14 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 
 	if o.media && isPlayable(t.Type) {
 		m.Media = s.mediaFor(ctx, pr, t, detail)
+		if detail {
+			s.addStreamFeatures(ctx, pr, t, &m)
+		}
 		if m.Duration == 0 && len(m.Media) > 0 {
 			m.Duration = m.Media[0].Duration
 		}
 	}
+	s.decorateDiscoveryMetadata(ctx, pr, t, &m)
 	return m
 }
 
@@ -489,6 +493,7 @@ func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withS
 			userID = pr.User.ID
 		}
 		sel := s.selections.get(userID, int64(t.Key))
+		sel = s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
 		m.Part[0].Stream = s.buildStreams(t.Key, info, sel, pr.User)
 	}
 	return []model.Media{m}
@@ -1017,6 +1022,7 @@ func languageTag(code string) string {
 
 // renderTitles renders a list, loading the user's watch state in one call.
 func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title, o renderOpts) []model.Metadata {
+	ts = s.visibleTitles(pr.User, ts)
 	if len(ts) == 0 {
 		return nil
 	}
@@ -1026,7 +1032,15 @@ func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title,
 	s.preloadUltraBlur(ctx, ts)
 	out := make([]model.Metadata, 0, len(ts))
 	for i := range ts {
-		out = append(out, s.metadata(ctx, pr, &ts[i], o))
+		m := s.metadata(ctx, pr, &ts[i], o)
+		s.applyEpisodeOrder(ctx, pr, &ts[i], &m)
+		if s.d.PlexGUID != nil {
+			guid := s.d.PlexGUID.Cached(ctx, ts[i].Key)
+			if guid != "" {
+				m.GUID = guid
+			}
+		}
+		out = append(out, m)
 	}
 	return out
 }
@@ -1053,20 +1067,30 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 	if s.d.State == nil || pr.User == nil {
 		return
 	}
-	for i := range ts {
+	byKey := map[string]int{}
+	for i := range items {
+		byKey[items[i].RatingKey] = i
+	}
+	for sourceIndex := range ts {
+		i, ok := byKey[ts[sourceIndex].Key.String()]
+		if !ok {
+			continue
+		}
+		title := ts[sourceIndex]
 		var eps []core.Title
 		var err error
-		switch ts[i].Type {
+		switch title.Type {
 		case core.TypeShow:
-			eps, err = s.d.Catalog.Grandchildren(ctx, ts[i].Key)
+			eps, err = s.metadataGrandchildren(ctx, pr, title.Key)
 		case core.TypeSeason:
-			eps, err = s.d.Catalog.Children(ctx, ts[i].Key)
+			eps, err = s.metadataChildren(ctx, pr, title.Key)
 		default:
 			continue
 		}
 		if err != nil || len(eps) == 0 {
 			continue
 		}
+		eps = s.visibleTitles(pr.User, eps)
 		st := s.stateFor(ctx, pr, eps)
 		viewed := 0
 		for _, e := range eps {
@@ -1075,7 +1099,7 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 			}
 		}
 		items[i].ViewedLeafCount = model.Ptr(viewed)
-		if items[i].LeafCount == nil || *items[i].LeafCount == 0 {
+		if s.d.EpisodeOrder != nil || items[i].LeafCount == nil || *items[i].LeafCount == 0 {
 			items[i].LeafCount = model.Ptr(len(eps))
 		}
 		if viewed == len(eps) {

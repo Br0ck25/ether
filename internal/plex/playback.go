@@ -17,6 +17,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/transcode"
 )
 
 // Decision codes. PMS documents the classes (1xxx ok, 2xxx general error,
@@ -196,16 +197,34 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 		return nil, nil, core.Decision{}, err
 	}
 	if !s.titleVisible(pr.User, t) {
-		return t, nil, core.Decision{}, core.ErrNotFound
+		return nil, nil, core.Decision{}, core.ErrNotFound
+	}
+	if policy, ok := s.d.AccessPolicy.(interface {
+		CanPlay(*core.User, bool, time.Time) bool
+	}); ok && !policy.CanPlay(pr.User, p.caps.Remote, s.now()) {
+		return nil, nil, core.Decision{}, core.ErrUnauthorized
+	}
+	if policy, ok := s.d.AccessPolicy.(interface{ BitrateLimit(*core.User) int }); ok {
+		if limit := policy.BitrateLimit(pr.User); limit > 0 && (p.caps.MaxBitrateKbps == 0 || limit < p.caps.MaxBitrateKbps) {
+			p.caps.MaxBitrateKbps = limit
+			p.opts.MaxBitrateKbps = limit
+		}
 	}
 	ps, err := s.d.Playback.Prepare(ctx, pr.User, p.key, p.caps)
 	if err != nil {
 		return t, nil, core.Decision{}, err
 	}
+	s.applyStreamPreferences(ctx, pr, p, t, ps.Info)
 	applySelections(p, ps.Info, s.audioLanguages(pr.User))
 	dec := core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container, AudioStream: p.opts.AudioStream, SubtitleStream: p.opts.SubtitleStream}
 	if s.d.Transcoder != nil {
 		dec = s.d.Transcoder.Decide(ps.Info, p.caps, p.opts)
+	} else {
+		dec = transcode.Decide(ps.Info, p.caps, p.opts, transcode.Policy{RemoteMaxBitrateKbps: s.cfg().Transcode.RemoteMaxBitrateKbps})
+		if dec.Kind != core.DecisionDirectPlay {
+			s.d.Playback.Stop(ps.ID)
+			return t, nil, core.Decision{}, fmt.Errorf("this client requires media conversion; install or configure FFmpeg")
+		}
 	}
 	s.transcodes.put(&transcodeEntry{
 		id: p.sessionID, playID: ps.ID, userID: pr.User.ID, clientID: pr.ClientID, key: p.key,
@@ -216,6 +235,9 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 
 // handleDecision is /video/:/transcode/universal/decision.
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
+	if s.handleLiveTVPlayback(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	if chi.URLParam(r, "ttype") != "" && chi.URLParam(r, "ttype") != "video" {
@@ -306,12 +328,13 @@ func (s *Server) decisionContainer(ctx context.Context, pr *Request, t *core.Tit
 	// engine decides: PMS answers with the source media as direct play and
 	// only an mdeDecisionCode. Ether's own decision is kept for start.m3u8
 	// in case the client then asks for a stream.
-	mdeDirect := p.mde && p.opts.DirectPlay
+	mdeDirect := p.mde && p.opts.DirectPlay && len(p.opts.AudioFilters) == 0
 	shown := dec
 	if mdeDirect {
 		shown = core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container}
 	}
 	md.Media = []model.Media{s.decisionMedia(t, ps, shown, p, pr.User)}
+	s.addProbedStreamFeatures(ctx, t.Key, ps.Info, &md)
 	if md.Duration == 0 {
 		md.Duration = md.Media[0].Duration
 	}
@@ -503,6 +526,9 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 
 // handleStartHLS is /video/:/transcode/universal/start.m3u8.
 func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
+	if s.handleLiveTVPlayback(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	if s.d.Transcoder == nil || s.d.Playback == nil {
@@ -732,6 +758,17 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
+	title, titleErr := s.d.Catalog.Get(ctx, key)
+	if titleErr != nil || !s.visibleTitle(ctx, pr.User, title) {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
+	if policy, ok := s.d.AccessPolicy.(interface {
+		CanPlay(*core.User, bool, time.Time) bool
+	}); ok && !policy.CanPlay(pr.User, pr.ClientCaps(0).Remote, s.now()) {
+		writeHTTPError(w, http.StatusForbidden)
+		return
+	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)
 	if !ok || ps == nil {
 		t, err := s.d.Catalog.Get(ctx, key)
@@ -768,7 +805,7 @@ func (s *Server) handlePartSelect(w http.ResponseWriter, r *http.Request) {
 	s.selections.update(pr.User.ID, id, func(sel *selection) {
 		if v := q.Get("audioStreamID"); v != "" {
 			if sid, err := strconv.ParseInt(v, 10, 64); err == nil {
-				if ref, ok := s.streams.lookup(sid); ok && int64(ref.key) == id {
+				if ref, ok := s.streams.lookup(sid); ok && int64(ref.key) == id && ref.info.Type == "audio" {
 					sel.audio, sel.audioSet = ref.index, true
 				}
 			}
@@ -777,12 +814,13 @@ func (s *Server) handlePartSelect(w http.ResponseWriter, r *http.Request) {
 			if sid, err := strconv.ParseInt(v, 10, 64); err == nil {
 				if sid == 0 {
 					sel.subtitle, sel.subtitleSet = -1, true
-				} else if ref, ok := s.streams.lookup(sid); ok && int64(ref.key) == id {
+				} else if ref, ok := s.streams.lookup(sid); ok && int64(ref.key) == id && ref.info.Type == "subtitle" {
 					sel.subtitle, sel.subtitleSet = ref.index, true
 				}
 			}
 		}
 	})
+	s.rememberStreamRequest(r, pr.User, core.RatingKey(id))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -808,11 +846,39 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
+	title, titleErr := s.d.Catalog.Get(r.Context(), ref.key)
+	if titleErr != nil || !s.visibleTitle(r.Context(), FromContext(r.Context()).User, title) {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
 	ct := subtitleContentTypes[plexCodec(ref.info.Codec)]
 	if ct == "" {
 		ct = "text/plain; charset=utf-8"
 	}
 	src := ref.info.ExternalURL
+	if strings.HasPrefix(src, "ether-subtitle:") {
+		if s.d.Subtitles == nil {
+			writeHTTPError(w, http.StatusNotFound)
+			return
+		}
+		format := "srt"
+		if strings.HasSuffix(chi.URLParam(r, "stream"), ".vtt") {
+			format = "vtt"
+		}
+		reader, actual, err := s.d.Subtitles.OpenFormat(src, format)
+		if err != nil {
+			writeHTTPError(w, http.StatusNotFound)
+			return
+		}
+		defer reader.Close()
+		contentType := subtitleContentTypes[actual]
+		if contentType == "" {
+			contentType = "text/plain; charset=utf-8"
+		}
+		w.Header().Set("Content-Type", contentType)
+		_, _ = io.Copy(w, io.LimitReader(reader, 32<<20))
+		return
+	}
 	u, err := url.Parse(src)
 	if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, src, nil)

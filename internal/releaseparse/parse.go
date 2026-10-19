@@ -107,6 +107,7 @@ func Parse(name string) core.ReleaseInfo {
 	if strings.Contains(upper, "DOLBY VISION") || strings.Contains(upper, " DOLBYVISION ") || strings.Contains(upper, " DOVI ") || strings.Contains(upper, " DV ") || strings.Contains(upper, " DV-") || strings.HasSuffix(strings.TrimSpace(upper), " DV") {
 		info.DolbyVision = true
 	}
+	info.Edition = ParseEdition(name)
 	info.Proper = strings.Contains(upper, " PROPER ")
 	info.Repack = strings.Contains(upper, " REPACK ")
 	seen := map[string]bool{}

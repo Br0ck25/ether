@@ -180,6 +180,8 @@ export interface TasteProfile {
   overrides: TasteOverride[];
 }
 
+export type LayerName = "global" | "personalized" | "override";
+
 export interface HomeRow {
   hubId: string;
   title: string;
@@ -191,6 +193,14 @@ export interface HomeRow {
   source: "engine" | "owner" | "plex";
   items: TitleCard[];
   itemReasons?: Record<string, string>;
+  /** Provenance in the layered Home Designer. */
+  layer?: LayerName;
+  slot?: number;
+  anchorSlot?: number;
+  placement?: string;
+  hiddenReason?: string;
+  policy?: RowPolicy;
+  policyLayer?: "global" | "override";
 }
 
 export interface HomeContext { device: string; daypart: string; weekend: boolean }
@@ -199,39 +209,85 @@ export interface ViewerHome {
   rows: HomeRow[];
   generatedAt: string;
   context: HomeContext;
+  /** layout/preview: the previewed viewer, null for the typical viewer. */
+  viewer?: { id: number; title: string } | null;
 }
 
 export type LayoutSection = "home" | "movies" | "shows";
-export type LayoutAction = "pin" | "hide" | "boost" | "bury";
+export type Device = "tv" | "mobile" | "web" | "desktop";
+export type Daypart = "morning" | "afternoon" | "evening" | "late";
 
 export interface LayoutWhen {
   days?: number[];
   fromHour?: number;
   toHour?: number;
   devices?: string[];
+  dayparts?: Daypart[];
+  months?: number[];
+  startDate?: string;
+  endDate?: string;
 }
 
-export interface LayoutRowRule {
-  hubId: string;
-  action: LayoutAction;
-  position?: number;
+export type RowStatus = "always" | "eligible" | "off";
+
+/** The owner's policy for a row (or a family of rows) on a page. */
+export interface RowPolicy {
+  /** Kind ("short-on-time"), "collection:<id>", a hub id, or a glob ("because.*"). */
+  row: string;
+  status: RowStatus;
+  /** Anchored slot, 1 = top. */
+  slot?: number;
+  /** Never above this slot. */
+  minSlot?: number;
+  /** Never below this slot. */
+  maxSlot?: number;
+  priority?: number;
+  maxPerPage?: number;
+  maxDaysPerWeek?: number;
   when?: LayoutWhen;
 }
 
-export interface LayoutRule {
-  id?: string;
-  scope: "all" | { userIds: number[] };
-  section?: LayoutSection;
-  rows: LayoutRowRule[];
+export interface LayoutPage {
+  section: LayoutSection;
   maxRows?: number;
+  deviceMaxRows?: Partial<Record<Device, number>>;
+  rows: RowPolicy[];
+}
+
+export interface ViewerLayout { userId: number; pages: LayoutPage[] }
+
+export interface HomeLayout {
+  global: LayoutPage[];
+  viewers: ViewerLayout[];
+  updatedAt?: string;
+  notes?: string[];
 }
 
 export interface AvailableRow { hubId: string; title: string; kind: string; description: string }
 
 export interface LayoutDoc {
-  rules: LayoutRule[];
+  layout: HomeLayout;
   availableRows: AvailableRow[];
+  defaults: { maxRows: Record<LayoutSection, number> };
 }
+
+export interface LayoutImpact {
+  viewerId: number;
+  title: string;
+  overrides: number;
+  changed: boolean;
+  added: string[];
+  removed: string[];
+  moved: number;
+}
+
+export interface LayoutImpactResult {
+  viewers: LayoutImpact[];
+  summary: { viewers: number; withOverrides: number; changed: number };
+}
+
+/** Context of a Home preview. */
+export interface PreviewContext { device: Device; at: string; section?: LayoutSection }
 
 // ---- Insights ---------------------------------------------------------------
 

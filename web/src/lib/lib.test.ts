@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { HomeRow, LayoutRule, Rule } from "./contract";
+import type { HomeLayout, Rule } from "./contract";
 import { formatBytes, formatNanos, relativeTime } from "./format";
 import { cacheHealth, catalogHealth, computeHealth, indexersHealth, normalizeSessions, plexDirectHealth, remoteHealth, usenetHealth, worstLevel } from "./health";
 import { COALESCE_MS, historyReducer, initHistory } from "./history";
-import { atFor, previewLayout, rowActionFor, setRowAction, whenMatches } from "./layout";
+import {
+  anchorsOf, atFor, describeWhen, effectiveLength, effectivePolicy, freeSlot, matchRank, overrideCount, policyChips, policyIn, removePolicy,
+  reorderAnchors, sameLayout, setPageLength, setPolicy, viewersOverriding, whenMatches,
+} from "./layout";
 import {
   blankSpec, describeRule, isRuleComplete, newRule, normalizeSpec, previewableSpec, specProblems, valueFor, withOp, FIELD_BY_NAME,
 } from "./rules";
@@ -87,8 +90,7 @@ describe("undo history", () => {
 });
 
 describe("layout", () => {
-  const row = (hubId: string, score = 0.5): HomeRow => ({ hubId, title: hubId, kind: hubId, reason: "", score, source: "engine", items: [] });
-  const ctx = { userId: 2, section: "home" as const, device: "tv", day: 6, hour: 20 };
+  const empty = (): HomeLayout => ({ global: [], viewers: [] });
 
   it("finds the next moment for a weekday and hour", () => {
     const wed = new Date(2026, 9, 21, 10, 0, 0); // Wednesday 10:00
@@ -97,36 +99,76 @@ describe("layout", () => {
     expect(atFor(3, 7, wed)).toEqual(new Date(2026, 9, 28, 7, 0, 0));
   });
 
-  it("toggles row actions within the right scope and drops empty rules", () => {
-    let rules: LayoutRule[] = [];
-    rules = setRowAction(rules, "all", "home", "a", "hide");
-    expect(rules).toEqual([{ scope: "all", section: "home", rows: [{ hubId: "a", action: "hide" }] }]);
-    rules = setRowAction(rules, 2, "home", "b", "pin", 1);
-    expect(rules[1]).toEqual({ scope: { userIds: [2] }, section: "home", rows: [{ hubId: "b", action: "pin", position: 1 }] });
-    expect(rowActionFor(rules, 2, "home", "b")?.action).toBe("pin");
-    expect(rowActionFor(rules, "all", "home", "b")).toBeUndefined();
-    rules = setRowAction(rules, "all", "home", "a", null);
-    expect(rules).toHaveLength(1);
+  it("edits a layer's policies and prunes what becomes empty", () => {
+    let doc = setPolicy(empty(), "global", "home", { row: "short-on-time", status: "off" });
+    expect(doc.global).toEqual([{ section: "home", rows: [{ row: "short-on-time", status: "off" }] }]);
+    doc = setPolicy(doc, 2, "home", { row: "short-on-time", status: "always", priority: 1, maxDaysPerWeek: 7 });
+    expect(doc.viewers).toEqual([{ userId: 2, pages: [{ section: "home", rows: [{ row: "short-on-time", status: "always" }] }] }]);
+    expect(overrideCount(doc, 2)).toBe(1);
+    expect(viewersOverriding(doc, "home", "short-on-time")).toEqual([2]);
+    // Reset to global drops the override and the now-empty layer.
+    doc = removePolicy(doc, 2, "home", "short-on-time");
+    expect(doc.viewers).toEqual([]);
+    doc = removePolicy(doc, "global", "home", "short-on-time");
+    expect(doc.global).toEqual([]);
   });
 
-  it("matches schedules including windows that wrap midnight", () => {
+  it("anchors keep one row per slot and reorder by swapping slots", () => {
+    let doc = setPolicy(empty(), "global", "home", { row: "continue-watching", status: "eligible", slot: 1 });
+    expect(policyIn(doc, "global", "home", "continue-watching")).toEqual({ row: "continue-watching", status: "always", slot: 1 });
+    doc = setPolicy(doc, "global", "home", { row: "top-10", status: "always", slot: 3, minSlot: 2 });
+    expect(policyIn(doc, "global", "home", "top-10")).toEqual({ row: "top-10", status: "always", slot: 3 });
+    expect(freeSlot(doc, "global", "home")).toBe(2);
+    doc = reorderAnchors(doc, "global", "home", ["top-10", "continue-watching"]);
+    expect(anchorsOf(doc, "global", "home").map((a) => [a.row, a.slot])).toEqual([["top-10", 1], ["continue-watching", 3]]);
+    // Anchoring another row to a held slot frees it.
+    doc = setPolicy(doc, "global", "home", { row: "trending", status: "always", slot: 1 });
+    expect(policyIn(doc, "global", "home", "top-10")?.slot).toBeUndefined();
+  });
+
+  it("resolves overrides over Global and specific matches over globs", () => {
+    const doc: HomeLayout = {
+      global: [{ section: "home", rows: [{ row: "because.*", status: "off" }, { row: "because-you-watched", status: "eligible", maxPerPage: 2 }, { row: "because.42", status: "always" }] }],
+      viewers: [{ userId: 5, pages: [{ section: "home", rows: [{ row: "because.*", status: "always" }] }] }],
+    };
+    expect(effectivePolicy(doc, null, "home", "home.because.42", "because-you-watched")?.policy.row).toBe("because.42");
+    expect(effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched")?.policy.row).toBe("because-you-watched");
+    expect(effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched.x")?.policy.row).toBe("because.*");
+    expect(effectivePolicy(doc, 5, "home", "home.because.42", "because-you-watched")).toMatchObject({ layer: "override", policy: { row: "because.*" } });
+    expect(effectivePolicy(doc, 5, "movies", "movie.because.42", "because-you-watched")).toBeNull();
+    expect(matchRank("collection:*", "collection.7", "collection:7")).toBe(1);
+  });
+
+  it("resolves page lengths: viewer device, viewer page, Global device, Global page, default", () => {
+    let doc = setPageLength(empty(), "global", "home", null, 12);
+    doc = setPageLength(doc, "global", "home", "mobile", 8);
+    doc = setPageLength(doc, 3, "home", "tv", 6);
+    expect(effectiveLength(doc, 3, "home", "tv", 14)).toEqual({ n: 6, layer: "override" });
+    expect(effectiveLength(doc, 3, "home", "mobile", 14)).toEqual({ n: 8, layer: "global" });
+    expect(effectiveLength(doc, null, "home", "web", 14)).toEqual({ n: 12, layer: "global" });
+    expect(effectiveLength(doc, null, "shows", "web", 10)).toEqual({ n: 10, layer: "default" });
+    doc = setPageLength(doc, 3, "home", "tv", undefined);
+    expect(doc.viewers).toEqual([]);
+  });
+
+  it("compares layouts ignoring server stamps and empty pages", () => {
+    const a: HomeLayout = { global: [{ section: "home", rows: [] }], viewers: [], updatedAt: "2026-10-19T00:00:00Z", notes: ["x"] };
+    expect(sameLayout(a, empty())).toBe(true);
+    expect(sameLayout(setPolicy(a, "global", "home", { row: "top-10", status: "off" }), empty())).toBe(false);
+  });
+
+  it("matches schedules including windows that wrap midnight, months and dates", () => {
     expect(whenMatches({ days: [1, 2] }, { day: 6, hour: 20, device: "tv" })).toBe(false);
     expect(whenMatches({ fromHour: 22, toHour: 2 }, { day: 6, hour: 1, device: "tv" })).toBe(true);
     expect(whenMatches({ fromHour: 22, toHour: 2 }, { day: 6, hour: 12, device: "tv" })).toBe(false);
     expect(whenMatches({ devices: ["mobile"] }, { day: 6, hour: 12, device: "tv" })).toBe(false);
-  });
-
-  it("previews pins, hides, boosts, buries and row caps; viewer rules win", () => {
-    const rows = ["a", "b", "c", "d", "e"].map((id) => row(id));
-    const rules: LayoutRule[] = [
-      { scope: "all", section: "home", rows: [{ hubId: "a", action: "hide" }, { hubId: "e", action: "pin", position: 1 }, { hubId: "c", action: "bury" }], maxRows: 3 },
-      { scope: { userIds: [2] }, section: "home", rows: [{ hubId: "a", action: "boost" }, { hubId: "d", action: "hide", when: { days: [1] } }] },
-      { scope: { userIds: [9] }, section: "home", rows: [{ hubId: "b", action: "hide" }] },
-    ];
-    const out = previewLayout(rows, rules, ctx);
-    expect(out.map((r) => r.row.hubId)).toEqual(["a", "e", "b", "d", "c"]);
-    expect(out[0]).toMatchObject({ action: "boost", actionScope: "viewer", hidden: false });
-    expect(out.filter((r) => r.overLimit).map((r) => r.row.hubId)).toEqual(["d", "c"]);
+    expect(whenMatches({ dayparts: ["morning"] }, { day: 6, hour: 9, device: "tv" })).toBe(true);
+    const dec = new Date(2026, 11, 20, 20);
+    expect(whenMatches({ months: [12] }, { day: 0, hour: 20, device: "tv", date: dec })).toBe(true);
+    expect(whenMatches({ months: [12] }, { day: 0, hour: 20, device: "tv", date: new Date(2026, 9, 20) })).toBe(false);
+    expect(whenMatches({ startDate: "2026-12-21" }, { day: 0, hour: 20, device: "tv", date: dec })).toBe(false);
+    expect(describeWhen({ days: [1, 2, 3, 4, 5], months: [12], devices: ["tv"] }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])).toBe("Weekdays · TV · Dec");
+    expect(policyChips({ row: "x", status: "always", slot: 2, maxSlot: 4, priority: 1.5, maxDaysPerWeek: 3 }, ["Sun"])).toEqual(["Slot 2", "Not below 4", "Higher", "3 days a week"]);
   });
 });
 

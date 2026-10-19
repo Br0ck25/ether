@@ -1,6 +1,16 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { getThemeScript } from "@braedonsaunders/appkit-ui/theme-script";
+import type { Plugin } from "vite";
+import { theme } from "./src/theme";
+
+// AppKit's pre-paint theme script goes first in <head>, so the stored (or
+// default dark) theme class is on <html> before anything paints.
+const themeScript: Plugin = {
+  name: "ether-theme-script",
+  transformIndexHtml: () => [{ tag: "script", children: getThemeScript(theme), injectTo: "head-prepend" }],
+};
 
 // The production bundle is embedded into the Go binary from
 // ../internal/admin/dist. `public/.gitkeep` is copied into the output so the
@@ -12,20 +22,12 @@ import tailwindcss from "@tailwindcss/vite";
 // mock is only reachable behind `import.meta.env.MODE === "mock"`, which is a
 // compile-time constant, so it never ships in the production bundle.
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), themeScript],
   base: "/ether/",
   build: {
     outDir: "../internal/admin/dist",
     emptyOutDir: true,
     chunkSizeWarningLimit: 700,
-    rollupOptions: {
-      onwarn(warning, warn) {
-        // AppKit's published modules carry React Server Component
-        // directives; they are meaningless in a client-only SPA.
-        if (warning.code === "MODULE_LEVEL_DIRECTIVE") return;
-        warn(warning);
-      },
-    },
   },
   server: {
     port: 5173,

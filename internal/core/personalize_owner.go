@@ -84,16 +84,23 @@ const (
 // with the engine's explanation. Items are catalogue titles; the admin API
 // turns them into TitleCards.
 type HomeRow struct {
-	HubID       string               `json:"hubId"`
-	Title       string               `json:"title"`
-	Kind        string               `json:"kind"` // e.g. "because-you-watched", "collection:<id>"
-	Reason      string               `json:"reason"`
-	Score       float64              `json:"score"` // predicted engagement used for ordering
-	Pinned      bool                 `json:"pinned,omitempty"`
-	Hidden      bool                 `json:"hidden,omitempty"` // hidden by a layout rule: not sent to Plex
-	Source      string               `json:"source"`
-	Items       []Title              `json:"items"`
-	ItemReasons map[RatingKey]string `json:"itemReasons,omitempty"`
+	HubID        string               `json:"hubId"`
+	Layer        string               `json:"layer,omitempty"`
+	Slot         int                  `json:"slot,omitempty"`
+	AnchorSlot   int                  `json:"anchorSlot,omitempty"`
+	Placement    string               `json:"placement,omitempty"`
+	HiddenReason string               `json:"hiddenReason,omitempty"`
+	Policy       *RowPolicy           `json:"policy,omitempty"`
+	PolicyLayer  string               `json:"policyLayer,omitempty"`
+	Title        string               `json:"title"`
+	Kind         string               `json:"kind"` // e.g. "because-you-watched", "collection:<id>"
+	Reason       string               `json:"reason"`
+	Score        float64              `json:"score"` // predicted engagement used for ordering
+	Pinned       bool                 `json:"pinned,omitempty"`
+	Hidden       bool                 `json:"hidden,omitempty"` // hidden by a layout rule: not sent to Plex
+	Source       string               `json:"source"`
+	Items        []Title              `json:"items"`
+	ItemReasons  map[RatingKey]string `json:"itemReasons,omitempty"`
 	// Hub is the row as handed to the Plex front end.
 	Hub Hub `json:"-"`
 }
@@ -163,10 +170,14 @@ func (s LayoutScope) AppliesTo(userID int64) bool {
 // Saturday), an hour window [FromHour, ToHour) in server local time (wraps
 // past midnight when FromHour > ToHour) and device classes.
 type LayoutWhen struct {
-	Days     []int    `json:"days,omitempty"`
-	FromHour *int     `json:"fromHour,omitempty"`
-	ToHour   *int     `json:"toHour,omitempty"`
-	Devices  []string `json:"devices,omitempty"`
+	Days      []int    `json:"days,omitempty"`
+	Dayparts  []string `json:"dayparts,omitempty"`
+	Months    []int    `json:"months,omitempty"`
+	StartDate string   `json:"startDate,omitempty"`
+	EndDate   string   `json:"endDate,omitempty"`
+	FromHour  *int     `json:"fromHour,omitempty"`
+	ToHour    *int     `json:"toHour,omitempty"`
+	Devices   []string `json:"devices,omitempty"`
 }
 
 // Layout actions for LayoutRowRule.Action.

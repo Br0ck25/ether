@@ -181,6 +181,9 @@ func buildCodecArgs(s runSpec) []string {
 			}
 			args = append(args, "-c:a", enc, "-ac", strconv.Itoa(ch), "-ar", "48000",
 				"-b:a", fmt.Sprintf("%dk", audioBitrateKbps(codec, ch)))
+			if len(d.AudioFilters) > 0 {
+				args = append(args, "-af", strings.Join(d.AudioFilters, ","))
+			}
 			if enc == "opus" {
 				args = append(args, "-strict", "-2")
 			}

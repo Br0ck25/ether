@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -37,16 +38,18 @@ type Options struct {
 
 // CandidateTrace explains one candidate's fate in a resolution.
 type CandidateTrace struct {
-	ReleaseID      string        `json:"releaseId"`
-	Name           string        `json:"name"`
-	Indexer        string        `json:"indexer"`
-	Score          float64       `json:"score"`
-	Rejected       bool          `json:"rejected"`
-	Reason         string        `json:"reason,omitempty"`
-	HealthChecked  bool          `json:"healthChecked"`
-	Healthy        bool          `json:"healthy"`
-	FetchDuration  time.Duration `json:"fetchDuration"`
-	HealthDuration time.Duration `json:"healthDuration"`
+	ReleaseID           string        `json:"releaseId"`
+	Name                string        `json:"name"`
+	Indexer             string        `json:"indexer"`
+	Score               float64       `json:"score"`
+	CustomFormats       []FormatMatch `json:"customFormats,omitempty"`
+	CompatibilityReason string        `json:"compatibilityReason,omitempty"`
+	Rejected            bool          `json:"rejected"`
+	Reason              string        `json:"reason,omitempty"`
+	HealthChecked       bool          `json:"healthChecked"`
+	Healthy             bool          `json:"healthy"`
+	FetchDuration       time.Duration `json:"fetchDuration"`
+	HealthDuration      time.Duration `json:"healthDuration"`
 }
 
 // Trace is one recorded resolution attempt, for the admin UI.
@@ -80,9 +83,11 @@ type Service struct {
 	log     *slog.Logger
 	now     func() time.Time
 
-	cfgMu   sync.RWMutex
-	rcfg    config.Resolver
-	quality config.Quality
+	cfgMu     sync.RWMutex
+	rcfg      config.Resolver
+	quality   config.Quality
+	scorer    *FormatScorer
+	scorerErr error
 
 	mu            sync.RWMutex
 	bad           map[string]string
@@ -96,6 +101,12 @@ type Service struct {
 	tracesMu  sync.Mutex
 	traces    []Trace
 	maxTraces int
+
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgMu     sync.Mutex
+	bgClosed bool
+	bgWG     sync.WaitGroup
 
 	flightMu sync.Mutex
 	flights  map[string]*inflight
@@ -117,6 +128,7 @@ func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config
 		verified:      map[string]time.Time{},
 		healthTTL:     opts.HealthTTL,
 	}
+	s.bgCtx, s.bgCancel = context.WithCancel(context.Background())
 	if s.healthTTL == 0 {
 		s.healthTTL = 6 * time.Hour
 	}
@@ -142,6 +154,7 @@ func (s *Service) UpdateConfig(cfg config.Config) {
 	defer s.cfgMu.Unlock()
 	s.rcfg = cfg.Resolver
 	s.quality = cfg.Quality
+	s.scorer, s.scorerErr = NewFormatScorer(cfg.Resolver.CustomFormats, cfg.Resolver.CustomFormatScores)
 }
 
 func (s *Service) resolverCfg() config.Resolver {
@@ -262,7 +275,9 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 func flightKey(req core.ResolveRequest, profile core.QualityProfile) string {
 	ex := append([]string(nil), req.Exclude...)
 	sort.Strings(ex)
-	return fmt.Sprintf("%d|%s|%s", req.Title.Key, profile.Name, strings.Join(ex, ","))
+	capsJSON, _ := json.Marshal(req.Client)
+	profileJSON, _ := json.Marshal(profile)
+	return fmt.Sprintf("%d|%s|%s|%s|%s", req.Title.Key, profile.Name, strings.Join(ex, ","), capsJSON, profileJSON)
 }
 
 // Resolve implements core.Resolver. Concurrent calls for the same
@@ -328,131 +343,92 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		exclude[id] = true
 	}
 	rcfg := s.resolverCfg()
-	type cand struct {
-		rel   core.Release
-		trace int // index into trace.Candidates
-	}
-	var cands []cand
+	var cands []candidate
+	clientRejected := false
 	for _, rel := range results {
 		ct := CandidateTrace{ReleaseID: rel.ID, Name: rel.Name, Indexer: rel.Indexer}
 		if reason := s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude); reason != "" {
 			ct.Rejected = true
+			switch reason {
+			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile":
+				clientRejected = true
+			}
 			ct.Reason = reason
 			trace.Candidates = append(trace.Candidates, ct)
 			continue
 		}
-		rel.Score = s.score(rel, profile, t)
+		s.cfgMu.RLock()
+		scorer, scorerErr := s.scorer, s.scorerErr
+		s.cfgMu.RUnlock()
+		if scorerErr != nil {
+			trace.Err = scorerErr.Error()
+			return nil, scorerErr
+		}
+		formatScore, matches, scoreErr := scorer.ScoreWithScores(rel, profile.CustomFormatScores)
+		if scoreErr != nil {
+			trace.Err = scoreErr.Error()
+			return nil, scoreErr
+		}
+		ct.CustomFormats = matches
+		minimum := rcfg.MinCustomFormatScore
+		if profile.MinCustomFormatScore != nil {
+			minimum = profile.MinCustomFormatScore
+		}
+		if minimum != nil && formatScore < *minimum {
+			clientRejected = true
+			ct.Rejected = true
+			ct.Reason = "below minimum custom format score"
+			trace.Candidates = append(trace.Candidates, ct)
+			continue
+		}
+		compatibility, note := compatibilityScore(rel, req.Client, t)
+		ct.CompatibilityReason = note
+		rel.Score = s.score(rel, profile, t) + float64(formatScore) + compatibility
 		ct.Score = rel.Score
 		trace.Candidates = append(trace.Candidates, ct)
-		cands = append(cands, cand{rel: rel, trace: len(trace.Candidates) - 1})
+		cands = append(cands, candidate{rel: rel, trace: len(trace.Candidates) - 1})
 	}
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rel.Score > cands[j].rel.Score })
 
 	if len(cands) == 0 {
-		s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
+		// Client/profile rejection is not proof that the title is unavailable for everyone.
+		if !clientRejected && len(req.Exclude) == 0 {
+			s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
+		}
 		trace.Err = "no acceptable candidates"
 		return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
 	}
 
-	attempts := 0
-	var alternatesStart int
-	// Fetch and validate the leading candidates together. Selection remains in
-	// score order, so latency improves without changing ranking or acceptance.
-	limit := min(len(cands), 2)
-	type validation struct {
-		nzb            []byte
-		fetchErr       error
-		healthy        bool
-		healthErr      error
-		fetchDuration  time.Duration
-		healthDuration time.Duration
+	if rcfg.OptimisticStart {
+		nzb, err := s.indexer.FetchNZB(ctx, cands[0].rel)
+		if err == nil {
+			winner := cands[0]
+			trace.Winner = winner.rel.ID
+			trace.Candidates[winner.trace].Reason = "optimistic start: health check pending"
+			s.optimisticCheck(winner.rel, nzb)
+			return s.resolution(t.Key, cands, 0, nzb, &trace), nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		trace.Candidates[cands[0].trace].Rejected = true
+		trace.Candidates[cands[0].trace].Reason = "nzb fetch: " + err.Error()
+		cands = cands[1:]
 	}
-	validated := make([]validation, limit)
-	var wg sync.WaitGroup
-	for i := range validated {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			v := &validated[i]
-			phase := time.Now()
-			v.nzb, v.fetchErr = s.indexer.FetchNZB(ctx, cands[i].rel)
-			v.fetchDuration = time.Since(phase)
-			if v.fetchErr == nil {
-				v.healthy = true
-				if s.health != nil {
-					phase = time.Now()
-					v.healthy, v.healthErr = s.checkHealth(ctx, cands[i].rel.ID, v.nzb)
-					v.healthDuration = time.Since(phase)
-				}
-			}
-		}(i)
+	index, nzb, err := s.validateCandidates(ctx, cands, &trace, rcfg.HealthRace)
+	if err != nil {
+		trace.Err = err.Error()
+		return nil, err
 	}
-	wg.Wait()
-	for i, cd := range cands {
-		if attempts >= maxHealthAttempts {
-			break
-		}
-		if err := ctx.Err(); err != nil {
-			trace.Err = err.Error()
-			return nil, err
-		}
-		attempts++
-		v := validation{}
-		if i < len(validated) {
-			v = validated[i]
-		} else {
-			phase := time.Now()
-			v.nzb, v.fetchErr = s.indexer.FetchNZB(ctx, cd.rel)
-			v.fetchDuration = time.Since(phase)
-			if v.fetchErr == nil {
-				v.healthy = true
-				if s.health != nil {
-					phase = time.Now()
-					v.healthy, v.healthErr = s.checkHealth(ctx, cd.rel.ID, v.nzb)
-					v.healthDuration = time.Since(phase)
-				}
-			}
-		}
-		trace.Candidates[cd.trace].FetchDuration = v.fetchDuration
-		trace.Candidates[cd.trace].HealthDuration = v.healthDuration
-		if v.fetchErr != nil {
-			trace.Candidates[cd.trace].Reason = "nzb fetch: " + v.fetchErr.Error()
-			trace.Candidates[cd.trace].Rejected = true
-			s.recordReputation(ctx, cd.rel.Indexer, false)
-			continue
-		}
-		if s.health != nil {
-			trace.Candidates[cd.trace].HealthChecked = true
-			if v.healthErr != nil && ctx.Err() != nil {
-				trace.Err = v.healthErr.Error()
-				return nil, v.healthErr
-			}
-			if v.healthErr != nil {
-				trace.Candidates[cd.trace].Reason = "health: " + v.healthErr.Error()
-			} else if !v.healthy {
-				trace.Candidates[cd.trace].Reason = "health: unhealthy"
-			}
-		}
-		trace.Candidates[cd.trace].Healthy = v.healthy && v.healthErr == nil
-		if !trace.Candidates[cd.trace].Healthy {
-			trace.Candidates[cd.trace].Rejected = true
-			s.recordReputation(ctx, cd.rel.Indexer, false)
-			continue
-		}
-		s.recordReputation(ctx, cd.rel.Indexer, true)
+	if index >= 0 {
 		s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
-		trace.Winner = cd.rel.ID
-		alternatesStart = i + 1
-		res := &core.Resolution{Title: t.Key, Release: cd.rel, NZB: v.nzb, ResolvedAt: s.now()}
-		for j := alternatesStart; j < len(cands) && len(res.Alternates) < s.maxCandidates(); j++ {
-			if !trace.Candidates[cands[j].trace].Rejected {
-				res.Alternates = append(res.Alternates, cands[j].rel)
-			}
-		}
-		return res, nil
+		trace.Winner = cands[index].rel.ID
+		return s.resolution(t.Key, cands, index, nzb, &trace), nil
 	}
 
-	s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
+	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts {
+		s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
+	}
 	trace.Err = "no healthy candidates"
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
 }
@@ -553,10 +529,21 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		}
 	}
 	// Client / profile hard gates.
+	if len(profile.AllowedQualities) > 0 {
+		allowed := false
+		for _, q := range profile.AllowedQualities {
+			if q == releaseQuality(rel.Info) {
+				allowed = true
+			}
+		}
+		if !allowed {
+			return "quality excluded by imported profile"
+		}
+	}
 	if profile.MaxHeight > 0 && rel.Info.Height > profile.MaxHeight {
 		return "above profile max height"
 	}
-	if rel.Info.DolbyVision && !profile.AllowDolbyVision {
+	if rel.Info.DolbyVision && !profile.AllowDolbyVision && !(rel.Info.HDR10 && profile.AllowHDR) {
 		return "dolby vision not allowed for client"
 	}
 	if rel.Info.VideoCodec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(rel.Info.VideoCodec) {

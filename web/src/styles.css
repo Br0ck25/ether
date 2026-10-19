@@ -26,25 +26,6 @@
 }
 
 @layer utilities {
-  /* Entrance reveal: visible by default; @starting-style supplies the
-     transition origin so a paused or background tab never strands content
-     at opacity 0. (AppKit's page shells reference `.reveal`; the published
-     token sheet does not define it, so the app owns it.) */
-  .reveal {
-    opacity: 1;
-    transform: none;
-    transition:
-      opacity var(--duration-slow) var(--ease-out),
-      transform var(--duration-slow) var(--ease-out);
-    transition-delay: var(--reveal-delay, 0ms);
-  }
-  @starting-style {
-    .reveal {
-      opacity: 0;
-      transform: translateY(8px);
-    }
-  }
-
   /* Horizontal poster rows: scroll-snap like a TV shelf, no visible scrollbar. */
   .shelf {
     scroll-snap-type: x proximity;
@@ -75,7 +56,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .reveal,
     .img-fade {
       transition: none;
     }

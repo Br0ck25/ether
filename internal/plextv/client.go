@@ -64,7 +64,7 @@ type Identity struct {
 // it.
 func ServerIdentity(cfg config.Config, version string) Identity {
 	if version == "" {
-		version = DefaultServerVersion
+		version = PMSVersion(cfg)
 	}
 	name := cfg.Server.FriendlyName
 	if name == "" {
@@ -121,11 +121,12 @@ func platformName() string {
 
 // Options configures a Client.
 type Options struct {
-	BaseURL    string // DefaultBaseURL when empty
-	AuthAppURL string // DefaultAuthAppURL when empty
-	HTTPClient *http.Client
-	Identity   Identity
-	Logger     *slog.Logger
+	VersionSource func() string
+	BaseURL       string // DefaultBaseURL when empty
+	AuthAppURL    string // DefaultAuthAppURL when empty
+	HTTPClient    *http.Client
+	Identity      Identity
+	Logger        *slog.Logger
 	// RetryBackoff is the initial delay between retries of idempotent
 	// requests (default 500ms).
 	RetryBackoff time.Duration
@@ -133,12 +134,13 @@ type Options struct {
 
 // Client talks to plex.tv with one identity. It is safe for concurrent use.
 type Client struct {
-	base    *url.URL
-	authApp string
-	hc      *http.Client
-	id      Identity
-	log     *slog.Logger
-	backoff time.Duration
+	base          *url.URL
+	authApp       string
+	hc            *http.Client
+	id            Identity
+	log           *slog.Logger
+	backoff       time.Duration
+	versionSource func() string
 }
 
 // New returns a client.
@@ -163,7 +165,7 @@ func New(o Options) (*Client, error) {
 		o.RetryBackoff = 500 * time.Millisecond
 	}
 	return &Client{base: base, authApp: o.AuthAppURL, hc: o.HTTPClient, id: o.Identity,
-		log: o.Logger.With("component", "plextv"), backoff: o.RetryBackoff}, nil
+		log: o.Logger.With("component", "plextv"), backoff: o.RetryBackoff, versionSource: o.VersionSource}, nil
 }
 
 // WithIdentity returns a copy of c that sends id.
@@ -349,7 +351,11 @@ func (c *Client) setHeaders(h http.Header, token string) {
 		}
 	}
 	set("X-Plex-Product", c.id.Product)
-	set("X-Plex-Version", c.id.Version)
+	version := c.id.Version
+	if c.id.Provides == "server" && c.versionSource != nil {
+		version = c.versionSource()
+	}
+	set("X-Plex-Version", version)
 	set("X-Plex-Client-Identifier", c.id.ClientIdentifier)
 	set("X-Plex-Device-Name", c.id.DeviceName)
 	set("X-Plex-Device", c.id.Device)
@@ -357,7 +363,7 @@ func (c *Client) setHeaders(h http.Header, token string) {
 	set("X-Plex-Platform-Version", c.id.PlatformVersion)
 	set("X-Plex-Provides", c.id.Provides)
 	set("X-Plex-Token", token)
-	h.Set("User-Agent", c.id.Product+"/"+c.id.Version)
+	h.Set("User-Agent", c.id.Product+"/"+version)
 }
 
 func parseAPIError(method, path string, resp *http.Response, body []byte) *APIError {

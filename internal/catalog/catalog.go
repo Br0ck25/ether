@@ -89,6 +89,7 @@ CREATE TABLE catalog_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
 CREATE TABLE catalog_keywords (key INTEGER NOT NULL, keyword TEXT NOT NULL, PRIMARY KEY(key, keyword));
 CREATE INDEX catalog_keywords_keyword ON catalog_keywords(keyword, key);
 `)
+	store.Register("catalog", 3, `ALTER TABLE catalog_titles ADD COLUMN adult INTEGER NOT NULL DEFAULT 0;`)
 }
 
 // TMDB is the subset of the TMDB client the catalogue needs.

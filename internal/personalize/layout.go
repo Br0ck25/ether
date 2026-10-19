@@ -133,6 +133,32 @@ func whenMatches(w *core.LayoutWhen, hc core.HubContext) bool {
 	if w == nil {
 		return true
 	}
+	if len(w.Months) > 0 {
+		ok := false
+		for _, m := range w.Months {
+			if m == int(hc.Now.Month()) {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	if len(w.Dayparts) > 0 {
+		ok := false
+		for _, d := range w.Dayparts {
+			if d == core.DaypartAt(hc.Now) {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	date := hc.Now.Format("2006-01-02")
+	if w.StartDate != "" && date < w.StartDate || w.EndDate != "" && date > w.EndDate {
+		return false
+	}
 	if len(w.Days) > 0 {
 		ok := false
 		for _, d := range w.Days {

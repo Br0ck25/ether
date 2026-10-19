@@ -187,6 +187,7 @@ export interface NowPlaying {
   device: string;
   product: string;
   decision: string;
+  decisionReason: string;
   remote: boolean;
   bytesServed: number;
   size: number;
@@ -227,6 +228,7 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
       device: str(pick(client, "deviceName", "device")) || str(pick(client, "product")) || "Unknown device",
       product: str(pick(client, "product")),
       decision: str(pick(s, "Decision", "decision")),
+      decisionReason:str(pick(s,"decisionReason","DecisionReason")),
       remote: pick(client, "remote") === true,
       bytesServed: num(pick(s, "BytesServed", "bytesServed")),
       size: num(pick(info, "size", "Size")),

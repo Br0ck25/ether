@@ -13,8 +13,7 @@ import (
 //	4  adults        R, TV-MA, MA15+
 //	5  adults-only   NC-17, 18/R18+
 //
-// Unknown / unrated ratings rank 0 and never exceed a limit (a title with no
-// certification on TMDB is not assumed to be adult).
+// Unknown / unrated ratings rank 0. Restricted viewers cannot access them.
 func RatingRank(rating string) int {
 	r := strings.ToUpper(strings.TrimSpace(rating))
 	r = strings.ReplaceAll(r, " ", "")
@@ -80,10 +79,10 @@ func RatingExceeds(rating, max string) bool {
 	}
 	mr := RatingRank(max)
 	if mr == 0 {
-		return false
+		return true
 	}
 	r := RatingRank(rating)
-	return r > mr
+	return r == 0 || r > mr
 }
 
 // WithinRatingLimit is the negation, for readability at call sites.

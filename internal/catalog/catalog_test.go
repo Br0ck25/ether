@@ -157,7 +157,7 @@ func TestBrowseFiltersSortPaging(t *testing.T) {
 		{"studio", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Studio: "Fox 2000"}}, []string{"Fight Club"}},
 		{"country", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Countries: []string{"United States of America"}}}, []string{"Fight Club"}},
 		{"contentRatings", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, ContentRatings: []string{"PG"}}}, []string{"Family Fun"}},
-		{"maxContentRating PG excludes R", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, MaxContentRating: "PG"}}, []string{"Family Fun", "Old Classic"}}, // Old Classic unrated -> allowed
+		{"maxContentRating PG excludes R", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, MaxContentRating: "PG"}}, []string{"Family Fun"}}, // Old Classic unrated -> allowed
 		{"collection", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Collection: 10}}, []string{"Fight Club"}},
 		{"query", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Query: "fight"}}, []string{"Fight Club"}},
 		{"language", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Languages: []string{"fr"}}}, []string{}},
@@ -307,7 +307,7 @@ func TestRatingRankOrdering(t *testing.T) {
 		{"TV-MA", "TV-14", true}, {"TV-PG", "PG-13", false}, {"TV-14", "PG", true},
 		{"R", "TV-MA", false}, {"TV-MA", "R", false}, // R ~ TV-MA same rank
 		{"18", "R", true}, {"12", "PG", true}, {"U", "G", false},
-		{"", "G", false}, {"R", "", false}, {"NR", "G", false},
+		{"", "G", true}, {"R", "", false}, {"NR", "G", true},
 	}
 	for _, tc := range cases {
 		if got := catalog.RatingExceeds(tc.rating, tc.max); got != tc.exceeds {

@@ -59,7 +59,7 @@ func (c *Catalog) Search(ctx context.Context, query string, types []core.MediaTy
 	var out []core.Title
 	add := func(ts []core.Title) {
 		for _, t := range ts {
-			if t.Key == 0 || seen[t.Key] {
+			if t.Adult || t.Key == 0 || seen[t.Key] {
 				continue
 			}
 			seen[t.Key] = true

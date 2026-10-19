@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/config"
@@ -19,12 +20,14 @@ import (
 
 func (a *App) buildAdmin() http.Handler {
 	return admin.New(admin.Deps{
-		Config:   a.cfg,
-		Logger:   a.log.With("component", "admin"),
-		Logs:     a.logs,
-		Version:  a.opts.Version,
-		PlexAuth: &plexAuth{app: a, pins: map[string]*plextv.PIN{}},
-		SignIn:   &plexSignIn{app: a, pins: map[string]*plextv.PIN{}},
+		Config:        a.cfg,
+		Extensions:    a.extensionHandlers(),
+		ValidateExtra: validatePlaybackConfig,
+		Logger:        a.log.With("component", "admin"),
+		Logs:          a.logs,
+		Version:       a.opts.Version,
+		PlexAuth:      &plexAuth{app: a, pins: map[string]*plextv.PIN{}},
+		SignIn:        &plexSignIn{app: a, pins: map[string]*plextv.PIN{}},
 		IsOwnerToken: func(ctx context.Context, token string) bool {
 			u, err := a.users.Authenticate(ctx, token)
 			return err == nil && u.IsOwner
@@ -46,7 +49,7 @@ func (a *App) buildAdmin() http.Handler {
 				[]llm.Message{{Role: "user", Content: "Reply with the word ok."}}, false)
 			return err
 		},
-		SessionsStatus:  func(context.Context) any { return a.playback.Sessions() },
+		SessionsStatus:  func(context.Context) any { return (ownerPlayback{Playback: a.playback, app: a}).Sessions() },
 		CacheStatus:     a.cacheStatus,
 		ProvidersStatus: func(context.Context) any { return a.fetcher.Stats() },
 		IndexersStatus: func(ctx context.Context) any {
@@ -72,6 +75,7 @@ func (a *App) buildAdmin() http.Handler {
 		},
 		ExtraStatus: map[string]admin.StatusFunc{
 			"stream":   func(context.Context) any { return a.engine.Stats() },
+			"widget":   a.widgetStatus,
 			"prefetch": func(context.Context) any { return a.prefetch.Stats() },
 		},
 		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
@@ -171,6 +175,11 @@ func (p *plexSignIn) StartPIN(ctx context.Context, forwardURL string) (id, code,
 	}
 	id = strconv.FormatInt(pin.ID, 10)
 	p.mu.Lock()
+	for k, v := range p.pins {
+		if !v.ExpiresAt.IsZero() && time.Now().After(v.ExpiresAt) {
+			delete(p.pins, k)
+		}
+	}
 	p.pins[id] = pin
 	p.mu.Unlock()
 	return id, pin.Code, c.AuthURL(pin, forwardURL), nil
@@ -180,8 +189,11 @@ func (p *plexSignIn) PINToken(ctx context.Context, id string) (string, error) {
 	p.mu.Lock()
 	pin := p.pins[id]
 	p.mu.Unlock()
-	if pin == nil {
+	if pin == nil || (!pin.ExpiresAt.IsZero() && time.Now().After(pin.ExpiresAt)) {
 		return "", errors.New("unknown sign-in request")
+	}
+	if pin.AuthToken != "" {
+		return pin.AuthToken, nil
 	}
 	got, err := p.app.registrar.SignInClient().CheckPIN(ctx, pin.ID, pin.Code)
 	if err != nil {
@@ -189,7 +201,7 @@ func (p *plexSignIn) PINToken(ctx context.Context, id string) (string, error) {
 	}
 	if got.AuthToken != "" {
 		p.mu.Lock()
-		delete(p.pins, id)
+		pin.AuthToken = got.AuthToken
 		p.mu.Unlock()
 	}
 	return got.AuthToken, nil

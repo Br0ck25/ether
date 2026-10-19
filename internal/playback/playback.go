@@ -28,10 +28,12 @@ import (
 // Deps are the components playback orchestrates. Resolver, Engine,
 // Transcoder, Catalog and SelectProfile are required.
 type Deps struct {
-	Resolver   core.Resolver
-	Engine     core.Engine
-	Transcoder core.Transcoder
-	Catalog    core.Catalog
+	LocalMedia   LocalMedia                                                                                          // optional adopted files, tried before Usenet
+	AugmentMedia func(context.Context, *core.Title, *core.User, *core.Resolution, core.MediaSource, *core.MediaInfo) // synchronous enrichment before publishing a generation
+	Resolver     core.Resolver
+	Engine       core.Engine
+	Transcoder   core.Transcoder
+	Catalog      core.Catalog
 	// Cache, when set, receives pins for live and in-progress releases.
 	Cache core.SegmentCache
 	// State, when set, tells which titles are in progress (cache protection).
@@ -125,6 +127,7 @@ func (o *Options) defaults() {
 
 // Manager implements core.Playback.
 type Manager struct {
+	events eventBus
 	deps   Deps
 	opts   Options
 	log    *slog.Logger
@@ -135,15 +138,20 @@ type Manager struct {
 	cfgMu sync.RWMutex
 	cfg   config.Config
 
-	mu       sync.Mutex
-	closed   bool
-	sessions map[string]*session
-	byIdent  map[identity]*session
-	tokens   map[string]*generation
-	flights  map[identity]*flight
-	pending  map[int64]int
-	pendingN int
-	lastCaps map[int64]core.ClientCaps
+	mu             sync.Mutex
+	closed         bool
+	sessions       map[string]*session
+	byIdent        map[identity]*session
+	tokens         map[string]*generation
+	flights        map[identity]*flight
+	pending        map[int64]int
+	pendingN       int
+	reservations   map[identity]struct{}
+	channelGroups  map[identity]string
+	externalGroups map[string]externalGroup
+	lastCaps       map[int64]core.ClientCaps
+	warm           map[identity]*warmEntry
+	warmRequests   map[int64][]time.Time
 
 	pinMu        sync.Mutex
 	livePins     map[string]int
@@ -201,17 +209,18 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 		deps.HLSLookup = func(id string) (core.HLSSession, bool) { return tr.Session(id) }
 	}
 	m := &Manager{
-		deps:         deps,
-		opts:         opts,
-		log:          deps.Logger.With("component", "playback"),
-		now:          opts.Now,
-		cfg:          cfg,
-		sessions:     map[string]*session{},
-		byIdent:      map[identity]*session{},
-		tokens:       map[string]*generation{},
-		flights:      map[identity]*flight{},
-		pending:      map[int64]int{},
-		lastCaps:     map[int64]core.ClientCaps{},
+		deps:     deps,
+		opts:     opts,
+		log:      deps.Logger.With("component", "playback"),
+		now:      opts.Now,
+		cfg:      cfg,
+		sessions: map[string]*session{},
+		byIdent:  map[identity]*session{},
+		tokens:   map[string]*generation{},
+		flights:  map[identity]*flight{},
+		pending:  map[int64]int{},
+		lastCaps: map[int64]core.ClientCaps{},
+		warm:     map[identity]*warmEntry{}, warmRequests: map[int64][]time.Time{},
 		livePins:     map[string]int{},
 		progressPins: map[string]bool{},
 		pinKick:      make(chan struct{}, 1),
@@ -266,6 +275,7 @@ func (m *Manager) Close() error {
 		return nil
 	}
 	m.closed = true
+	m.cancel()
 	ids := make([]string, 0, len(m.sessions))
 	for id := range m.sessions {
 		ids = append(ids, id)
@@ -292,6 +302,9 @@ func (m *Manager) SetConfig(cfg config.Config) {
 	m.cfgMu.Lock()
 	m.cfg = cfg
 	m.cfgMu.Unlock()
+	m.mu.Lock()
+	m.warm = map[identity]*warmEntry{}
+	m.mu.Unlock()
 }
 
 func (m *Manager) config() config.Config {
@@ -351,15 +364,9 @@ func (m *Manager) reserve(user *core.User, id identity) error {
 	if m.closed {
 		return errors.New("playback: shutting down")
 	}
-	userN, total := m.pending[user.ID], m.pendingN
-	for _, s := range m.sessions {
-		if s.ident.userID == id.userID && s.ident.clientID == id.clientID {
-			continue // will be replaced by this one
-		}
-		total++
-		if s.ident.userID == user.ID {
-			userN++
-		}
+	userN, total, children := m.reservationCountsLocked(id)
+	if m.channelGroups[id] != "" && children >= 3 {
+		return fmt.Errorf("%w: channel source overlap limit", core.ErrStreamLimit)
 	}
 	if userLimit > 0 && userN >= userLimit {
 		return fmt.Errorf("%w: %s is using %d of %d streams", core.ErrStreamLimit, userLabel(user), userN, userLimit)
@@ -367,12 +374,18 @@ func (m *Manager) reserve(user *core.User, id identity) error {
 	if serverLimit > 0 && total >= serverLimit {
 		return fmt.Errorf("%w: server is at its limit of %d streams", core.ErrStreamLimit, serverLimit)
 	}
+	if m.reservations == nil {
+		m.reservations = map[identity]struct{}{}
+	}
+	m.reservations[id] = struct{}{}
 	m.pending[user.ID]++
 	m.pendingN++
 	return nil
 }
 
-func (m *Manager) unreserveLocked(userID int64) {
+func (m *Manager) unreserveLocked(id identity) {
+	userID := id.userID
+	delete(m.reservations, id)
 	if m.pending[userID]--; m.pending[userID] <= 0 {
 		delete(m.pending, userID)
 	}
@@ -441,8 +454,14 @@ func (m *Manager) runFlight(ctx context.Context, f *flight, id identity, user *c
 	s, err := m.prepare(ctx, id, user, caps)
 	m.mu.Lock()
 	delete(m.flights, id)
+	if err != nil && m.byIdent[id] == nil {
+		delete(m.channelGroups, id)
+	}
 	m.mu.Unlock()
 	f.sess, f.err = s, err
+	if err != nil {
+		m.emitEvent("error", s, err)
+	}
 }
 
 func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, caps core.ClientCaps) (*session, error) {
@@ -455,7 +474,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	defer func() {
 		if !registered {
 			m.mu.Lock()
-			m.unreserveLocked(user.ID)
+			m.unreserveLocked(id)
 			m.mu.Unlock()
 		}
 	}()
@@ -469,6 +488,9 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	}
 	profile := m.deps.SelectProfile(caps, user)
 	s := newSession(randomID(16), id, user, caps, title, profile.Name, m.now())
+	m.mu.Lock()
+	s.playbackGroup = m.channelGroups[id]
+	m.mu.Unlock()
 
 	g, err := m.openInitial(ctx, s, profile)
 	if err != nil {
@@ -489,7 +511,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 			replaced = append(replaced, o.id)
 		}
 	}
-	m.unreserveLocked(user.ID)
+	m.unreserveLocked(id)
 	registered = true
 	m.sessions[s.id] = s
 	m.byIdent[id] = s
@@ -506,6 +528,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	m.saveResume(ctx, s, g)
 	log.Info("playback session started", "session", s.id, "release", g.res.Release.Name,
 		"container", g.info.Container, "size", g.tmap.Size, "duration", g.info.Duration, "estimated", g.info.Estimated)
+	m.emitEvent("start", s, nil)
 	return s, nil
 }
 
@@ -569,6 +592,7 @@ func (m *Manager) Stop(id string) {
 	delete(m.sessions, id)
 	if m.byIdent[s.ident] == s {
 		delete(m.byIdent, s.ident)
+		delete(m.channelGroups, s.ident)
 	}
 	s.mu.Lock()
 	s.closed = true
@@ -586,6 +610,7 @@ func (m *Manager) Stop(id string) {
 	if hls, ok := m.deps.HLSLookup(id); ok && hls != nil {
 		m.deps.Transcoder.Stop(hls.ID())
 	}
+	m.emitEvent("stop", s, nil)
 	m.kickPins()
 	m.log.Info("playback session ended", "session", id, "key", s.ident.key, "bytes", s.bytes.Load())
 }
@@ -610,7 +635,9 @@ func (m *Manager) SetDecision(id string, d core.Decision) {
 	if s := m.lookup(id); s != nil {
 		s.mu.Lock()
 		s.decision, s.explicit = d.Kind, true
+		s.decisionReason = d.Reason
 		s.mu.Unlock()
+		m.emitEvent("update", s, nil)
 	}
 }
 

@@ -1,157 +1,129 @@
-import { Badge, Button, Drawer, EmptyState, PageHeader, Spinner, toast, cn } from "@braedonsaunders/appkit-ui";
-import { Columns2, ListOrdered, RefreshCw, Save, Undo2, Users } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle, Badge, Button, EmptyState, PageHeader, Spinner, toast } from "@braedonsaunders/appkit-ui";
+import { RefreshCw, Save, Undo2, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ErrorPanel } from "../../components/feedback";
-import { Segmented } from "../../components/fields";
 import { useViewers, viewerName } from "../../components/pickers";
 import { api, errorMessage } from "../../lib/api";
-import type { LayoutAction, LayoutRule } from "../../lib/contract";
+import type { HomeLayout } from "../../lib/contract";
 import { useAsync, useMediaQuery } from "../../lib/hooks";
-import { rowActionFor, setRowAction, type LayoutScope } from "../../lib/layout";
+import { EMPTY_LAYOUT, prune, sameLayout, type LayerKey } from "../../lib/layout";
 import { ContextBar, type ViewContext } from "./ContextBar";
 import { HomeCanvas } from "./HomeCanvas";
-import { RulesPanel } from "./RulesPanel";
+import { LayerSwitcher } from "./LayerSwitcher";
+import { OverrideList } from "./OverrideList";
+import { PageSettings } from "./PageSettings";
+import { RowPool } from "./RowPool";
+import { AnchoredSlots } from "./AnchoredSlots";
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-
-function initialContext(viewerId: number): ViewContext {
+function initialContext(): ViewContext {
   const now = new Date();
-  return { viewerId, device: "tv", day: now.getDay(), hour: now.getHours(), section: "home" };
+  return { device: "tv", day: now.getDay(), hour: now.getHours(), section: "home" };
 }
 
+/**
+ * The Home Designer: a Global Home everyone starts from, personalization
+ * within it, and per-viewer overrides on top. Controls on the left third,
+ * the live Plex Home (rendered server-side from the draft) on the right.
+ */
 export default function Designer() {
   const { viewers, error: viewersError } = useViewers();
-  const layout = useAsync(() => api.layout(), []);
-  const [ctx, setCtx] = useState<ViewContext | null>(null);
-  const [ctxB, setCtxB] = useState<ViewContext | null>(null);
-  const [compare, setCompare] = useState(false);
-  const [rules, setRules] = useState<LayoutRule[]>([]);
-  const [scopeMode, setScopeMode] = useState<"all" | "viewer">("all");
+  const doc = useAsync(() => api.layout(), []);
+  const [draft, setDraft] = useState<HomeLayout>(EMPTY_LAYOUT);
+  const [layer, setLayer] = useState<LayerKey>("global");
+  const [spotCheck, setSpotCheck] = useState<number | null>(null);
+  const [ctx, setCtx] = useState<ViewContext>(initialContext);
   const [saving, setSaving] = useState(false);
   const [nonce, setNonce] = useState(0);
-  const [panelOpen, setPanelOpen] = useState(false);
-  const wide = useMediaQuery("(min-width: 1280px)");
-  const medium = useMediaQuery("(min-width: 768px)");
+  const [focusRow, setFocusRow] = useState<string | null>(null);
+  const wide = useMediaQuery("(min-width: 1024px)");
 
-  useEffect(() => {
-    if (viewers?.length && !ctx) {
-      const first = viewers.find((v) => v.isOwner) ?? viewers[0]!;
-      setCtx(initialContext(first.id));
-      const other = viewers.find((v) => v.id !== first.id) ?? first;
-      setCtxB({ ...initialContext(other.id) });
-    }
-  }, [viewers, ctx]);
-  useEffect(() => { if (layout.data) setRules(layout.data.rules ?? []); }, [layout.data]);
+  const saved = doc.data?.layout ?? EMPTY_LAYOUT;
+  useEffect(() => { if (doc.data) setDraft(prune(doc.data.layout)); }, [doc.data]);
+  const dirty = Boolean(doc.data) && !sameLayout(draft, saved);
+  const available = doc.data?.availableRows ?? [];
+  const defaults = doc.data?.defaults.maxRows ?? { home: 14, movies: 10, shows: 10 };
 
-  const saved = layout.data?.rules ?? [];
-  const dirty = Boolean(layout.data) && !same(rules, saved);
-  const available = layout.data?.availableRows ?? [];
-
-  const scopeFor = (c: ViewContext): LayoutScope => (scopeMode === "all" ? "all" : c.viewerId);
-  const handlers = (c: ViewContext) => ({
-    actionFor: (hubId: string) => rowActionFor(rules, scopeFor(c), c.section, hubId)?.action,
-    onAction: (hubId: string, action: LayoutAction | null, position?: number) => setRules((r) => setRowAction(r, scopeFor(c), c.section, hubId, action, position)),
-    onReorder: (hubId: string, to: number) => setRules((r) => setRowAction(r, scopeFor(c), c.section, hubId, "pin", to)),
-  });
+  const viewerId = layer === "global" ? spotCheck : layer;
+  const viewerById = useMemo(() => new Map((viewers ?? []).map((v) => [v.id, v])), [viewers]);
+  const layerName = layer === "global" ? "Global Home" : viewerById.get(layer) ? viewerName(viewerById.get(layer)!) : `Viewer ${layer}`;
 
   const save = async () => {
     setSaving(true);
     try {
-      const doc = await api.putLayout(rules);
-      layout.setData(doc);
-      setRules(doc.rules ?? []);
+      const next = await api.putLayout(draft);
+      doc.setData(next);
+      setDraft(prune(next.layout));
       setNonce((n) => n + 1);
-      toast.success("Layout saved", { description: "Plex Home updates for these viewers right away." });
+      toast.success("Home layout saved", { description: "Plex Homes follow it on their next load." });
     } catch (e) { toast.error("Couldn't save the layout", { description: errorMessage(e) }); }
     finally { setSaving(false); }
   };
 
   const refreshRows = async () => {
-    if (!ctx) return;
     try {
-      await Promise.all([api.refreshViewer(ctx.viewerId), compare && ctxB ? api.refreshViewer(ctxB.viewerId) : Promise.resolve(null)]);
+      if (viewerId !== null) await api.refreshViewer(viewerId);
       setNonce((n) => n + 1);
-      toast.success("Rows rebuilt");
+      toast.success(viewerId !== null ? "Rows rebuilt" : "Preview refreshed");
     } catch (e) { toast.error("Couldn't rebuild rows", { description: errorMessage(e) }); }
   };
 
-  const viewerLabel = useMemo(() => {
-    const v = viewers?.find((x) => x.id === ctx?.viewerId);
-    return v ? viewerName(v) : "this viewer";
-  }, [viewers, ctx]);
-
   const actions = (
-    <>
-      {dirty ? <Badge variant="warning" className="self-center">Unsaved layout</Badge> : null}
-      <Button variant="ghost" size="sm" onClick={() => void refreshRows()} disabled={!ctx}><RefreshCw size={14} /> Rebuild rows</Button>
-      {!wide || compare ? <Button variant="outline" size="sm" onClick={() => setPanelOpen(true)}><ListOrdered size={14} /> Rules{rules.length ? ` (${rules.length})` : ""}</Button> : null}
-      <Button variant="outline" size="sm" onClick={() => setRules(saved)} disabled={!dirty || saving}><Undo2 size={14} /> Discard</Button>
+    <div className="flex flex-wrap items-center gap-2">
+      {dirty ? <Badge variant="warning">Unsaved changes</Badge> : null}
+      <Button variant="ghost" size="sm" onClick={() => void refreshRows()}><RefreshCw size={14} /> {viewerId !== null ? "Rebuild rows" : "Refresh"}</Button>
+      <Button variant="outline" size="sm" onClick={() => setDraft(prune(saved))} disabled={!dirty || saving}><Undo2 size={14} /> Discard</Button>
       <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}><Save size={14} /> {saving ? "Saving…" : "Save layout"}</Button>
-    </>
+    </div>
   );
 
-  const rulesPanel = layout.error ? <ErrorPanel error={layout.error} feature="Home Designer" onRetry={() => void layout.reload()} /> : !layout.data ? <Spinner label="Loading rules" /> : (
-    <RulesPanel rules={rules} onChange={setRules} available={available} viewers={viewers ?? []} />
-  );
+  const editing = { draft, onChange: setDraft, layer, section: ctx.section, viewers: viewers ?? [] };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-border bg-surface px-3 py-3 sm:px-6">
         <PageHeader
           title="Home Designer"
-          description="See each viewer's Plex Home exactly as Plex receives it, then shape it."
-          actions={medium ? <div className="flex flex-wrap gap-2">{actions}</div> : undefined}
+          description="Shape the Global Home everyone starts from; personalization fills it per viewer, and per-viewer overrides sit on top."
+          actions={wide ? actions : undefined}
         />
-        {!medium ? <div className="mt-3 flex flex-wrap gap-2">{actions}</div> : null}
-        {ctx && viewers ? (
-          <div className="mt-3 flex flex-wrap items-center gap-3">
-            <ContextBar ctx={ctx} onChange={setCtx} viewers={viewers} idPrefix={compare ? "Left" : "Preview"} compact={compare} />
-            <div className="ml-auto flex flex-wrap items-center gap-2">
-              <span className="text-xs text-fg-muted">Row changes apply to</span>
-              <Segmented ariaLabel="Row changes apply to" size="sm" value={scopeMode} onChange={setScopeMode}
-                options={[{ value: "all", label: "Everyone" }, { value: "viewer", label: compare ? "Each viewer" : `Only ${viewerLabel}` }]} />
-              <Button variant={compare ? "subtle" : "ghost"} size="sm" aria-pressed={compare} onClick={() => setCompare((c) => !c)}><Columns2 size={14} /> Compare</Button>
-            </div>
-          </div>
-        ) : null}
+        {!wide ? <div className="mt-3">{actions}</div> : null}
       </div>
 
-      {viewersError ? <div className="p-6"><ErrorPanel error={viewersError} /></div> : !viewers || !ctx ? (
-        <div className="grid flex-1 place-items-center"><Spinner size={22} label="Loading viewers" /></div>
-      ) : viewers.length === 0 ? (
-        <div className="p-6"><EmptyState icon={<Users />} title="No viewers yet" description="Share this server from plex.tv; each person appears here once they sign in." /></div>
-      ) : (
-        <div className="flex min-h-0 flex-1">
-          <div className={cn("app-scroll min-h-0 min-w-0 flex-1 overflow-y-auto bg-bg", compare && "grid divide-border lg:grid-cols-2 lg:divide-x")}>
-            <div className="min-w-0 p-3 sm:p-6">
-              {compare ? <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-fg-subtle">Left</p> : null}
-              <HomeCanvas label="Home preview" ctx={ctx} rules={rules} dirty={dirty} refreshNonce={nonce} {...handlers(ctx)} />
-            </div>
-            {compare && ctxB ? (
-              <div className="min-w-0 border-t border-border p-3 sm:p-6 lg:border-t-0">
-                <div className="mb-4 space-y-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Right</p>
-                  <ContextBar ctx={ctxB} onChange={setCtxB} viewers={viewers} idPrefix="Right" compact />
-                </div>
-                <HomeCanvas label="Comparison preview" ctx={ctxB} rules={rules} dirty={dirty} refreshNonce={nonce} {...handlers(ctxB)} />
+      {viewersError ? <div className="p-6"><ErrorPanel error={viewersError} /></div>
+        : doc.error ? <div className="p-6"><ErrorPanel error={doc.error} feature="Home Designer" onRetry={() => void doc.reload()} /></div>
+          : !viewers || !doc.data ? <div className="grid flex-1 place-items-center"><Spinner size={22} label="Loading the Home layout" /></div>
+            : viewers.length === 0 ? (
+              <div className="p-6"><EmptyState icon={<Users />} title="No viewers yet" description="Share this server from plex.tv; each person appears here once they sign in." /></div>
+            ) : (
+              <div className="app-scroll min-h-0 flex-1 overflow-y-auto lg:grid lg:grid-cols-3 lg:overflow-hidden">
+                <aside className="app-scroll space-y-5 border-b border-border bg-bg-subtle p-3 sm:p-5 lg:col-span-1 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r" aria-label="Designer controls">
+                  {saved.notes?.length ? (
+                    <Alert>
+                      <AlertTitle>Converted from the previous Home Designer</AlertTitle>
+                      <AlertDescription>
+                        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs">{saved.notes.map((n) => <li key={n}>{n}</li>)}</ul>
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  <LayerSwitcher layer={layer} onChange={(l) => { setLayer(l); setFocusRow(null); }} viewers={viewers} draft={draft} />
+                  <section aria-label="Preview context" className="space-y-2">
+                    <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Context</h2>
+                    <ContextBar ctx={ctx} onChange={setCtx} />
+                  </section>
+                  <PageSettings {...editing} defaults={defaults} />
+                  <AnchoredSlots {...editing} available={available} />
+                  <RowPool {...editing} available={available} focusRow={focusRow} onFocusRow={setFocusRow} />
+                  <OverrideList {...editing} onOpenLayer={(l) => { setLayer(l); setFocusRow(null); }} />
+                </aside>
+                <main className="app-scroll min-w-0 bg-bg p-3 sm:p-6 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto" aria-label="Home preview">
+                  <HomeCanvas
+                    draft={draft} dirty={dirty} saved={saved} layer={layer} layerName={layerName} ctx={ctx} viewers={viewers}
+                    viewerId={viewerId} onSpotCheck={setSpotCheck} refreshNonce={nonce} onChange={setDraft}
+                    onEditRow={(row) => setFocusRow(row)}
+                  />
+                </main>
               </div>
-            ) : null}
-          </div>
-          {wide && !compare ? (
-            <aside className="app-scroll w-[26rem] shrink-0 overflow-y-auto border-l border-border bg-bg-subtle p-4" aria-label="Layout rules">
-              <h2 className="mb-1 text-sm font-semibold text-fg">Layout rules</h2>
-              <p className="mb-4 text-xs text-fg-muted">Server-wide rules apply to everyone; viewer rules override them. Schedules limit a change to certain days, hours or devices.</p>
-              {rulesPanel}
-            </aside>
-          ) : null}
-        </div>
-      )}
-
-      {(!wide || compare) ? (
-        <Drawer open={panelOpen} onClose={() => setPanelOpen(false)} title="Layout rules" description="Server-wide rules apply to everyone; viewer rules override them." size="lg">
-          {rulesPanel}
-        </Drawer>
-      ) : null}
+            )}
     </div>
   );
 }

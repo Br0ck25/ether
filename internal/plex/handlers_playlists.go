@@ -75,17 +75,17 @@ func uriPath(uri string) (string, error) {
 func (s *Server) expandKey(ctx context.Context, pr *Request, k core.RatingKey) ([]core.RatingKey, error) {
 	switch k.Kind() {
 	case core.KindShow:
-		eps, err := s.d.Catalog.Grandchildren(ctx, k)
+		eps, err := s.metadataGrandchildren(ctx, pr, k)
 		if err != nil {
 			return nil, err
 		}
-		return titleKeys(eps), nil
+		return titleKeys(s.visibleTitles(pr.User, eps)), nil
 	case core.KindSeason:
-		eps, err := s.d.Catalog.Children(ctx, k)
+		eps, err := s.metadataChildren(ctx, pr, k)
 		if err != nil {
 			return nil, err
 		}
-		return titleKeys(eps), nil
+		return titleKeys(s.visibleTitles(pr.User, eps)), nil
 	case core.KindCollection, core.KindSmart:
 		if s.d.Collections == nil {
 			return nil, core.ErrNotFound
