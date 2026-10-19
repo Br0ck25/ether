@@ -4,7 +4,9 @@ package notify
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,12 @@ func init() {
 CREATE TABLE notify_channels(id TEXT PRIMARY KEY,config TEXT NOT NULL);
 CREATE TABLE notify_queue(id INTEGER PRIMARY KEY AUTOINCREMENT,channel TEXT NOT NULL,event TEXT NOT NULL,created INTEGER NOT NULL,due INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempted INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX notify_due ON notify_queue(status,due);
+`)
+	// Claim columns let several nodes drain one queue: a row is delivered
+	// by the node whose conditional update moved it out of 'pending'.
+	store.Register("notify", 2, `
+ALTER TABLE notify_queue ADD COLUMN claimed_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE notify_queue ADD COLUMN claimed_at INTEGER NOT NULL DEFAULT 0;
 `)
 }
 
@@ -54,6 +62,9 @@ type Event struct {
 	At      time.Time `json:"at"`
 }
 type Options struct {
+	// NodeID names this node on the queue rows it claims; a random id is
+	// used when empty.
+	NodeID     string
 	Providers  func() []usenet.ProviderStats
 	CacheUsage func() (int64, int64)
 	Client     *http.Client
@@ -79,8 +90,18 @@ func New(db *sql.DB, opts Options) *Service {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	if opts.NodeID == "" {
+		var b [8]byte
+		_, _ = rand.Read(b[:])
+		opts.NodeID = hex.EncodeToString(b[:])
+	}
 	return &Service{db: db, opts: opts}
 }
+
+// claimTimeout is how long a claimed row may stay in 'sending' before it is
+// presumed abandoned by a node that stopped mid-delivery.
+const claimTimeout = 10 * time.Minute
+
 func (s *Service) channels(ctx context.Context) ([]Channel, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT config FROM notify_channels ORDER BY id`)
 	if err != nil {
@@ -279,8 +300,8 @@ func (s *Service) Drain(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		ids := []int64{}
-		events := []Event{}
+		candidates := []int64{}
+		pending := []Event{}
 		for rows.Next() {
 			var id int64
 			var raw string
@@ -290,14 +311,31 @@ func (s *Service) Drain(ctx context.Context) error {
 			}
 			var e Event
 			if json.Unmarshal([]byte(raw), &e) == nil {
-				ids = append(ids, id)
-				events = append(events, e)
+				candidates = append(candidates, id)
+				pending = append(pending, e)
 			}
 		}
 		err = rows.Err()
 		rows.Close()
 		if err != nil {
 			return err
+		}
+		// Claim each row with a conditional update; a row another node
+		// claimed first is skipped, so every event is delivered by one node.
+		ids := []int64{}
+		events := []Event{}
+		for i, id := range candidates {
+			res, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status='sending',attempted=?,claimed_by=?,claimed_at=? WHERE id=? AND status='pending'`,
+				now, s.opts.NodeID, now, id)
+			if err != nil {
+				return err
+			}
+			if n, err := res.RowsAffected(); err != nil {
+				return err
+			} else if n == 1 {
+				ids = append(ids, id)
+				events = append(events, pending[i])
+			}
 		}
 		if len(ids) == 0 {
 			continue
@@ -312,20 +350,21 @@ func (s *Service) Drain(ctx context.Context) error {
 			}
 			e.Message = strings.Join(parts, "\n")
 		}
-		for _, id := range ids {
-			if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status='sending',attempted=? WHERE id=? AND status='pending'`, now, id); err != nil {
-				return err
-			}
-		}
 		status := "sent"
 		if err := s.deliver(ctx, c, e); err != nil {
 			status = "failed"
 		}
 		for _, id := range ids {
-			if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status=? WHERE id=?`, status, id); err != nil {
+			if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status=? WHERE id=? AND claimed_by=?`, status, id, s.opts.NodeID); err != nil {
 				return err
 			}
 		}
+	}
+	// A claim whose node stopped mid-delivery is recorded as failed rather
+	// than resent: the event may already have been delivered.
+	if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status='failed' WHERE status='sending' AND claimed_at<?`,
+		s.opts.Now().Add(-claimTimeout).Unix()); err != nil {
+		return err
 	}
 	_, err = s.db.ExecContext(ctx, `DELETE FROM notify_queue WHERE status IN ('sent','failed') AND created<?`, s.opts.Now().AddDate(0, 0, -30).Unix())
 	return err

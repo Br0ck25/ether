@@ -299,11 +299,11 @@ ON CONFLICT(key) DO UPDATE SET
  collection_name=CASE WHEN excluded.collection_name<>'' THEN excluded.collection_name ELSE catalog_titles.collection_name END,
  child_count=CASE WHEN excluded.child_count<>0 THEN excluded.child_count ELSE catalog_titles.child_count END,
  leaf_count=CASE WHEN excluded.leaf_count<>0 THEN excluded.leaf_count ELSE catalog_titles.leaf_count END,
- browsable=MAX(catalog_titles.browsable, excluded.browsable),
+ browsable=CASE WHEN excluded.browsable>catalog_titles.browsable THEN excluded.browsable ELSE catalog_titles.browsable END,
  added_at=CASE WHEN catalog_titles.added_at<>0 THEN catalog_titles.added_at
                WHEN excluded.browsable=1 THEN excluded.added_at ELSE 0 END,
  fetched_at=excluded.fetched_at,
- detail=MAX(catalog_titles.detail, excluded.detail)`,
+ detail=CASE WHEN excluded.detail>catalog_titles.detail THEN excluded.detail ELSE catalog_titles.detail END`,
 		int64(t.Key), string(t.Type), t.IDs.TMDB, t.IDs.IMDB, t.IDs.TVDB, int64(t.ShowKey), showTMDB, t.ShowTitle, t.SeasonTitle, t.Season, t.Episode,
 		t.Title, t.OriginalTitle, t.SortTitle, t.Tagline, t.Summary, t.Year, releasedTS, int64(t.Runtime.Seconds()), t.Status, t.Language,
 		t.ContentRating, RatingRank(t.ContentRating), t.Rating, t.VoteCount, t.Popularity, t.PosterPath, t.BackdropPath, t.StillPath, t.LogoPath,
@@ -339,7 +339,7 @@ ON CONFLICT(key) DO UPDATE SET
 		}
 		insert := func(ps []core.Person, kind string) error {
 			for i, p := range ps {
-				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?)`,
+				if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
 					int64(t.Key), p.TMDB, p.Name, p.Role, kind, i, p.ThumbPath); err != nil {
 					return err
 				}
@@ -376,7 +376,7 @@ func replacePairs(ctx context.Context, tx *sql.Tx, table, col string, key int64,
 			continue
 		}
 		seen[v] = true
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO `+table+`(key,`+col+`) VALUES(?,?)`, key, v); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO `+table+`(key,`+col+`) VALUES(?,?) ON CONFLICT DO NOTHING`, key, v); err != nil {
 			return err
 		}
 	}

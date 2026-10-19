@@ -459,7 +459,7 @@ func (s *Service) Import(ctx context.Context, id string) (Plan, error) {
 		ratingsOnly := strings.HasPrefix(p.Source, "csv:") && strings.HasSuffix(p.Source, ":ratings")
 		for _, it := range p.Items {
 			if watchlistOnly || it.Watchlist {
-				if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO migrate_watchlist(viewer,key) VALUES(?,?)`, it.Viewer, it.Key); err != nil {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO migrate_watchlist(viewer,key) VALUES(?,?) ON CONFLICT DO NOTHING`, it.Viewer, it.Key); err != nil {
 					return batch, err
 				}
 			}

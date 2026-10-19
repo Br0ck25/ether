@@ -59,6 +59,16 @@ CREATE TABLE state_playlist_items (
   rating_key INTEGER NOT NULL,
   PRIMARY KEY (playlist_id, position)
 );`)
+	// version lets update() detect a concurrent writer on another node
+	// (optimistic concurrency) instead of relying on an in-process lock.
+	// Imported history rows are unique per (user, item, time) so two nodes
+	// importing the same history cannot both insert it; live history keeps
+	// every event. Rows written before this migration are all imported=0,
+	// so no existing data needs deduplicating.
+	store.Register("state", 2, `
+ALTER TABLE state_watch ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE state_history ADD COLUMN imported INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX state_history_imported ON state_history(user_id, rating_key, viewed_at) WHERE imported=1;`)
 }
 
 // WatchedThreshold and StartedThreshold are the fractions of duration at
@@ -107,9 +117,9 @@ type State struct {
 	log *slog.Logger
 	now func() time.Time
 
-	// wmu serialises read-modify-write updates of watch rows so concurrent
-	// timeline updates (several clients, or a client racing a scrobble)
-	// cannot lose view counts. Writes are tiny; contention is negligible.
+	// wmu serialises this process's read-modify-write updates of watch rows
+	// so they do not retry against each other. Correctness across processes
+	// comes from the row version check in saveTx.
 	wmu sync.Mutex
 
 	mu   sync.RWMutex
@@ -185,8 +195,18 @@ func Fraction(ws core.WatchStatus) float64 {
 type row struct {
 	ws      core.WatchStatus
 	counted bool
+	exists  bool  // a stored row was loaded
+	version int64 // stored version when loaded
 }
 
+// errConflict means another writer changed the row since it was loaded.
+var errConflict = errors.New("state: concurrent watch update")
+
+// maxUpdateAttempts bounds optimistic retries of one update.
+const maxUpdateAttempts = 10
+
+// saveTx writes r only if the stored row is still the one loaded (same
+// version, or still absent); otherwise it returns errConflict.
 func saveTx(ctx context.Context, tx *sql.Tx, userID int64, r row) error {
 	var last int64
 	if !r.ws.LastViewedAt.IsZero() {
@@ -196,13 +216,30 @@ func saveTx(ctx context.Context, tx *sql.Tx, userID int64, r row) error {
 	if r.counted {
 		counted = 1
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO state_watch(user_id, rating_key, view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(user_id, rating_key) DO UPDATE SET view_offset_ns=excluded.view_offset_ns, duration_ns=excluded.duration_ns,
-		  view_count=excluded.view_count, counted=excluded.counted, last_viewed_at=excluded.last_viewed_at,
-		  user_rating=excluded.user_rating, updated_at=excluded.updated_at`,
-		userID, int64(r.ws.Key), int64(r.ws.ViewOffset), int64(r.ws.Duration), r.ws.ViewCount, counted, last, r.ws.UserRating, r.ws.UpdatedAt.UnixNano())
-	return err
+	var res sql.Result
+	var err error
+	if r.exists {
+		res, err = tx.ExecContext(ctx, `UPDATE state_watch SET view_offset_ns=?, duration_ns=?, view_count=?, counted=?,
+		  last_viewed_at=?, user_rating=?, updated_at=?, version=version+1
+		  WHERE user_id=? AND rating_key=? AND version=?`,
+			int64(r.ws.ViewOffset), int64(r.ws.Duration), r.ws.ViewCount, counted, last, r.ws.UserRating, r.ws.UpdatedAt.UnixNano(),
+			userID, int64(r.ws.Key), r.version)
+	} else {
+		res, err = tx.ExecContext(ctx, `INSERT INTO state_watch(user_id, rating_key, view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, rating_key) DO NOTHING`,
+			userID, int64(r.ws.Key), int64(r.ws.ViewOffset), int64(r.ws.Duration), r.ws.ViewCount, counted, last, r.ws.UserRating, r.ws.UpdatedAt.UnixNano())
+	}
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return errConflict
+	}
+	return nil
 }
 
 func addHistoryTx(ctx context.Context, tx *sql.Tx, userID int64, key core.RatingKey, at time.Time, completed bool) error {
@@ -280,40 +317,25 @@ func (s *State) GetMany(ctx context.Context, userID int64, keys []core.RatingKey
 	return out, nil
 }
 
-// update runs one locked read-modify-write of a watch row: fn mutates the
-// loaded row and reports whether to log history (and whether that history
-// entry is a completion). The row and history are written in one
-// transaction. Events are returned so the caller emits them after the lock
-// is released (subscribers may call back into State).
+// update runs one read-modify-write of watch rows: fn mutates the loaded
+// row and reports whether to log history (and whether that history entry is
+// a completion). The rows and history are written in one transaction. When
+// another node changed a row in between, the transaction is discarded and
+// re-run from fresh reads, so fn must be safe to call again. Events are
+// returned so the caller emits them after the lock is released (subscribers
+// may call back into State).
 func (s *State) update(ctx context.Context, userID int64, keys []core.RatingKey, fn func(cur *row, now time.Time) (logHistory, completed bool, evs []Event)) error {
 	s.wmu.Lock()
 	now := s.now().UTC()
 	var events []Event
-	err := func() error {
-		defer s.wmu.Unlock()
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
+	var err error
+	for attempt := 0; attempt < maxUpdateAttempts; attempt++ {
+		events, err = s.updateTx(ctx, userID, keys, now, fn)
+		if !errors.Is(err, errConflict) {
+			break
 		}
-		defer tx.Rollback()
-		for _, key := range keys {
-			cur, err := loadTx(ctx, tx, userID, key)
-			if err != nil {
-				return err
-			}
-			logHistory, completed, evs := fn(&cur, now)
-			if err := saveTx(ctx, tx, userID, cur); err != nil {
-				return err
-			}
-			if logHistory {
-				if err := addHistoryTx(ctx, tx, userID, key, now, completed); err != nil {
-					return err
-				}
-			}
-			events = append(events, evs...)
-		}
-		return tx.Commit()
-	}()
+	}
+	s.wmu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -323,19 +345,46 @@ func (s *State) update(ctx context.Context, userID int64, keys []core.RatingKey,
 	return nil
 }
 
+func (s *State) updateTx(ctx context.Context, userID int64, keys []core.RatingKey, now time.Time, fn func(cur *row, now time.Time) (bool, bool, []Event)) ([]Event, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var events []Event
+	for _, key := range keys {
+		cur, err := loadTx(ctx, tx, userID, key)
+		if err != nil {
+			return nil, err
+		}
+		logHistory, completed, evs := fn(&cur, now)
+		if err := saveTx(ctx, tx, userID, cur); err != nil {
+			return nil, err
+		}
+		if logHistory {
+			if err := addHistoryTx(ctx, tx, userID, key, now, completed); err != nil {
+				return nil, err
+			}
+		}
+		events = append(events, evs...)
+	}
+	return events, tx.Commit()
+}
+
 func loadTx(ctx context.Context, tx *sql.Tx, userID int64, key core.RatingKey) (row, error) {
 	r := row{ws: core.WatchStatus{Key: key}}
 	var off, dur, last, upd int64
 	var counted int
-	err := tx.QueryRowContext(ctx, `SELECT view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at
+	err := tx.QueryRowContext(ctx, `SELECT view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at, version
 		FROM state_watch WHERE user_id=? AND rating_key=?`, userID, int64(key)).
-		Scan(&off, &dur, &r.ws.ViewCount, &counted, &last, &r.ws.UserRating, &upd)
+		Scan(&off, &dur, &r.ws.ViewCount, &counted, &last, &r.ws.UserRating, &upd, &r.version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, nil
 	}
 	if err != nil {
 		return r, err
 	}
+	r.exists = true
 	r.ws.ViewOffset = time.Duration(off)
 	r.ws.Duration = time.Duration(dur)
 	r.counted = counted != 0
@@ -357,7 +406,9 @@ func (s *State) Progress(ctx context.Context, userID int64, key core.RatingKey, 
 	if offset < 0 {
 		offset = 0
 	}
+	reported := offset
 	return s.update(ctx, userID, []core.RatingKey{key}, func(cur *row, now time.Time) (bool, bool, []Event) {
+		offset := reported // fn may be re-run after a conflict
 		if duration > 0 {
 			cur.ws.Duration = duration
 		}

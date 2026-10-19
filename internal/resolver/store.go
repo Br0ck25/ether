@@ -103,7 +103,7 @@ func (s *Service) recordReputation(ctx context.Context, indexer string, success 
 		}
 		_, _ = s.db.ExecContext(ctx,
 			`INSERT INTO resolver_reputation(indexer, `+col+`) VALUES (?,1)
-			 ON CONFLICT(indexer) DO UPDATE SET `+col+`=`+col+`+1`, indexer)
+			 ON CONFLICT(indexer) DO UPDATE SET `+col+`=resolver_reputation.`+col+`+1`, indexer)
 	}
 }
 
