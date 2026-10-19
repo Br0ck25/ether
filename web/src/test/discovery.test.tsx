@@ -131,9 +131,9 @@ describe("A viewer's watchlist (viewer profile › Watchlist)", () => {
   });
 });
 
-describe("Language model features (Settings › Connected services)", () => {
+describe("Language model features (Connected services)", () => {
   it("persists LLM feature toggles through the discovery settings API", async () => {
-    const { fake } = renderAppWith("/settings/services", discoveryRoutes());
+    const { fake } = renderAppWith("/services", discoveryRoutes());
     const search = await screen.findByLabelText("Natural-language search", {}, WAIT);
     expect(search).not.toBeChecked();
     fireEvent.click(search);

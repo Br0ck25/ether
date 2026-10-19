@@ -3,13 +3,12 @@ import {
   AlertDescription,
   AlertTitle,
   Button,
-  EmptyState,
   Skeleton,
   Spinner,
 } from "@braedonsaunders/appkit-ui";
-import { CloudOff, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
-import { ApiError, errorMessage, isUnavailable } from "../lib/api";
+import { ApiError, errorMessage } from "../lib/api";
 
 export function LoadingRows({ rows = 3, className }: { rows?: number; className?: string }) {
   return (
@@ -47,39 +46,17 @@ export function PosterSkeletons({
   );
 }
 
-/**
- * Error panel for a failed load. A 404/501 from a feature the server doesn't
- * offer renders as a calm "unavailable" state instead of a red error.
- */
+/** Error panel for a failed load, with an optional retry. */
 export function ErrorPanel({
   error,
   onRetry,
-  feature,
   className,
 }: {
   error: unknown;
   onRetry?: () => void;
-  feature?: string;
   className?: string;
 }) {
   if (!error) return null;
-  if (feature && isUnavailable(error)) {
-    return (
-      <EmptyState
-        className={className}
-        icon={<CloudOff />}
-        title="Not available on this server yet"
-        description={`${feature} comes with a newer version of Ether. Update Ether to use it; everything else keeps working in the meantime.`}
-        action={
-          onRetry ? (
-            <Button variant="outline" size="sm" onClick={onRetry}>
-              <RefreshCw size={14} /> Check again
-            </Button>
-          ) : undefined
-        }
-      />
-    );
-  }
   return (
     <Alert variant="destructive" className={className} role="alert">
       <AlertTitle>

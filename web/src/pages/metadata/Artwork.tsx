@@ -313,7 +313,7 @@ function TitleArtworkDrawer({
       }
     >
       {loadError ? (
-        <ErrorPanel error={loadError} feature="Artwork choices" />
+        <ErrorPanel error={loadError} />
       ) : !choices ? (
         <div className="py-10 text-center">
           <Spinner size={20} label="Loading artwork choices" />

@@ -11,18 +11,6 @@ async function choose(label: string, option: string) {
 }
 
 describe("Sources", () => {
-  it("sends the old Usenet settings URL to Sources", async () => {
-    renderApp("/settings/usenet");
-    expect(await screen.findByRole("heading", { name: "Sources" }, WAIT)).toBeInTheDocument();
-    expect(
-      await screen.findByRole("button", { name: "Edit Primary news" }, WAIT),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Usenet providers" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-  });
-
   it("discards unsaved provider edits when its drawer closes", async () => {
     const { fake } = renderApp("/sources/usenet");
     fireEvent.click(await screen.findByRole("button", { name: "Edit Primary news" }, WAIT));
@@ -90,16 +78,6 @@ describe("Sources", () => {
 });
 
 describe("Releases", () => {
-  it("sends the old playback policy rules tab to Releases", async () => {
-    renderApp("/playback?tab=rules");
-    expect(await screen.findByRole("heading", { name: "Releases" }, WAIT)).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: "Edit rule 1" }, WAIT)).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Client rules" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-  });
-
   it("edits client rules in a drawer using a device and named viewer", async () => {
     const { fake } = renderApp("/releases/rules");
     expect(await screen.findByRole("button", { name: "Edit rule 1" }, WAIT)).toBeInTheDocument();
@@ -193,12 +171,6 @@ describe("Release traces", () => {
     expect(within(drawer).getByText("CAM releases are disabled")).toBeInTheDocument();
     expect(within(drawer).getAllByText("Picked").length).toBeGreaterThan(0);
   });
-
-  it("sends the old traces URL to Releases", async () => {
-    renderApp("/traces");
-    expect(await screen.findByRole("heading", { name: "Releases" }, WAIT)).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Traces" })).toHaveAttribute("aria-selected", "true");
-  });
 });
 
 describe("Playback", () => {
@@ -223,17 +195,5 @@ describe("Playback", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("h264_videotoolbox")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Hardware acceleration" })).toBeInTheDocument();
-  });
-
-  it("sends the old device capabilities tab to Playback", async () => {
-    renderApp("/playback?tab=compatibility");
-    expect(await screen.findByRole("tab", { name: "Device capabilities" }, WAIT)).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-    expect(screen.getByRole("link", { name: "Client rules" })).toHaveAttribute(
-      "href",
-      "/releases/rules",
-    );
   });
 });

@@ -90,11 +90,7 @@ export function Invitations() {
         </Button>
       </div>
       {invites.error ? (
-        <ErrorPanel
-          error={invites.error}
-          feature="Invitations"
-          onRetry={() => void invites.reload()}
-        />
+        <ErrorPanel error={invites.error} onRetry={() => void invites.reload()} />
       ) : !invites.data ? (
         <LoadingRows rows={3} />
       ) : (

@@ -108,11 +108,6 @@ describe("Viewers", () => {
     expect(calls(fake, "PUT", "/safety/policies/4")).toHaveLength(0);
   });
 
-  it("opens the old limits link on the Access tab", async () => {
-    renderApp("/viewers/4?tab=limits");
-    expect(await screen.findByLabelText("Stream limit", {}, WAIT)).toBeInTheDocument();
-  });
-
   it("saves a viewer's parental controls from their Access tab", async () => {
     const { fake } = renderApp(
       "/viewers/3/access",

@@ -106,13 +106,7 @@ export function WeeklyReport({ notifications }: { notifications: NotificationsDa
   const [error, setError] = useState<unknown>(null);
 
   if (settings.error && !settings.data)
-    return (
-      <ErrorPanel
-        error={settings.error}
-        onRetry={() => void settings.reload()}
-        feature="The weekly report"
-      />
-    );
+    return <ErrorPanel error={settings.error} onRetry={() => void settings.reload()} />;
   if (!draft) return <LoadingRows rows={3} />;
 
   const edit = (p: Partial<NewsletterSettings>) => setDraft({ ...draft, ...p });

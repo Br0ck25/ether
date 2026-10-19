@@ -30,11 +30,7 @@ export default function Notifications() {
     tab === "report" ? (
       <WeeklyReport notifications={data} />
     ) : notices.error && !data ? (
-      <ErrorPanel
-        error={notices.error}
-        onRetry={() => void notices.reload()}
-        feature="Notifications"
-      />
+      <ErrorPanel error={notices.error} onRetry={() => void notices.reload()} />
     ) : !data ? (
       <LoadingRows rows={3} />
     ) : tab === "channels" ? (
