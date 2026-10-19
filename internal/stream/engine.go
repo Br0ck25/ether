@@ -1,0 +1,308 @@
+// Package stream is Ether's stream engine: it turns an NZB into a seekable
+// core.MediaSource without writing the full file anywhere.
+//
+// Open parses the NZB, picks the main video (a plain post, or the file
+// inside a store-mode RAR/7z set or a plain split), and builds a
+// byte-offset index from the yEnc part headers so any byte range maps to
+// exact articles. ReadAt fetches those articles in parallel through the
+// core.ArticleFetcher, reads ahead of sequential readers, coalesces
+// concurrent requests for the same article, keeps a bounded in-memory hot
+// buffer and spills decoded segments to the core.SegmentCache.
+//
+// Open touches as few articles as possible: the first article of the video
+// (plain posts), or the first article of the first, second and last
+// volumes of an archive set, assuming the uniform volume layout that
+// archivers produce. That assumption is checked against the archive's own
+// totals at Open and verified per volume, lazily, before any byte of that
+// volume is served; a mismatch rebuilds the layout from every volume's
+// headers.
+package stream
+
+import (
+	"container/list"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/ether-media/ether/internal/config"
+	"github.com/ether-media/ether/internal/core"
+	"github.com/ether-media/ether/internal/nzb"
+)
+
+// Options tune the engine. Zero values take the defaults noted.
+type Options struct {
+	// HotBufferBytes bounds decoded segments kept in memory across all
+	// sources (default 256 MiB).
+	HotBufferBytes int64
+	// ReadAheadMin is the initial read-ahead window of a sequential reader
+	// (default 4 MiB); it grows with the bytes read up to ReadAheadMax
+	// (default 64 MiB).
+	ReadAheadMin int64
+	ReadAheadMax int64
+	// ReadAheadParallel caps concurrent read-ahead fetches per source
+	// (default 8).
+	ReadAheadParallel int
+	// ReadParallel caps concurrent fetches serving one ReadAt (default 16).
+	ReadParallel int
+	// PrefetchParallel caps concurrent fetches of one Prefetch call
+	// (default 4).
+	PrefetchParallel int
+	// HealthSamples is how many articles Check STATs (default 12, from
+	// config Resolver.HealthSamples).
+	HealthSamples int
+	// HealthParallel caps concurrent STATs of one Check (default 16).
+	HealthParallel int
+	// OpenParallel caps concurrent header fetches while opening (default 16).
+	OpenParallel int
+	// ReadTimeout bounds one ReadAt (default 90 s); ReadAt has no context.
+	ReadTimeout time.Duration
+	// MaxReleases is how many parsed release indexes are kept for reuse
+	// (default 32). Releases with open sources are never dropped.
+	MaxReleases int
+	// Retries is how often a failed article fetch (other than missing or
+	// cancelled) is retried (default 2).
+	Retries int
+	// MaxProbes bounds articles fetched to identify obfuscated files
+	// (default 64).
+	MaxProbes int
+}
+
+// OptionsFromConfig derives options from the owner settings.
+func OptionsFromConfig(cfg config.Config) Options {
+	return Options{HealthSamples: cfg.Resolver.HealthSamples}
+}
+
+func (o Options) withDefaults() Options {
+	def := func(v *int64, d int64) {
+		if *v <= 0 {
+			*v = d
+		}
+	}
+	defi := func(v *int, d int) {
+		if *v <= 0 {
+			*v = d
+		}
+	}
+	def(&o.HotBufferBytes, 256<<20)
+	def(&o.ReadAheadMin, 4<<20)
+	def(&o.ReadAheadMax, 64<<20)
+	if o.ReadAheadMax < o.ReadAheadMin {
+		o.ReadAheadMax = o.ReadAheadMin
+	}
+	defi(&o.ReadAheadParallel, 8)
+	defi(&o.ReadParallel, 16)
+	defi(&o.PrefetchParallel, 4)
+	defi(&o.HealthSamples, 12)
+	defi(&o.HealthParallel, 16)
+	defi(&o.OpenParallel, 16)
+	defi(&o.MaxReleases, 32)
+	defi(&o.MaxProbes, 64)
+	if o.Retries < 0 {
+		o.Retries = 0
+	} else if o.Retries == 0 {
+		o.Retries = 2
+	}
+	if o.ReadTimeout <= 0 {
+		o.ReadTimeout = 90 * time.Second
+	}
+	return o
+}
+
+// Stats are engine counters for diagnostics.
+type Stats struct {
+	Fetches       int64 // articles fetched from Usenet
+	FetchedBytes  int64 // decoded bytes fetched from Usenet
+	HotHits       int64 // segments served from memory
+	CacheHits     int64 // segments served from the disk cache
+	Missing       int64 // articles missing on every provider
+	Coalesced     int64 // requests that joined an in-flight fetch
+	HotBytes      int64 // bytes currently in the hot buffer
+	OpenReleases  int   // release indexes held
+	ActiveSources int64
+}
+
+// hasCache is optionally implemented by a SegmentCache (segcache does) to
+// test presence without reading the segment.
+type hasCache interface {
+	Has(releaseID string, segment int) bool
+}
+
+// Engine implements core.Engine and core.HealthChecker.
+type Engine struct {
+	fetcher core.ArticleFetcher
+	cache   core.SegmentCache
+	opts    Options
+	log     *slog.Logger
+	hot     *hotBuffer
+
+	ctx    context.Context // cancelled by Close; parent of every fetch
+	cancel context.CancelFunc
+
+	mu       sync.Mutex
+	releases map[string]*list.Element // digest -> *release
+	relLRU   *list.List
+	flights  map[segKey]*flight
+	wg       sync.WaitGroup // fetch goroutines
+	closed   bool
+
+	fetches, fetchedBytes, hotHits, cacheHits, missing, coalesced, active atomic.Int64
+}
+
+var (
+	_ core.Engine        = (*Engine)(nil)
+	_ core.HealthChecker = (*Engine)(nil)
+)
+
+// New returns an engine. cache may be nil (memory only). logger may be nil.
+func New(fetcher core.ArticleFetcher, cache core.SegmentCache, opts Options, logger *slog.Logger) *Engine {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	opts = opts.withDefaults()
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Engine{
+		fetcher:  fetcher,
+		cache:    cache,
+		opts:     opts,
+		log:      logger.With("component", "stream"),
+		hot:      newHotBuffer(opts.HotBufferBytes),
+		ctx:      ctx,
+		cancel:   cancel,
+		releases: map[string]*list.Element{},
+		relLRU:   list.New(),
+		flights:  map[segKey]*flight{},
+	}
+}
+
+// Close cancels every in-flight fetch, makes open sources fail and waits
+// for background work (fetches, cache writes) to stop.
+func (e *Engine) Close() error {
+	e.mu.Lock()
+	e.closed = true
+	e.mu.Unlock()
+	e.cancel()
+	e.wg.Wait()
+	return nil
+}
+
+// Stats returns a snapshot of the counters.
+func (e *Engine) Stats() Stats {
+	e.mu.Lock()
+	n := len(e.releases)
+	e.mu.Unlock()
+	return Stats{
+		Fetches:       e.fetches.Load(),
+		FetchedBytes:  e.fetchedBytes.Load(),
+		HotHits:       e.hotHits.Load(),
+		CacheHits:     e.cacheHits.Load(),
+		Missing:       e.missing.Load(),
+		Coalesced:     e.coalesced.Load(),
+		HotBytes:      e.hot.usage(),
+		OpenReleases:  n,
+		ActiveSources: e.active.Load(),
+	}
+}
+
+// Open builds the byte-offset index for the main video file of an NZB.
+func (e *Engine) Open(ctx context.Context, releaseID string, nzbData []byte) (core.MediaSource, error) {
+	if err := e.ctx.Err(); err != nil {
+		return nil, ErrClosed
+	}
+	rel, err := e.acquire(nzbData)
+	if err != nil {
+		return nil, err
+	}
+	p, err := rel.ensurePlan(ctx, core.PriorityLive, releaseID)
+	if err != nil {
+		e.release(rel)
+		return nil, err
+	}
+	return newSource(e, rel, p, releaseID), nil
+}
+
+// Prefetch warms [offset, offset+length) of the main video into the
+// segment cache at background priority.
+func (e *Engine) Prefetch(ctx context.Context, releaseID string, nzbData []byte, offset, length int64) error {
+	if err := e.ctx.Err(); err != nil {
+		return ErrClosed
+	}
+	rel, err := e.acquire(nzbData)
+	if err != nil {
+		return err
+	}
+	defer e.release(rel)
+	p, err := rel.ensurePlan(ctx, core.PriorityPrefetch, releaseID)
+	if err != nil {
+		return err
+	}
+	return e.prefetchRange(ctx, rel, p, releaseID, offset, length)
+}
+
+// acquire returns the release state for an NZB (parsing it once) and takes
+// a reference that release must drop.
+func (e *Engine) acquire(nzbData []byte) (*release, error) {
+	sum := sha256.Sum256(nzbData)
+	digest := hex.EncodeToString(sum[:12])
+	e.mu.Lock()
+	if el, ok := e.releases[digest]; ok {
+		rel := el.Value.(*release)
+		rel.refs++
+		e.relLRU.MoveToFront(el)
+		e.mu.Unlock()
+		return rel, nil
+	}
+	e.mu.Unlock()
+
+	doc, err := nzb.Parse(nzbData)
+	if err != nil {
+		return nil, err
+	}
+	rel := newRelease(e, digest, doc)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if el, ok := e.releases[digest]; ok { // lost a race; use the winner
+		other := el.Value.(*release)
+		other.refs++
+		e.relLRU.MoveToFront(el)
+		return other, nil
+	}
+	rel.refs = 1
+	e.releases[digest] = e.relLRU.PushFront(rel)
+	e.trimReleasesLocked()
+	return rel, nil
+}
+
+func (e *Engine) release(rel *release) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	rel.refs--
+	e.trimReleasesLocked()
+}
+
+func (e *Engine) trimReleasesLocked() {
+	for el := e.relLRU.Back(); el != nil && e.relLRU.Len() > e.opts.MaxReleases; {
+		prev := el.Prev()
+		rel := el.Value.(*release)
+		if rel.refs <= 0 {
+			e.relLRU.Remove(el)
+			delete(e.releases, rel.digest)
+			go e.hot.dropRelease(rel.digest)
+		}
+		el = prev
+	}
+}
+
+// errorsJoinMissing builds an error that is both ErrIncomplete and
+// core.ErrArticleMissing.
+func incompleteError(format string, args ...any) error {
+	return fmt.Errorf("%w: %s: %w", ErrIncomplete, fmt.Sprintf(format, args...), core.ErrArticleMissing)
+}
+
+func isMissing(err error) bool { return errors.Is(err, core.ErrArticleMissing) }
