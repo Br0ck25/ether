@@ -44,3 +44,21 @@ func TestRatingKeyRoundTrip(t *testing.T) {
 		t.Errorf("parse extra key: %v", err)
 	}
 }
+
+func TestEphemeralSmartKeysAvoidYearInReview(t *testing.T) {
+	if k := EphemeralSmartKey(1); !k.IsEphemeral() || k.Kind() != KindSmart {
+		t.Fatalf("EphemeralSmartKey(1) = %d not ephemeral", k)
+	}
+	if k := EphemeralSmartKey(EphemeralSmartEnd - EphemeralSmartBase - 1); !k.IsEphemeral() {
+		t.Fatalf("last ephemeral key %d not ephemeral", k)
+	}
+	// personalize's Year in Review keys start at payload 9*10^14
+	// (base + year*10 + kind) and must never look ephemeral.
+	review := SmartKey(EphemeralSmartEnd + 2026*10 + 1)
+	if review.IsEphemeral() {
+		t.Fatalf("Year in Review key %d reported ephemeral", review)
+	}
+	if SmartKey(42).IsEphemeral() || MovieKey(42).IsEphemeral() {
+		t.Fatal("database smart key or movie key reported ephemeral")
+	}
+}

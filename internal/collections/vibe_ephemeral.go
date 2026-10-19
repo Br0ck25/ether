@@ -16,7 +16,7 @@ import (
 // Ephemeral collections are the browseable grids synthesized from vibe
 // searches ("90s thrillers under 100 mins"). They live only in memory:
 // per viewer, in a bounded LRU with a TTL. Their keys are KindSmart
-// keys in the reserved ephemeral payload range (core.EphemeralSmartBase)
+// keys in the reserved ephemeral payload range (core.EphemeralSmartBase up to core.EphemeralSmartEnd)
 // so every existing collection path serves them. Rating one promotes
 // it to a persisted personal smart collection (PromoteEphemeral); the
 // ephemeral key then aliases the saved one until it is evicted or the
