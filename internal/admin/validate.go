@@ -104,12 +104,39 @@ func ValidateConfig(cfg config.Config) []FieldError {
 		if ix.DailyGrabs < 0 {
 			v.add(f+".dailyGrabs", "must be >= 0")
 		}
+		if ix.Protocol != "" {
+			v.oneOf(f+".protocol", ix.Protocol, "usenet", "torrent")
+		}
 		if ix.ID != "" {
 			if seenIx[ix.ID] {
 				v.add(f+".id", "duplicate indexer id %q", ix.ID)
 			}
 			seenIx[ix.ID] = true
 		}
+	}
+
+	seenDebrid := map[string]bool{}
+	for i, p := range cfg.Debrid.Providers {
+		f := fmt.Sprintf("debrid.providers[%d]", i)
+		v.oneOf(f+".kind", p.Kind, config.DebridKinds...)
+		if p.Enabled && strings.TrimSpace(p.APIKey) == "" {
+			v.add(f+".apiKey", "is required when the provider is enabled")
+		}
+		if p.ID != "" {
+			if seenDebrid[p.ID] {
+				v.add(f+".id", "duplicate provider id %q", p.ID)
+			}
+			seenDebrid[p.ID] = true
+		}
+	}
+	if cfg.Debrid.ChunkBytes != 0 && (cfg.Debrid.ChunkBytes < 256<<10 || cfg.Debrid.ChunkBytes > 64<<20) {
+		v.add("debrid.chunkBytes", "must be between 256 KiB and 64 MiB")
+	}
+	if cfg.Debrid.MaxConnections < 0 || cfg.Debrid.MaxConnections > 16 {
+		v.add("debrid.maxConnections", "must be between 0 and 16")
+	}
+	if cfg.Debrid.ReadAheadChunks > 32 {
+		v.add("debrid.readAheadChunks", "must be at most 32")
 	}
 
 	if strings.TrimSpace(cfg.Cache.Dir) == "" {
