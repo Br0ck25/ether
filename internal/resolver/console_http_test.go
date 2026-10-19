@@ -14,7 +14,9 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-type fakeCatalog struct{ titles map[core.RatingKey]*core.Title }
+type fakeCatalog struct {
+	titles map[core.RatingKey]*core.Title
+}
 
 func (f fakeCatalog) Get(_ context.Context, key core.RatingKey) (*core.Title, error) {
 	if t, ok := f.titles[key]; ok {

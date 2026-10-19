@@ -201,6 +201,22 @@ func (s *Service) notePin(ctx context.Context, key core.RatingKey, releaseID str
 	}
 }
 
+// notePinsBlocked marks pins of a newly blocklisted release as failing, so
+// the Pinned list shows why the pin is being skipped.
+func (s *Service) notePinsBlocked(ctx context.Context, releaseID, reason string) {
+	s.con.mu.Lock()
+	var keys []core.RatingKey
+	for k, p := range s.con.pins {
+		if p.Release.ID == releaseID {
+			keys = append(keys, k)
+		}
+	}
+	s.con.mu.Unlock()
+	for _, k := range keys {
+		s.notePin(ctx, k, releaseID, PinUnhealthy, "blocklisted: "+reason)
+	}
+}
+
 // pinForResolve returns the title's pin when it applies to req, else nil
 // and, when there is a pin, why it does not apply.
 func (s *Service) pinForResolve(req core.ResolveRequest) (*Pin, string) {

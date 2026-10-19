@@ -114,6 +114,7 @@ func (s *Service) Block(ctx context.Context, req BlockRequest, reason string) (B
 	s.bad[req.ReleaseID] = reason
 	s.mu.Unlock()
 	s.forgetVerified(ctx, req.ReleaseID)
+	s.notePinsBlocked(ctx, req.ReleaseID, reason)
 	e := s.blockEntryFor(req.ReleaseID, reason, true)
 	if e.Name == "" {
 		e.Name = req.Name

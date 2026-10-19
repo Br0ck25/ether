@@ -551,3 +551,30 @@ func TestCheckReleaseOnDemand(t *testing.T) {
 		t.Fatalf("pin note %q", search.PinNote)
 	}
 }
+
+func TestBlockingAPinnedReleaseSurfacesOnThePin(t *testing.T) {
+	ctx := context.Background()
+	idx := &fakeIndexer{releases: movieReleases()}
+	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	if _, err := svc.SearchReleases(ctx, matrixTitle(), SearchOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r720, _ := svc.LookupRelease("sd720")
+	if _, err := svc.Pin(ctx, matrixTitle().Key, "", r720, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.MarkBad(ctx, "sd720", "playback failed"); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := svc.PinFor(matrixTitle().Key)
+	if p.LastStatus != PinUnhealthy || p.LastReason != "blocklisted: playback failed" {
+		t.Fatalf("pin %+v", p)
+	}
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: webCaps()})
+	if err != nil || res.Release.ID != "hd" {
+		t.Fatalf("res=%+v err=%v", res, err)
+	}
+	if tr := svc.Traces()[0]; tr.PinStatus != "skipped: pinned release is blocklisted" || tr.TitleName != "The Matrix (1999)" {
+		t.Fatalf("trace %q %q", tr.PinStatus, tr.TitleName)
+	}
+}

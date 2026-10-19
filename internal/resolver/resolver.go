@@ -225,6 +225,7 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 	s.bad[releaseID] = reason
 	s.mu.Unlock()
 	s.forgetVerified(ctx, releaseID)
+	s.notePinsBlocked(ctx, releaseID, reason)
 	return s.persistBad(ctx, s.blockEntryFor(releaseID, reason, false))
 }
 
@@ -334,7 +335,7 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 
 func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile core.QualityProfile) (*core.Resolution, error) {
 	t := req.Title
-	trace := Trace{TitleKey: t.Key, TitleName: displayTitle(t), Profile: profile.Name, At: s.now(), Failover: len(req.Exclude) > 0}
+	trace := Trace{TitleKey: t.Key, TitleName: consoleTitleName(t), Profile: profile.Name, At: s.now(), Failover: len(req.Exclude) > 0}
 	defer func() {
 		s.addTrace(trace)
 		s.recordHistory(ctx, trace)
@@ -508,13 +509,6 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 	trace.Err = "no healthy candidates"
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
-}
-
-func displayTitle(t *core.Title) string {
-	if t.ShowTitle != "" && (t.Type == core.TypeEpisode || t.Type == core.TypeSeason) {
-		return t.ShowTitle
-	}
-	return t.Title
 }
 
 func searchCacheKey(req core.SearchRequest) string {
