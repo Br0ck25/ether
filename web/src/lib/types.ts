@@ -215,6 +215,11 @@ export interface CandidateTrace {
   healthy: boolean;
   fetchDuration: number;
   healthDuration: number;
+  size?: number;
+  /** The owner's pin for the title. */
+  pinned?: boolean;
+  customFormats?: { id: string; name: string; score: number }[] | null;
+  compatibilityReason?: string;
 }
 export interface ResolverTrace {
   titleKey: string;
@@ -225,4 +230,11 @@ export interface ResolverTrace {
   winner?: string;
   err?: string;
   searchDuration: number;
+  /** The resolution excluded releases already tried (mid-play failover). */
+  failover?: boolean;
+  /** Pinned release id and what became of it ("used", "unhealthy: …"). */
+  pinned?: string;
+  pinStatus?: string;
+  /** Candidates left out of a stored trace. */
+  omitted?: number;
 }

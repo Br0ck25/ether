@@ -17,7 +17,7 @@ describe("sitemap", () => {
     expect(legacyRedirect("/settings/server", "")).toBeNull();
     expect(legacyRedirect("/settings/x-personalize", "")).toBeNull();
     expect(legacyRedirect("/discovery", "")).toBe("/metadata/ratings");
-    expect(legacyRedirect("/traces", "")).toBe("/releases/traces");
+    expect(legacyRedirect("/traces", "")).toBe("/releases/history");
     expect(legacyRedirect("/designer", "")).toBe("/home-screens");
   });
 });
