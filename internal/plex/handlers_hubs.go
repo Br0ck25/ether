@@ -650,8 +650,11 @@ func (s *Server) handleMetadataHubs(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, mc)
 }
 
-// handlePostplay is /hubs/metadata/{key}/postplay: next episode, then
-// related rows.
+// handlePostplay is /hubs/metadata/{key}/postplay. An episode with a
+// next episode keeps Up Next first; everything else leads with the
+// viewer's personalized hook queue (#30, the same #1 pick prefetch
+// pre-buffered), then the related rows. Without a PostPlayer this is the
+// old behaviour: Up Next, then related.
 func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
@@ -660,18 +663,31 @@ func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
+	count := countParam(r, 12)
 	mc := hubContainer()
+	seen := map[core.RatingKey]bool{k: true}
 	if k.Kind() == core.KindEpisode {
 		if next, err := s.d.Catalog.NextEpisode(ctx, k); err == nil && next != nil {
 			h := core.Hub{ID: "tv.upnext", Title: "Up Next", Type: core.TypeEpisode, Context: "hub.tv.upnext", Items: []core.Title{*next}}
 			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{related: k}))
+			seen[next.Key] = true
 		}
 	}
-	if s.d.Recommender != nil {
-		if hubs, err := s.d.Recommender.Related(ctx, pr.User, k, countParam(r, 12)); err == nil {
-			mc.Hub = append(mc.Hub, s.renderHubs(ctx, pr, hubs, hubCtx{related: k})...)
+	if picks := s.postPlayPicks(ctx, pr, k, count); len(picks) > 0 {
+		// Skip whatever Up Next already covers so the queue never
+		// repeats the next episode as a "recommendation".
+		kept := picks[:0:0]
+		for _, p := range picks {
+			if !seen[p.Title.Key] {
+				seen[p.Title.Key] = true
+				kept = append(kept, p)
+			}
+		}
+		if mh, ok := s.postPlayHub(ctx, pr, k, kept); ok {
+			mc.Hub = append(mc.Hub, mh)
 		}
 	}
+	s.relatedAfterPostPlay(ctx, pr, mc, k, count, seen)
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
 }
