@@ -516,7 +516,7 @@ func TestTransientErrorsRetried(t *testing.T) {
 		}
 		return nntptest.Fault{}
 	})
-	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 2)}, Options{Retries: 2})
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 2)}, Options{Retries: 2, FailThreshold: 3})
 	got, err := f.Body(context.Background(), "a@x", nil, core.PriorityLive)
 	if err != nil || string(got) != "alpha" {
 		t.Fatalf("err = %v", err)
