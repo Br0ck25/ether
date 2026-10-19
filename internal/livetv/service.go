@@ -169,7 +169,15 @@ func (s *Service) maintain() {
 	}
 }
 func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT data FROM livetv_channels ORDER BY id`)
+	return channels(ctx, s.o.DB)
+}
+
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func channels(ctx context.Context, db queryer) ([]Channel, error) {
+	rows, err := db.QueryContext(ctx, `SELECT data FROM livetv_channels ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -565,7 +573,23 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			return src, err
 		}
 	}
-	old, err := s.Channels(ctx)
+	tx, err := s.o.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return src, err
+	}
+	defer tx.Rollback()
+	// Writing the source row first takes its row lock, so a concurrent save
+	// of the same source on another node waits here; the owner's channel
+	// edits are then read inside the transaction and cannot be lost.
+	src.UpdatedAt = s.o.Now()
+	sb, err := json.Marshal(src)
+	if err != nil {
+		return src, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_sources(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, src.ID, sb); err != nil {
+		return src, err
+	}
+	old, err := channels(ctx, tx)
 	if err != nil {
 		return src, err
 	}
@@ -575,11 +599,6 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			oldByID[c.ID] = c
 		}
 	}
-	tx, err := s.o.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return src, err
-	}
-	defer tx.Rollback()
 	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_programmes WHERE source_id=?`, src.ID); err != nil {
 		return src, err
 	}
@@ -611,17 +630,11 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 		if e != nil {
 			return src, e
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT OR REPLACE INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)`, src.ID, p.ChannelID, p.Start.UnixMilli(), p.End.UnixMilli(), b); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)
+			ON CONFLICT(source_id,channel_id,start_ms) DO UPDATE SET end_ms=excluded.end_ms, data=excluded.data`,
+			src.ID, p.ChannelID, p.Start.UnixMilli(), p.End.UnixMilli(), b); err != nil {
 			return src, err
 		}
-	}
-	src.UpdatedAt = s.o.Now()
-	b, err := json.Marshal(src)
-	if err != nil {
-		return src, err
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_sources(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, src.ID, b); err != nil {
-		return src, err
 	}
 	err = tx.Commit()
 	if err == nil {
