@@ -14,10 +14,10 @@ import (
 )
 
 // DefaultWANEndpoints are queried in order. The first is the endpoint PMS
-// itself uses ("PublicAddressManager: Got public IP from http://plex.tv");
+// itself uses (GET https://v4.plex.tv/pms/:/ip in observed PMS traffic);
 // the rest are well-known plain-text fallbacks.
 var DefaultWANEndpoints = []string{
-	"https://plex.tv/pms/:/ip",
+	"https://v4.plex.tv/pms/:/ip",
 	"https://api.ipify.org",
 	"https://icanhazip.com",
 	"https://ifconfig.me/ip",
