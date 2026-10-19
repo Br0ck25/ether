@@ -1,0 +1,449 @@
+// Package usenet is Ether's Usenet layer: an NNTP client, per-provider
+// connection pools with priority scheduling and circuit breakers, and a
+// multi-provider fetcher that implements core.ArticleFetcher with
+// primary-first ordering and backfill from block accounts.
+package usenet
+
+import (
+	"cmp"
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"slices"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/ether-media/ether/internal/config"
+	"github.com/ether-media/ether/internal/core"
+	"github.com/ether-media/ether/internal/yenc"
+)
+
+// Defaults for Options.
+const (
+	DefaultConnections      = 8
+	DefaultPrefetchFraction = 0.25
+	DefaultIdleTimeout      = 90 * time.Second
+	DefaultKeepAlive        = 30 * time.Second
+	DefaultMissTTL          = 2 * time.Minute
+	DefaultMissCacheSize    = 100_000
+	DefaultRetries          = 2
+	DefaultBackoffMin       = time.Second
+	DefaultBackoffMax       = 2 * time.Minute
+	DefaultFailThreshold    = 2
+	DefaultLimitCooloff     = 5 * time.Minute
+)
+
+// Options tune the fetcher. Zero values take the defaults above.
+type Options struct {
+	Logger *slog.Logger
+	// PrefetchFraction is the share of each provider's connections that
+	// PriorityPrefetch requests may hold at once (at least one).
+	PrefetchFraction float64
+	// DialTimeout bounds connect + TLS + greeting + login.
+	DialTimeout time.Duration
+	// CommandTimeout bounds one command, including reading an article body.
+	CommandTimeout time.Duration
+	// IdleTimeout closes connections unused for this long.
+	IdleTimeout time.Duration
+	// KeepAlive pings (DATE) connections idle for this long so servers do not
+	// drop them; negative disables pings.
+	KeepAlive time.Duration
+	// MissTTL is how long a 430 from a provider is remembered per article;
+	// negative disables the miss cache.
+	MissTTL       time.Duration
+	MissCacheSize int
+	// Retries is how many extra attempts a provider gets, each on another
+	// connection, after transient (network/protocol) errors.
+	Retries int
+	// Circuit breaker: after FailThreshold consecutive failed connects a
+	// provider is skipped for BackoffMin, doubling up to BackoffMax.
+	BackoffMin    time.Duration
+	BackoffMax    time.Duration
+	FailThreshold int
+	// LimitCooloff: when a server refuses connections beyond some number
+	// while others work, the pool shrinks to that number for this long.
+	LimitCooloff time.Duration
+	// TLSConfig is the base TLS client configuration (custom roots, e.g. in
+	// tests). Nil uses the system roots.
+	TLSConfig *tls.Config
+	// DialContext overrides the network dialer.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+	// UseGroup issues GROUP (first of the segment's groups) before BODY. Most
+	// providers serve BODY <message-id> without it.
+	UseGroup bool
+	// MaxArticleSize caps a decoded article; 0 = yenc.DefaultMaxSize.
+	MaxArticleSize int64
+}
+
+func (o *Options) withDefaults() {
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
+	if o.PrefetchFraction <= 0 || o.PrefetchFraction > 1 {
+		o.PrefetchFraction = DefaultPrefetchFraction
+	}
+	if o.DialTimeout <= 0 {
+		o.DialTimeout = DefaultDialTimeout
+	}
+	if o.CommandTimeout <= 0 {
+		o.CommandTimeout = DefaultCommandTimeout
+	}
+	if o.IdleTimeout <= 0 {
+		o.IdleTimeout = DefaultIdleTimeout
+	}
+	if o.KeepAlive == 0 {
+		o.KeepAlive = DefaultKeepAlive
+	}
+	if o.MissTTL == 0 {
+		o.MissTTL = DefaultMissTTL
+	}
+	if o.MissCacheSize <= 0 {
+		o.MissCacheSize = DefaultMissCacheSize
+	}
+	if o.Retries < 0 {
+		o.Retries = 0
+	} else if o.Retries == 0 {
+		o.Retries = DefaultRetries
+	}
+	if o.BackoffMin <= 0 {
+		o.BackoffMin = DefaultBackoffMin
+	}
+	if o.BackoffMax < o.BackoffMin {
+		o.BackoffMax = max(DefaultBackoffMax, o.BackoffMin)
+	}
+	if o.FailThreshold <= 0 {
+		o.FailThreshold = DefaultFailThreshold
+	}
+	if o.LimitCooloff <= 0 {
+		o.LimitCooloff = DefaultLimitCooloff
+	}
+	if o.MaxArticleSize <= 0 {
+		o.MaxArticleSize = yenc.DefaultMaxSize
+	}
+}
+
+// Fetcher implements core.ArticleFetcher over the owner's providers.
+//
+// Ordering: non-backfill providers are tried in ascending Priority; providers
+// sharing a Priority form a tier and share load (the least busy is tried
+// first). Only when every non-backfill provider answered 430 are backfill
+// (block) providers tried, in the same way. Transient errors are retried on
+// fresh connections and then on the next provider.
+type Fetcher struct {
+	o   Options
+	log *slog.Logger
+
+	mu     sync.RWMutex
+	pools  []*pool   // every enabled provider, in config order
+	tiers  [][]*pool // try order
+	closed bool
+	gen    atomic.Uint64
+	rr     atomic.Uint64
+
+	misses *missCache
+}
+
+var _ core.ArticleFetcher = (*Fetcher)(nil)
+
+// New builds a fetcher for providers. Connections are dialled lazily.
+func New(providers []config.UsenetProvider, opts Options) *Fetcher {
+	opts.withDefaults()
+	f := &Fetcher{
+		o:      opts,
+		log:    opts.Logger,
+		misses: newMissCache(opts.MissTTL, opts.MissCacheSize),
+	}
+	f.Update(providers)
+	return f
+}
+
+// Update swaps in a new provider list. Providers whose settings are
+// unchanged keep their pool, connections, statistics and circuit-breaker
+// state; changed providers get a fresh pool (which also clears an
+// authentication lockout); removed or disabled ones are closed gracefully:
+// queued requests move on to other providers and busy connections close
+// when their current article finishes.
+func (f *Fetcher) Update(providers []config.UsenetProvider) {
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return
+	}
+	old := f.pools
+	var next []*pool
+	reused := make(map[*pool]bool)
+	for _, cfg := range providers {
+		if !cfg.Enabled || cfg.Host == "" {
+			continue
+		}
+		var p *pool
+		for _, op := range old {
+			if op.cfg == cfg && !reused[op] {
+				p = op
+				break
+			}
+		}
+		if p == nil {
+			key := cmp.Or(cfg.ID, cfg.Host) + "#" + strconv.FormatUint(f.gen.Add(1), 10)
+			p = newPool(key, cfg, &f.o, f.log)
+		}
+		reused[p] = true
+		next = append(next, p)
+	}
+	f.pools = next
+	f.tiers = buildTiers(next)
+	f.mu.Unlock()
+
+	for _, p := range old {
+		if !reused[p] {
+			p.close()
+		}
+	}
+	f.log.Debug("usenet: providers updated", "enabled", len(next))
+}
+
+func buildTiers(pools []*pool) [][]*pool {
+	sorted := slices.Clone(pools)
+	slices.SortStableFunc(sorted, func(a, b *pool) int {
+		if a.cfg.Backfill != b.cfg.Backfill {
+			if a.cfg.Backfill {
+				return 1
+			}
+			return -1
+		}
+		return cmp.Compare(a.cfg.Priority, b.cfg.Priority)
+	})
+	var tiers [][]*pool
+	for i, p := range sorted {
+		if i > 0 {
+			q := sorted[i-1]
+			if q.cfg.Backfill == p.cfg.Backfill && q.cfg.Priority == p.cfg.Priority {
+				tiers[len(tiers)-1] = append(tiers[len(tiers)-1], p)
+				continue
+			}
+		}
+		tiers = append(tiers, []*pool{p})
+	}
+	return tiers
+}
+
+// order returns the providers to try, tier by tier, least loaded first
+// within a tier (ties rotate so equal providers share work).
+func (f *Fetcher) order() []*pool {
+	f.mu.RLock()
+	tiers := f.tiers
+	f.mu.RUnlock()
+	var out []*pool
+	rot := int(f.rr.Add(1))
+	for _, tier := range tiers {
+		if len(tier) == 1 {
+			out = append(out, tier[0])
+			continue
+		}
+		t := make([]*pool, len(tier))
+		for i := range tier {
+			t[i] = tier[(i+rot)%len(tier)]
+		}
+		loads := make(map[*pool]float64, len(t))
+		for _, p := range t {
+			s := p.sem.stats()
+			w := s.Waiting[0] + s.Waiting[1] + s.Waiting[2]
+			loads[p] = float64(s.InUse+w) / float64(s.Size)
+		}
+		slices.SortStableFunc(t, func(a, b *pool) int { return cmp.Compare(loads[a], loads[b]) })
+		out = append(out, t...)
+	}
+	return out
+}
+
+// Body returns the decoded payload of one article.
+func (f *Fetcher) Body(ctx context.Context, messageID string, groups []string, prio core.Priority) ([]byte, error) {
+	data, _, err := f.BodyPart(ctx, messageID, groups, prio)
+	return data, err
+}
+
+// BodyPart returns the decoded payload and its yEnc part header. It returns
+// an error wrapping core.ErrArticleMissing only when every provider able to
+// answer said 430. Providers locked out after an authentication failure
+// cannot answer and are not counted; providers in connection backoff are.
+func (f *Fetcher) BodyPart(ctx context.Context, messageID string, groups []string, prio core.Priority) ([]byte, core.ArticlePart, error) {
+	var ap core.ArticlePart
+	id, err := normalizeMessageID(messageID)
+	if err != nil {
+		return nil, ap, err
+	}
+	var part *yenc.Part
+	err = f.each(ctx, id, func(p *pool) error {
+		var e error
+		part, e = p.body(ctx, id, groups, prio)
+		return e
+	})
+	if err != nil {
+		return nil, ap, err
+	}
+	h := part.Header
+	ap = core.ArticlePart{Name: h.Name, FileSize: h.Size, Part: h.Part, Total: h.Total, Begin: h.Begin, End: h.End}
+	if ap.Part == 0 {
+		ap.Part, ap.Total = 1, max(h.Total, 1)
+	}
+	return part.Data, ap, nil
+}
+
+// Stat reports whether any provider has the article (STAT, at live
+// priority since health checks gate playback). It returns (false, nil) when
+// every provider able to answer said 430, and an error when that could not
+// be established.
+func (f *Fetcher) Stat(ctx context.Context, messageID string) (bool, error) {
+	id, err := normalizeMessageID(messageID)
+	if err != nil {
+		return false, err
+	}
+	err = f.each(ctx, id, func(p *pool) error {
+		ok, e := p.stat(ctx, id)
+		if e == nil && !ok {
+			return ErrNoSuchArticle
+		}
+		return e
+	})
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, core.ErrArticleMissing):
+		return false, nil
+	}
+	return false, err
+}
+
+// each runs op against providers in order until one succeeds, and turns the
+// collected failures into the right error.
+func (f *Fetcher) each(ctx context.Context, id string, op func(*pool) error) error {
+	var swapped bool
+	err := f.eachOnce(ctx, id, op, &swapped)
+	if swapped && err != nil && !errors.Is(err, core.ErrArticleMissing) && ctxErr(ctx) == nil {
+		// A pool was replaced by Update while we were using it: go again
+		// over the current providers.
+		err = f.eachOnce(ctx, id, op, &swapped)
+	}
+	return err
+}
+
+// eachOnce is one pass over the providers. It sets *swapped when a pool
+// turned out to be closed by a concurrent Update.
+func (f *Fetcher) eachOnce(ctx context.Context, id string, op func(*pool) error, swapped *bool) error {
+	pools := f.order()
+	if len(pools) == 0 {
+		return ErrNoProviders
+	}
+	known := f.misses.get(id)
+	var (
+		answered, missing int
+		lastErr, corrupt  error
+	)
+	for _, p := range pools {
+		if slices.Contains(known, p.key) {
+			answered++
+			missing++
+			continue
+		}
+		if err := p.brk.allow(); errors.Is(err, ErrProviderDisabled) {
+			lastErr = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+			continue
+		}
+		answered++
+	attempts:
+		for attempt := 0; attempt <= f.o.Retries; attempt++ {
+			err := op(p)
+			if err == nil {
+				return nil
+			}
+			if cerr := ctxErr(ctx); cerr != nil {
+				return cerr
+			}
+			switch {
+			case errors.Is(err, ErrNoSuchArticle):
+				missing++
+				f.misses.add(id, p.key)
+				break attempts
+			case errors.Is(err, ErrInvalidMessageID):
+				return err
+			case errors.Is(err, ErrCorrupt):
+				corrupt = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+				break attempts
+			case errors.Is(err, ErrProviderDisabled), errors.Is(err, ErrAuthFailed):
+				// Locked out mid-request (bad credentials): cannot answer.
+				answered--
+				lastErr = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+				break attempts
+			case errors.Is(err, ErrPoolClosed):
+				*swapped = true
+				lastErr = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+				break attempts
+			case errors.Is(err, ErrProviderBackoff):
+				lastErr = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+				break attempts
+			default:
+				lastErr = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+				f.log.Debug("usenet: transient error; retrying", "provider", providerLabel(p.cfg), "msgid", id, "attempt", attempt+1, "err", err)
+			}
+		}
+	}
+	switch {
+	case answered > 0 && missing == answered:
+		return fmt.Errorf("%s: %w", id, core.ErrArticleMissing)
+	case answered == 0:
+		return fmt.Errorf("%w: %w", ErrNoProviders, lastErr)
+	case corrupt != nil && lastErr == nil:
+		return corrupt
+	case corrupt != nil:
+		return errors.Join(corrupt, lastErr)
+	}
+	return lastErr
+}
+
+// Stats returns a snapshot per enabled provider, in configuration order.
+func (f *Fetcher) Stats() []ProviderStats {
+	f.mu.RLock()
+	pools := f.pools
+	f.mu.RUnlock()
+	out := make([]ProviderStats, 0, len(pools))
+	for _, p := range pools {
+		out = append(out, p.stats())
+	}
+	return out
+}
+
+// MaxConnections is the sum of all enabled providers' connection limits
+// (used to derive a server-wide stream cap).
+func (f *Fetcher) MaxConnections() int {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	n := 0
+	for _, p := range f.pools {
+		if !p.cfg.Backfill {
+			n += p.size
+		}
+	}
+	return n
+}
+
+// Close closes every pool. Further requests fail with ErrNoProviders.
+func (f *Fetcher) Close() error {
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return nil
+	}
+	f.closed = true
+	pools := f.pools
+	f.pools, f.tiers = nil, nil
+	f.mu.Unlock()
+	for _, p := range pools {
+		p.close()
+	}
+	return nil
+}
