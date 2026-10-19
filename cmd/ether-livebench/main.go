@@ -49,14 +49,23 @@ func main() {
 	runtime := flag.Duration("runtime", 136*time.Minute, "runtime")
 	product := flag.String("product", "Plex Web", "client product")
 	indexer := flag.String("indexer", "api.nzbgeek.info", "only this indexer host")
+	data := flag.String("data", "", "persistent benchmark data directory (keeps search/NZB caches)")
+	trace := flag.Bool("trace", false, "print coarse phase timing breakdown")
 	flag.Parse()
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	var r ref
 	b, _ := os.ReadFile(*refPath)
 	json.Unmarshal(b, &r)
 
-	dir, _ := os.MkdirTemp("", "ether-e2e")
-	defer os.RemoveAll(dir)
+	dir := *data
+	if dir == "" {
+		var err error
+		dir, err = os.MkdirTemp("", "ether-e2e")
+		must(err)
+		defer os.RemoveAll(dir)
+	} else if err := os.MkdirAll(dir, 0o700); err != nil {
+		must(err)
+	}
 	ctx := context.Background()
 	cfg := config.Defaults(dir)
 	for i, s := range r.Servers {
@@ -86,11 +95,21 @@ func main() {
 	start := time.Now()
 	sol, err := res.Resolve(ctx, core.ResolveRequest{Title: t, Client: caps, User: &core.User{ID: 1, IsOwner: true}})
 	tResolve := time.Since(start)
+	if *trace {
+		fmt.Printf("trace resolve_total=%s (resolver search/fetch/health instrumentation available below)\n", tResolve.Round(time.Millisecond))
+	}
 	for _, tr := range res.Traces() {
+		if *trace {
+			fmt.Printf("trace search=%s winner=%s\n", tr.SearchDuration.Round(time.Millisecond), tr.Winner)
+		}
 		n := 0
 		for _, c := range tr.Candidates {
 			if !c.Rejected || c.HealthChecked {
-				fmt.Printf("  cand score=%.1f rej=%v hc=%v healthy=%v %s %s\n", c.Score, c.Rejected, c.HealthChecked, c.Healthy, c.Name, c.Reason)
+				if *trace {
+					fmt.Printf("  cand fetch=%s health=%s score=%.1f rej=%v hc=%v healthy=%v %s %s\n", c.FetchDuration.Round(time.Millisecond), c.HealthDuration.Round(time.Millisecond), c.Score, c.Rejected, c.HealthChecked, c.Healthy, c.Name, c.Reason)
+				} else {
+					fmt.Printf("  cand score=%.1f rej=%v hc=%v healthy=%v %s %s\n", c.Score, c.Rejected, c.HealthChecked, c.Healthy, c.Name, c.Reason)
+				}
 				if n++; n > 6 {
 					break
 				}

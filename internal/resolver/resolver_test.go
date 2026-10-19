@@ -58,6 +58,25 @@ func (f fakeHealth) Check(ctx context.Context, nzb []byte) (bool, error) {
 	return true, nil
 }
 
+type parallelHealth struct {
+	active atomic.Int64
+	peak   atomic.Int64
+	delay  time.Duration
+}
+
+func (f *parallelHealth) Check(ctx context.Context, _ []byte) (bool, error) {
+	n := f.active.Add(1)
+	for p := f.peak.Load(); n > p && !f.peak.CompareAndSwap(p, n); p = f.peak.Load() {
+	}
+	defer f.active.Add(-1)
+	select {
+	case <-time.After(f.delay):
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
 func rel(id, name string, sizeMB int64) core.Release {
 	return core.Release{ID: id, GUID: id, Indexer: "fake", Name: name, NZBURL: "x", Size: sizeMB << 20, PubDate: time.Now().Add(-30 * 24 * time.Hour), Grabs: 10}
 }
@@ -160,6 +179,26 @@ func TestResolveHealthFailoverAndTraces(t *testing.T) {
 	}
 	if !sawUnhealthy {
 		t.Errorf("trace candidates %+v", traces[0].Candidates)
+	}
+}
+
+func TestResolveValidatesLeadingCandidatesConcurrentlyInRankOrder(t *testing.T) {
+	idx := &fakeIndexer{releases: movieReleases()}
+	h := &parallelHealth{delay: 40 * time.Millisecond}
+	svc := New(idx, h, nil, testCfg(), Options{})
+	started := time.Now()
+	got, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Release.ID != "uhd" {
+		t.Fatalf("winner %q; want highest-ranked uhd", got.Release.ID)
+	}
+	if h.peak.Load() < 2 {
+		t.Fatalf("health checks were not concurrent (peak=%d)", h.peak.Load())
+	}
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatalf("validation took %s; candidates likely serialized", time.Since(started))
 	}
 }
 
