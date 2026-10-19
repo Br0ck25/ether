@@ -21,6 +21,8 @@ type renderOpts struct {
 	// inSection: the container already carries the section attributes
 	// (section listings, children), so items omit librarySection*.
 	inSection bool
+	// detailEpisodes renders episodes in full (hub rows, like PMS).
+	detailEpisodes bool
 	// state holds the user's watch status for the rendered keys.
 	state map[core.RatingKey]core.WatchStatus
 }
@@ -293,9 +295,11 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 		}
 	}
 
-	// Tags.
+	// Tags. PMS renders episodes inside hubs in full (tag ids, Guid,
+	// streams), everything else in lists with three plain tags of a kind.
+	detail := o.detail || (o.detailEpisodes && t.Type == core.TypeEpisode)
 	maxTags := 3
-	if o.detail {
+	if detail {
 		maxTags = math.MaxInt
 	}
 	genres, countries := t.Genres, t.Countries
@@ -307,7 +311,7 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 			break
 		}
 		tag := model.Tag{Tag: g}
-		if o.detail {
+		if detail {
 			tag.ID = tagID("genre", g)
 			tag.Filter = "genre=" + url.QueryEscape(g)
 		}
@@ -318,24 +322,27 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 			break
 		}
 		tag := model.Tag{Tag: c}
-		if o.detail {
+		if detail {
 			tag.ID = tagID("country", c)
 			tag.Filter = "country=" + url.QueryEscape(c)
 		}
 		m.Country = append(m.Country, tag)
 	}
-	m.Director = s.personTags(t.Directors, "director", maxTags, o.detail, false)
-	m.Writer = s.personTags(t.Writers, "writer", maxTags, o.detail, false)
-	m.Role = s.personTags(t.Cast, "actor", maxTags, o.detail, true)
+	if t.Type != core.TypeShow || detail {
+		// Show tiles in PMS lists carry Role tags only.
+		m.Director = s.personTags(t.Directors, "director", maxTags, detail, false)
+		m.Writer = s.personTags(t.Writers, "writer", maxTags, detail, false)
+	}
+	m.Role = s.personTags(t.Cast, "actor", maxTags, detail, true)
 	if t.CollectionID > 0 && t.CollectionName != "" {
 		tag := model.Tag{Tag: t.CollectionName}
-		if o.detail {
+		if detail {
 			tag.ID = t.CollectionID
 			tag.Filter = "collection=" + strconv.FormatInt(t.CollectionID, 10)
 		}
 		m.Collection = []model.Tag{tag}
 	}
-	if o.detail {
+	if detail {
 		m.Guid = externalGuids(t)
 		if t.Rating > 0 {
 			m.Rating_ = []model.RatingTag{{Image: "themoviedb://image.rating", Value: math.Round(t.Rating*10) / 10, Type: "audience"}}
@@ -349,7 +356,7 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 	}
 
 	if o.media && isPlayable(t.Type) {
-		m.Media = s.mediaFor(ctx, pr, t, o.detail)
+		m.Media = s.mediaFor(ctx, pr, t, detail)
 		if m.Duration == 0 && len(m.Media) > 0 {
 			m.Duration = m.Media[0].Duration
 		}
@@ -655,10 +662,12 @@ func (s *Server) buildStreams(key core.RatingKey, info core.MediaInfo, sel selec
 			if i == audioSelected {
 				ps.Selected = model.Ptr(true)
 			}
+			ps.CanNormalizeLoudness = model.Ptr(false) // no loudness analysis
 			ps.DisplayTitle = audioDisplayTitle(st)
-			ps.ExtendedDisplayTitle = extendedTitle(st.Title, ps.DisplayTitle)
+			ps.ExtendedDisplayTitle = extendedTitle(st, ps.DisplayTitle, audioCodecLabel(st.Codec))
 		case "subtitle":
 			ps.StreamType = 3
+			ps.CanAutoSync = model.Ptr(false) // no voice-activity data
 			if st.External {
 				ps.Key = "/library/streams/" + strconv.FormatInt(id, 10)
 				ps.Format = ps.Codec
@@ -668,7 +677,7 @@ func (s *Server) buildStreams(key core.RatingKey, info core.MediaInfo, sel selec
 				ps.Selected = model.Ptr(true)
 			}
 			ps.DisplayTitle = subtitleDisplayTitle(st)
-			ps.ExtendedDisplayTitle = extendedTitle(st.Title, ps.DisplayTitle)
+			ps.ExtendedDisplayTitle = extendedTitle(st, ps.DisplayTitle, strings.ToUpper(plexCodec(st.Codec)))
 		default:
 			continue
 		}
@@ -677,11 +686,18 @@ func (s *Server) buildStreams(key core.RatingKey, info core.MediaInfo, sel selec
 	return out
 }
 
-func extendedTitle(title, display string) string {
-	if title == "" {
+// extendedTitle is PMS's extendedDisplayTitle for audio and subtitle
+// streams: the display title, or for a titled track "<title> (<language>
+// <codec>)" ("Stereo (English DTS)", "SDH (English SRT)").
+func extendedTitle(st core.StreamInfo, display, codec string) string {
+	if st.Title == "" {
 		return display
 	}
-	return title + " (" + display + ")"
+	lang := languageName(st.Language)
+	if lang == "" {
+		lang = "Unknown"
+	}
+	return st.Title + " (" + lang + " " + codec + ")"
 }
 
 func pickAudio(info core.MediaInfo, u *core.User) int {
@@ -844,10 +860,26 @@ func videoDisplayTitle(st core.StreamInfo) string {
 	case "hevc":
 		codec = "HEVC"
 	}
-	if st.Profile != "" {
+	// PMS names the profile only where it matters ("HEVC Main 10"), not
+	// for H.264 ("1080p (H.264)") or plain HEVC Main.
+	if p := strings.ToLower(st.Profile); p != "" && p != "main" && strings.ToLower(st.Codec) != "h264" {
 		codec += " " + titleCase(st.Profile)
 	}
 	return res + " (" + codec + ")"
+}
+
+// audioCodecLabel is the codec as PMS writes it in stream titles.
+func audioCodecLabel(c string) string {
+	codec := strings.ToUpper(plexCodec(c))
+	switch codec {
+	case "DCA":
+		return "DTS"
+	case "DCA-MA":
+		return "DTS-HD MA"
+	case "TRUEHD":
+		return "TrueHD"
+	}
+	return codec
 }
 
 func titleCase(s string) string {
@@ -882,16 +914,7 @@ func audioDisplayTitle(st core.StreamInfo) string {
 	if lang == "" {
 		lang = "Unknown"
 	}
-	codec := strings.ToUpper(plexCodec(st.Codec))
-	switch codec {
-	case "DCA":
-		codec = "DTS"
-	case "DCA-MA":
-		codec = "DTS-HD MA"
-	case "TRUEHD":
-		codec = "TrueHD"
-	}
-	inner := codec
+	inner := audioCodecLabel(st.Codec)
 	if ch := channelsLabel(st.Channels, st.ChannelLayout); ch != "" {
 		inner += " " + ch
 	}

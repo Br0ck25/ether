@@ -260,18 +260,21 @@ type Metadata struct {
 	Media           []Media          `plex:"Media"`
 	Image           []Image          `plex:"Image"`
 	UltraBlurColors *UltraBlurColors `plex:"UltraBlurColors,object"`
-	Genre           []Tag            `plex:"Genre"`
-	Country         []Tag            `plex:"Country"`
-	Guid            []GUID           `plex:"Guid"`
-	Rating_         []RatingTag      `plex:"Rating"`
-	Collection      []Tag            `plex:"Collection"`
-	Director        []Tag            `plex:"Director"`
-	Writer          []Tag            `plex:"Writer"`
-	Role            []Tag            `plex:"Role"`
-	Producer        []Tag            `plex:"Producer"`
-	Label           []Tag            `plex:"Label"`
-	Similar         []Tag            `plex:"Similar"`
-	Studio_         []Tag            `plex:"Studio"`
+	// UltraBlurList is UltraBlurColors as decision responses send it: an
+	// array in JSON. Set one or the other, never both.
+	UltraBlurList []UltraBlurColors `plex:"UltraBlurColors"`
+	Genre         []Tag             `plex:"Genre"`
+	Country       []Tag             `plex:"Country"`
+	Guid          []GUID            `plex:"Guid"`
+	Rating_       []RatingTag       `plex:"Rating"`
+	Collection    []Tag             `plex:"Collection"`
+	Director      []Tag             `plex:"Director"`
+	Writer        []Tag             `plex:"Writer"`
+	Role          []Tag             `plex:"Role"`
+	Producer      []Tag             `plex:"Producer"`
+	Label         []Tag             `plex:"Label"`
+	Similar       []Tag             `plex:"Similar"`
+	Studio_       []Tag             `plex:"Studio"`
 
 	User             *SessionUser   `plex:"User,object"`
 	Player           *Player        `plex:"Player,object"`
@@ -329,6 +332,7 @@ type Extras struct {
 
 // Tag is Genre, Director, Writer, Role, Country, Collection... entries.
 type Tag struct {
+	alpha  bool
 	ID     int64  `plex:"id,omitempty"`
 	Filter string `plex:"filter,omitempty"`
 	Tag    string `plex:"tag"`
@@ -344,6 +348,7 @@ type GUID struct {
 }
 
 type RatingTag struct {
+	alpha bool
 	Image string  `plex:"image"`
 	Value float64 `plex:"value"`
 	Type  string  `plex:"type"`
@@ -359,6 +364,7 @@ type Image struct {
 // newer Plex apps blend into a blurred background behind an item. One
 // element in XML, an object (not an array) in JSON.
 type UltraBlurColors struct {
+	alpha       bool
 	TopLeft     string `plex:"topLeft"`
 	TopRight    string `plex:"topRight"`
 	BottomRight string `plex:"bottomRight"`
@@ -420,8 +426,10 @@ type Stream struct {
 	alpha                bool
 	ID                   int64   `plex:"id"`
 	StreamType           int     `plex:"streamType"`
-	Default              *bool   `plex:"default"`
+	CanAutoSync          *bool   `plex:"canAutoSync"`          // subtitles
+	CanNormalizeLoudness *bool   `plex:"canNormalizeLoudness"` // audio
 	Selected             *bool   `plex:"selected"`
+	Default              *bool   `plex:"default"`
 	Forced               *bool   `plex:"forced"`
 	Codec                string  `plex:"codec,omitempty"`
 	Index                *int    `plex:"index"`

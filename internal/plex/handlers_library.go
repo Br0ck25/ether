@@ -61,6 +61,44 @@ const viewModeList = 65592
 // defaultUnpagedLimit bounds list responses for clients that don't page.
 const defaultUnpagedLimit = 500
 
+// sectionPrefs is /library/sections/{id}/prefs: the library settings the
+// apps read (visibility, collection mode, episode sorting and ordering,
+// season display), with the values Ether actually behaves by. PMS types
+// default/value as strings in this endpoint's JSON, unlike /:/prefs.
+// Writes are not supported (Ether's libraries are generated).
+func sectionPrefs(sec Section) []model.Setting {
+	set := func(id, label, summary, typ, def, val, enum string) model.Setting {
+		return model.Setting{ID: id, Label: label, Summary: summary, Type: typ, Default: def, Value: val, EnumValues: enum}
+	}
+	visibility := set("hidden", "Visibility", "Restrict where content from this library should appear.", "int", "0", "0",
+		"0:Include in home screen and global search|1:Exclude from home screen|2:Exclude from home screen and global search")
+	collections := set("collectionMode", "Collections", "How to display collections on the Library tab.", "int", "2", "2",
+		"0:Hide collections but show their items|1:Hide items which are in collections|2:Show collections and their items")
+	original := set("originalTitles", "Use original titles", "Use the original titles for all items regardless of the library language.", "bool", "false", "false", "")
+	if sec.Type == core.TypeShow {
+		return []model.Setting{
+			visibility,
+			set("episodeSort", "Episode sorting", "How to sort the episodes for shows.", "text", "-1", "-1", "0:Oldest first|1:Newest first"),
+			set("showOrdering", "Episode ordering", "Determines the ordering of episodes.", "text", "tmdbAiring", "tmdbAiring", "tmdbAiring:The Movie Database"),
+			set("useSeasonTitles", "Use season titles", "Use season titles when available.", "bool", "false", "false", ""),
+			original,
+			set("enableBIFGeneration", "Enable video preview thumbnails", "Generate video preview thumbnails for items in this library when enabled in server settings.", "bool", "true", "false", ""),
+			collections,
+			set("flattenSeasons", "Seasons", "Choose whether to show or hide seasons.", "int", "0", "0", "0:Show|2:Hide for single-season series|1:Hide"),
+			set("enableIntroMarkerGeneration", "Enable intro detection", "Detect intros and allow intro skipping for items in this library when enabled in server settings.", "bool", "true", "false", ""),
+			set("enableCreditsMarkerGeneration", "Enable credits detection", "Detect credits and allow credits skipping for items in this library when enabled in server settings.", "bool", "true", "false", ""),
+		}
+	}
+	return []model.Setting{
+		visibility,
+		set("enableCinemaTrailers", "Enable Cinema Trailers", "Allow Cinema Trailers to play before items in this library.", "bool", "true", "false", ""),
+		original,
+		set("enableBIFGeneration", "Enable video preview thumbnails", "Generate video preview thumbnails for items in this library when enabled in server settings.", "bool", "true", "false", ""),
+		collections,
+		set("enableCreditsMarkerGeneration", "Enable credits detection", "Detect credits and allow credits skipping for items in this library when enabled in server settings.", "bool", "true", "false", ""),
+	}
+}
+
 func sectionTypeTitle(sec Section) (typeTitle, all string) {
 	if sec.Type == core.TypeShow {
 		return "TV Shows", "All Shows"
@@ -546,7 +584,8 @@ func (s *Server) handleSectionSub(w http.ResponseWriter, r *http.Request) {
 		}
 		s.write(w, r, &model.MediaContainer{Size: len(dirs), Directory: dirs})
 	case "prefs":
-		s.write(w, r, &model.MediaContainer{Size: 0})
+		settings := sectionPrefs(sec)
+		s.write(w, r, &model.MediaContainer{Size: len(settings), Setting: settings})
 	case "refresh", "analyze", "emptyTrash":
 		s.ownerOnly(s.handleOK)(w, r)
 	default:

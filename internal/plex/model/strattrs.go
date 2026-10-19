@@ -33,7 +33,15 @@ func (m Media) StringAttrs() []string {
 	if !m.alpha {
 		return nil
 	}
-	return []string{"id", "hasVoiceActivity"}
+	return []string{"id", "hasVoiceActivity", "aspectRatio"}
+}
+
+// StringAttrs implements StringAttrer: decision responses quote tag ids.
+func (t Tag) StringAttrs() []string {
+	if !t.alpha {
+		return nil
+	}
+	return []string{"id"}
 }
 
 // StringAttrs implements StringAttrer.

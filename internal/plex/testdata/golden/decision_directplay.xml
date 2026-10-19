@@ -3,23 +3,21 @@
 <Video addedAt="1790812800" art="/library/metadata/1000000000000550/art/1790812800" audienceRating="8.4" audienceRatingImage="themoviedb://image.rating" contentRating="R" duration="8340000" guid="com.plexapp.agents.themoviedb://550?lang=en" key="/library/metadata/1000000000000550" librarySectionID="1" librarySectionKey="/library/sections/1" librarySectionTitle="Movies" originallyAvailableAt="1999-10-15" ratingKey="1000000000000550" slug="fight-club" studio="Fox 2000 Pictures" summary="An insomniac office worker..." tagline="Mischief. Mayhem. Soap." thumb="/library/metadata/1000000000000550/thumb/1790812800" title="Fight Club" type="movie" updatedAt="1790812800" year="1999">
 <Media aspectRatio="1.78" audioChannels="6" audioCodec="eac3" bitrate="7600" container="mkv" duration="8340000" hasVoiceActivity="0" height="1080" id="1000000000000550" videoCodec="h264" videoFrameRate="24p" videoProfile="high" videoResolution="1080" width="1920" selected="1">
 <Part container="mkv" duration="8340000" file="/ether/Fight Club (1999).mkv" id="1000000000000550" key="/library/parts/1000000000000550/1792324800/file.mkv" size="8000000000" videoProfile="high" decision="directplay" selected="1">
-<Stream bitDepth="8" bitrate="7000" chromaSubsampling="4:2:0" codec="h264" default="1" displayTitle="1080p (H.264 High)" extendedDisplayTitle="1080p (H.264 High)" frameRate="23.976" height="1080" id="1387133930" index="0" profile="high" streamType="1" width="1920" location="direct" />
-<Stream audioChannelLayout="5.1(side)" bitrate="640" channels="6" codec="eac3" default="1" displayTitle="English (EAC3 5.1)" extendedDisplayTitle="English (EAC3 5.1)" id="1875505719" index="1" language="English" languageCode="eng" languageTag="en" samplingRate="48000" streamType="2" selected="1" location="direct" />
-<Stream bitrate="128" channels="2" codec="aac" displayTitle="French (AAC Stereo)" extendedDisplayTitle="French (AAC Stereo)" id="363877508" index="2" language="French" languageCode="fre" languageTag="fr" samplingRate="48000" streamType="2" location="direct" />
-<Stream codec="srt" displayTitle="English (SRT)" extendedDisplayTitle="English (SRT)" id="852249297" index="3" language="English" languageCode="eng" languageTag="en" streamType="3" location="direct" />
-<Stream codec="srt" displayTitle="Spanish (SRT External)" extendedDisplayTitle="Spanish (SRT External)" external="1" format="srt" id="1433646774" key="/library/streams/1433646774" language="Spanish" languageCode="spa" languageTag="es" streamType="3" location="direct" />
+<Stream bitDepth="8" bitrate="7000" chromaSubsampling="4:2:0" codec="h264" default="1" displayTitle="1080p" extendedDisplayTitle="1080p (H.264)" frameRate="23.976" height="1080" id="1387133930" index="0" profile="high" streamType="1" width="1920" location="direct" />
+<Stream audioChannelLayout="5.1(side)" bitrate="640" canNormalizeLoudness="0" channels="6" codec="eac3" default="1" displayTitle="English (EAC3 5.1)" extendedDisplayTitle="English (EAC3 5.1)" id="1875505719" index="1" language="English" languageCode="eng" languageTag="en" samplingRate="48000" streamType="2" selected="1" location="direct" />
+<Stream bitrate="128" canNormalizeLoudness="0" channels="2" codec="aac" displayTitle="French (AAC Stereo)" extendedDisplayTitle="French (AAC Stereo)" id="363877508" index="2" language="French" languageCode="fre" languageTag="fr" samplingRate="48000" streamType="2" location="direct" />
+<Stream canAutoSync="0" codec="srt" displayTitle="English (SRT)" extendedDisplayTitle="English (SRT)" id="852249297" index="3" language="English" languageCode="eng" languageTag="en" streamType="3" location="direct" />
+<Stream canAutoSync="0" codec="srt" displayTitle="Spanish (SRT External)" extendedDisplayTitle="Spanish (SRT External)" external="1" format="srt" id="1433646774" key="/library/streams/1433646774" language="Spanish" languageCode="spa" languageTag="es" streamType="3" location="direct" />
 </Part>
 </Media>
-<UltraBlurColors topLeft="8c000c" topRight="542400" bottomRight="600007" bottomLeft="538700" />
-<Genre id="1106135894" filter="genre=Drama" tag="Drama" />
-<Genre id="45642825" filter="genre=Thriller" tag="Thriller" />
-<Country id="1765229598" filter="country=United+States+of+America" tag="United States of America" />
-<Guid id="imdb://tt0137523" />
-<Guid id="tmdb://550" />
-<Rating image="themoviedb://image.rating" value="8.4" type="audience" />
-<Director id="7467" filter="director=7467" tag="David Fincher" tagKey="tmdb-person-7467" />
-<Writer id="7468" filter="writer=7468" tag="Chuck Palahniuk" tagKey="tmdb-person-7468" />
-<Role id="287" filter="actor=287" tag="Brad Pitt" tagKey="tmdb-person-287" role="Tyler Durden" thumb="https://image.tmdb.org/t/p/w185/brad.jpg" />
-<Role id="819" filter="actor=819" tag="Edward Norton" tagKey="tmdb-person-819" role="The Narrator" />
+<UltraBlurColors bottomLeft="538700" bottomRight="600007" topLeft="8c000c" topRight="542400" />
+<Genre filter="genre=Drama" id="1106135894" tag="Drama" />
+<Genre filter="genre=Thriller" id="45642825" tag="Thriller" />
+<Country filter="country=United+States+of+America" id="1765229598" tag="United States of America" />
+<Rating image="themoviedb://image.rating" type="audience" value="8.4" />
+<Director filter="director=7467" id="7467" tag="David Fincher" tagKey="tmdb-person-7467" />
+<Writer filter="writer=7468" id="7468" tag="Chuck Palahniuk" tagKey="tmdb-person-7468" />
+<Role filter="actor=287" id="287" role="Tyler Durden" tag="Brad Pitt" tagKey="tmdb-person-287" thumb="https://image.tmdb.org/t/p/w185/brad.jpg" />
+<Role filter="actor=819" id="819" role="The Narrator" tag="Edward Norton" tagKey="tmdb-person-819" />
 </Video>
 </MediaContainer>

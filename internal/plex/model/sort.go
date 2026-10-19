@@ -39,6 +39,24 @@ func (p *Part) SetAlphabetical() { p.alpha = true }
 func (p Part) AttrOrder() (bool, []string, []string) { return p.alpha, nil, decisionTrailing }
 
 // SetAlphabetical switches the element to PMS's decision-response ordering.
+func (r *RatingTag) SetAlphabetical() { r.alpha = true }
+
+// AttrOrder implements AttrSorter.
+func (r RatingTag) AttrOrder() (bool, []string, []string) { return r.alpha, nil, nil }
+
+// SetAlphabetical switches the element to PMS's decision-response ordering.
+func (u *UltraBlurColors) SetAlphabetical() { u.alpha = true }
+
+// AttrOrder implements AttrSorter.
+func (u UltraBlurColors) AttrOrder() (bool, []string, []string) { return u.alpha, nil, nil }
+
+// SetAlphabetical switches the element to PMS's decision-response ordering.
+func (t *Tag) SetAlphabetical() { t.alpha = true }
+
+// AttrOrder implements AttrSorter.
+func (t Tag) AttrOrder() (bool, []string, []string) { return t.alpha, nil, nil }
+
+// SetAlphabetical switches the element to PMS's decision-response ordering.
 func (s *Stream) SetAlphabetical() { s.alpha = true }
 
 // AttrOrder implements AttrSorter.

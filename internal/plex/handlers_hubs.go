@@ -48,7 +48,10 @@ func hubItemsKey(h core.Hub, hc hubCtx) string {
 func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
 	h := hs.Hub
 	items := s.filterAllowed(pr.User, h.Items)
-	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state})
+	// Related hubs (detail pages, postplay) omit the items' library section
+	// and the hub's promoted flag, like PMS.
+	related := hc.related != 0
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detailEpisodes: true})
 	keys := make([]string, 0, len(items))
 	for _, t := range items {
 		keys = append(keys, t.Key.String())
@@ -80,7 +83,7 @@ func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubC
 		Style:         style,
 		Metadata:      md,
 	}
-	if !hs.noPromoted {
+	if !hs.noPromoted && !related {
 		mh.Promoted = model.Ptr(h.Promoted)
 	}
 	if len(keys) > 0 {
@@ -488,6 +491,11 @@ func (s *Server) handleHubSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	q := r.URL.Query()
+	if strings.TrimSpace(q.Get("query")) == "" {
+		// PMS rejects an empty hub search with its HTML 400 page.
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	limit := 10
 	if n, _ := strconv.Atoi(q.Get("limit")); n > 0 {
 		limit = min(n, 100)
