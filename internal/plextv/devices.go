@@ -24,16 +24,47 @@ import (
 // c must carry the server identity: plex.tv associates the PUT with the
 // device whose client identifier matches the path.
 func (c *Client) PublishConnections(ctx context.Context, serverToken string, uris []string) error {
+	return c.PublishConnectionsWith(ctx, serverToken, uris, nil)
+}
+
+// PublishFlags are the capability flags PMS appends to its device publish
+// (after the Connection[][uri] list, in this order: httpsEnabled,
+// httpsRequired, dnsRebindingProtection, natLoopbackSupported). plex.tv uses
+// httpsEnabled to offer clients the https plex.direct form of each
+// published http URI.
+type PublishFlags struct {
+	HTTPSEnabled           bool
+	HTTPSRequired          bool
+	DNSRebindingProtection bool
+	NATLoopbackSupported   bool
+}
+
+// PublishConnectionsWith publishes connection URIs plus capability flags;
+// flags=nil sends only the URIs.
+func (c *Client) PublishConnectionsWith(ctx context.Context, serverToken string, uris []string, flags *PublishFlags) error {
 	if c.id.ClientIdentifier == "" {
 		return errors.New("plextv: machine identifier required")
 	}
 	if len(uris) == 0 {
 		uris = []string{""}
 	}
+	q := url.Values{"Connection[][uri]": uris}
+	if flags != nil {
+		b := func(v bool) []string {
+			if v {
+				return []string{"1"}
+			}
+			return []string{"0"}
+		}
+		q["httpsEnabled"] = b(flags.HTTPSEnabled)
+		q["httpsRequired"] = b(flags.HTTPSRequired)
+		q["dnsRebindingProtection"] = b(flags.DNSRebindingProtection)
+		q["natLoopbackSupported"] = b(flags.NATLoopbackSupported)
+	}
 	_, err := c.do(ctx, request{
 		method: http.MethodPut,
 		path:   "/devices/" + url.PathEscape(c.id.ClientIdentifier),
-		query:  url.Values{"Connection[][uri]": uris},
+		query:  q,
 		token:  serverToken,
 		accept: "application/xml",
 	})

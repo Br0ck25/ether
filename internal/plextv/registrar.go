@@ -69,6 +69,11 @@ type Status struct {
 	Cert      CertInfo `json:"cert"`
 	CertError string   `json:"certError,omitempty"`
 
+	// Presence is the plex.tv pubsub stream that marks the server online.
+	Presence PresenceStatus `json:"presence"`
+	// PlexReachable is plex.tv's last notifyConnectivity verdict for our
+	// published address (nil until one arrives).
+	PlexReachable   *bool     `json:"plexReachable,omitempty"`
 	Friends         int       `json:"friends"`
 	LastFriendSync  time.Time `json:"lastFriendSync,omitempty"`
 	FriendSyncError string    `json:"friendSyncError,omitempty"`
@@ -128,6 +133,9 @@ type Registrar struct {
 	pubFail   int
 	forcePub  bool
 	mappingOn bool
+	asyncID   string // outstanding connectivity request
+
+	presence *Presence
 }
 
 const (
@@ -192,6 +200,15 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 		wake:   make(chan struct{}, 1),
 		next:   map[string]time.Time{},
 	}
+	r.presence = NewPresence(PresenceOptions{
+		Client: client,
+		Credentials: func() (int64, string, string, bool) {
+			c := r.o.Config.Get()
+			return c.Plex.OwnerPlexID, c.Server.MachineIdentifier, c.Plex.Token,
+				c.Plex.Token != "" && c.Plex.OwnerPlexID != 0 && c.Server.MachineIdentifier != ""
+		},
+		OnMessage: r.onPubsub,
+	})
 	r.refreshConfigStatus(o.Config.Get())
 	return r, nil
 }
@@ -214,8 +231,13 @@ func (r *Registrar) Start(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
-	r.done = make(chan struct{})
-	go r.loop(ctx, r.done)
+	done := make(chan struct{})
+	r.done = done
+	loopDone := make(chan struct{})
+	go r.loop(ctx, loopDone)
+	presenceDone := make(chan struct{})
+	go func() { defer close(presenceDone); r.presence.Run(ctx) }()
+	go func() { <-loopDone; <-presenceDone; close(done) }()
 	return nil
 }
 
@@ -266,6 +288,7 @@ func (r *Registrar) Status() Status {
 	if r.o.Certs != nil {
 		st.Cert = r.o.Certs.Info()
 	}
+	st.Presence = r.presence.Status()
 	return st
 }
 
@@ -507,7 +530,12 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 		uris = lanOnly
 	}
 	now := r.o.Now()
-	err := r.client.PublishConnections(ctx, cfg.Plex.Token, uris)
+	flags := &PublishFlags{HTTPSRequired: cfg.Plex.SecureConnections == "required"}
+	if r.o.Certs != nil {
+		ci := r.o.Certs.Info()
+		flags.HTTPSEnabled = ci.Present && !ci.SelfSigned && cfg.Plex.SecureConnections != "disabled"
+	}
+	err := r.client.PublishConnectionsWith(ctx, cfg.Plex.Token, uris, flags)
 
 	r.mu.Lock()
 	r.st.Connections = conns
@@ -550,7 +578,13 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	}
 	regErr := r.client.RegisterServer(ctx, cfg.Plex.Token, reg)
 	if regErr == nil && cfg.Plex.RemoteAccess {
-		_, regErr = r.client.ReportConnectivity(ctx, cfg.Plex.Token)
+		var id string
+		id, regErr = r.client.ReportConnectivity(ctx, cfg.Plex.Token)
+		if regErr == nil {
+			r.mu.Lock()
+			r.asyncID = id
+			r.mu.Unlock()
+		}
 	}
 	if regErr != nil && ctx.Err() == nil {
 		r.log.Debug("servers.xml registration failed (non-fatal)", "err", regErr)
@@ -754,4 +788,30 @@ func (r *Registrar) RefreshOwner(ctx context.Context) error {
 		return r.o.Users.SetOwner(ctx, *acct, cfg.Plex.Token)
 	}
 	return nil
+}
+
+// onPubsub handles events pushed over the presence stream.
+func (r *Registrar) onPubsub(m PubsubMessage) {
+	switch m.Command {
+	case "notifyConnectivity":
+		r.mu.Lock()
+		// Like PMS, only trust the answer to our outstanding request.
+		if r.asyncID == "" || m.AsyncIdentifier != r.asyncID {
+			r.mu.Unlock()
+			return
+		}
+		ok := m.Reachable()
+		r.st.PlexReachable = &ok
+		r.asyncID = ""
+		r.mu.Unlock()
+		r.log.Info("plex.tv connectivity check", "reachable", ok)
+	case "refreshCertificate":
+		r.schedule(taskCert, time.Time{})
+		r.Trigger()
+	case "notifyResetToken", "notifyAccountChange":
+		r.schedule(taskFriends, time.Time{})
+		r.Trigger()
+	default:
+		r.log.Debug("pubsub event", "command", m.Command)
+	}
 }
