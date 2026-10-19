@@ -133,6 +133,11 @@ func becauseYouWatched(ts *Taste, t *core.Title) string {
 // (episode runtime for a show) minus the resume offset when in progress.
 // Zero when unknown or already finished.
 func (e *Engine) remainingRuntime(ctx context.Context, user *core.User, t *core.Title) time.Duration {
+	if t.Type == core.TypeShow {
+		if rem := e.nextEpisodeRuntime(ctx, user, t); rem > 0 {
+			return rem
+		}
+	}
 	rt := t.Runtime
 	var ws core.WatchStatus
 	if e.state != nil {
@@ -151,6 +156,46 @@ func (e *Engine) remainingRuntime(ctx context.Context, user *core.User, t *core.
 		return rt - ws.ViewOffset
 	}
 	return rt
+}
+
+// nextEpisodeRuntime uses the next unwatched episode for a show's detail
+// header. A series-level runtime is usually an average episode length, so
+// showing it as the viewer's finish time would be misleading.
+func (e *Engine) nextEpisodeRuntime(ctx context.Context, user *core.User, show *core.Title) time.Duration {
+	episodes, err := e.catalog.Grandchildren(ctx, show.Key)
+	if err != nil || len(episodes) == 0 {
+		return 0
+	}
+	keys := make([]core.RatingKey, 0, len(episodes))
+	for _, ep := range episodes {
+		if ep.Season > 0 {
+			keys = append(keys, ep.Key)
+		}
+	}
+	statuses := map[core.RatingKey]core.WatchStatus{}
+	if e.state != nil && len(keys) > 0 {
+		statuses, _ = e.state.GetMany(ctx, user.ID, keys)
+	}
+	for _, ep := range episodes {
+		if ep.Season == 0 || statuses[ep.Key].ViewCount > 0 {
+			continue
+		}
+		if !ep.Released.IsZero() && ep.Released.After(e.now()) {
+			continue
+		}
+		runtime := ep.Runtime
+		if runtime <= 0 {
+			runtime = statuses[ep.Key].Duration
+		}
+		if runtime <= 0 {
+			return 0
+		}
+		if offset := statuses[ep.Key].ViewOffset; offset > 0 && offset < runtime {
+			return runtime - offset
+		}
+		return runtime
+	}
+	return 0
 }
 
 // formatMicroHeader joins the parts that exist, e.g.

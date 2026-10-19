@@ -28,6 +28,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/episodeorder"
+	"github.com/braedonsaunders/ether/internal/extras"
 	"github.com/braedonsaunders/ether/internal/invites"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/llm"
@@ -118,6 +119,7 @@ type App struct {
 	trackprefs        *trackprefs.Service
 	markers           *markers.Service
 	localmedia        *localmedia.Service
+	extras            *extras.Service
 	backups           *backup.Service
 	migration         *migrate.Service
 	invites           *invites.Service
@@ -206,8 +208,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger:  log.With("component", "llm"),
 	})
 	a.recommend = recommend.New(recommend.Options{
-		Catalog: a.catalog, State: a.state, Collections: a.collections,
-		Trakt: a.trakt, LLM: a.llm, Events: a.state,
+		Catalog: a.catalog, State: a.state, LLM: a.llm,
 		Logger: log.With("component", "recommend"),
 	})
 	a.closers = append(a.closers, a.recommend.Close)
@@ -232,6 +233,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("personalization: %w", err)
 	}
 	a.recommend.SetScorer(a.personalize)
+	a.recommend.SetHomeSource(a.personalize)
 	a.collections.SetScorer(a.personalize) // "personal" collection sort
 	a.closers = append(a.closers, a.personalize.Close)
 	a.subtitles = subtitles.New(subtitles.Options{
@@ -274,15 +276,16 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 
 	a.trackprefs = trackprefs.New(a.db, trackprefs.Options{ShowName: func(ctx context.Context, id int64) string {
-		var name string
-		_ = a.db.QueryRowContext(ctx, `SELECT title FROM catalog_titles WHERE key=?`, int64(core.ShowKey(id))).Scan(&name)
-		return name
+		if title, err := a.catalog.CachedTitle(ctx, core.ShowKey(id)); err == nil {
+			return title.Title
+		}
+		return ""
 	}})
 	markerFFmpeg := cfg.Transcode.FFmpegPath
 	if a.transcoder != nil {
 		markerFFmpeg = a.transcoder.FFmpegPath()
 	}
-	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}})
+	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
 	a.closers = append(a.closers, func() { a.markers.Close() })
 	a.buildAdoption()
 	// Playback and prefetch.
@@ -404,6 +407,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.cleanHome = &cleanHomeStatus{app: a}
 	a.cfg.Subscribe(a.applyConfig)
 
+	a.buildExtras()
 	plexHandler, err := a.buildPlex(cfg)
 	if err != nil {
 		return fmt.Errorf("plex front end: %w", err)

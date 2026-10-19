@@ -7,16 +7,40 @@ import type { Indexer, UsenetProvider } from "../lib/types";
 import { calls, renderApp } from "./harness";
 
 const provider: UsenetProvider = {
-  id: "p1", name: "Main", host: "news.example.com", port: 563, tls: true,
-  username: "u", password: "pw", connections: 20, priority: 0, backfill: false, enabled: true,
+  id: "p1",
+  name: "Main",
+  host: "news.example.com",
+  port: 563,
+  tls: true,
+  username: "u",
+  password: "pw",
+  connections: 20,
+  priority: 0,
+  backfill: false,
+  enabled: true,
 };
 const indexer: Indexer = {
-  id: "i1", name: "Idx", url: "https://idx.example.com", apiKey: "k",
-  dailyLimit: 0, dailyGrabs: 0, priority: 0, enabled: true, movieCategories: null, tvCategories: null,
+  id: "i1",
+  name: "Idx",
+  url: "https://idx.example.com",
+  apiKey: "k",
+  dailyLimit: 0,
+  dailyGrabs: 0,
+  priority: 0,
+  enabled: true,
+  movieCategories: null,
+  tvCategories: null,
 };
 
 describe("canAdvance gating", () => {
-  const base = { plexDone: false, providers: [provider], indexers: [indexer], providerTests: {}, indexerTests: {}, skipped: {} };
+  const base = {
+    plexDone: false,
+    providers: [provider],
+    indexers: [indexer],
+    providerTests: {},
+    indexerTests: {},
+    skipped: {},
+  };
   it("blocks the Plex step until sign-in completes", () => {
     expect(canAdvance(0, base)).toBe(false);
     expect(canAdvance(0, { ...base, plexDone: true })).toBe(true);
@@ -26,7 +50,13 @@ describe("canAdvance gating", () => {
     expect(canAdvance(1, { ...base, providerTests: { p1: { status: "fail" } } })).toBe(false);
     expect(canAdvance(1, { ...base, providerTests: { p1: { status: "ok" } } })).toBe(true);
     expect(canAdvance(1, { ...base, providers: [{ ...provider, enabled: false }] })).toBe(false);
-    expect(canAdvance(1, { ...base, providers: [{ ...provider, host: "" }], providerTests: { p1: { status: "ok" } } })).toBe(false);
+    expect(
+      canAdvance(1, {
+        ...base,
+        providers: [{ ...provider, host: "" }],
+        providerTests: { p1: { status: "ok" } },
+      }),
+    ).toBe(false);
   });
   it("blocks indexers until tested; the skip escape hatch always passes", () => {
     expect(canAdvance(2, base)).toBe(false);
@@ -45,7 +75,11 @@ function renderWizard() {
   fake.state.config.setupComplete = false;
   fake.state.config.plex.ownerUsername = "alice";
   vi.stubGlobal("fetch", vi.fn(fake.fetch));
-  render(<MemoryRouter><Setup /></MemoryRouter>);
+  render(
+    <MemoryRouter>
+      <Setup />
+    </MemoryRouter>,
+  );
   return fake;
 }
 
@@ -64,7 +98,9 @@ describe("setup wizard", () => {
     // Both seeded providers must pass before continuing.
     expect(screen.getByRole("button", { name: "Save and continue" })).toBeDisabled();
     fireEvent.click(screen.getAllByRole("button", { name: /^Test$/ })[1]!);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save and continue" })).toBeEnabled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save and continue" })).toBeEnabled(),
+    );
   });
 
   it("the skip-test checkbox unblocks an untested step", async () => {

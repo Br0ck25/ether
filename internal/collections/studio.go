@@ -326,10 +326,8 @@ func (s *Service) tmdbCollectionPoster(ctx context.Context, sp core.CollectionSp
 		if src.Kind != "tmdbCollection" || src.ID <= 0 {
 			continue
 		}
-		var poster string
-		_ = s.db.QueryRowContext(ctx, `SELECT poster FROM catalog_collections WHERE tmdb_id=?`, src.ID).Scan(&poster)
-		if poster != "" {
-			return poster
+		if art, err := s.mirror.CollectionArt(ctx, src.ID); err == nil && art.PosterPath != "" {
+			return art.PosterPath
 		}
 	}
 	return ""

@@ -36,7 +36,8 @@ own Usenet providers and indexers.
 configured for Windows, macOS and Linux; available downloads will appear on the
 [Releases page](https://github.com/braedonsaunders/ether/releases).
 
-See [installation](docs/install.md) and the [user guide](docs/user-guide.md).
+See [installation](docs/install.md), the [user guide](docs/user-guide.md), and the
+[product and architecture specification](docs/design.md).
 Once Ether is running, open <http://localhost:32400/ether/> to sign in to Plex
 and configure your providers and indexers. Share the server through Plex to add
 viewers.

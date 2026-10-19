@@ -135,8 +135,17 @@ func (s *sqlStore) homeLayout(ctx context.Context, rules []core.LayoutRule) (cor
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT document FROM personalize_home_layout WHERE id=1`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
+		if rules == nil {
+			rules, err = s.layout(ctx)
+			if err != nil {
+				return core.HomeLayout{}, err
+			}
+		}
 		d := migrateLayout(rules)
-		return d, s.setHomeLayout(ctx, d)
+		if err := s.setHomeLayout(ctx, d); err != nil {
+			return d, err
+		}
+		return d, nil
 	}
 	if err != nil {
 		return core.HomeLayout{}, err
@@ -150,8 +159,19 @@ func (s *sqlStore) setHomeLayout(ctx context.Context, d core.HomeLayout) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO personalize_home_layout(id,document) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET document=excluded.document`, string(b))
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO personalize_home_layout(id,document) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET document=excluded.document`, string(b)); err != nil {
+		return err
+	}
+	// Legacy rules are consumed once. All subsequent reads and writes use the document.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM personalize_layout`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func normalizeHomeLayout(d core.HomeLayout) (core.HomeLayout, error) {
@@ -279,7 +299,6 @@ func (e *Engine) SetHomeLayout(ctx context.Context, d core.HomeLayout) (core.Hom
 	}
 	e.mu.Lock()
 	e.homeLayout = cloneLayout(d)
-	e.layout = nil
 	e.layoutVer++
 	e.mu.Unlock()
 	return cloneLayout(d), nil
@@ -618,4 +637,46 @@ func selectedCollections(d core.HomeLayout, user int64, section string, hc core.
 		}
 	}
 	return ids
+}
+
+// legacyLayoutView is a compatibility projection, never another saved model.
+// The current Designer reads the complete HomeLayout document directly.
+func legacyLayoutView(d core.HomeLayout) []core.LayoutRule {
+	out := []core.LayoutRule{}
+	appendPages := func(pages []core.LayoutPage, userID int64) {
+		for _, p := range pages {
+			r := core.LayoutRule{ID: fmt.Sprintf("layout-%d-%s", userID, p.Section), Section: p.Section, MaxRows: p.MaxRows, Scope: core.LayoutScope{All: userID == 0}}
+			if userID != 0 {
+				r.Scope.UserIDs = []int64{userID}
+			}
+			for _, row := range p.Rows {
+				rr := core.LayoutRowRule{HubID: row.Row, When: row.When}
+				switch {
+				case row.Status == "off":
+					rr.Action = core.LayoutHide
+				case row.Status == "always":
+					rr.Action = core.LayoutPin
+					if row.Slot > 0 {
+						position := row.Slot - 1
+						rr.Position = &position
+					}
+				case row.Priority > 1:
+					rr.Action = core.LayoutBoost
+				case row.Priority > 0 && row.Priority < 1:
+					rr.Action = core.LayoutBury
+				default:
+					continue
+				}
+				r.Rows = append(r.Rows, rr)
+			}
+			if len(r.Rows) > 0 || r.MaxRows > 0 {
+				out = append(out, r)
+			}
+		}
+	}
+	appendPages(d.Global, 0)
+	for _, v := range d.Viewers {
+		appendPages(v.Pages, v.UserID)
+	}
+	return out
 }

@@ -240,6 +240,9 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 		}
 		dec.Reason = "Direct stream preserves playback across source changes."
 	}
+	if v := ps.Info.Video(); v != nil {
+		s.log.Debug("playback media decision", "key", p.key, "client", pr.ClientID, "device", pr.Device, "model", pr.Model, "platformVersion", pr.PlatformVersion, "video", v.Codec, "videoProfile", v.Profile, "height", v.Height, "bitDepth", v.BitDepth, "transfer", v.ColorTransfer, "dvProfile", v.DolbyVisionProfile, "dvLevel", v.DolbyVisionLevel, "dvCompatibility", v.DolbyVisionCompatibilityID, "kind", dec.Kind, "outputContainer", dec.Container, "videoCopy", dec.VideoCopy, "audioCopy", dec.AudioCopy, "hdrCap", p.caps.HDR10, "dvCap", p.caps.DolbyVision, "profileExtra", pr.ProfileExtra)
+	}
 	s.transcodes.put(&transcodeEntry{
 		id: p.sessionID, playID: ps.ID, userID: pr.User.ID, clientID: pr.ClientID, key: p.key,
 		decision: dec, info: ps.Info, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
@@ -254,6 +257,9 @@ func onDemandSession(ps *core.PlaySession) bool {
 // handleDecision is /video/:/transcode/universal/decision.
 func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 	if s.handleLiveTVPlayback(w, r) {
+		return
+	}
+	if s.handleExtraPlayback(w, r) {
 		return
 	}
 	ctx := r.Context()
@@ -435,13 +441,17 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		part.Stream = kept
 		return m
 	}
-	// Remux or transcode into HLS (mpegts).
+	// Describe the actual HLS segment container so native MDE does not see
+	// HEVC paired with the MPEG-TS container it cannot use.
 	m.SetTranscodeOrder()
 	part.SetTranscodeOrder()
 	m.AspectRatio = 0
 	m.Protocol = p.protocol
 	m.Container = "mpegts"
-	part.Container = "mpegts"
+	if dec.Container == transcode.ContainerFMP4 {
+		m.Container = "mp4"
+	}
+	part.Container = m.Container
 	part.Protocol = p.protocol
 	part.Decision = "transcode"
 	part.Key = ""
@@ -545,6 +555,9 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 // handleStartHLS is /video/:/transcode/universal/start.m3u8.
 func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	if s.handleLiveTVPlayback(w, r) {
+		return
+	}
+	if s.handleExtraPlayback(w, r) {
 		return
 	}
 	ctx := r.Context()
@@ -783,6 +796,9 @@ func transcodeSessionModel(te *transcodeEntry) model.TranscodeSess {
 // handlePart serves /library/parts/{part}/{changestamp}/{file} with Range
 // support through Playback.ServeRange.
 func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
+	if s.handleExtraPart(w, r) {
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	id, err := strconv.ParseInt(chi.URLParam(r, "part"), 10, 64)

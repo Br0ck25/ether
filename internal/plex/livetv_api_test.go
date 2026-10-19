@@ -221,7 +221,7 @@ func TestAppleTVTuneReturnsAnalyzedMediaAndCanonicalUUID(t *testing.T) {
 				t.Fatalf("invalid UUID %q", uuid)
 			}
 			part := media["Part"].([]any)[0].(map[string]any)
-			if media["videoCodec"] != "h264" || part["decision"] != nil || len(part["Stream"].([]any)) < 2 {
+			if media["protocol"] != nil || part["key"] != nil || part["decision"] != nil || len(part["Stream"].([]any)) < 2 {
 				t.Fatal(body)
 			}
 		} else if !strings.Contains(body, `genuineMediaAnalysis="1"`) || !strings.Contains(body, `streamType="1"`) || !strings.Contains(body, `streamType="2"`) {

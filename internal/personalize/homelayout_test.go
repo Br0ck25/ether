@@ -84,7 +84,8 @@ func TestLegacyLayoutMigrationPersistsAndDraftDoesNotWrite(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
 	rules := []core.LayoutRule{{Scope: core.LayoutScope{All: true}, MaxRows: 8, Rows: []core.LayoutRowRule{{HubID: KindTrending, Action: core.LayoutPin, Position: ip(2)}}}, {Scope: core.LayoutScope{UserIDs: []int64{1}}, Rows: []core.LayoutRowRule{{HubID: KindTop10, Action: core.LayoutHide}}}}
-	if err := h.e.store.setLayout(ctx, rules, testNow); err != nil {
+	raw, _ := json.Marshal(rules)
+	if _, err := h.db.Exec(`INSERT INTO personalize_layout(id,rules,updated_at) VALUES(1,?,?)`, string(raw), testNow.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.e.store.db.Exec(`DELETE FROM personalize_home_layout`); err != nil {
@@ -293,5 +294,35 @@ func TestPreviewRechecksCurrentViewerPolicyForEveryProducer(t *testing.T) {
 		if deny && total != 0 || !deny && total == 0 {
 			t.Fatalf("deny=%v titles=%d", deny, total)
 		}
+	}
+}
+
+func TestDesignerHasOnePersistentLayout(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	if _, err := h.e.SetLayout(ctx, []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindTrending, Action: core.LayoutHide}}}}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := h.db.QueryRow(`SELECT COUNT(*) FROM personalize_layout`).Scan(&count); err != nil || count != 0 {
+		t.Fatal("legacy model still written", count, err)
+	}
+	d, _ := h.e.HomeLayout(ctx)
+	d.Viewers = []core.ViewerLayout{{UserID: 1, Pages: []core.LayoutPage{{Section: "home", DeviceMaxRows: map[string]int{"tv": 8}, Rows: []core.RowPolicy{{Row: KindTrending, Status: "always", Slot: 2, MaxDaysPerWeek: 4}}}}}}
+	if _, err := h.e.SetHomeLayout(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	e2, err := New(Options{DB: h.db, Catalog: h.cat, Logger: quietLogger(), Now: h.clock.Now, Location: time.UTC, RefreshEvery: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Close()
+	loaded, err := e2.HomeLayout(ctx)
+	if err != nil || len(loaded.Viewers) != 1 || loaded.Viewers[0].Pages[0].Rows[0].MaxDaysPerWeek != 4 || loaded.Viewers[0].Pages[0].DeviceMaxRows["tv"] != 8 {
+		t.Fatal("canonical layout lost advanced viewer constraints", loaded, err)
+	}
+	legacy, err := e2.Layout(ctx)
+	if err != nil || len(legacy) != 2 {
+		t.Fatal("compatibility view did not reflect document", legacy, err)
 	}
 }

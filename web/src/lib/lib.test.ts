@@ -1,14 +1,48 @@
 import { describe, expect, it } from "vitest";
 import type { HomeLayout, Rule } from "./contract";
 import { formatBytes, formatNanos, relativeTime } from "./format";
-import { cacheHealth, catalogHealth, computeHealth, indexersHealth, normalizeSessions, plexDirectHealth, remoteHealth, usenetHealth, worstLevel } from "./health";
+import {
+  cacheHealth,
+  catalogHealth,
+  computeHealth,
+  indexersHealth,
+  normalizeSessions,
+  plexDirectHealth,
+  remoteHealth,
+  usenetHealth,
+  worstLevel,
+} from "./health";
 import { COALESCE_MS, historyReducer, initHistory } from "./history";
 import {
-  anchorsOf, atFor, describeWhen, effectiveLength, effectivePolicy, freeSlot, matchRank, overrideCount, policyChips, policyIn, removePolicy,
-  reorderAnchors, sameLayout, setPageLength, setPolicy, viewersOverriding, whenMatches,
+  anchorsOf,
+  atFor,
+  describeWhen,
+  effectiveLength,
+  effectivePolicy,
+  freeSlot,
+  matchRank,
+  overrideCount,
+  policyChips,
+  policyIn,
+  removePolicy,
+  reorderAnchors,
+  sameLayout,
+  setPageLength,
+  setPolicy,
+  viewersOverriding,
+  whenMatches,
 } from "./layout";
 import {
-  blankSpec, describeRule, isRuleComplete, newRule, normalizeSpec, previewableSpec, specProblems, valueFor, withOp, FIELD_BY_NAME,
+  blankSpec,
+  describeRule,
+  isRuleComplete,
+  newRule,
+  normalizeSpec,
+  previewableSpec,
+  specProblems,
+  valueFor,
+  withOp,
+  FIELD_BY_NAME,
 } from "./rules";
 
 describe("rules", () => {
@@ -26,7 +60,10 @@ describe("rules", () => {
     expect(withOp(between, "lte").value).toBe(1990);
     const genre: Rule = { field: "genre", op: "in", value: ["Horror", "Thriller"] };
     expect(withOp(genre, "notIn").value).toEqual(["Horror", "Thriller"]);
-    expect(valueFor(FIELD_BY_NAME.released, "between", "2020-01-01")).toEqual(["2020-01-01", expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/)]);
+    expect(valueFor(FIELD_BY_NAME.released, "between", "2020-01-01")).toEqual([
+      "2020-01-01",
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    ]);
   });
 
   it("knows when a rule is complete", () => {
@@ -38,15 +75,29 @@ describe("rules", () => {
   });
 
   it("describes rules in plain language using labels for ids", () => {
-    expect(describeRule({ field: "genre", op: "in", value: ["Horror", "Thriller"] })).toBe("Genre is any of Horror, Thriller");
-    expect(describeRule({ field: "person", op: "in", value: [1, 2, 3, 4], label: "A, B, C, D" })).toBe("Person is any of A, B and 2 more");
-    expect(describeRule({ field: "runtime", op: "lte", value: 90 })).toBe("Runtime is at most 90 min");
-    expect(describeRule({ field: "released", op: "within", value: "6m" })).toBe("Released in the last 6 months");
-    expect(describeRule({ field: "watched", op: "is", value: false })).toBe("Not watched by the viewer");
+    expect(describeRule({ field: "genre", op: "in", value: ["Horror", "Thriller"] })).toBe(
+      "Genre is any of Horror, Thriller",
+    );
+    expect(
+      describeRule({ field: "person", op: "in", value: [1, 2, 3, 4], label: "A, B, C, D" }),
+    ).toBe("Person is any of A, B and 2 more");
+    expect(describeRule({ field: "runtime", op: "lte", value: 90 })).toBe(
+      "Runtime is at most 90 min",
+    );
+    expect(describeRule({ field: "released", op: "within", value: "6m" })).toBe(
+      "Released in the last 6 months",
+    );
+    expect(describeRule({ field: "watched", op: "is", value: false })).toBe(
+      "Not watched by the viewer",
+    );
   });
 
   it("previews only the complete parts of a spec", () => {
-    const spec = { ...blankSpec(), sources: [{ kind: "tmdbPerson" as const, id: 0 }], rules: [newRule("genre"), newRule("rating")] };
+    const spec = {
+      ...blankSpec(),
+      sources: [{ kind: "tmdbPerson" as const, id: 0 }],
+      rules: [newRule("genre"), newRule("rating")],
+    };
     const p = previewableSpec(spec);
     expect(p.sources).toEqual([{ kind: "catalog" }]);
     expect(p.rules).toEqual([{ field: "rating", op: "gte", value: 7 }]);
@@ -54,8 +105,16 @@ describe("rules", () => {
 
   it("lists problems that block saving", () => {
     expect(specProblems(blankSpec())).toEqual(["Give the collection a name."]);
-    const bad = { ...blankSpec(), name: "X", rules: [newRule("genre")], artwork: { mode: "custom" as const } };
-    expect(specProblems(bad)).toEqual(["Finish or remove the incomplete rule.", "Add an image URL for custom artwork."]);
+    const bad = {
+      ...blankSpec(),
+      name: "X",
+      rules: [newRule("genre")],
+      artwork: { mode: "custom" as const },
+    };
+    expect(specProblems(bad)).toEqual([
+      "Finish or remove the incomplete rule.",
+      "Add an image URL for custom artwork.",
+    ]);
   });
 
   it("normalizes partial specs from the server", () => {
@@ -101,9 +160,21 @@ describe("layout", () => {
 
   it("edits a layer's policies and prunes what becomes empty", () => {
     let doc = setPolicy(empty(), "global", "home", { row: "short-on-time", status: "off" });
-    expect(doc.global).toEqual([{ section: "home", rows: [{ row: "short-on-time", status: "off" }] }]);
-    doc = setPolicy(doc, 2, "home", { row: "short-on-time", status: "always", priority: 1, maxDaysPerWeek: 7 });
-    expect(doc.viewers).toEqual([{ userId: 2, pages: [{ section: "home", rows: [{ row: "short-on-time", status: "always" }] }] }]);
+    expect(doc.global).toEqual([
+      { section: "home", rows: [{ row: "short-on-time", status: "off" }] },
+    ]);
+    doc = setPolicy(doc, 2, "home", {
+      row: "short-on-time",
+      status: "always",
+      priority: 1,
+      maxDaysPerWeek: 7,
+    });
+    expect(doc.viewers).toEqual([
+      {
+        userId: 2,
+        pages: [{ section: "home", rows: [{ row: "short-on-time", status: "always" }] }],
+      },
+    ]);
     expect(overrideCount(doc, 2)).toBe(1);
     expect(viewersOverriding(doc, "home", "short-on-time")).toEqual([2]);
     // Reset to global drops the override and the now-empty layer.
@@ -114,13 +185,33 @@ describe("layout", () => {
   });
 
   it("anchors keep one row per slot and reorder by swapping slots", () => {
-    let doc = setPolicy(empty(), "global", "home", { row: "continue-watching", status: "eligible", slot: 1 });
-    expect(policyIn(doc, "global", "home", "continue-watching")).toEqual({ row: "continue-watching", status: "always", slot: 1 });
-    doc = setPolicy(doc, "global", "home", { row: "top-10", status: "always", slot: 3, minSlot: 2 });
-    expect(policyIn(doc, "global", "home", "top-10")).toEqual({ row: "top-10", status: "always", slot: 3 });
+    let doc = setPolicy(empty(), "global", "home", {
+      row: "continue-watching",
+      status: "eligible",
+      slot: 1,
+    });
+    expect(policyIn(doc, "global", "home", "continue-watching")).toEqual({
+      row: "continue-watching",
+      status: "always",
+      slot: 1,
+    });
+    doc = setPolicy(doc, "global", "home", {
+      row: "top-10",
+      status: "always",
+      slot: 3,
+      minSlot: 2,
+    });
+    expect(policyIn(doc, "global", "home", "top-10")).toEqual({
+      row: "top-10",
+      status: "always",
+      slot: 3,
+    });
     expect(freeSlot(doc, "global", "home")).toBe(2);
     doc = reorderAnchors(doc, "global", "home", ["top-10", "continue-watching"]);
-    expect(anchorsOf(doc, "global", "home").map((a) => [a.row, a.slot])).toEqual([["top-10", 1], ["continue-watching", 3]]);
+    expect(anchorsOf(doc, "global", "home").map((a) => [a.row, a.slot])).toEqual([
+      ["top-10", 1],
+      ["continue-watching", 3],
+    ]);
     // Anchoring another row to a held slot frees it.
     doc = setPolicy(doc, "global", "home", { row: "trending", status: "always", slot: 1 });
     expect(policyIn(doc, "global", "home", "top-10")?.slot).toBeUndefined();
@@ -128,13 +219,32 @@ describe("layout", () => {
 
   it("resolves overrides over Global and specific matches over globs", () => {
     const doc: HomeLayout = {
-      global: [{ section: "home", rows: [{ row: "because.*", status: "off" }, { row: "because-you-watched", status: "eligible", maxPerPage: 2 }, { row: "because.42", status: "always" }] }],
-      viewers: [{ userId: 5, pages: [{ section: "home", rows: [{ row: "because.*", status: "always" }] }] }],
+      global: [
+        {
+          section: "home",
+          rows: [
+            { row: "because.*", status: "off" },
+            { row: "because-you-watched", status: "eligible", maxPerPage: 2 },
+            { row: "because.42", status: "always" },
+          ],
+        },
+      ],
+      viewers: [
+        { userId: 5, pages: [{ section: "home", rows: [{ row: "because.*", status: "always" }] }] },
+      ],
     };
-    expect(effectivePolicy(doc, null, "home", "home.because.42", "because-you-watched")?.policy.row).toBe("because.42");
-    expect(effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched")?.policy.row).toBe("because-you-watched");
-    expect(effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched.x")?.policy.row).toBe("because.*");
-    expect(effectivePolicy(doc, 5, "home", "home.because.42", "because-you-watched")).toMatchObject({ layer: "override", policy: { row: "because.*" } });
+    expect(
+      effectivePolicy(doc, null, "home", "home.because.42", "because-you-watched")?.policy.row,
+    ).toBe("because.42");
+    expect(
+      effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched")?.policy.row,
+    ).toBe("because-you-watched");
+    expect(
+      effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched.x")?.policy.row,
+    ).toBe("because.*");
+    expect(effectivePolicy(doc, 5, "home", "home.because.42", "because-you-watched")).toMatchObject(
+      { layer: "override", policy: { row: "because.*" } },
+    );
     expect(effectivePolicy(doc, 5, "movies", "movie.because.42", "because-you-watched")).toBeNull();
     expect(matchRank("collection:*", "collection.7", "collection:7")).toBe(1);
   });
@@ -152,38 +262,113 @@ describe("layout", () => {
   });
 
   it("compares layouts ignoring server stamps and empty pages", () => {
-    const a: HomeLayout = { global: [{ section: "home", rows: [] }], viewers: [], updatedAt: "2026-10-19T00:00:00Z", notes: ["x"] };
+    const a: HomeLayout = {
+      global: [{ section: "home", rows: [] }],
+      viewers: [],
+      updatedAt: "2026-10-19T00:00:00Z",
+      notes: ["x"],
+    };
     expect(sameLayout(a, empty())).toBe(true);
-    expect(sameLayout(setPolicy(a, "global", "home", { row: "top-10", status: "off" }), empty())).toBe(false);
+    expect(
+      sameLayout(setPolicy(a, "global", "home", { row: "top-10", status: "off" }), empty()),
+    ).toBe(false);
   });
 
   it("matches schedules including windows that wrap midnight, months and dates", () => {
     expect(whenMatches({ days: [1, 2] }, { day: 6, hour: 20, device: "tv" })).toBe(false);
     expect(whenMatches({ fromHour: 22, toHour: 2 }, { day: 6, hour: 1, device: "tv" })).toBe(true);
-    expect(whenMatches({ fromHour: 22, toHour: 2 }, { day: 6, hour: 12, device: "tv" })).toBe(false);
+    expect(whenMatches({ fromHour: 22, toHour: 2 }, { day: 6, hour: 12, device: "tv" })).toBe(
+      false,
+    );
     expect(whenMatches({ devices: ["mobile"] }, { day: 6, hour: 12, device: "tv" })).toBe(false);
     expect(whenMatches({ dayparts: ["morning"] }, { day: 6, hour: 9, device: "tv" })).toBe(true);
     const dec = new Date(2026, 11, 20, 20);
     expect(whenMatches({ months: [12] }, { day: 0, hour: 20, device: "tv", date: dec })).toBe(true);
-    expect(whenMatches({ months: [12] }, { day: 0, hour: 20, device: "tv", date: new Date(2026, 9, 20) })).toBe(false);
-    expect(whenMatches({ startDate: "2026-12-21" }, { day: 0, hour: 20, device: "tv", date: dec })).toBe(false);
-    expect(describeWhen({ days: [1, 2, 3, 4, 5], months: [12], devices: ["tv"] }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"])).toBe("Weekdays · TV · Dec");
-    expect(policyChips({ row: "x", status: "always", slot: 2, maxSlot: 4, priority: 1.5, maxDaysPerWeek: 3 }, ["Sun"])).toEqual(["Slot 2", "Not below 4", "Higher", "3 days a week"]);
+    expect(
+      whenMatches(
+        { months: [12] },
+        { day: 0, hour: 20, device: "tv", date: new Date(2026, 9, 20) },
+      ),
+    ).toBe(false);
+    expect(
+      whenMatches({ startDate: "2026-12-21" }, { day: 0, hour: 20, device: "tv", date: dec }),
+    ).toBe(false);
+    expect(
+      describeWhen({ days: [1, 2, 3, 4, 5], months: [12], devices: ["tv"] }, [
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+      ]),
+    ).toBe("Weekdays · TV · Dec");
+    expect(
+      policyChips(
+        { row: "x", status: "always", slot: 2, maxSlot: 4, priority: 1.5, maxDaysPerWeek: 3 },
+        ["Sun"],
+      ),
+    ).toEqual(["Slot 2", "Not below 4", "Higher", "3 days a week"]);
   });
 });
 
 const LIVE = {
   cache: { budget: 21474836480, used: 970344835 },
-  catalog: { movies: 24929, shows: 24298, browsableMovies: 24928, browsableShows: 24298, lastSync: "2026-10-19T13:16:36Z", sync: { running: false } },
+  catalog: {
+    movies: 24929,
+    shows: 24298,
+    browsableMovies: 24928,
+    browsableShows: 24298,
+    lastSync: "2026-10-19T13:16:36Z",
+    sync: { running: false },
+  },
   indexers: [
-    { indexer: "NZBgeek", hitsUsed: 6, hitsLimit: 200, hitsRemaining: 194, grabsUsed: 10, grabsLimit: 50, grabsRemaining: 40 },
-    { indexer: "DOGnzb", hitsUsed: 20, hitsLimit: 20, hitsRemaining: 0, grabsUsed: 0, grabsLimit: 10, grabsRemaining: 10 },
+    {
+      indexer: "NZBgeek",
+      hitsUsed: 6,
+      hitsLimit: 200,
+      hitsRemaining: 194,
+      grabsUsed: 10,
+      grabsLimit: 50,
+      grabsRemaining: 40,
+    },
+    {
+      indexer: "DOGnzb",
+      hitsUsed: 20,
+      hitsLimit: 20,
+      hitsRemaining: 0,
+      grabsUsed: 0,
+      grabsLimit: 10,
+      grabsRemaining: 10,
+    },
   ],
   providers: [
-    { id: "p1", name: "Giganews", backfill: false, state: "ok", configuredConnections: 16, activeConnections: 4 },
-    { id: "p2", name: "Frugal", backfill: false, state: "backoff", configuredConnections: 16, activeConnections: 0 },
+    {
+      id: "p1",
+      name: "Giganews",
+      backfill: false,
+      state: "ok",
+      configuredConnections: 16,
+      activeConnections: 4,
+    },
+    {
+      id: "p2",
+      name: "Frugal",
+      backfill: false,
+      state: "backoff",
+      configuredConnections: 16,
+      activeConnections: 0,
+    },
   ],
-  remote: { claimed: true, ownerUsername: "o", remoteAccess: false, listed: true, presence: { connected: true }, cert: { present: true, subject: "*.x.plex.direct", notAfter: "2027-01-17T04:36:33Z" } },
+  remote: {
+    claimed: true,
+    ownerUsername: "o",
+    remoteAccess: false,
+    listed: true,
+    presence: { connected: true },
+    cert: { present: true, subject: "*.x.plex.direct", notAfter: "2027-01-17T04:36:33Z" },
+  },
 };
 
 describe("health", () => {
@@ -191,7 +376,12 @@ describe("health", () => {
   it("summarises the live dashboard shapes", () => {
     const h = computeHealth(LIVE, now);
     expect(h.map((x) => [x.id, x.level])).toEqual([
-      ["usenet", "warn"], ["indexers", "warn"], ["cache", "ok"], ["catalog", "ok"], ["remote", "off"], ["plexdirect", "ok"],
+      ["usenet", "warn"],
+      ["indexers", "warn"],
+      ["cache", "ok"],
+      ["catalog", "ok"],
+      ["remote", "off"],
+      ["plexdirect", "ok"],
     ]);
     expect(usenetHealth(LIVE.providers).fill).toBeCloseTo(4 / 32);
     expect(indexersHealth(LIVE.indexers).summary).toBe("1 of 2 indexers out of searches today");
@@ -203,14 +393,43 @@ describe("health", () => {
     expect(usenetHealth({ error: "boom" }).summary).toBe("boom");
     expect(catalogHealth({ lastSync: "2026-10-01T00:00:00Z" }, now).level).toBe("warn");
     expect(remoteHealth({ claimed: false }).level).toBe("error");
-    expect(remoteHealth({ claimed: true, remoteAccess: true, presence: { connected: false } }).level).toBe("warn");
-    expect(plexDirectHealth({ cert: { present: true, notAfter: "2026-10-25T00:00:00Z" } }, now).level).toBe("warn");
+    expect(
+      remoteHealth({ claimed: true, remoteAccess: true, presence: { connected: false } }).level,
+    ).toBe("warn");
+    expect(
+      plexDirectHealth({ cert: { present: true, notAfter: "2026-10-25T00:00:00Z" } }, now).level,
+    ).toBe("warn");
     expect(plexDirectHealth({ cert: { present: false } }, now).level).toBe("warn");
-    expect(computeHealth(undefined, now).every((x) => x.level === "unknown" || x.level === "warn")).toBe(true);
+    expect(
+      computeHealth(undefined, now).every((x) => x.level === "unknown" || x.level === "warn"),
+    ).toBe(true);
   });
   it("normalizes now-playing sessions from Go field names", () => {
-    const [s] = normalizeSessions([{ ID: "s1", Key: 123, TitleName: "Dune (2021)", Username: "Sam", Client: { product: "Plex Web", deviceName: "Chrome", remote: true }, Decision: "transcode", BytesServed: 50, Info: { size: 100, duration: 7.2e12 }, viewOffset: 3.6e6, Resolution: { release: { name: "Dune.2021.1080p" } } }]);
-    expect(s).toMatchObject({ id: "s1", key: "123", title: "Dune (2021)", user: "Sam", device: "Chrome", decision: "transcode", remote: true, size: 100, release: "Dune.2021.1080p" });
+    const [s] = normalizeSessions([
+      {
+        ID: "s1",
+        Key: 123,
+        TitleName: "Dune (2021)",
+        Username: "Sam",
+        Client: { product: "Plex Web", deviceName: "Chrome", remote: true },
+        Decision: "transcode",
+        BytesServed: 50,
+        Info: { size: 100, duration: 7.2e12 },
+        viewOffset: 3.6e6,
+        Resolution: { release: { name: "Dune.2021.1080p" } },
+      },
+    ]);
+    expect(s).toMatchObject({
+      id: "s1",
+      key: "123",
+      title: "Dune (2021)",
+      user: "Sam",
+      device: "Chrome",
+      decision: "transcode",
+      remote: true,
+      size: 100,
+      release: "Dune.2021.1080p",
+    });
     expect(s!.progress).toBeCloseTo(0.5);
     expect(normalizeSessions(null)).toEqual([]);
   });

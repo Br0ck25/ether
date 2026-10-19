@@ -113,7 +113,8 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		pr := FromContext(r.Context())
 		s.log.Debug("request", "method", r.Method, "path", r.URL.Path, "status", sr.status,
 			"dur", time.Since(start).Round(time.Millisecond), "product", pr.Product, "client", pr.ClientID,
-			"pageStart", pr.Start, "pageSize", pr.Size, "paged", pr.HasPage, "format", pr.Format, "includeChildren", r.URL.Query().Get("includeChildren"))
+			"pageStart", pr.Start, "pageSize", pr.Size, "paged", pr.HasPage, "format", pr.Format, "includeChildren", r.URL.Query().Get("includeChildren"),
+			"model", pr.Model, "device", pr.Device, "platformVersion", pr.PlatformVersion, "peer", pr.RemoteIP.String())
 	})
 }
 
@@ -208,6 +209,12 @@ func (s *Server) write(w http.ResponseWriter, r *http.Request, v any) {
 
 func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request, status int, v any) {
 	pr := FromContext(r.Context())
+	// allowSync on library containers follows the viewer's download
+	// permission; containers that don't carry the attribute keep not
+	// carrying it.
+	if mc, ok := v.(*model.MediaContainer); ok && mc.AllowSync != nil {
+		*mc.AllowSync = s.downloadsAllowed(pr.User)
+	}
 	body, err := model.Marshal(v, pr.Format)
 	if err != nil {
 		s.log.Error("encode response", "path", r.URL.Path, "err", err)

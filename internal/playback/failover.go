@@ -257,7 +257,7 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 	log := m.log.With("session", s.id, "key", s.ident.key, "at", at)
 	log.Warn("failing over", "release", cur.res.Release.Name, "reason", reason)
 	// A provider outage is not evidence that the release itself is invalid.
-	if failure := cur.sourceFailure(); failure == nil || permanentSourceFailure(failure) {
+	if failure := cur.sourceFailure(); permanentSourceFailure(failure) {
 		m.markBad(cur.releaseID(), reason)
 	}
 
@@ -485,7 +485,7 @@ func permanentSourceFailure(err error) bool {
 	return errors.Is(err, core.ErrArticleMissing) || errors.Is(err, core.ErrArticleCorrupt) || errors.Is(err, core.ErrReleaseRejected)
 }
 func recoverableSourceFailure(err error) bool {
-	if permanentSourceFailure(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrNoProgress) {
+	if permanentSourceFailure(err) || errors.Is(err, core.ErrSourceUnavailable) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrNoProgress) {
 		return true
 	}
 	var ne net.Error

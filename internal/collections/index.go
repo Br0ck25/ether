@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -167,7 +168,7 @@ func (in *interner) lower(s string) string { return in.str(strings.ToLower(strin
 // when the mirror changes. Readers get the current snapshot without
 // blocking; the first load is synchronous.
 type index struct {
-	db       *sql.DB
+	mirror   *catalog.Mirror
 	now      func() time.Time
 	checkTTL time.Duration
 
@@ -194,7 +195,7 @@ type fingerprint struct {
 }
 
 func newIndex(db *sql.DB, now func() time.Time, checkTTL time.Duration) *index {
-	return &index{db: db, now: now, checkTTL: checkTTL, extra: map[core.RatingKey]*entry{}, intern: newInterner()}
+	return &index{mirror: catalog.NewMirror(db, now), now: now, checkTTL: checkTTL, extra: map[core.RatingKey]*entry{}, intern: newInterner()}
 }
 
 // get returns the current snapshot, building it on first use and
@@ -292,10 +293,8 @@ func (ix *index) invalidate() {
 }
 
 func (ix *index) fingerprint(ctx context.Context) (fingerprint, error) {
-	var fp fingerprint
-	err := ix.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(MAX(fetched_at),0), COALESCE(MAX(added_at),0)
-		FROM catalog_titles WHERE type IN ('movie','show') AND browsable=1`).Scan(&fp.count, &fp.maxFetch, &fp.maxAdd)
-	return fp, err
+	fp, err := ix.mirror.Fingerprint(ctx)
+	return fingerprint{count: fp.Count, maxFetch: fp.MaxFetch, maxAdd: fp.MaxAdd}, err
 }
 
 func (ix *index) rebuild(ctx context.Context) (*snapshot, error) {
@@ -349,119 +348,23 @@ func (ix *index) rebuild(ctx context.Context) (*snapshot, error) {
 	return ix.current(), nil
 }
 
-const browsableWhere = `t.type IN ('movie','show') AND t.browsable=1`
-
 func (ix *index) load(ctx context.Context) (*snapshot, error) {
 	fp, err := ix.fingerprint(ctx)
 	if err != nil {
 		return nil, err
 	}
+	items, err := ix.mirror.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	in := newInterner()
-	rows, err := ix.db.QueryContext(ctx, `SELECT t.key,t.type,t.title,t.sort_title,t.year,t.released_ts,t.added_at,
-		t.runtime_sec,t.rating,t.vote_count,t.popularity,t.language,t.content_rating,t.collection_id,t.poster,t.backdrop,t.detail
-		FROM catalog_titles t WHERE `+browsableWhere+` ORDER BY t.popularity DESC, t.key ASC`)
-	if err != nil {
-		return nil, err
-	}
-	snap := &snapshot{entries: make(map[core.RatingKey]*entry, fp.count), print: fp, builtAt: ix.now()}
-	for rows.Next() {
-		var e entry
-		var key int64
-		var typ, lang, crating string
-		var runtimeSec int64
-		var detail int
-		if err := rows.Scan(&key, &typ, &e.title, &e.sortTitle, &e.year, &e.released, &e.added, &runtimeSec,
-			&e.rating, &e.votes, &e.pop, &lang, &crating, &e.collID, &e.poster, &e.backdrop, &detail); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		e.key = core.RatingKey(key)
-		e.typ = core.MediaType(in.str(typ))
-		e.lang = in.lower(lang)
-		e.crating = in.str(crating)
-		e.runtime = int(runtimeSec / 60)
-		e.detail = detail != 0
-		if e.sortTitle == "" {
-			e.sortTitle = sortKey(e.title)
-		}
-		ep := &e
-		snap.entries[ep.key] = ep
-		snap.order = append(snap.order, ep)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	pairs := func(q string, apply func(e *entry, v string)) error {
-		rows, err := ix.db.QueryContext(ctx, q)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var k int64
-			var v string
-			if err := rows.Scan(&k, &v); err != nil {
-				return err
-			}
-			if e := snap.entries[core.RatingKey(k)]; e != nil {
-				apply(e, v)
-			}
-		}
-		return rows.Err()
-	}
-	if err := pairs(`SELECT g.key, g.genre FROM catalog_genres g JOIN catalog_titles t ON t.key=g.key WHERE `+browsableWhere+` ORDER BY g.key, g.genre`,
-		func(e *entry, v string) {
-			e.genres = append(e.genres, in.str(v))
-			e.genresLC = append(e.genresLC, in.lower(v))
-		}); err != nil {
-		return nil, err
-	}
-	if err := pairs(`SELECT c.key, c.country FROM catalog_countries c JOIN catalog_titles t ON t.key=c.key WHERE `+browsableWhere,
-		func(e *entry, v string) { e.countriesLC = append(e.countriesLC, in.lower(v)) }); err != nil {
-		return nil, err
-	}
-	if err := pairs(`SELECT s.key, s.studio FROM catalog_studios s JOIN catalog_titles t ON t.key=s.key WHERE `+browsableWhere,
-		func(e *entry, v string) { e.studiosLC = append(e.studiosLC, in.lower(v)) }); err != nil {
-		return nil, err
-	}
-	if err := pairs(`SELECT k.key, k.keyword FROM catalog_keywords k JOIN catalog_titles t ON t.key=k.key WHERE `+browsableWhere,
-		func(e *entry, v string) { e.keywordsLC = append(e.keywordsLC, in.lower(v)) }); err != nil {
-		return nil, err
-	}
-	crows, err := ix.db.QueryContext(ctx, `SELECT c.key, c.person_tmdb, c.kind FROM catalog_credits c JOIN catalog_titles t ON t.key=c.key WHERE `+browsableWhere)
-	if err != nil {
-		return nil, err
-	}
-	for crows.Next() {
-		var k, pid int64
-		var kind string
-		if err := crows.Scan(&k, &pid, &kind); err != nil {
-			crows.Close()
-			return nil, err
-		}
-		e := snap.entries[core.RatingKey(k)]
-		if e == nil {
-			continue
-		}
-		switch kind {
-		case "director":
-			e.directors = append(e.directors, pid)
-		case "writer":
-			e.writers = append(e.writers, pid)
-		default:
-			e.cast = append(e.cast, pid)
-		}
-	}
-	crows.Close()
-	if err := crows.Err(); err != nil {
-		return nil, err
-	}
-	for _, e := range snap.order {
-		e.finish()
-		if len(e.keywordsLC) > 0 || len(e.cast) > 0 || e.runtime > 0 {
-			e.detail = true
-		}
+	snap := &snapshot{entries: make(map[core.RatingKey]*entry, len(items)), print: fp, builtAt: ix.now()}
+	for _, item := range items {
+		e := entryFromTitle(item.Title, in)
+		e.added = item.AddedAt
+		e.detail = e.detail || item.Detailed
+		snap.entries[e.key] = e
+		snap.order = append(snap.order, e)
 	}
 	return snap, nil
 }
@@ -473,7 +376,7 @@ func (ix *index) lookupRows(ctx context.Context, keys []core.RatingKey) (map[cor
 	if len(keys) == 0 {
 		return out, nil
 	}
-	titles, err := loadTitles(ctx, ix.db, keys)
+	titles, err := ix.mirror.Titles(ctx, keys)
 	if err != nil {
 		return nil, err
 	}
