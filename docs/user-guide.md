@@ -53,3 +53,19 @@ Use **Activity & notifications** for playback activity and alerts. **Logs** show
 newest entries first. If playback fails, check provider and indexer connectivity,
 quality limits and the client's supported formats. Share redacted logs when
 reporting an issue.
+
+## Owner sign-in and playback access
+
+After setup, sign in with the Plex account that owns Ether, including when you
+open the owner UI on localhost. Viewers access shared libraries through their
+own Plex accounts. Refreshing Plex sharing removes revoked viewers' access;
+stream links stop working when the viewer is inactive or the session ends.
+
+## Source interruptions
+
+Ether tries other providers before changing a release. Copy-only HLS or DASH
+can restart on another release at the current media time. Direct-play MKV and MP4
+have stricter replacement limits because the player retains the original file's
+headers. Provider outages and timeouts are retriable and do not permanently mark
+a release bad. Different cuts of a title can still skip or repeat a short section
+when Ether maps the playback timestamp.

@@ -235,6 +235,9 @@ func (c *Client) HandleEvent(ctx context.Context, ev state.Event) {
 	}
 	var err error
 	progress := min(max(ev.Fraction*100, 0), 100)
+	if ev.Imported && (ev.Kind == state.EventProgress || ev.At.IsZero()) {
+		return
+	}
 	switch ev.Kind {
 	case state.EventProgress:
 		action := ""

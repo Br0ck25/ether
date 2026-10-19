@@ -632,8 +632,8 @@ func TestFailoverHLS(t *testing.T) {
 	if err != nil || resp.StatusCode != 206 || !bytes.Equal(body, expected("B", 1000, 1000)) {
 		t.Fatalf("new url: %d %v", resp.StatusCode, err)
 	}
-	if !h.resolver.isBad("A") {
-		t.Fatal("A not marked bad")
+	if h.resolver.isBad("A") {
+		t.Fatal("manual failover without permanent evidence blacklisted A")
 	}
 	// The retired source is closed.
 	if !h.engine.sources[0].closed.Load() {
@@ -940,6 +940,7 @@ func TestReadFailuresRecoverWithoutPoisoningReleases(t *testing.T) {
 	}{
 		{"corrupt", core.ErrArticleCorrupt, true},
 		{"timeout", context.DeadlineExceeded, false},
+		{"provider-backoff", core.ErrSourceUnavailable, false},
 		{"truncated", io.ErrUnexpectedEOF, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

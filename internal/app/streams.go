@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -19,14 +18,10 @@ func (a *App) enrichSubtitles(ctx context.Context, t *core.Title, u *core.User, 
 	if !a.cfg.Get().Markers.DetectCached {
 		return
 	}
-	var path, raw string
-	if err := a.db.QueryRowContext(ctx, `SELECT path,info FROM localmedia_files WHERE key=? AND error='' ORDER BY size DESC LIMIT 1`, int64(t.Key)).Scan(&path, &raw); err != nil {
-		return
-	}
-	var localInfo core.MediaInfo
-	if err := json.Unmarshal([]byte(raw), &localInfo); err != nil {
+	file, err := a.localmedia.PreferredFile(ctx, t.Key)
+	if err != nil {
 		return
 	}
 	// Detection is queued only for a complete owner-selected local source.
-	_ = a.markers.ScheduleCached(ctx, t.Key, localInfo, path)
+	_ = a.markers.ScheduleCached(ctx, t.Key, file.Info, file.Path)
 }

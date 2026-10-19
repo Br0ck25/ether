@@ -178,6 +178,8 @@ func (c *Catalog) Facet(ctx context.Context, t core.MediaType, facet string) ([]
 	args = append([]any{c.now().Unix()}, args...)
 	var q string
 	switch facet {
+	case "language":
+		q = `SELECT t.language,COUNT(*) FROM catalog_titles t WHERE ` + base + ` AND t.language<>'' GROUP BY t.language ORDER BY COUNT(*) DESC,t.language ASC LIMIT 200`
 	case "genre":
 		q = `SELECT g.genre, COUNT(*) FROM catalog_genres g JOIN catalog_titles t ON t.key=g.key WHERE ` + base + ` GROUP BY g.genre ORDER BY COUNT(*) DESC, g.genre ASC`
 	case "studio":

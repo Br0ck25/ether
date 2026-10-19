@@ -30,9 +30,26 @@ export interface TitleDetail extends TitleCard {
 }
 
 export const RULE_FIELDS = [
-  "genre", "keyword", "person", "studio", "network", "country", "language",
-  "year", "decade", "rating", "votes", "popularity", "runtime", "contentRating",
-  "released", "watchProvider", "collection", "watched", "inProgress", "addedAt",
+  "genre",
+  "keyword",
+  "person",
+  "studio",
+  "network",
+  "country",
+  "language",
+  "year",
+  "decade",
+  "rating",
+  "votes",
+  "popularity",
+  "runtime",
+  "contentRating",
+  "released",
+  "watchProvider",
+  "collection",
+  "watched",
+  "inProgress",
+  "addedAt",
 ] as const;
 export type RuleField = (typeof RULE_FIELDS)[number];
 
@@ -47,8 +64,14 @@ export interface Rule {
 }
 
 export type TmdbListName =
-  | "trending_day" | "trending_week" | "popular" | "top_rated"
-  | "now_playing" | "upcoming" | "airing_today" | "on_the_air";
+  | "trending_day"
+  | "trending_week"
+  | "popular"
+  | "top_rated"
+  | "now_playing"
+  | "upcoming"
+  | "airing_today"
+  | "on_the_air";
 
 export type LookupSourceKind = "tmdbKeyword" | "tmdbCompany" | "tmdbNetwork" | "tmdbPerson";
 
@@ -67,7 +90,7 @@ export type Source =
 export type SourceKind = Source["kind"];
 
 export type CollectionSort =
-  | "popularity" | "rating" | "released" | "title" | "added" | "random" | "personal" | "source";
+  "popularity" | "rating" | "released" | "title" | "added" | "random" | "personal" | "source";
 
 export type Refresh = "live" | "hourly" | "daily" | "weekly";
 export type ArtworkMode = "auto" | "collage" | "backdrop" | "tmdb" | "custom";
@@ -127,10 +150,20 @@ export interface CollectionTemplate {
 }
 
 export type FacetName = "genre" | "decade" | "contentRating" | "studio" | "country" | "language";
-export interface FacetValue { key: string; title: string; count: number }
+export interface FacetValue {
+  key: string;
+  title: string;
+  count: number;
+}
 
-export type LookupKind = "person" | "keyword" | "company" | "network" | "collection" | "watchProvider";
-export interface LookupResult { id: number; name: string; subtitle?: string; image?: string }
+export type LookupKind =
+  "person" | "keyword" | "company" | "network" | "collection" | "watchProvider";
+export interface LookupResult {
+  id: number;
+  name: string;
+  subtitle?: string;
+  image?: string;
+}
 
 // ---- Viewers and personalization ------------------------------------------
 
@@ -158,7 +191,11 @@ export interface ViewerDetail extends Viewer {
 }
 
 export type OverrideKind = "genre" | "person" | "keyword";
-export interface TasteOverride { kind: OverrideKind; value: string; weight: number }
+export interface TasteOverride {
+  kind: OverrideKind;
+  value: string;
+  weight: number;
+}
 
 export interface TasteProfile {
   userId: number;
@@ -203,7 +240,11 @@ export interface HomeRow {
   policyLayer?: "global" | "override";
 }
 
-export interface HomeContext { device: string; daypart: string; weekend: boolean }
+export interface HomeContext {
+  device: string;
+  daypart: string;
+  weekend: boolean;
+}
 
 export interface ViewerHome {
   rows: HomeRow[];
@@ -254,7 +295,10 @@ export interface LayoutPage {
   rows: RowPolicy[];
 }
 
-export interface ViewerLayout { userId: number; pages: LayoutPage[] }
+export interface ViewerLayout {
+  userId: number;
+  pages: LayoutPage[];
+}
 
 export interface HomeLayout {
   global: LayoutPage[];
@@ -263,7 +307,12 @@ export interface HomeLayout {
   notes?: string[];
 }
 
-export interface AvailableRow { hubId: string; title: string; kind: string; description: string }
+export interface AvailableRow {
+  hubId: string;
+  title: string;
+  kind: string;
+  description: string;
+}
 
 export interface LayoutDoc {
   layout: HomeLayout;
@@ -287,7 +336,11 @@ export interface LayoutImpactResult {
 }
 
 /** Context of a Home preview. */
-export interface PreviewContext { device: Device; at: string; section?: LayoutSection }
+export interface PreviewContext {
+  device: Device;
+  at: string;
+  section?: LayoutSection;
+}
 
 // ---- Insights ---------------------------------------------------------------
 
@@ -299,4 +352,9 @@ export interface RowInsight {
   playRate: number;
 }
 
-export interface ActivityDay { date: string; plays: number; hours: number; uniqueViewers: number }
+export interface ActivityDay {
+  date: string;
+  plays: number;
+  hours: number;
+  uniqueViewers: number;
+}

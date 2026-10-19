@@ -522,3 +522,22 @@ func TestMDEOnDemandPrefersCopyRemux(t *testing.T) {
 		})
 	}
 }
+
+func TestHEVCDecisionReportsMP4ForFragmentedHLS(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	info := f.playback.info
+	info.Streams = append([]core.StreamInfo(nil), info.Streams...)
+	info.Container = "mkv"
+	for i := range info.Streams {
+		if info.Streams[i].Type == "video" {
+			info.Streams[i].Codec = "hevc"
+			info.Streams[i].BitDepth = 10
+		}
+	}
+	ps := &core.PlaySession{Info: info}
+	m := f.srv.decisionMedia(&fightClub, ps, core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true, Container: "fmp4"}, playRequest{protocol: "hls"}, &ownerUser)
+	if m.Container != "mp4" || len(m.Part) != 1 || m.Part[0].Container != "mp4" {
+		t.Fatalf("HEVC HLS advertised as MPEG-TS: %+v", m)
+	}
+}

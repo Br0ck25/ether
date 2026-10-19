@@ -262,7 +262,7 @@ func (c *Conn) begin(ctx context.Context, timeout time.Duration) (func(error) er
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				if fromCtx && errors.Is(err, os.ErrDeadlineExceeded) {
+				if fromCtx && ctxErr(ctx) != nil && errors.Is(err, os.ErrDeadlineExceeded) {
 					// The deadline taken from ctx expired the I/O a moment
 					// before ctx itself noticed.
 					return context.DeadlineExceeded

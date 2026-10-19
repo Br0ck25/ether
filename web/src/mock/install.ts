@@ -6,8 +6,12 @@ export function installMockBackend(): void {
   const fake = createFakeServer({ latencyMs: 120 });
   const real = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : String(input), window.location.origin);
-    if (url.origin === window.location.origin && url.pathname.startsWith("/ether/api/")) return fake.fetch(url.toString(), init);
+    const url = new URL(
+      input instanceof Request ? input.url : String(input),
+      window.location.origin,
+    );
+    if (url.origin === window.location.origin && url.pathname.startsWith("/ether/api/"))
+      return fake.fetch(url.toString(), init);
     return real(input, init);
   };
   // Generated artwork (/ether/api/collections/{id}/artwork) must come from the fake too.
