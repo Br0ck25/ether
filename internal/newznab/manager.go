@@ -220,6 +220,14 @@ func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 			if r.Size == 0 {
 				key = strings.ToLower(strings.TrimSpace(r.Name))
 			}
+			if r.Protocol != core.ProtocolUsenet {
+				// A torrent and a Usenet post of the same name are distinct
+				// sources; torrents dedupe by info hash when known.
+				key = r.Protocol + "|" + key
+				if r.InfoHash != "" {
+					key = r.Protocol + "|" + r.InfoHash
+				}
+			}
 			if seen[key] {
 				continue
 			}

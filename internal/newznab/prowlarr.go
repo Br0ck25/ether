@@ -28,7 +28,9 @@ type prowlarrIndexer struct {
 	} `json:"capabilities"`
 }
 
-// DiscoverProwlarr imports only enabled Usenet indexers. Each receives a stable
+// DiscoverProwlarr imports enabled Usenet (Newznab) and torrent (Torznab)
+// indexers; torrent indexers get Protocol "torrent" and stream through a
+// debrid provider. Each receives a stable
 // source-scoped ID and its own Ether hit/grab budget, cache and reputation.
 // Prowlarr's /{id}/api alias is intentionally used so ordinary Newznab URL
 // construction and all existing budget enforcement apply unchanged.
@@ -74,15 +76,19 @@ func DiscoverProwlarr(ctx context.Context, cfg config.Prowlarr, opts Options) ([
 	var out []config.Indexer
 	seen := map[int]bool{}
 	for _, item := range items {
-		// Prowlarr's public API serializes protocol as "usenet" (older exports
-		// can contain its enum value 1); torrent indexers are never imported.
+		// Prowlarr's public API serializes protocol as "usenet" or "torrent"
+		// (older exports can contain its enum values 1 and 2).
 		protocol := strings.ToLower(strings.Trim(string(item.Protocol), "\""))
-		if !item.Enable || item.ID <= 0 || seen[item.ID] || (protocol != "usenet" && protocol != "1") {
+		torrent := protocol == "torrent" || protocol == "2"
+		if !item.Enable || item.ID <= 0 || seen[item.ID] || (protocol != "usenet" && protocol != "1" && !torrent) {
 			continue
 		}
 		seen[item.ID] = true
 		id := "prowlarr-" + scope + "-" + strconv.Itoa(item.ID)
 		c := config.Indexer{ID: id, Name: "Prowlarr / " + item.Name + " [" + scope + ":" + strconv.Itoa(item.ID) + "]", URL: base.String() + "/" + strconv.Itoa(item.ID), APIKey: cfg.APIKey, DailyLimit: cfg.DailyLimit, DailyGrabs: cfg.DailyGrabs, Priority: cfg.Priority + item.Priority, Enabled: true}
+		if torrent {
+			c.Protocol = "torrent"
+		}
 		for _, cat := range item.Capabilities.Categories {
 			if cat.ID >= 2000 && cat.ID < 3000 {
 				c.MovieCategories = append(c.MovieCategories, cat.ID)
