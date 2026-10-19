@@ -20,6 +20,9 @@ type sourceResult struct {
 	keys     []core.RatingKey // keys known to be in the catalogue already
 	all      bool             // the whole catalogue
 	warnings []string
+	// assured lists, per title, the rules TMDB guaranteed when the rules
+	// were pushed into this source's discover query.
+	assured map[core.RatingKey][]*rule
 	// resolved fills in a source's id/name once looked up, so saved specs
 	// show what a label resolved to.
 	resolvedID    int64
@@ -82,8 +85,98 @@ func (s *Service) region(src string) string {
 	return "US"
 }
 
+// discoverInto runs a discover-backed source for one kind. With match
+// "all", the spec's rules are added to the query where TMDB can express
+// them, so the source returns the titles that match (not just the most
+// popular ones) and the rules are guaranteed for what comes back.
+func (s *Service) discoverInto(ctx context.Context, sp *core.CollectionSpec, kind string, q url.Values, rules []*rule, want int, res *sourceResult, what string) {
+	var covered []*rule
+	if sp.Match == MatchAll {
+		for _, r := range rules {
+			extra := url.Values{}
+			if s.translate(ctx, r, kind, extra) && mergeParams(q, extra) {
+				covered = append(covered, r)
+			}
+		}
+	}
+	if q.Get("sort_by") == "" {
+		q.Set("sort_by", discoverSort(sp.Sort, kind))
+	}
+	items, _, err := s.api.discover(ctx, kind, q, want, pagesFor(want))
+	if err != nil {
+		res.warnings = append(res.warnings, fmt.Sprintf("TMDB %s: %v", what, err))
+		return
+	}
+	res.titles = append(res.titles, items...)
+	if len(covered) == 0 {
+		return
+	}
+	if res.assured == nil {
+		res.assured = map[core.RatingKey][]*rule{}
+	}
+	for _, t := range items {
+		res.assured[t.Key] = append(res.assured[t.Key], covered...)
+	}
+}
+
+// mergeParams ANDs extra discover parameters into q. It reports false (and
+// changes nothing) when the combination cannot be expressed: an OR list
+// meeting another value of the same parameter, or a conflicting scalar.
+func mergeParams(q, extra url.Values) bool {
+	merged := map[string]string{}
+	for k := range extra {
+		v := extra.Get(k)
+		cur := q.Get(k)
+		switch {
+		case cur == "" || cur == v:
+			merged[k] = v
+		case strings.HasSuffix(k, ".gte") || strings.HasSuffix(k, ".lte"):
+			merged[k] = stricter(k, cur, v)
+		case (strings.HasPrefix(k, "with_") || strings.HasPrefix(k, "without_")) && listParam(k):
+			if strings.Contains(cur, "|") || strings.Contains(v, "|") {
+				if !strings.HasPrefix(k, "without_") {
+					return false
+				}
+			}
+			merged[k] = cur + "," + v
+		default:
+			return false
+		}
+	}
+	for k, v := range merged {
+		q.Set(k, v)
+	}
+	return true
+}
+
+func listParam(k string) bool {
+	switch k {
+	case "with_genres", "without_genres", "with_keywords", "without_keywords", "with_companies", "without_companies",
+		"with_people", "with_cast", "with_crew", "with_networks":
+		return true
+	}
+	return false
+}
+
+// stricter keeps the tighter of two bounds (numbers or YYYY-MM-DD dates).
+func stricter(k, a, b string) string {
+	fa, ea := strconv.ParseFloat(a, 64)
+	fb, eb := strconv.ParseFloat(b, 64)
+	gte := strings.HasSuffix(k, ".gte")
+	if ea == nil && eb == nil {
+		if (gte && fb > fa) || (!gte && fb < fa) {
+			return b
+		}
+		return a
+	}
+	if (gte && b > a) || (!gte && b < a) {
+		return b
+	}
+	return a
+}
+
 // gather runs one source.
-func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.CollectionSource) sourceResult {
+func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.CollectionSource, rules []*rule) sourceResult {
 	want := wantFor(sp)
 	kinds := kindsFor(sp.MediaType)
 	if src.MediaType == MediaMovie || src.MediaType == MediaShow {
@@ -158,12 +251,7 @@ func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.
 			kinds = []string{"tv"}
 		}
 		for _, kind := range kinds {
-			items, _, err := s.api.discover(ctx, kind, url.Values{param: {strconv.FormatInt(r.ID, 10)}, "sort_by": {"popularity.desc"}}, want, pagesFor(want))
-			if err != nil {
-				warn("TMDB %s %q: %v", entity, r.Name, err)
-				continue
-			}
-			res.titles = append(res.titles, items...)
+			s.discoverInto(ctx, sp, kind, url.Values{param: {strconv.FormatInt(r.ID, 10)}}, rules, want, &res, entity+" "+strconv.Quote(r.Name))
 		}
 	case "tmdbPerson":
 		if !needTMDB() {
@@ -193,15 +281,10 @@ func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.
 		}
 		res.resolvedID, res.resolvedLabel = r.ID, r.Name
 		for _, kind := range kinds {
-			items, _, err := s.api.discover(ctx, kind, url.Values{
+			s.discoverInto(ctx, sp, kind, url.Values{
 				"with_watch_providers": {strconv.FormatInt(r.ID, 10)}, "watch_region": {region},
-				"with_watch_monetization_types": {"flatrate|free|ads"}, "sort_by": {"popularity.desc"},
-			}, want, pagesFor(want))
-			if err != nil {
-				warn("TMDB watch provider %q: %v", r.Name, err)
-				continue
-			}
-			res.titles = append(res.titles, items...)
+				"with_watch_monetization_types": {"flatrate|free|ads"},
+			}, rules, want, &res, "watch provider "+strconv.Quote(r.Name))
 		}
 	case "tmdbDiscover":
 		if !needTMDB() {
@@ -213,15 +296,7 @@ func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.
 				warn("discover: %v", err)
 				break
 			}
-			if q.Get("sort_by") == "" {
-				q.Set("sort_by", "popularity.desc")
-			}
-			items, _, err := s.api.discover(ctx, kind, q, want, pagesFor(want))
-			if err != nil {
-				warn("TMDB discover: %v", err)
-				continue
-			}
-			res.titles = append(res.titles, items...)
+			s.discoverInto(ctx, sp, kind, q, rules, want, &res, "discover")
 		}
 	case "traktList", "letterboxdList", "mdblist":
 		var refs []extRef

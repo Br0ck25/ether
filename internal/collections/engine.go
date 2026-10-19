@@ -98,7 +98,7 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 		go func(i int, src core.CollectionSource) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			results[i] = s.gather(ctx, &sp, src)
+			results[i] = s.gather(ctx, &sp, src, rules)
 		}(i, src)
 	}
 	wg.Wait()
@@ -185,15 +185,10 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 		seen[k] = c
 		cands = append(cands, c)
 	}
-	showUnreleased := s.catCfg != nil && s.catCfg().ShowUnreleased
-	nowUnix := ec.now.Unix()
-	for i, r := range results {
+	for _, r := range results {
 		switch {
 		case r.all:
 			for _, e := range snap.order {
-				if !showUnreleased && (e.released == 0 || e.released > nowUnix) {
-					continue
-				}
 				addKey(e.key)
 			}
 			// Pushdown matches come right after the catalogue they extend.
@@ -208,13 +203,27 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 				addKey(k)
 			}
 		}
-		_ = i
+		for k, rs := range r.assured {
+			m := assured[k]
+			if m == nil {
+				m = map[*rule]bool{}
+				assured[k] = m
+			}
+			for _, x := range rs {
+				m[x] = true
+			}
+		}
 	}
 	for k, as := range assured {
 		if c := seen[k]; c != nil {
 			c.assured = as
 		}
 	}
+	// Like browsing, collections hold released titles only, unless the
+	// owner shows unreleased titles or the spec asks for future releases
+	// (Coming Soon).
+	hideUnreleased := !(s.catCfg != nil && s.catCfg().ShowUnreleased) && !wantsUnreleased(&sp, rules, ec.now)
+	nowUnix := ec.now.Unix()
 
 	// Filter.
 	want := func(e *entry) bool {
@@ -229,6 +238,9 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	var kept []*cand
 	for _, c := range cands {
 		if !want(c.e) {
+			continue
+		}
+		if hideUnreleased && (c.e.released == 0 || c.e.released > nowUnix) {
 			continue
 		}
 		if !matchesRules(c, rules, sp.Match, ec) {
@@ -250,7 +262,9 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	res.total = len(kept)
 	if len(kept) > maxMembers {
 		kept = kept[:maxMembers]
-		warn("only the first %d matches are kept", maxMembers)
+		if sp.Limit == 0 {
+			warn("%d titles match; only the first %d are kept", res.total, maxMembers)
+		}
 	}
 	res.keys = make([]core.RatingKey, len(kept))
 	for i, c := range kept {
@@ -262,6 +276,32 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	}
 	res.hash = buildHash(sp, res.keys)
 	return res, nil
+}
+
+// wantsUnreleased reports whether a spec asks for titles not out yet: an
+// upcoming list, or a release-date rule reaching into the future.
+func wantsUnreleased(sp *core.CollectionSpec, rules []*rule, now time.Time) bool {
+	for _, src := range sp.Sources {
+		if src.Kind == "tmdbList" && src.List == "upcoming" {
+			return true
+		}
+	}
+	for _, r := range rules {
+		if r.field != "released" {
+			continue
+		}
+		switch r.op {
+		case "gte":
+			if !r.from.at(now).Before(now.Add(-24 * time.Hour)) {
+				return true
+			}
+		case "lte", "between":
+			if r.to.set && r.to.at(now).After(now) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func splitPersonal(rs []*rule, personal *[]*rule) []*rule {

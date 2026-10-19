@@ -86,7 +86,8 @@ func compileRule(cr core.CollectionRule) (*rule, error) {
 	if !ok {
 		return nil, fmt.Errorf("unknown field %q", cr.Field)
 	}
-	if !classOps[class][cr.Op] {
+	ratingRange := cr.Field == "contentRating" && (cr.Op == "gte" || cr.Op == "lte")
+	if !classOps[class][cr.Op] && !ratingRange {
 		return nil, fmt.Errorf("%s does not support %q", cr.Field, cr.Op)
 	}
 	r := &rule{field: cr.Field, class: class, op: cr.Op, label: cr.Label}
@@ -108,8 +109,13 @@ func compileRule(cr core.CollectionRule) (*rule, error) {
 		if len(r.tags) == 0 {
 			return nil, fmt.Errorf("%s needs a value", cr.Field)
 		}
-		if cr.Field == "contentRating" && (cr.Op == "gte" || cr.Op == "lte") {
-			r.ratingRank = catalog.RatingRank(r.tags[0])
+		if ratingRange {
+			if len(r.tags) != 1 {
+				return nil, fmt.Errorf("contentRating %s needs one rating", cr.Op)
+			}
+			if r.ratingRank = catalog.RatingRank(r.tags[0]); r.ratingRank == 0 {
+				return nil, fmt.Errorf("%q is not a rating Ether can order (try G, PG, PG-13, R, TV-14…)", r.tags[0])
+			}
 		}
 	case classRefs:
 		refs, region, err := refList(raw)
