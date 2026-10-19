@@ -127,6 +127,77 @@ outside your LAN:
 - Behind a reverse proxy/TLS terminator, keep the path and `X-Plex-*`
   headers intact and point *Custom connection URLs* at the proxy.
 
+## Running a cluster
+
+Two or more Ether nodes on one network can serve as one Plex server,
+sharing an owner-supplied PostgreSQL database. A single server needs none
+of this.
+
+**Requirements**
+
+- PostgreSQL 14 or newer, with a dedicated, empty database for Ether.
+  Create it with the C collation (`CREATE DATABASE ether LC_COLLATE 'C'
+  LC_CTYPE 'C' TEMPLATE template0`) so text sorts as on a single server.
+- Ether does not make PostgreSQL highly available; replication and
+  failover of the database are yours to run.
+- Every node must reach the database (allow it through the firewall;
+  prefer `sslmode=require` off a trusted LAN) and the nodes must be on
+  the same LAN.
+- For remote access each node needs its own port forward (a different
+  external port per node, or UPnP), set on that node.
+
+**Start a cluster from an existing server**
+
+```sh
+# Stop Ether first (service stop, or quit the tray app), then:
+ether cluster init --database-url 'postgres://ether:PASSWORD@db.lan:5432/ether?sslmode=require'
+# start Ether again
+```
+
+`init` copies the server's database into PostgreSQL (it refuses a
+database that already holds data), shares its settings and identity from
+there and points `config.json` at PostgreSQL. A brand-new install can
+instead start with `ETHER_DATABASE_URL` set to the empty database; the
+first node to start seeds the cluster. Take a backup beforehand.
+
+**Add a node**
+
+On a running node, create a one-time join token, valid for one hour:
+
+```sh
+ether cluster token          # or POST /ether/api/cluster/join-tokens
+```
+
+Install Ether on the new machine, stop it, then run:
+
+```sh
+ether cluster join 'ether-join-v1:...'
+```
+
+and start it. The token is a secret: it carries the database password and
+the credential key that decrypts every stored credential, so treat it like
+a password and use it promptly. A used or expired token is refused; create
+another. `join` refuses to overwrite an already configured server unless
+you pass `--force` (its old settings are kept as `*.pre-join-*` files). If
+the new node reaches the database under a different address, add
+`--database-url`. Joining from the web setup wizard is not available.
+
+**What each node keeps for itself:** port and bind address, log level,
+cache location and size, transcoding hardware, ffmpeg paths and
+transcode limit, the public port/host and UPnP for its port forward,
+custom certificate file paths and the database URL. Everything else
+(providers, indexers, metadata keys, policies, the server identity and
+plex.tv sign-in, update channel) is shared: change it on any node and
+the others follow within seconds. A node's `config.json` keeps a copy of
+the shared settings, which is replaced from the database at every start.
+Local media folders are shared, so mount them at the same path on every
+node.
+
+**Remove a node:** stop and uninstall it, then delete its data directory
+(it holds the cluster's credential key). Unused tokens can be revoked with
+`DELETE /ether/api/cluster/join-tokens/{id}`. A node whose credential key
+does not match the cluster's refuses to start; join it with a fresh token.
+
 ## Updates
 
 The tray checks a signed update feed (stable/beta channel, chosen in the
