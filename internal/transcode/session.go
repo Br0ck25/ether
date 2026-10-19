@@ -374,11 +374,86 @@ func (s *Session) trackDecisionLocked(t int) core.Decision {
 }
 
 // vbvRateLocked is track t's VBV rate plan for a new run.
-func (s *Session) vbvRateLocked(t int) rateControl { return rateControl{} }
+func (s *Session) vbvRateLocked(t int) rateControl {
+	if !s.adapt.VBV || t < 0 || t >= len(s.rungs) {
+		return rateControl{}
+	}
+	r := s.rungs[t]
+	if r.decision.VideoCopy || r.peakKbps <= 0 {
+		return rateControl{}
+	}
+	maxrate := r.peakKbps
+	if gp := s.goodput.Kbps(); gp > 0 {
+		// Leave a modest delivery margin while allowing the reservoir to
+		// spend bits on complex scenes.
+		cap := gp * 9 / 10
+		if cap > 0 && cap < maxrate {
+			maxrate = cap
+		}
+	}
+	if maxrate < 300 {
+		maxrate = 300
+	}
+	seconds := s.adapt.VBVBufSeconds
+	if seconds <= 0 {
+		seconds = 8
+	}
+	return rateControl{Quality: true, MaxrateKbps: maxrate,
+		BufsizeKbps: maxrate * seconds, TargetKbps: r.avgKbps}
+}
 
 // maybeGovernLocked re-plans upcoming copy segments as clamped transcodes
 // when their bitrate spikes over the measured goodput (governor.go).
-func (s *Session) maybeGovernLocked() {}
+func (s *Session) maybeGovernLocked() {
+	if !s.governorOn || s.plan == nil || s.goodput.Samples() < 2 || len(s.segSizes) == 0 {
+		return
+	}
+	goodput := s.goodput.Kbps()
+	if goodput <= 0 {
+		return
+	}
+	// Only alter not-yet-requested segments in the encoder read-ahead
+	// window. EVENT playlists let clients discover the revised plan.
+	limit := s.aheadLimit()
+	if limit <= 0 {
+		limit = int(24 * time.Second / s.segDur)
+	}
+	maxSegs := limit
+	if maxSegs < 2 {
+		maxSegs = 2
+	}
+	margin := s.adapt.SpikeMargin
+	if margin < 1 {
+		margin = 1.25
+	}
+	for n := s.lastReq + 1; n <= s.lastReq+maxSegs; n++ {
+		if s.plan.ModeAt(n) != ModeCopy || s.plan.ClampKbps(n) != 0 {
+			continue
+		}
+		sz := s.segSizes[n]
+		if sz <= 0 {
+			continue
+		}
+		dur := s.plan.Dur(n)
+		if dur <= 0 {
+			dur = s.segDur
+		}
+		kbps := int(float64(sz*8) / dur.Seconds() / 1000)
+		if float64(kbps) <= float64(goodput)*margin {
+			continue
+		}
+		// Clamp total output below observed goodput; clampDecision retains
+		// the source resolution and audio selection.
+		clamp := goodput * 8 / 10
+		if clamp < 300 {
+			clamp = 300
+		}
+		s.plan.SetClamp(n, clamp)
+		s.playlist = nil
+		s.log.Info("governed VBR spike", "segment", n, "sourceKbps", kbps,
+			"goodputKbps", goodput, "clampKbps", clamp)
+	}
+}
 
 // ServeSegment implements core.HLSSession. n == InitSegment serves the fMP4
 // init segment. For DASH sessions it serves the first representation.

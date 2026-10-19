@@ -33,6 +33,19 @@ func baseSpec(info core.MediaInfo, d core.Decision) runSpec {
 	}
 }
 
+func TestVBVReservoirArgs(t *testing.T) {
+	info := mustParse(t, "mkv_truehd_atmos.json")
+	d := Decide(info, appleTV, allow(), Policy{})
+	d.Kind = core.DecisionTranscode
+	d.VideoCopy = false
+	d.VideoCodec = "h264"
+	s := baseSpec(info, d)
+	s.Rate = rateControl{Quality: true, MaxrateKbps: 2400, BufsizeKbps: 19200, TargetKbps: 1800}
+	args := buildArgs(s)
+	mustContain(t, args, "-crf 21", "-maxrate 2400k", "-bufsize 19200k")
+	mustNotContain(t, args, "-b:v 1800k")
+}
+
 func joined(args []string) string { return strings.Join(args, " ") }
 
 func mustContain(t *testing.T, args []string, parts ...string) {
