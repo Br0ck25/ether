@@ -1,0 +1,489 @@
+package stream
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"path"
+	"sort"
+	"strings"
+
+	"github.com/ether-media/ether/internal/archive"
+	"github.com/ether-media/ether/internal/nzb"
+)
+
+// planPlain maps a posted video file directly.
+func (b *builder) planPlain(ctx context.Context, pf *postedFile) (*plan, error) {
+	seg, err := b.e.segment(ctx, b.rel, pf, 0, b.prio, b.fo)
+	if err != nil {
+		return nil, err
+	}
+	if !pf.SizeKnown() {
+		// No yEnc file size: the last part tells where the file ends.
+		last := pf.numSlots() - 1
+		ls, err := b.e.segment(ctx, b.rel, pf, last, b.prio, b.fo)
+		if err != nil {
+			return nil, err
+		}
+		pf.learn(last, ls.begin, ls.end(), ls.end(), 0)
+	}
+	name := pf.Name()
+	if (pf.file.Obfuscated || name == "") && seg.name != "" && !nzb.IsObfuscated(seg.name) {
+		name = path.Base(seg.name)
+	}
+	size := pf.Size()
+	if size <= 0 {
+		return nil, fmt.Errorf("%w: %s is empty", ErrNoPlayableFile, name)
+	}
+	p := newPlan(b.rel, kindPlain, name, size, []*postedFile{pf}, []volInfo{{size: size, dataSize: size}}, []bool{true})
+	return p, p.init()
+}
+
+// planSplit maps a plain split (.001, .002 ...) of a video. Split sets are
+// rare and carry no internal totals, so every volume's size is learned.
+func (b *builder) planSplit(ctx context.Context, vols []*postedFile) (*plan, error) {
+	if err := b.heads(ctx, vols); err != nil {
+		return nil, err
+	}
+	head, err := b.sniff(ctx, vols[0])
+	if err != nil {
+		return nil, err
+	}
+	if f := archive.Detect(head); f != archive.FormatUnknown {
+		return nil, fmt.Errorf("stream: %s archive split into plain volumes: %w", f, ErrUnsupported)
+	}
+	ext := vols[0].file.Info.Ext
+	if !nzb.IsVideoExt(ext) && !looksLikeVideo(head) {
+		return nil, fmt.Errorf("%w: split set %s is not a video", ErrNoPlayableFile, vols[0].Name())
+	}
+	name := vols[0].Name()
+	if i := strings.LastIndex(name, "."); i > 0 {
+		name = name[:i]
+	}
+	info := make([]volInfo, len(vols))
+	verified := make([]bool, len(vols))
+	var size int64
+	for k, pf := range vols {
+		s := pf.Size()
+		info[k] = volInfo{size: s, dataSize: s}
+		verified[k] = true
+		size += s
+	}
+	p := newPlan(b.rel, kindSplit, name, size, vols, info, verified)
+	return p, p.init()
+}
+
+// planRAR maps the main video inside a store-mode RAR set.
+func (b *builder) planRAR(ctx context.Context, vols []*postedFile) (*plan, error) {
+	n := len(vols)
+	probe := []*postedFile{vols[0]}
+	if n > 1 {
+		probe = append(probe, vols[1])
+	}
+	if n > 2 {
+		probe = append(probe, vols[n-1])
+	}
+	if err := b.heads(ctx, probe); err != nil {
+		return nil, err
+	}
+	v0, err := archive.ReadRARVolume(b.reader(ctx, vols[0]), vols[0].Size(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("stream: rar %s: %w", vols[0].Name(), err)
+	}
+	if n == 1 {
+		return b.rarFromVolumes(ctx, vols, []*archive.RARVolume{v0})
+	}
+	// Estimated decoded size of the whole set (middle volumes as volume 2).
+	setBytes := vols[0].Size() + vols[n-1].Size()
+	if n > 2 {
+		setBytes += int64(n-2) * vols[1].Size()
+	}
+	main := pickRARFile(v0.Files)
+	if main == nil || !main.SplitAfter || main.SplitBefore || main.UnpackedSize <= 0 || main.UnpackedSize*2 < setBytes {
+		// The video is not a single member spanning the set from volume 1
+		// (or volume 1 has no video): read every volume's headers.
+		return b.rarFullScan(ctx, vols)
+	}
+	if m := rarMember(main); m.Streamable() != nil {
+		return nil, fmt.Errorf("stream: rar %s: %w", main.Name, m.Streamable())
+	}
+
+	read := func(k int) (*archive.RARFile, error) {
+		v, err := archive.ReadRARVolume(b.reader(ctx, vols[k]), vols[k].Size(), &archive.RAROptions{MaxFiles: 1})
+		if err != nil {
+			return nil, fmt.Errorf("stream: rar volume %d (%s): %w", k+1, vols[k].Name(), err)
+		}
+		if len(v.Files) == 0 || v.Files[0].Name != main.Name || !v.Files[0].SplitBefore {
+			return nil, nil
+		}
+		return &v.Files[0], nil
+	}
+	f1, err := read(1)
+	if err != nil {
+		return nil, err
+	}
+	fl := f1
+	if n > 2 {
+		if fl, err = read(n - 1); err != nil {
+			return nil, err
+		}
+	}
+	if f1 == nil || fl == nil || fl.SplitAfter {
+		return b.rarFullScan(ctx, vols)
+	}
+
+	info := make([]volInfo, n)
+	verified := make([]bool, n)
+	info[0] = volInfo{size: vols[0].Size(), dataOff: main.DataOffset, dataSize: main.PackedSize}
+	info[1] = volInfo{size: vols[1].Size(), dataOff: f1.DataOffset, dataSize: f1.PackedSize}
+	info[n-1] = volInfo{size: vols[n-1].Size(), dataOff: fl.DataOffset, dataSize: fl.PackedSize}
+	verified[0], verified[1], verified[n-1] = true, true, true
+	rar5 := v0.Format == archive.FormatRAR5
+	for k := 2; k < n-1; k++ {
+		// Middle volumes repeat volume 2's layout. RAR5 headers carry the
+		// volume number as a vint, which grows by a byte at 128 and 16384.
+		var delta int64
+		if rar5 {
+			delta = int64(vintLen(uint64(k)) - vintLen(1))
+		}
+		info[k] = volInfo{size: info[1].size, dataOff: info[1].dataOff + delta, dataSize: info[1].dataSize - delta}
+	}
+	p := newPlan(b.rel, kindRAR, path.Base(main.Name), main.UnpackedSize, vols, info, verified)
+	p.member, p.rar5 = main.Name, rar5
+	if err := p.init(); err != nil {
+		// The uniform model does not add up: learn every volume.
+		b.e.log.Debug("rar uniform layout rejected; reading all volume headers", "name", main.Name, "err", err)
+		if err := p.rebuildExact(ctx, verifier{e: b.e, prio: b.prio, fo: b.fo}); err != nil {
+			return nil, err
+		}
+	}
+	return p, nil
+}
+
+// rarFullScan reads the headers of every volume and composes members.
+func (b *builder) rarFullScan(ctx context.Context, vols []*postedFile) (*plan, error) {
+	if err := b.heads(ctx, vols); err != nil {
+		return nil, err
+	}
+	parsed := make([]*archive.RARVolume, len(vols))
+	err := b.parallel(ctx, len(vols), func(ctx context.Context, k int) error {
+		v, err := archive.ReadRARVolume(b.reader(ctx, vols[k]), vols[k].Size(), nil)
+		if err != nil {
+			return fmt.Errorf("stream: rar volume %d (%s): %w", k+1, vols[k].Name(), err)
+		}
+		parsed[k] = v
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return b.rarFromVolumes(ctx, vols, parsed)
+}
+
+func (b *builder) rarFromVolumes(_ context.Context, vols []*postedFile, parsed []*archive.RARVolume) (*plan, error) {
+	members, err := archive.ComposeRAR(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("stream: rar %s: %w", vols[0].Name(), err)
+	}
+	m := chooseMember(members)
+	if m == nil {
+		return nil, fmt.Errorf("%w: rar %s holds no video (%d files)", ErrNoPlayableFile, vols[0].Name(), len(members))
+	}
+	if err := m.Streamable(); err != nil {
+		return nil, fmt.Errorf("stream: rar %s: %s: %w", vols[0].Name(), m.Name, err)
+	}
+	info := make([]volInfo, len(vols))
+	verified := make([]bool, len(vols))
+	for k := range vols {
+		info[k] = volInfo{size: vols[k].Size()}
+		verified[k] = true
+	}
+	for _, x := range m.Extents {
+		if x.Volume < 0 || x.Volume >= len(vols) {
+			return nil, fmt.Errorf("stream: rar extent in volume %d of %d: %w", x.Volume, len(vols), ErrCorrupt)
+		}
+		if info[x.Volume].dataSize != 0 {
+			return nil, fmt.Errorf("stream: rar member %s has two extents in volume %d: %w", m.Name, x.Volume, ErrUnsupported)
+		}
+		info[x.Volume].dataOff, info[x.Volume].dataSize = x.Offset, x.Size
+	}
+	p := newPlan(b.rel, kindRAR, path.Base(m.Name), m.Size, vols, info, verified)
+	p.member = m.Name
+	return p, p.init()
+}
+
+// plan7z maps the main video inside a copy-method 7z set.
+func (b *builder) plan7z(ctx context.Context, vols []*postedFile) (*plan, error) {
+	n := len(vols)
+	// The signature header is at the start of volume 1 and the archive
+	// header at the end of the last volume: fetch both ends at once.
+	last := vols[n-1]
+	err := b.parallel(ctx, 2, func(ctx context.Context, i int) error {
+		if i == 0 {
+			_, err := b.e.segment(ctx, b.rel, vols[0], 0, b.prio, b.fo)
+			return err
+		}
+		_, err := b.e.segment(ctx, b.rel, last, last.numSlots()-1, b.prio, b.fo)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	head, err := b.sniff(ctx, vols[0])
+	if err != nil {
+		return nil, err
+	}
+	if archive.Detect(head) != archive.Format7z || len(head) < 32 {
+		return nil, fmt.Errorf("stream: %s is not a 7z archive: %w", vols[0].Name(), ErrCorrupt)
+	}
+	want := 32 + int64(binary.LittleEndian.Uint64(head[12:20])) + int64(binary.LittleEndian.Uint64(head[20:28]))
+
+	info := make([]volInfo, n)
+	verified := make([]bool, n)
+	sizes := func() int64 {
+		var t int64
+		for k := range vols {
+			if k == 0 || k == n-1 || verified[k] {
+				info[k] = volInfo{size: vols[k].Size()}
+				verified[k] = true
+			} else {
+				info[k] = volInfo{size: vols[0].Size()}
+			}
+			t += info[k].size
+		}
+		return t
+	}
+	total := sizes()
+	if total != want {
+		b.e.log.Debug("7z uniform volume sizes rejected; learning every volume", "name", vols[0].Name(), "total", total, "want", want)
+		if err := b.heads(ctx, vols); err != nil {
+			return nil, err
+		}
+		for k := range verified {
+			verified[k] = true
+		}
+		if total = sizes(); total != want {
+			return nil, fmt.Errorf("stream: 7z volumes total %d bytes, header says %d: %w", total, want, ErrCorrupt)
+		}
+	}
+	for k := range vols {
+		vols[k].setAssumed(info[k].size)
+	}
+	av := make([]archive.Volume, n)
+	for k, pf := range vols {
+		av[k] = archive.Volume{R: b.reader(ctx, pf), Size: info[k].size}
+	}
+	members, err := archive.List7z(archive.NewMultiReader(av), total)
+	if err != nil {
+		return nil, fmt.Errorf("stream: 7z %s: %w", vols[0].Name(), err)
+	}
+	m := chooseMember(members)
+	if m == nil {
+		return nil, fmt.Errorf("%w: 7z %s holds no video (%d files)", ErrNoPlayableFile, vols[0].Name(), len(members))
+	}
+	if err := m.Streamable(); err != nil {
+		return nil, fmt.Errorf("stream: 7z %s: %s: %w", vols[0].Name(), m.Name, err)
+	}
+	p := newPlan(b.rel, kind7z, path.Base(m.Name), m.Size, vols, info, verified)
+	p.concatExt = m.Extents
+	return p, p.init()
+}
+
+// pickRARFile chooses the likely video among the file headers of volume 1.
+func pickRARFile(files []archive.RARFile) *archive.RARFile {
+	members := make([]archive.Member, len(files))
+	for i, f := range files {
+		members[i] = rarMember(&f)
+	}
+	m := chooseMember(members)
+	if m == nil {
+		return nil
+	}
+	for i := range files {
+		if files[i].Name == m.Name {
+			return &files[i]
+		}
+	}
+	return nil
+}
+
+func rarMember(f *archive.RARFile) archive.Member {
+	return archive.Member{Name: f.Name, Size: f.UnpackedSize, Stored: f.Stored, Encrypted: f.Encrypted, Solid: f.Solid, Dir: f.Dir}
+}
+
+// chooseMember picks the main video of an archive: the largest video that
+// is not a sample or extra; failing that (obfuscated inner names), the
+// largest file without a known non-video type if it dominates the archive.
+func chooseMember(members []archive.Member) *archive.Member {
+	var best, anon *archive.Member
+	var total int64
+	for i := range members {
+		m := &members[i]
+		if m.Dir {
+			continue
+		}
+		total += max(m.Size, 0)
+		info := nzb.Classify(m.Name)
+		switch {
+		case info.Kind == nzb.KindVideo && !info.Sample && !info.Extra:
+			if best == nil || m.Size > best.Size {
+				best = m
+			}
+		case info.Kind == nzb.KindUnknown:
+			if anon == nil || m.Size > anon.Size {
+				anon = m
+			}
+		}
+	}
+	if best != nil {
+		return best
+	}
+	if anon != nil && anon.Size*2 >= total {
+		return anon
+	}
+	return nil
+}
+
+// shouldProbe: unidentifiable files outweigh every recognised candidate.
+func (b *builder) shouldProbe(cands []candidate) bool {
+	var unknown int64
+	for _, pf := range b.rel.files {
+		if pf.file.Info.Kind == nzb.KindUnknown {
+			unknown += pf.file.Bytes()
+		}
+	}
+	var best int64
+	if len(cands) > 0 {
+		best = cands[0].bytes
+	}
+	return unknown > best
+}
+
+// probeObfuscated fetches the first article of unidentified files and
+// re-classifies them from the yEnc name or the content's magic bytes.
+func (b *builder) probeObfuscated(ctx context.Context) error {
+	var unknown []*postedFile
+	for _, pf := range b.rel.files {
+		if pf.file.Info.Kind == nzb.KindUnknown {
+			unknown = append(unknown, pf)
+		}
+	}
+	sort.SliceStable(unknown, func(i, j int) bool { return unknown[i].file.Bytes() > unknown[j].file.Bytes() })
+	if len(unknown) > b.e.opts.MaxProbes {
+		unknown = unknown[:b.e.opts.MaxProbes]
+	}
+	type probe struct {
+		seg *segData
+		err error
+	}
+	probes := make([]probe, len(unknown))
+	_ = b.parallel(ctx, len(unknown), func(ctx context.Context, i int) error {
+		seg, err := b.e.segment(ctx, b.rel, unknown[i], 0, b.prio, b.fo)
+		probes[i] = probe{seg, err}
+		return nil // one dead file must not stop the others
+	})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	type rarVol struct {
+		pf     *postedFile
+		number int // -1 unknown
+	}
+	var rars []rarVol
+	for i, pf := range unknown {
+		pr := probes[i]
+		if pr.err != nil || pr.seg == nil {
+			continue
+		}
+		if yn := path.Base(strings.ReplaceAll(pr.seg.name, `\`, "/")); yn != "" && yn != "." {
+			if info := nzb.Classify(yn); info.Kind != nzb.KindUnknown && !nzb.IsObfuscated(yn) {
+				pf.file.Name, pf.file.Info, pf.file.Obfuscated = yn, info, false
+				pf.setName(yn)
+				continue
+			}
+		}
+		if pr.seg.begin != 0 {
+			continue
+		}
+		head := pr.seg.data
+		switch archive.Detect(head) {
+		case archive.FormatRAR4, archive.FormatRAR5:
+			num := -1
+			if v, err := archive.ReadRARVolume(bytes.NewReader(head), int64(len(head)), &archive.RAROptions{MaxFiles: 1}); err == nil {
+				if v.Number >= 0 {
+					num = v.Number
+				} else if v.First {
+					num = 0
+				}
+			}
+			rars = append(rars, rarVol{pf, num})
+		case archive.Format7z:
+			pf.file.Info = nzb.FileInfo{Kind: nzb.KindSevenZip, Ext: "7z", Volume: 0, SetName: fmt.Sprintf("\x00obfuscated-7z-%d", pf.idx)}
+		default:
+			if looksLikeVideo(head) {
+				pf.file.Info = nzb.FileInfo{Kind: nzb.KindVideo, Ext: "", Volume: -1, SetName: pf.file.Info.SetName}
+			}
+		}
+	}
+	if len(rars) == 0 {
+		return nil
+	}
+	allNumbered := true
+	for _, r := range rars {
+		if r.number < 0 {
+			allNumbered = false
+		}
+	}
+	sort.SliceStable(rars, func(i, j int) bool {
+		a, c := rars[i], rars[j]
+		if allNumbered {
+			return a.number < c.number
+		}
+		if (a.number == 0) != (c.number == 0) {
+			return a.number == 0 // the first volume leads
+		}
+		if a.pf.file.SubjectIndex != c.pf.file.SubjectIndex {
+			return a.pf.file.SubjectIndex < c.pf.file.SubjectIndex
+		}
+		return a.pf.idx < c.pf.idx
+	})
+	for i, r := range rars {
+		vol := i
+		if allNumbered {
+			vol = r.number
+		}
+		r.pf.file.Info = nzb.FileInfo{Kind: nzb.KindRAR, Ext: "rar", Volume: vol, SetName: "\x00obfuscated-rar", NewStyle: true}
+	}
+	return nil
+}
+
+// looksLikeVideo recognises common container signatures.
+func looksLikeVideo(b []byte) bool {
+	switch {
+	case len(b) >= 4 && bytes.Equal(b[:4], []byte{0x1a, 0x45, 0xdf, 0xa3}): // Matroska/WebM (EBML)
+		return true
+	case len(b) >= 8 && (string(b[4:8]) == "ftyp" || string(b[4:8]) == "moov" || string(b[4:8]) == "mdat" || string(b[4:8]) == "free"):
+		return true
+	case len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "AVI ":
+		return true
+	case len(b) >= 4 && bytes.Equal(b[:4], []byte{0x00, 0x00, 0x01, 0xba}): // MPEG program stream
+		return true
+	case len(b) >= 16 && bytes.Equal(b[:8], []byte{0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11}): // ASF/WMV
+		return true
+	case len(b) > 376 && b[0] == 0x47 && b[188] == 0x47 && b[376] == 0x47: // MPEG-TS
+		return true
+	case len(b) > 392 && b[4] == 0x47 && b[196] == 0x47 && b[388] == 0x47: // M2TS (192-byte packets)
+		return true
+	}
+	return false
+}
+
+func vintLen(v uint64) int {
+	n := 1
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
+}

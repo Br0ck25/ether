@@ -1,0 +1,359 @@
+package stream
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
+	"time"
+
+	"github.com/ether-media/ether/internal/core"
+)
+
+// maxCursors is how many independent sequential readers a source tracks
+// (a player reading the video while a prober reads the index, ...).
+const maxCursors = 4
+
+// backSlack tolerates small backwards steps of a sequential reader.
+const backSlack = 1 << 20
+
+// cursor follows one sequential reader.
+type cursor struct {
+	next     int64 // offset after the last byte read
+	window   int64 // current read-ahead window
+	frontier int64 // read-ahead scheduled up to here
+	used     time.Time
+}
+
+// source implements core.MediaSource.
+type source struct {
+	e         *Engine
+	rel       *release
+	plan      *plan
+	releaseID string
+	fo        fetchOpts
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	mu      sync.Mutex
+	cursors []*cursor
+	closed  bool
+
+	raSem chan struct{}
+	raWG  sync.WaitGroup
+}
+
+func newSource(e *Engine, rel *release, p *plan, releaseID string) *source {
+	ctx, cancel := context.WithCancel(e.ctx)
+	e.active.Add(1)
+	return &source{
+		e: e, rel: rel, plan: p, releaseID: releaseID,
+		fo:     fetchOpts{cacheID: releaseID},
+		ctx:    ctx,
+		cancel: cancel,
+		raSem:  make(chan struct{}, e.opts.ReadAheadParallel),
+	}
+}
+
+func (s *source) Size() int64       { return s.plan.size }
+func (s *source) Name() string      { return s.plan.name }
+func (s *source) ReleaseID() string { return s.releaseID }
+
+// Close stops read-ahead and releases the index. Safe to call twice.
+func (s *source) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.mu.Unlock()
+	s.cancel()
+	s.raWG.Wait()
+	s.e.active.Add(-1)
+	s.e.release(s.rel)
+	return nil
+}
+
+// ReadAt implements io.ReaderAt. It is safe for concurrent use. A segment
+// missing on every provider surfaces as an error wrapping
+// core.ErrArticleMissing.
+func (s *source) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, fmt.Errorf("stream: negative offset %d", off)
+	}
+	if s.ctx.Err() != nil {
+		return 0, ErrClosed
+	}
+	size := s.plan.size
+	if off >= size {
+		return 0, io.EOF
+	}
+	want := p
+	if rem := size - off; int64(len(want)) > rem {
+		want = want[:rem]
+	}
+	s.readAhead(off, int64(len(want)))
+
+	ctx, cancel := context.WithTimeout(s.ctx, s.e.opts.ReadTimeout)
+	defer cancel()
+	n, err := s.read(ctx, want, off, core.PriorityLive)
+	if err != nil {
+		if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
+			err = ErrClosed
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			err = fmt.Errorf("stream: read %d bytes at %d of %s timed out: %w", len(want), off, s.plan.name, err)
+		}
+		return n, err
+	}
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// read fills p (within the video) at off.
+func (s *source) read(ctx context.Context, p []byte, off int64, prio core.Priority) (int, error) {
+	return readPlan(ctx, s.e, s.rel, s.plan, p, off, prio, s.fo)
+}
+
+// readPlan reads video bytes through the plan's layout, verifying volumes
+// before serving from them.
+func readPlan(ctx context.Context, e *Engine, rel *release, p *plan, buf []byte, off int64, prio core.Priority, fo fetchOpts) (int, error) {
+	v := verifier{e: e, prio: prio, fo: fo}
+	for attempt := 0; ; attempt++ {
+		lay := p.layout()
+		pcs := lay.pieces(off, int64(len(buf)))
+		var unverified []int
+		for _, pc := range pcs {
+			if !p.isVerified(pc.vol) {
+				unverified = append(unverified, pc.vol)
+			}
+		}
+		if len(unverified) > 0 {
+			if attempt > 3 {
+				return 0, fmt.Errorf("stream: %s layout keeps changing: %w", p.name, ErrCorrupt)
+			}
+			// Fetch the wanted segments speculatively while the volume
+			// headers are checked; they are usually right.
+			for _, pc := range pcs {
+				pf := p.vols[pc.vol]
+				for _, i := range pf.slotsFor(pc.off, pc.n) {
+					go func(i int) { _, _ = e.segment(ctx, rel, pf, i, prio, fo) }(i)
+				}
+			}
+			if err := p.ensure(ctx, v, unverified); err != nil {
+				return 0, err
+			}
+			if p.layout().version != lay.version {
+				continue
+			}
+		}
+		var n int
+		for _, pc := range pcs {
+			m, err := e.readFile(ctx, rel, p.vols[pc.vol], buf[pc.bufOff:pc.bufOff+pc.n], pc.off, prio, fo)
+			n += m
+			if err != nil {
+				if err == io.EOF {
+					err = fmt.Errorf("stream: volume %d of %s ended early: %w", pc.vol+1, p.name, ErrCorrupt)
+				}
+				return n, err
+			}
+		}
+		return n, nil
+	}
+}
+
+// readAhead updates the reader cursors and schedules background fetches
+// ahead of a sequential reader.
+func (s *source) readAhead(off, n int64) {
+	now := time.Now()
+	end := off + n
+	opts := s.e.opts
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	var c *cursor
+	for _, cur := range s.cursors {
+		if off >= cur.next-backSlack && off <= cur.next+cur.window {
+			c = cur
+			break
+		}
+	}
+	if c == nil {
+		c = &cursor{next: end, window: opts.ReadAheadMin, frontier: end}
+		if len(s.cursors) < maxCursors {
+			s.cursors = append(s.cursors, c)
+		} else {
+			oldest := 0
+			for i, cur := range s.cursors {
+				if cur.used.Before(s.cursors[oldest].used) {
+					oldest = i
+				}
+			}
+			s.cursors[oldest] = c
+		}
+	} else {
+		if off >= c.next-backSlack && end > c.next {
+			// Sequential progress: grow the window with the bytes consumed.
+			c.window = min(opts.ReadAheadMax, c.window+2*(end-c.next))
+		}
+		c.next = max(c.next, end)
+	}
+	c.used = now
+	from := max(c.frontier, c.next)
+	to := min(c.next+c.window, s.plan.size)
+	if from >= to {
+		s.mu.Unlock()
+		return
+	}
+	c.frontier = to // optimistic; lowered below if scheduling stops early
+	s.mu.Unlock()
+
+	scheduled := s.schedule(from, to)
+	if scheduled < to {
+		s.mu.Lock()
+		if c.frontier == to {
+			c.frontier = scheduled
+		}
+		s.mu.Unlock()
+	}
+}
+
+// schedule starts read-ahead fetches for [from, to) without blocking and
+// returns how far it got (the start of the first slot it could not start).
+func (s *source) schedule(from, to int64) int64 {
+	lay := s.plan.layout()
+	for _, pc := range lay.pieces(from, to-from) {
+		pf := s.plan.vols[pc.vol]
+		if !s.plan.isVerified(pc.vol) {
+			// Check the volume in the background; its data follows on the
+			// next read once verified.
+			if !s.acquireRA() {
+				return from + pc.bufOff
+			}
+			vol := pc.vol
+			s.raWG.Add(1)
+			go func() {
+				defer s.raWG.Done()
+				defer s.releaseRA()
+				_ = s.plan.ensure(s.ctx, verifier{e: s.e, prio: core.PriorityReadahead, fo: s.fo}, []int{vol})
+			}()
+			return from + pc.bufOff
+		}
+		for _, i := range pf.slotsFor(pc.off, pc.n) {
+			key := segKey{s.rel.digest, pf.segBase + i}
+			if s.e.hot.has(key) {
+				continue
+			}
+			if !s.acquireRA() {
+				b, _, _ := pf.rangeOf(i)
+				inner := from + pc.bufOff + max(0, b-pc.off)
+				return inner
+			}
+			s.raWG.Add(1)
+			go func(i int) {
+				defer s.raWG.Done()
+				defer s.releaseRA()
+				_, err := s.e.segment(s.ctx, s.rel, pf, i, core.PriorityReadahead, s.fo)
+				if err != nil && s.ctx.Err() == nil && !isMissing(err) {
+					s.e.log.Debug("read-ahead fetch failed", "name", s.plan.name, "part", i+1, "err", err)
+				}
+			}(i)
+		}
+	}
+	return to
+}
+
+func (s *source) acquireRA() bool {
+	select {
+	case s.raSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *source) releaseRA() { <-s.raSem }
+
+// prefetchRange warms a byte range of the video into the segment cache.
+func (e *Engine) prefetchRange(ctx context.Context, rel *release, p *plan, releaseID string, offset, length int64) error {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= p.size || length <= 0 {
+		return nil
+	}
+	if offset+length > p.size {
+		length = p.size - offset
+	}
+	fo := fetchOpts{cacheID: releaseID, noHot: e.cache != nil && releaseID != ""}
+	if err := p.ensure(ctx, verifier{e: e, prio: core.PriorityPrefetch, fo: fo}, volsOf(p.layout().pieces(offset, length))); err != nil {
+		return err
+	}
+	type job struct {
+		pf *postedFile
+		i  int
+	}
+	var jobs []job
+	hc, _ := e.cache.(hasCache)
+	for _, pc := range p.layout().pieces(offset, length) {
+		pf := p.vols[pc.vol]
+		for _, i := range pf.slotsFor(pc.off, pc.n) {
+			if fo.noHot && hc != nil && hc.Has(releaseID, pf.segBase+i) {
+				continue
+			}
+			if e.hot.has(segKey{rel.digest, pf.segBase + i}) && !fo.noHot {
+				continue
+			}
+			jobs = append(jobs, job{pf, i})
+		}
+	}
+	sem := make(chan struct{}, e.opts.PrefetchParallel)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var first error
+	for _, j := range jobs {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		go func(j job) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if _, err := e.segment(ctx, rel, j.pf, j.i, core.PriorityPrefetch, fo); err != nil {
+				mu.Lock()
+				if first == nil {
+					first = err
+				}
+				mu.Unlock()
+			}
+		}(j)
+	}
+	wg.Wait()
+	if first != nil {
+		return first
+	}
+	return ctx.Err()
+}
+
+func volsOf(pcs []piece) []int {
+	var out []int
+	seen := map[int]bool{}
+	for _, pc := range pcs {
+		if !seen[pc.vol] {
+			seen[pc.vol] = true
+			out = append(out, pc.vol)
+		}
+	}
+	return out
+}
