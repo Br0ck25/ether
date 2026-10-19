@@ -12,60 +12,98 @@
     "librarySectionUUID": "1dc336c6-64af-dcfe-d33e-ccd1243d2b6a",
     "mediaTagPrefix": "/system/bundle/media/flags/",
     "mediaTagVersion": "1720000000",
+    "resourceSession": "client-1",
     "transcodeDecisionCode": 4000,
     "transcodeDecisionText": "Not available yet: no playable release of this title was found. Try again later.",
     "Metadata": [
       {
-        "ratingKey": "1000000000000550",
-        "key": "/library/metadata/1000000000000550",
-        "guid": "com.plexapp.agents.themoviedb://550?lang=en",
-        "studio": "Fox 2000 Pictures",
-        "type": "movie",
-        "title": "Fight Club",
-        "librarySectionTitle": "Movies",
-        "librarySectionID": 1,
-        "librarySectionKey": "/library/sections/1",
-        "contentRating": "R",
-        "summary": "An insomniac office worker...",
+        "addedAt": 1790812800,
+        "art": "/library/metadata/1000000000000550/art/1790812800",
         "audienceRating": 8.4,
-        "year": 1999,
+        "audienceRatingImage": "themoviedb://image.rating",
+        "contentRating": "R",
+        "duration": 8340000,
+        "guid": "com.plexapp.agents.themoviedb://550?lang=en",
+        "key": "/library/metadata/1000000000000550",
+        "librarySectionID": "1",
+        "librarySectionKey": "/library/sections/1",
+        "librarySectionTitle": "Movies",
+        "originallyAvailableAt": "1999-10-15",
+        "ratingKey": "1000000000000550",
+        "slug": "fight-club",
+        "studio": "Fox 2000 Pictures",
+        "summary": "An insomniac office worker...",
         "tagline": "Mischief. Mayhem. Soap.",
         "thumb": "/library/metadata/1000000000000550/thumb/1790812800",
-        "art": "/library/metadata/1000000000000550/art/1790812800",
-        "duration": 8340000,
-        "originallyAvailableAt": "1999-10-15",
-        "addedAt": 1790812800,
+        "title": "Fight Club",
+        "type": "movie",
         "updatedAt": 1790812800,
-        "audienceRatingImage": "themoviedb://image.rating",
+        "year": 1999,
+        "UltraBlurColors": [
+          {
+            "bottomLeft": "538700",
+            "bottomRight": "600007",
+            "topLeft": "8c000c",
+            "topRight": "542400"
+          }
+        ],
         "Genre": [
           {
+            "filter": "genre=Drama",
+            "id": "1106135894",
             "tag": "Drama"
           },
           {
+            "filter": "genre=Thriller",
+            "id": "45642825",
             "tag": "Thriller"
           }
         ],
         "Country": [
           {
+            "filter": "country=United+States+of+America",
+            "id": "1765229598",
             "tag": "United States of America"
+          }
+        ],
+        "Rating": [
+          {
+            "image": "themoviedb://image.rating",
+            "type": "audience",
+            "value": "8.4"
           }
         ],
         "Director": [
           {
-            "tag": "David Fincher"
+            "filter": "director=7467",
+            "id": "7467",
+            "tag": "David Fincher",
+            "tagKey": "tmdb-person-7467"
           }
         ],
         "Writer": [
           {
-            "tag": "Chuck Palahniuk"
+            "filter": "writer=7468",
+            "id": "7468",
+            "tag": "Chuck Palahniuk",
+            "tagKey": "tmdb-person-7468"
           }
         ],
         "Role": [
           {
-            "tag": "Brad Pitt"
+            "filter": "actor=287",
+            "id": "287",
+            "role": "Tyler Durden",
+            "tag": "Brad Pitt",
+            "tagKey": "tmdb-person-287",
+            "thumb": "https://image.tmdb.org/t/p/w185/brad.jpg"
           },
           {
-            "tag": "Edward Norton"
+            "filter": "actor=819",
+            "id": "819",
+            "role": "The Narrator",
+            "tag": "Edward Norton",
+            "tagKey": "tmdb-person-819"
           }
         ]
       }

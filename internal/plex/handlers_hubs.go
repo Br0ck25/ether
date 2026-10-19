@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -28,7 +29,13 @@ type hubSpec struct {
 	core.Hub
 	key        string // overrides the computed key
 	noPromoted bool   // omit the promoted attribute (section rows)
-	state      map[core.RatingKey]core.WatchStatus
+	// included stamps includedAt on the items, as PMS's
+	// /hubs/continueWatching does.
+	included bool
+	// plain keeps episodes in list form (the Home hero row); other rows
+	// carry episodes in full, as PMS does.
+	plain bool
+	state map[core.RatingKey]core.WatchStatus
 }
 
 func hubItemsKey(h core.Hub, hc hubCtx) string {
@@ -48,7 +55,13 @@ func hubItemsKey(h core.Hub, hc hubCtx) string {
 func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
 	h := hs.Hub
 	items := s.filterAllowed(pr.User, h.Items)
-	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state})
+	// Related hubs (detail pages, postplay) carry Guid children and omit the
+	// items' library section and the hub's promoted flag, like PMS.
+	related := hc.related != 0
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, guids: related, detailEpisodes: !hs.plain})
+	if hs.included {
+		stampIncluded(md)
+	}
 	keys := make([]string, 0, len(items))
 	for _, t := range items {
 		keys = append(keys, t.Key.String())
@@ -80,13 +93,23 @@ func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubC
 		Style:         style,
 		Metadata:      md,
 	}
-	if !hs.noPromoted {
+	if !hs.noPromoted && !related {
 		mh.Promoted = model.Ptr(h.Promoted)
 	}
 	if len(keys) > 0 {
 		mh.HubKey = "/library/metadata/" + strings.Join(keys, ",")
 	}
 	return mh
+}
+
+// stampIncluded sets includedAt (when an item joined Continue Watching) to
+// its last view, which is when Ether's in-progress list picked it up.
+func stampIncluded(md []model.Metadata) {
+	for i := range md {
+		if md[i].LastViewedAt > 0 {
+			md[i].IncludedAt = md[i].LastViewedAt
+		}
+	}
 }
 
 func (s *Server) renderHubs(ctx context.Context, pr *Request, hubs []core.Hub, hc hubCtx) []model.Hub {
@@ -123,9 +146,10 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 	hs := hubSpec{Hub: core.Hub{Title: "Continue Watching", Style: "hero", Promoted: true}, state: state}
 	switch v {
 	case cwHome:
-		hs.ID, hs.Context, hs.key = "home.continue", "hub.home.continue", "/hubs/home/continueWatching"
+		hs.ID, hs.Context, hs.key, hs.plain = "home.continue", "hub.home.continue", "/hubs/home/continueWatching", true
 	case cwGlobal:
 		hs.ID, hs.Context, hs.key, hs.noPromoted = "continueWatching", "hub.continueWatching", "/hubs/continueWatching/items", true
+		hs.included = true
 	case cwSection:
 		id := strconv.Itoa(sec.ID)
 		hs.Style, hs.noPromoted = "shelf", true
@@ -216,11 +240,56 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{}))
 		}
 	}
+	if len(sections) == 0 {
+		if h, ok := s.playlistsHub(ctx, pr, count); ok {
+			mc.Hub = append(mc.Hub, h)
+		}
+	}
 	if ids := q["identifier"]; len(ids) > 0 {
 		mc.Hub = filterHubs(mc.Hub, ids)
 	}
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
+}
+
+// playlistsHub is PMS's "Recent Playlists" Home row (home.playlists): the
+// user's playlists, most recently updated first. Omitted when there are
+// none.
+func (s *Server) playlistsHub(ctx context.Context, pr *Request, count int) (model.Hub, bool) {
+	if s.d.Playlists == nil || pr.User == nil {
+		return model.Hub{}, false
+	}
+	pls, err := s.d.Playlists.List(ctx, pr.User.ID)
+	if err != nil {
+		s.log.Warn("playlists hub", "err", err)
+		return model.Hub{}, false
+	}
+	if len(pls) == 0 {
+		return model.Hub{}, false
+	}
+	sort.SliceStable(pls, func(i, j int) bool { return pls[i].UpdatedAt.After(pls[j].UpdatedAt) })
+	more := len(pls) > count
+	if more {
+		pls = pls[:count]
+	}
+	h := model.Hub{
+		Key:           "/playlists/all?type=15&sort=lastViewedAt:desc&playlistType=video,audio",
+		Title:         "Recent Playlists",
+		Type:          "playlist",
+		HubIdentifier: "home.playlists",
+		Context:       "hub.home.playlists",
+		More:          more,
+		Style:         "shelf",
+		Promoted:      model.Ptr(true),
+	}
+	keys := make([]string, 0, len(pls))
+	for i := range pls {
+		h.Metadata = append(h.Metadata, s.playlistMetadata(ctx, &pls[i]))
+		keys = append(keys, pls[i].Key.String())
+	}
+	h.Size = len(h.Metadata)
+	h.HubKey = "/library/metadata/" + strings.Join(keys, ",")
+	return h, true
 }
 
 func filterHubs(hs []model.Hub, ids []string) []model.Hub {
@@ -272,7 +341,10 @@ func (s *Server) handleContinueWatchingItems(w http.ResponseWriter, r *http.Requ
 	}
 	hs := s.continueHub(ctx, pr, v, sec, count)
 	mc := hubContainer()
-	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state})
+	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state, detailEpisodes: !hs.plain})
+	if hs.included {
+		stampIncluded(mc.Metadata)
+	}
 	mc.Size = len(mc.Metadata)
 	s.write(w, r, mc)
 }
@@ -488,6 +560,11 @@ func (s *Server) handleHubSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	q := r.URL.Query()
+	if strings.TrimSpace(q.Get("query")) == "" {
+		// PMS rejects an empty hub search with its HTML 400 page.
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	limit := 10
 	if n, _ := strconv.Atoi(q.Get("limit")); n > 0 {
 		limit = min(n, 100)
@@ -600,6 +677,8 @@ func (s *Server) handleLibrarySearch(w http.ResponseWriter, r *http.Request) {
 	mc := &model.MediaContainer{}
 	for i := range md {
 		score := math.Round(searchScore(i, len(md))*10000) / 10000
+		// PMS names the section here but sends no section id or key.
+		md[i].LibrarySectionID, md[i].LibrarySectionKey = 0, ""
 		mc.SearchResult = append(mc.SearchResult, model.SearchResult{Score: score, Metadata: &md[i]})
 	}
 	mc.Size = len(mc.SearchResult)

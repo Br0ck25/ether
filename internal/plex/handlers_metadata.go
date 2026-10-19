@@ -121,6 +121,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 
 // detail renders a full item page.
 func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, children, onDeck, related, extras bool) model.Metadata {
+	s.rememberTitle(t)
 	ts := []core.Title{*t}
 	items := s.renderTitles(ctx, pr, ts, renderOpts{detail: true, media: true})
 	s.applyLeafCounts(ctx, pr, items, ts)
@@ -208,6 +209,7 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	s.rememberTitle(parent) // seasons render the show's studio/year/logo
 	kids, err := s.d.Catalog.Children(ctx, k)
 	if err != nil && !errors.Is(err, core.ErrNotFound) {
 		s.writeErr(w, r, err)
@@ -240,6 +242,17 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 		}
 		mc.ParentIndex = model.Ptr(parent.Season)
 		mc.ParentTitle = ""
+		// PMS always sends parentTitle here, empty.
+		mc.Extra = append(mc.Extra, model.A("parentTitle", ""))
+		if st, err := s.d.Catalog.Get(ctx, show); err == nil {
+			s.rememberTitle(st)
+			if st.ContentRating != "" {
+				mc.Extra = append(mc.Extra, model.A("grandparentContentRating", st.ContentRating))
+			}
+			if len(st.Studios) > 0 {
+				mc.Extra = append(mc.Extra, model.A("grandparentStudio", st.Studios[0]))
+			}
+		}
 		mc.GrandparentRatingKey = int64(show)
 		mc.GrandparentTitle = parent.ShowTitle
 		mc.GrandparentThumb = "/library/metadata/" + show.String() + "/thumb/" + imageStamp(parent)
@@ -438,6 +451,10 @@ func (s *Server) collectionMetadata(c *core.Collection) model.Metadata {
 		m.LibrarySectionTitle = sec.Title
 	}
 	m.Image = []model.Image{{Alt: c.Title, Type: "coverPoster", URL: m.Thumb}}
+	if m.Art != "" {
+		m.Image = append(m.Image, model.Image{Alt: c.Title, Type: "background", URL: m.Art})
+	}
+	m.UltraBlurColors = s.ultraBlurFor(c.Key, c.BackdropPath)
 	return m
 }
 

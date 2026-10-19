@@ -62,6 +62,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 			Playback:    a.playback,
 			Transcoder:  tc,
 			ImageURL:    a.tmdb.ImageURLFunc(),
+			DB:          a.db, // plex_ultrablur
 		}
 	}
 	deps.Config = a.cfg.Get

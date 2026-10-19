@@ -22,6 +22,7 @@
         "guid": "com.plexapp.agents.themoviedb://1396/1/1?lang=en",
         "parentGuid": "com.plexapp.agents.themoviedb://1396/1?lang=en",
         "grandparentGuid": "com.plexapp.agents.themoviedb://1396?lang=en",
+        "grandparentSlug": "breaking-bad",
         "type": "episode",
         "title": "Pilot",
         "grandparentKey": "/library/metadata/2000000000001396",
@@ -34,7 +35,6 @@
         "summary": "",
         "index": 1,
         "parentIndex": 1,
-        "year": 2008,
         "thumb": "/library/metadata/4000013960010001/thumb/1790899200",
         "art": "/library/metadata/2000000000001396/art/1790899200",
         "parentThumb": "/library/metadata/3000000013960001/thumb/1790899200",
@@ -82,23 +82,24 @@
                     "chromaSubsampling": "4:2:0",
                     "frameRate": 23.976,
                     "height": 1080,
-                    "width": 1920,
                     "profile": "high",
-                    "displayTitle": "1080p (H.264 High)",
-                    "extendedDisplayTitle": "1080p (H.264 High)"
+                    "width": 1920,
+                    "displayTitle": "1080p (H.264)",
+                    "extendedDisplayTitle": "1080p (H.264)"
                   },
                   {
                     "id": 235143889,
                     "streamType": 2,
-                    "default": true,
+                    "canNormalizeLoudness": false,
                     "selected": true,
+                    "default": true,
                     "codec": "eac3",
                     "index": 1,
+                    "channels": 6,
                     "bitrate": 640,
                     "language": "English",
                     "languageTag": "en",
                     "languageCode": "eng",
-                    "channels": 6,
                     "audioChannelLayout": "5.1(side)",
                     "samplingRate": 48000,
                     "displayTitle": "English (EAC3 5.1)",
@@ -107,13 +108,14 @@
                   {
                     "id": 770028522,
                     "streamType": 2,
+                    "canNormalizeLoudness": false,
                     "codec": "aac",
                     "index": 2,
+                    "channels": 2,
                     "bitrate": 128,
                     "language": "French",
                     "languageTag": "fr",
                     "languageCode": "fre",
-                    "channels": 2,
                     "samplingRate": 48000,
                     "displayTitle": "French (AAC Stereo)",
                     "extendedDisplayTitle": "French (AAC Stereo)"
@@ -121,6 +123,7 @@
                   {
                     "id": 1258400311,
                     "streamType": 3,
+                    "canAutoSync": false,
                     "codec": "srt",
                     "index": 3,
                     "language": "English",
@@ -132,6 +135,7 @@
                   {
                     "id": 1793284944,
                     "streamType": 3,
+                    "canAutoSync": false,
                     "codec": "srt",
                     "key": "/library/streams/1793284944",
                     "language": "Spanish",
@@ -150,8 +154,18 @@
         "Image": [
           {
             "alt": "Pilot",
+            "type": "coverPoster",
+            "url": "/library/metadata/2000000000001396/thumb/1790899200"
+          },
+          {
+            "alt": "Pilot",
             "type": "snapshot",
             "url": "/library/metadata/4000013960010001/thumb/1790899200"
+          },
+          {
+            "alt": "Pilot",
+            "type": "background",
+            "url": "/library/metadata/2000000000001396/art/1790899200"
           }
         ]
       },
@@ -163,6 +177,7 @@
         "guid": "com.plexapp.agents.themoviedb://1396/1/2?lang=en",
         "parentGuid": "com.plexapp.agents.themoviedb://1396/1?lang=en",
         "grandparentGuid": "com.plexapp.agents.themoviedb://1396?lang=en",
+        "grandparentSlug": "breaking-bad",
         "type": "episode",
         "title": "Cat's in the Bag...",
         "grandparentKey": "/library/metadata/2000000000001396",
@@ -175,7 +190,6 @@
         "summary": "",
         "index": 2,
         "parentIndex": 1,
-        "year": 2008,
         "art": "/library/metadata/2000000000001396/art/1790899200",
         "parentThumb": "/library/metadata/3000000013960001/thumb/1790899200",
         "grandparentThumb": "/library/metadata/2000000000001396/thumb/1790899200",
@@ -222,23 +236,24 @@
                     "chromaSubsampling": "4:2:0",
                     "frameRate": 23.976,
                     "height": 1080,
-                    "width": 1920,
                     "profile": "high",
-                    "displayTitle": "1080p (H.264 High)",
-                    "extendedDisplayTitle": "1080p (H.264 High)"
+                    "width": 1920,
+                    "displayTitle": "1080p (H.264)",
+                    "extendedDisplayTitle": "1080p (H.264)"
                   },
                   {
                     "id": 1113299542,
                     "streamType": 2,
-                    "default": true,
+                    "canNormalizeLoudness": false,
                     "selected": true,
+                    "default": true,
                     "codec": "eac3",
                     "index": 1,
+                    "channels": 6,
                     "bitrate": 640,
                     "language": "English",
                     "languageTag": "en",
                     "languageCode": "eng",
-                    "channels": 6,
                     "audioChannelLayout": "5.1(side)",
                     "samplingRate": 48000,
                     "displayTitle": "English (EAC3 5.1)",
@@ -247,13 +262,14 @@
                   {
                     "id": 578414909,
                     "streamType": 2,
+                    "canNormalizeLoudness": false,
                     "codec": "aac",
                     "index": 2,
+                    "channels": 2,
                     "bitrate": 128,
                     "language": "French",
                     "languageTag": "fr",
                     "languageCode": "fre",
-                    "channels": 2,
                     "samplingRate": 48000,
                     "displayTitle": "French (AAC Stereo)",
                     "extendedDisplayTitle": "French (AAC Stereo)"
@@ -261,6 +277,7 @@
                   {
                     "id": 90043120,
                     "streamType": 3,
+                    "canAutoSync": false,
                     "codec": "srt",
                     "index": 3,
                     "language": "English",
@@ -272,6 +289,7 @@
                   {
                     "id": 1555158487,
                     "streamType": 3,
+                    "canAutoSync": false,
                     "codec": "srt",
                     "key": "/library/streams/1555158487",
                     "language": "Spanish",
@@ -285,6 +303,18 @@
                 ]
               }
             ]
+          }
+        ],
+        "Image": [
+          {
+            "alt": "Cat's in the Bag...",
+            "type": "coverPoster",
+            "url": "/library/metadata/2000000000001396/thumb/1790899200"
+          },
+          {
+            "alt": "Cat's in the Bag...",
+            "type": "background",
+            "url": "/library/metadata/2000000000001396/art/1790899200"
           }
         ]
       }

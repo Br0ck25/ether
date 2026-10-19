@@ -44,6 +44,16 @@ func (f *fixture) get(t *testing.T, target string, hdr ...string) *httptest.Resp
 	return f.request(t, http.MethodGet, target, h)
 }
 
+// getWarm requests target once, lets the background enrichment it
+// triggered (title details, UltraBlurColors) finish, then requests it
+// again, so golden output doesn't depend on worker timing.
+func (f *fixture) getWarm(t *testing.T, target string, hdr ...string) *httptest.ResponseRecorder {
+	t.Helper()
+	f.get(t, target, hdr...)
+	f.srv.waitBackground()
+	return f.get(t, target, hdr...)
+}
+
 var jsonAccept = []string{"Accept", "application/json"}
 
 func checkGolden(t *testing.T, name string, rec *httptest.ResponseRecorder) {
@@ -143,7 +153,7 @@ func TestGolden(t *testing.T) {
 			suffix = " json"
 		}
 		t.Run(c.name+suffix, func(t *testing.T) {
-			checkGolden(t, c.name, f.get(t, c.target, c.hdr...))
+			checkGolden(t, c.name, f.getWarm(t, c.target, c.hdr...))
 		})
 	}
 }
@@ -152,13 +162,14 @@ func TestGoldenDecisionNotAvailable(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
 	f.playback.failures[fightClub.Key] = errWrap("resolve", errNotAvailable)
-	checkGolden(t, "decision_not_available", f.get(t, "/video/:/transcode/universal/decision?path=/library/metadata/1000000000000550&session=s3"))
-	checkGolden(t, "decision_not_available", f.get(t, "/video/:/transcode/universal/decision?path=/library/metadata/1000000000000550&session=s3", jsonAccept...))
+	checkGolden(t, "decision_not_available", f.getWarm(t, "/video/:/transcode/universal/decision?path=/library/metadata/1000000000000550&session=s3"))
+	checkGolden(t, "decision_not_available", f.getWarm(t, "/video/:/transcode/universal/decision?path=/library/metadata/1000000000000550&session=s3", jsonAccept...))
 }
 
 func TestGoldenPlayQueue(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
+	f.getWarm(t, "/library/metadata/4000013960010001") // cache the show's detail
 	rec := f.request(t, http.MethodPost, "/playQueues?type=video&uri=server%3A%2F%2F0123456789abcdef0123456789abcdef01234567%2Fcom.plexapp.plugins.library%2Flibrary%2Fmetadata%2F4000013960010001&continuous=1&repeat=0&own=1", map[string]string{"Accept": "application/json"})
 	checkGolden(t, "playqueue_create", rec)
 }
@@ -168,5 +179,5 @@ func TestGoldenSessions(t *testing.T) {
 	defer f.srv.Close()
 	f.get(t, "/:/timeline?ratingKey=1000000000000550&key=%2Flibrary%2Fmetadata%2F1000000000000550&state=playing&time=60000&duration=8340000",
 		"X-Plex-Product", "Plex Web", "X-Plex-Platform", "Chrome", "X-Plex-Device", "OSX", "X-Plex-Device-Name", "Chrome", "X-Plex-Session-Identifier", "sess-1")
-	checkGolden(t, "status_sessions", f.get(t, "/status/sessions"))
+	checkGolden(t, "status_sessions", f.getWarm(t, "/status/sessions"))
 }

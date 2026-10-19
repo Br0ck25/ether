@@ -6,6 +6,7 @@ package plex
 import (
 	"context"
 	"crypto/sha1"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
@@ -90,6 +91,12 @@ type Deps struct {
 	HTTPClient *http.Client
 	// ImageCacheBytes bounds the in-memory artwork cache (default 128 MiB).
 	ImageCacheBytes int64
+	// DB persists derived artwork data (UltraBlurColors) in plex_* tables.
+	// Optional: without it, colours are kept in memory only.
+	DB *sql.DB
+	// DisableEnrichment turns off the background title-detail and
+	// UltraBlurColors work (spike/local libraries have nothing to fetch).
+	DisableEnrichment bool
 	// Now is the clock (tests).
 	Now func() time.Time
 }
@@ -111,6 +118,12 @@ type Server struct {
 	selections *selectionStore
 	notifier   *notifier
 	facets     *facetCache
+
+	// Background enrichment (nil when disabled).
+	titles    *titleCache
+	ultra     *ultraBlurCache
+	titleJobs *bgQueue
+	blurJobs  *bgQueue
 
 	// Owner stream kills, delivered on the client's next timeline.
 	termMu sync.Mutex
@@ -158,6 +171,12 @@ func NewServer(d Deps) *Server {
 		cancel:     cancel,
 	}
 	s.sections = s.buildSections()
+	if !d.DisableEnrichment && d.Catalog != nil {
+		s.titleJobs = newBGQueue(ctx, &s.wg, titleFetchWorkers, titleFetchQueueLen)
+		s.blurJobs = newBGQueue(ctx, &s.wg, ultraBlurWorkers, ultraBlurQueueLen)
+		s.titles = newTitleCache(s.titleJobs, s.now, s.log, d.Catalog.Get)
+		s.ultra = newUltraBlurCache(d.DB, s.blurJobs, s.now, s.log, s.computeUltraBlur)
+	}
 	s.router = s.routes()
 	s.wg.Add(1)
 	go s.janitor()

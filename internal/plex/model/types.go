@@ -178,6 +178,8 @@ type Metadata struct {
 	element string
 	alpha   bool
 
+	// On Deck items lead with their sync flag and section (PMS).
+	AllowSync             *bool   `plex:"allowSync"`
 	RatingKey             string  `plex:"ratingKey,omitempty"`
 	Key                   string  `plex:"key,omitempty"`
 	ParentRatingKey       string  `plex:"parentRatingKey,omitempty"`
@@ -186,6 +188,9 @@ type Metadata struct {
 	ParentGUID            string  `plex:"parentGuid,omitempty"`
 	GrandparentGUID       string  `plex:"grandparentGuid,omitempty"`
 	Slug                  string  `plex:"slug,omitempty"`
+	GrandparentSlug       string  `plex:"grandparentSlug,omitempty"`
+	ParentSlug            string  `plex:"parentSlug,omitempty"`
+	ParentStudio          string  `plex:"parentStudio,omitempty"`
 	Studio                string  `plex:"studio,omitempty"`
 	Type                  string  `plex:"type,omitempty"`
 	Subtype               string  `plex:"subtype,omitempty"`
@@ -195,6 +200,7 @@ type Metadata struct {
 	LibrarySectionTitle   string  `plex:"librarySectionTitle,omitempty"`
 	LibrarySectionID      int     `plex:"librarySectionID,omitempty"`
 	LibrarySectionKey     string  `plex:"librarySectionKey,omitempty"`
+	LibrarySectionUUID    string  `plex:"librarySectionUUID,omitempty"`
 	GrandparentTitle      string  `plex:"grandparentTitle,omitempty"`
 	ParentTitle           string  `plex:"parentTitle,omitempty"`
 	OriginalTitle         string  `plex:"originalTitle,omitempty"`
@@ -212,6 +218,7 @@ type Metadata struct {
 	ViewCount             int     `plex:"viewCount,omitempty"`
 	SkipCount             int     `plex:"skipCount,omitempty"`
 	LastViewedAt          int64   `plex:"lastViewedAt,omitempty"`
+	IncludedAt            int64   `plex:"includedAt,omitempty"` // joined Continue Watching
 	LastRatedAt           int64   `plex:"lastRatedAt,omitempty"`
 	Year                  int     `plex:"year,omitempty"`
 	ParentYear            int     `plex:"parentYear,omitempty"`
@@ -251,8 +258,18 @@ type Metadata struct {
 
 	Extra []Attr `plex:",attrs"`
 
-	Media      []Media     `plex:"Media"`
-	Image      []Image     `plex:"Image"`
+	// Children follow PMS's order: Media, Image, UltraBlurColors, then the
+	// tags (Genre, Country, Guid, Rating, Collection, Director, Writer,
+	// Role, Producer, Label, Similar).
+	Media           []Media          `plex:"Media"`
+	Image           []Image          `plex:"Image"`
+	UltraBlurColors *UltraBlurColors `plex:"UltraBlurColors,object"`
+	// UltraBlurList is UltraBlurColors as decision responses send it: an
+	// array in JSON. Set one or the other, never both.
+	UltraBlurList []UltraBlurColors `plex:"UltraBlurColors"`
+	// GuidLead is Guid as list items (related hubs) carry it: before the
+	// tags, where detail pages put it after Country.
+	GuidLead   []GUID      `plex:"Guid"`
 	Genre      []Tag       `plex:"Genre"`
 	Country    []Tag       `plex:"Country"`
 	Guid       []GUID      `plex:"Guid"`
@@ -260,8 +277,9 @@ type Metadata struct {
 	Collection []Tag       `plex:"Collection"`
 	Director   []Tag       `plex:"Director"`
 	Writer     []Tag       `plex:"Writer"`
-	Producer   []Tag       `plex:"Producer"`
 	Role       []Tag       `plex:"Role"`
+	Producer   []Tag       `plex:"Producer"`
+	Label      []Tag       `plex:"Label"`
 	Similar    []Tag       `plex:"Similar"`
 	Studio_    []Tag       `plex:"Studio"`
 
@@ -270,14 +288,15 @@ type Metadata struct {
 	Session          *Session       `plex:"Session,object"`
 	TranscodeSession *TranscodeSess `plex:"TranscodeSession,object"`
 
+	// Extras (includeExtras=1): always empty for Ether. PMS sends them
+	// before Related.
+	Extras *Extras `plex:"Extras,object"`
 	// Related hubs inside a detail response (includeRelated=1).
 	Related *Related `plex:"Related,object"`
 	// OnDeck episode inside a show detail (includeOnDeck=1).
 	OnDeck *OnDeck `plex:"OnDeck,object"`
 	// Children inside a detail response (includeChildren=1).
 	Children *Children `plex:"Children,object"`
-	// Extras (includeExtras=1): always empty for Ether.
-	Extras *Extras `plex:"Extras,object"`
 }
 
 // SetElement overrides the XML element name.
@@ -321,6 +340,7 @@ type Extras struct {
 
 // Tag is Genre, Director, Writer, Role, Country, Collection... entries.
 type Tag struct {
+	alpha  bool
 	ID     int64  `plex:"id,omitempty"`
 	Filter string `plex:"filter,omitempty"`
 	Tag    string `plex:"tag"`
@@ -336,6 +356,7 @@ type GUID struct {
 }
 
 type RatingTag struct {
+	alpha bool
 	Image string  `plex:"image"`
 	Value float64 `plex:"value"`
 	Type  string  `plex:"type"`
@@ -347,52 +368,65 @@ type Image struct {
 	URL  string `plex:"url"`
 }
 
+// UltraBlurColors are the four corner colours (6-digit hex, no "#") the
+// newer Plex apps blend into a blurred background behind an item. One
+// element in XML, an object (not an array) in JSON.
+type UltraBlurColors struct {
+	alpha       bool
+	TopLeft     string `plex:"topLeft"`
+	TopRight    string `plex:"topRight"`
+	BottomRight string `plex:"bottomRight"`
+	BottomLeft  string `plex:"bottomLeft"`
+}
+
 // Media is one version of an item. Ether always exposes exactly one.
 type Media struct {
 	alpha                 bool
-	ID                    int64   `plex:"id"`
-	Duration              int64   `plex:"duration,omitempty"`
-	Bitrate               int     `plex:"bitrate,omitempty"`
-	Width                 int     `plex:"width,omitempty"`
-	Height                int     `plex:"height,omitempty"`
-	AspectRatio           float64 `plex:"aspectRatio,omitempty"`
-	AudioChannels         int     `plex:"audioChannels,omitempty"`
-	AudioCodec            string  `plex:"audioCodec,omitempty"`
-	VideoCodec            string  `plex:"videoCodec,omitempty"`
-	VideoResolution       string  `plex:"videoResolution,omitempty"`
-	Container             string  `plex:"container,omitempty"`
-	VideoFrameRate        string  `plex:"videoFrameRate,omitempty"`
-	OptimizedForStreaming *int    `plex:"optimizedForStreaming"` // an int in PMS JSON, unlike Part's bool
-	AudioProfile          string  `plex:"audioProfile,omitempty"`
-	Has64bitOffsets       *bool   `plex:"has64bitOffsets"`
-	VideoProfile          string  `plex:"videoProfile,omitempty"`
-	Protocol              string  `plex:"protocol,omitempty"`
-	Selected              *bool   `plex:"selected"`
-	HasVoiceActivity      *bool   `plex:"hasVoiceActivity"`
+	lead                  []string // decision: attributes before the alphabetical rest
+	ID                    int64    `plex:"id"`
+	Duration              int64    `plex:"duration,omitempty"`
+	Bitrate               int      `plex:"bitrate,omitempty"`
+	Width                 int      `plex:"width,omitempty"`
+	Height                int      `plex:"height,omitempty"`
+	AspectRatio           float64  `plex:"aspectRatio,omitempty"`
+	AudioChannels         int      `plex:"audioChannels,omitempty"`
+	AudioCodec            string   `plex:"audioCodec,omitempty"`
+	VideoCodec            string   `plex:"videoCodec,omitempty"`
+	VideoResolution       string   `plex:"videoResolution,omitempty"`
+	Container             string   `plex:"container,omitempty"`
+	VideoFrameRate        string   `plex:"videoFrameRate,omitempty"`
+	OptimizedForStreaming *int     `plex:"optimizedForStreaming"` // an int in PMS JSON, unlike Part's bool
+	AudioProfile          string   `plex:"audioProfile,omitempty"`
+	Has64bitOffsets       *bool    `plex:"has64bitOffsets"`
+	VideoProfile          string   `plex:"videoProfile,omitempty"`
+	Protocol              string   `plex:"protocol,omitempty"`
+	Selected              *bool    `plex:"selected"`
+	HasVoiceActivity      *bool    `plex:"hasVoiceActivity"`
 
 	Part []Part `plex:"Part"`
 }
 
 type Part struct {
 	alpha                 bool
-	ID                    int64  `plex:"id"`
-	Key                   string `plex:"key,omitempty"`
-	Duration              int64  `plex:"duration,omitempty"`
-	File                  string `plex:"file,omitempty"`
-	Size                  int64  `plex:"size,omitempty"`
-	AudioProfile          string `plex:"audioProfile,omitempty"`
-	Container             string `plex:"container,omitempty"`
-	Has64bitOffsets       *bool  `plex:"has64bitOffsets"`
-	OptimizedForStreaming *bool  `plex:"optimizedForStreaming"`
-	VideoProfile          string `plex:"videoProfile,omitempty"`
-	Bitrate               int    `plex:"bitrate,omitempty"`
-	Width                 int    `plex:"width,omitempty"`
-	Height                int    `plex:"height,omitempty"`
-	Decision              string `plex:"decision,omitempty"`
-	Protocol              string `plex:"protocol,omitempty"`
-	Selected              *bool  `plex:"selected"`
-	Exists                *bool  `plex:"exists"`
-	Accessible            *bool  `plex:"accessible"`
+	lead                  []string // decision: attributes before the alphabetical rest
+	ID                    int64    `plex:"id"`
+	Key                   string   `plex:"key,omitempty"`
+	Duration              int64    `plex:"duration,omitempty"`
+	File                  string   `plex:"file,omitempty"`
+	Size                  int64    `plex:"size,omitempty"`
+	AudioProfile          string   `plex:"audioProfile,omitempty"`
+	Container             string   `plex:"container,omitempty"`
+	Has64bitOffsets       *bool    `plex:"has64bitOffsets"`
+	OptimizedForStreaming *bool    `plex:"optimizedForStreaming"`
+	VideoProfile          string   `plex:"videoProfile,omitempty"`
+	Bitrate               int      `plex:"bitrate,omitempty"`
+	Width                 int      `plex:"width,omitempty"`
+	Height                int      `plex:"height,omitempty"`
+	Decision              string   `plex:"decision,omitempty"`
+	Protocol              string   `plex:"protocol,omitempty"`
+	Selected              *bool    `plex:"selected"`
+	Exists                *bool    `plex:"exists"`
+	Accessible            *bool    `plex:"accessible"`
 
 	Stream []Stream `plex:"Stream"`
 }
@@ -400,18 +434,23 @@ type Part struct {
 // Stream is a video (1), audio (2) or subtitle (3) track.
 type Stream struct {
 	alpha                bool
-	ID                   int64   `plex:"id"`
-	StreamType           int     `plex:"streamType"`
-	Default              *bool   `plex:"default"`
-	Selected             *bool   `plex:"selected"`
-	Forced               *bool   `plex:"forced"`
-	Codec                string  `plex:"codec,omitempty"`
-	Index                *int    `plex:"index"`
-	Key                  string  `plex:"key,omitempty"`
-	Bitrate              int     `plex:"bitrate,omitempty"`
-	Language             string  `plex:"language,omitempty"`
-	LanguageTag          string  `plex:"languageTag,omitempty"`
-	LanguageCode         string  `plex:"languageCode,omitempty"`
+	ID                   int64  `plex:"id"`
+	StreamType           int    `plex:"streamType"`
+	CanAutoSync          *bool  `plex:"canAutoSync"`          // subtitles
+	CanNormalizeLoudness *bool  `plex:"canNormalizeLoudness"` // audio
+	Selected             *bool  `plex:"selected"`
+	Default              *bool  `plex:"default"`
+	Forced               *bool  `plex:"forced"`
+	Codec                string `plex:"codec,omitempty"`
+	Index                *int   `plex:"index"`
+	Key                  string `plex:"key,omitempty"`
+	Channels             int    `plex:"channels,omitempty"`
+	Bitrate              int    `plex:"bitrate,omitempty"`
+	Language             string `plex:"language,omitempty"`
+	LanguageTag          string `plex:"languageTag,omitempty"`
+	LanguageCode         string `plex:"languageCode,omitempty"`
+	// From here PMS lists the technical attributes alphabetically.
+	AudioChannelLayout   string  `plex:"audioChannelLayout,omitempty"`
 	BitDepth             int     `plex:"bitDepth,omitempty"`
 	ChromaSubsampling    string  `plex:"chromaSubsampling,omitempty"`
 	ColorPrimaries       string  `plex:"colorPrimaries,omitempty"`
@@ -420,17 +459,15 @@ type Stream struct {
 	ColorTrc             string  `plex:"colorTrc,omitempty"`
 	DOVIPresent          *bool   `plex:"DOVIPresent"`
 	DOVIProfile          int     `plex:"DOVIProfile,omitempty"`
+	Format               string  `plex:"format,omitempty"`
 	FrameRate            float64 `plex:"frameRate,omitempty"`
 	Height               int     `plex:"height,omitempty"`
-	Width                int     `plex:"width,omitempty"`
 	Level                int     `plex:"level,omitempty"`
 	Profile              string  `plex:"profile,omitempty"`
 	RefFrames            int     `plex:"refFrames,omitempty"`
-	ScanType             string  `plex:"scanType,omitempty"`
-	Channels             int     `plex:"channels,omitempty"`
-	AudioChannelLayout   string  `plex:"audioChannelLayout,omitempty"`
 	SamplingRate         int     `plex:"samplingRate,omitempty"`
-	Format               string  `plex:"format,omitempty"`
+	ScanType             string  `plex:"scanType,omitempty"`
+	Width                int     `plex:"width,omitempty"`
 	Title                string  `plex:"title,omitempty"`
 	DisplayTitle         string  `plex:"displayTitle,omitempty"`
 	ExtendedDisplayTitle string  `plex:"extendedDisplayTitle,omitempty"`

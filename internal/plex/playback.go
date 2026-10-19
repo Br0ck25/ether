@@ -61,6 +61,9 @@ type playRequest struct {
 	audioSel  int // stream position, -1 = default
 	subSel    int // stream position, -1 = none/default
 	subSet    bool
+	// mde: the client runs its own media decision engine (hasMDE=1, sent
+	// by current Plex Web, iOS and Apple TV apps).
+	mde bool
 }
 
 func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
@@ -78,7 +81,7 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 	}
 	caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
 	applyDecisionQuery(&caps, q)
-	p := playRequest{key: key, caps: caps, audioSel: -1, subSel: -1, protocol: q.Get("protocol")}
+	p := playRequest{key: key, caps: caps, audioSel: -1, subSel: -1, protocol: q.Get("protocol"), mde: q.Get("hasMDE") == "1"}
 	if p.protocol == "" {
 		p.protocol = "hls"
 	}
@@ -234,7 +237,7 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.log.Info("playback decision failed", "key", p.key, "user", pr.User.Username, "err", err)
-		s.write(w, r, s.decisionError(ctx, pr, t, err))
+		s.write(w, r, s.decisionError(ctx, pr, t, err, p))
 		return
 	}
 	s.write(w, r, s.decisionContainer(ctx, pr, t, ps, dec, p))
@@ -243,12 +246,13 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 // decisionError is the decision response for a failed resolve: no Media,
 // and the reason in every *DecisionText so whichever field a client shows
 // carries the message instead of a spinner.
-func (s *Server) decisionError(ctx context.Context, pr *Request, t *core.Title, err error) *model.MediaContainer {
+func (s *Server) decisionError(ctx context.Context, pr *Request, t *core.Title, err error, p playRequest) *model.MediaContainer {
 	msg := playbackMessage(err)
 	mc := libraryContainer()
 	if t != nil {
 		mc = s.itemContainer(t.Type)
-		md := s.metadata(ctx, pr, t, renderOpts{})
+		md := s.metadata(ctx, pr, t, renderOpts{detail: true})
+		decisionItem(&md) // shaped and typed like a successful decision's item
 		mc.Metadata = []model.Metadata{md}
 	}
 	mc.Extra = []model.Attr{
@@ -259,25 +263,68 @@ func (s *Server) decisionError(ctx context.Context, pr *Request, t *core.Title, 
 		model.A("transcodeDecisionCode", codeTranscodeError),
 		model.A("transcodeDecisionText", msg),
 	}
+	if p.mde {
+		// MDE clients read mdeDecision* too (Plex Web shows the first
+		// *DecisionText whose code is >= 2000).
+		mc.Extra = append(mc.Extra, model.A("mdeDecisionCode", codeGeneralError), model.A("mdeDecisionText", msg))
+	}
+	mc.Extra = append(mc.Extra, model.A("resourceSession", firstNonEmpty(pr.ClientID, p.sessionID)))
 	mc.Size = len(mc.Metadata)
 	mc.SetDecision()
 	return mc
 }
 
+// decisionItem reshapes a detail item the way PMS's decision responses
+// carry it: attributes alphabetical with string-typed ids, no Image or Guid
+// children, tag attributes alphabetical with string ids, and
+// UltraBlurColors as an array in JSON.
+func decisionItem(md *model.Metadata) {
+	md.SetAlphabetical()
+	md.Image = nil
+	md.Guid = nil
+	if md.UltraBlurColors != nil {
+		u := *md.UltraBlurColors
+		u.SetAlphabetical()
+		md.UltraBlurList = []model.UltraBlurColors{u}
+		md.UltraBlurColors = nil
+	}
+	for i := range md.Rating_ {
+		md.Rating_[i].SetAlphabetical()
+	}
+	for _, tags := range [][]model.Tag{md.Genre, md.Country, md.Collection, md.Director, md.Writer, md.Role, md.Producer, md.Label, md.Similar} {
+		for i := range tags {
+			tags[i].SetAlphabetical()
+		}
+	}
+}
+
 func (s *Server) decisionContainer(ctx context.Context, pr *Request, t *core.Title, ps *core.PlaySession, dec core.Decision, p playRequest) *model.MediaContainer {
 	mc := s.itemContainer(t.Type)
 	md := s.metadata(ctx, pr, t, renderOpts{detail: true})
-	md.SetAlphabetical() // PMS decision responses list attributes alphabetically
-	md.Image = nil
-	md.Media = []model.Media{s.decisionMedia(t, ps, dec, p, pr.User)}
+	decisionItem(&md)
+	// With hasMDE=1 and direct play allowed, the client's own decision
+	// engine decides: PMS answers with the source media as direct play and
+	// only an mdeDecisionCode. Ether's own decision is kept for start.m3u8
+	// in case the client then asks for a stream.
+	mdeDirect := p.mde && p.opts.DirectPlay
+	shown := dec
+	if mdeDirect {
+		shown = core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container}
+	}
+	md.Media = []model.Media{s.decisionMedia(t, ps, shown, p, pr.User)}
 	if md.Duration == 0 {
 		md.Duration = md.Media[0].Duration
 	}
 	mc.Metadata = []model.Metadata{md}
 	mc.Size = 1
 	mc.SetDecision()
-	switch dec.Kind {
-	case core.DecisionDirectPlay:
+	switch {
+	case mdeDirect:
+		mc.Extra = []model.Attr{
+			model.A("mdeDecisionCode", codeDirectPlayOK),
+			model.A("mdeDecisionText", textDirectPlayOK),
+		}
+	case dec.Kind == core.DecisionDirectPlay:
 		mc.Extra = []model.Attr{
 			model.A("directPlayDecisionCode", codeDirectPlayOK),
 			model.A("directPlayDecisionText", textDirectPlayOK),
@@ -323,17 +370,34 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 	streams := s.buildStreams(t.Key, info, sel, u)
 	for i := range streams {
 		streams[i].SetAlphabetical()
+		if streams[i].StreamType == 1 {
+			// Decisions shorten the video title to the resolution part
+			// ("1080p"); the extended title keeps the codec.
+			if short, _, ok := strings.Cut(streams[i].DisplayTitle, " ("); ok {
+				streams[i].DisplayTitle = short
+			}
+		}
 	}
 
 	if dec.Kind == core.DecisionDirectPlay {
+		// Like PMS, list the video and the selected audio and subtitle
+		// streams only.
 		part.Decision = "directplay"
-		for i := range streams {
-			streams[i].Location = "direct"
+		var kept []model.Stream
+		for _, st := range streams {
+			if st.StreamType != 1 && (st.Selected == nil || !*st.Selected) {
+				continue
+			}
+			st.Location = "direct"
+			kept = append(kept, st)
 		}
-		part.Stream = streams
+		part.Stream = kept
 		return m
 	}
 	// Remux or transcode into HLS (mpegts).
+	m.SetTranscodeOrder()
+	part.SetTranscodeOrder()
+	m.AspectRatio = 0
 	m.Protocol = p.protocol
 	m.Container = "mpegts"
 	part.Container = "mpegts"
@@ -375,6 +439,8 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		case 1:
 			st.Decision = "copy"
 			if !dec.VideoCopy {
+				// A transcoded stream is new: PMS drops the source's
+				// profile and chroma details and reports 8-bit output.
 				st.Decision = "transcode"
 				if dec.VideoCodec != "" {
 					st.Codec = plexCodec(dec.VideoCodec)
@@ -382,6 +448,17 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 				if dec.MaxHeight > 0 && st.Height > dec.MaxHeight {
 					st.Width = st.Width * dec.MaxHeight / max(st.Height, 1)
 					st.Height = dec.MaxHeight
+				}
+				if dec.BitrateKbps > 0 {
+					st.Bitrate = dec.BitrateKbps
+				}
+				st.Profile, st.ChromaSubsampling, st.ScanType = "", "", ""
+				st.DOVIPresent, st.DOVIProfile = nil, 0
+				if st.Codec == "h264" || dec.ToneMap {
+					st.BitDepth = 8
+				}
+				if dec.ToneMap {
+					st.ColorTrc, st.ColorPrimaries, st.ColorSpace = "bt709", "", ""
 				}
 			}
 			st.Location = "segments-av"
@@ -395,6 +472,8 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 				if dec.AudioCodec != "" {
 					st.Codec = plexCodec(dec.AudioCodec)
 				}
+				// Source-only details go, as in PMS's transcoded audio.
+				st.Profile, st.AudioChannelLayout, st.SamplingRate, st.Title = "", "", 0, ""
 			}
 			st.Location = "segments-av"
 		case 3:
@@ -449,6 +528,13 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		entry, _ = s.transcodes.get(p.sessionID)
 	}
 	dec := entry.decision
+	if dec.Kind == core.DecisionDirectPlay && !p.opts.DirectPlay {
+		// An MDE client got "direct play OK" from the decision, judged the
+		// media unplayable itself and now asks for a stream: decide again
+		// without direct play so a needed transcode isn't a plain remux.
+		applySelections(&p, ps.Info, pr.User)
+		dec = s.d.Transcoder.Decide(ps.Info, p.caps, p.opts)
+	}
 	if dec.Kind == core.DecisionDirectPlay {
 		// The client asked for HLS anyway: remux.
 		dec.Kind, dec.VideoCopy, dec.AudioCopy, dec.Container = core.DecisionRemux, true, true, "mpegts"

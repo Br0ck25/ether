@@ -23,6 +23,7 @@
             "guid": "com.plexapp.agents.themoviedb://1396/1/1?lang=en",
             "parentGuid": "com.plexapp.agents.themoviedb://1396/1?lang=en",
             "grandparentGuid": "com.plexapp.agents.themoviedb://1396?lang=en",
+            "grandparentSlug": "breaking-bad",
             "type": "episode",
             "title": "Pilot",
             "grandparentKey": "/library/metadata/2000000000001396",
@@ -37,7 +38,7 @@
             "parentIndex": 1,
             "viewOffset": 600000,
             "lastViewedAt": 1792321200,
-            "year": 2008,
+            "includedAt": 1792321200,
             "thumb": "/library/metadata/4000013960010001/thumb/1790899200",
             "art": "/library/metadata/2000000000001396/art/1790899200",
             "parentThumb": "/library/metadata/3000000013960001/thumb/1790899200",
@@ -71,9 +72,103 @@
                     "file": "/ether/Breaking Bad - s01e01 - Pilot.mkv",
                     "size": 8000000000,
                     "container": "mkv",
-                    "videoProfile": "high"
+                    "videoProfile": "high",
+                    "Stream": [
+                      {
+                        "id": 1746772100,
+                        "streamType": 1,
+                        "default": true,
+                        "codec": "h264",
+                        "index": 0,
+                        "bitrate": 7000,
+                        "bitDepth": 8,
+                        "chromaSubsampling": "4:2:0",
+                        "frameRate": 23.976,
+                        "height": 1080,
+                        "profile": "high",
+                        "width": 1920,
+                        "displayTitle": "1080p (H.264)",
+                        "extendedDisplayTitle": "1080p (H.264)"
+                      },
+                      {
+                        "id": 235143889,
+                        "streamType": 2,
+                        "canNormalizeLoudness": false,
+                        "selected": true,
+                        "default": true,
+                        "codec": "eac3",
+                        "index": 1,
+                        "channels": 6,
+                        "bitrate": 640,
+                        "language": "English",
+                        "languageTag": "en",
+                        "languageCode": "eng",
+                        "audioChannelLayout": "5.1(side)",
+                        "samplingRate": 48000,
+                        "displayTitle": "English (EAC3 5.1)",
+                        "extendedDisplayTitle": "English (EAC3 5.1)"
+                      },
+                      {
+                        "id": 770028522,
+                        "streamType": 2,
+                        "canNormalizeLoudness": false,
+                        "codec": "aac",
+                        "index": 2,
+                        "channels": 2,
+                        "bitrate": 128,
+                        "language": "French",
+                        "languageTag": "fr",
+                        "languageCode": "fre",
+                        "samplingRate": 48000,
+                        "displayTitle": "French (AAC Stereo)",
+                        "extendedDisplayTitle": "French (AAC Stereo)"
+                      },
+                      {
+                        "id": 1258400311,
+                        "streamType": 3,
+                        "canAutoSync": false,
+                        "codec": "srt",
+                        "index": 3,
+                        "language": "English",
+                        "languageTag": "en",
+                        "languageCode": "eng",
+                        "displayTitle": "English (SRT)",
+                        "extendedDisplayTitle": "English (SRT)"
+                      },
+                      {
+                        "id": 1793284944,
+                        "streamType": 3,
+                        "canAutoSync": false,
+                        "codec": "srt",
+                        "key": "/library/streams/1793284944",
+                        "language": "Spanish",
+                        "languageTag": "es",
+                        "languageCode": "spa",
+                        "format": "srt",
+                        "displayTitle": "Spanish (SRT External)",
+                        "extendedDisplayTitle": "Spanish (SRT External)",
+                        "external": true
+                      }
+                    ]
                   }
                 ]
+              }
+            ],
+            "Image": [
+              {
+                "alt": "Pilot",
+                "type": "coverPoster",
+                "url": "/library/metadata/2000000000001396/thumb/1790899200"
+              },
+              {
+                "alt": "Pilot",
+                "type": "snapshot",
+                "url": "/library/metadata/4000013960010001/thumb/1790899200"
+              },
+              {
+                "alt": "Pilot",
+                "type": "background",
+                "url": "/library/metadata/2000000000001396/art/1790899200"
               }
             ]
           }
