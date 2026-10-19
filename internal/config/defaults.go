@@ -61,7 +61,7 @@ func Defaults(dataDir string) Config {
 			MaxTranscodes:        2,
 			RemoteMaxBitrateKbps: 8000,
 		},
-		Updates: Updates{Channel: "stable", AutoUpdate: false},
+		Updates: Updates{Channel: "stable", AutoUpdate: false, MaintenanceStart: "03:00", MaintenanceEnd: "06:00"},
 	}
 }
 

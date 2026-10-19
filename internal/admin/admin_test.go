@@ -517,3 +517,19 @@ func TestValidateConfigDirect(t *testing.T) {
 		t.Fatalf("expected >=2 errors, got %v", errs)
 	}
 }
+
+func TestValidateMaintenanceWindow(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	cfg.Updates.MaintenanceStart = "23:30"
+	cfg.Updates.MaintenanceEnd = "" // empty falls back to the default
+	if errs := admin.ValidateConfig(cfg); len(errs) != 0 {
+		t.Fatalf("valid window rejected: %v", errs)
+	}
+	for _, bad := range []string{"3am", "24:00", "3:00", "03:60"} {
+		cfg.Updates.MaintenanceEnd = bad
+		errs := admin.ValidateConfig(cfg)
+		if len(errs) != 1 || errs[0].Field != "updates.maintenanceEnd" {
+			t.Errorf("%q: errs=%v", bad, errs)
+		}
+	}
+}
