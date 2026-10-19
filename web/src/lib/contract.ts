@@ -304,7 +304,6 @@ export interface HomeLayout {
   global: LayoutPage[];
   viewers: ViewerLayout[];
   updatedAt?: string;
-  notes?: string[];
 }
 
 export interface AvailableRow {

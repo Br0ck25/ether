@@ -39,6 +39,31 @@ to open a drawer, make changes and save. Audio and subtitle preferences are unde
 **Audio & subtitles**; quality profiles and client rules are under **Playback &
 releases**.
 
+## Versions, trailers, downloads and previews
+
+Detail pages can list several versions of a title, such as 4K, a
+high-compatibility 1080p release or an extended cut. Choose one with Plex's
+**Play Version**; otherwise Ether picks the best version for the device. Search
+also accepts descriptions such as "90s thrillers under 100 mins" and offers a
+matching collection; rate it to keep it as a personal collection.
+
+These settings have no dedicated pages yet. The owner UI lists them alongside
+the server's general settings; they are stored in the server's configuration
+file under these names:
+
+- `downloads`: offline downloads, on for the owner. Set `allowFriends` to let
+  viewers download.
+- `extras`: trailers and Cinema Trailers, off until `enabled` is set. Configure
+  `resolverCommand`, a yt-dlp-compatible tool you install.
+- `personalize`: post-play ranking, detail-page headers and session-based Home
+  changes.
+- `transcode`: `fastStart`, `abrLadder`, `vbvReservoir` and `spikeGovernor`
+  control adaptive streaming.
+- `usenet.minIdle`: warm provider connections kept ready for playback.
+
+Preview thumbnails appear while a title plays and fill in as playback
+progresses.
+
 ## Bring your library and history
 
 Use **Libraries & backups** to add existing media or preview a Plex import. Map

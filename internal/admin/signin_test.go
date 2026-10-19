@@ -14,7 +14,7 @@ import (
 // A reverse proxy can use loopback and Host: localhost. Neither grants access.
 func TestLoopbackStillRequiresOwner(t *testing.T) {
 	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	for _, tc := range []struct {
 		remote, host string
 		want         int
@@ -35,12 +35,12 @@ func TestLoopbackStillRequiresOwner(t *testing.T) {
 	r := req(http.MethodGet, "/ether/api/bootstrap", "")
 	r.RemoteAddr, r.Host = "127.0.0.1:5000", "localhost:32400"
 	var boot struct {
-		Authenticated, AuthRequired, LocalTrusted bool
+		Authenticated, AuthRequired bool
 	}
 	if err := json.Unmarshal(serve(h, r).Body.Bytes(), &boot); err != nil {
 		t.Fatal(err)
 	}
-	if boot.Authenticated || !boot.AuthRequired || boot.LocalTrusted {
+	if boot.Authenticated || !boot.AuthRequired {
 		t.Fatalf("bootstrap %+v", boot)
 	}
 }
@@ -73,7 +73,7 @@ func (f *fakeSignIn) approve(id, token string) {
 func TestSignInWithPlex(t *testing.T) {
 	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
 	si := &fakeSignIn{tokens: map[string]string{}}
-	h := admin.New(admin.Deps{Config: store, SignIn: si})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), SignIn: si})
 
 	start := func() string {
 		r := req(http.MethodPost, "/ether/api/auth/pin", "{}")

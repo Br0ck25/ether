@@ -21,8 +21,8 @@ func TestDiscoveryStickyShowDismissalAndViewerIsolation(t *testing.T) {
 	a := core.Title{Key: core.EpisodeKey(99, 1, 1), Type: core.TypeEpisode, ShowKey: show, ContentRating: "PG"}
 	b := a
 	b.Key = core.EpisodeKey(99, 1, 2)
-	cat.titles[a.Key] = a
-	cat.titles[b.Key] = b
+	cat.set(a)
+	cat.set(b)
 	d := NewDiscovery(db, cat, nil, nil)
 	if e = d.RemoveContinue(ctx, 1, a.Key); e != nil {
 		t.Fatal(e)
@@ -68,7 +68,7 @@ func TestDiscoveryReviewRespectsYearCompletionAndSafety(t *testing.T) {
 	if e != nil || len(current.Items) != 0 {
 		t.Fatal("review included another year")
 	}
-	cat.titles[key] = core.Title{Key: key, Type: core.TypeMovie, Adult: true}
+	cat.set(core.Title{Key: key, Type: core.TypeMovie, Adult: true})
 	h, e = d.YearInReview(ctx, &core.User{ID: 1}, 2025, 20)
 	if e != nil || len(h.Items) != 0 {
 		t.Fatal("adult title leaked into review")

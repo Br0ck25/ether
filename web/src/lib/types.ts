@@ -73,7 +73,6 @@ export interface EtherConfig {
     minVotes: number;
     includeAdult: boolean;
     refreshInterval: string;
-    showUnreleased: boolean;
   };
   resolver: {
     allowCam: boolean;
@@ -147,8 +146,6 @@ export interface Bootstrap {
   setupComplete: boolean;
   authenticated: boolean;
   authRequired: boolean;
-  localTrusted?: boolean;
-  signIn?: boolean;
   serverName: string;
 }
 export interface TestResult {

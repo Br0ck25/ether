@@ -99,10 +99,6 @@ func mediaTypeParam(v string) core.MediaType {
 }
 
 func (h *Handler) handleCatalogSearch(w http.ResponseWriter, r *http.Request) {
-	if h.deps.CatalogHelper == nil {
-		writeNotImplemented(w, "catalogue search")
-		return
-	}
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 || limit > 100 {
@@ -117,10 +113,6 @@ func (h *Handler) handleCatalogSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleCatalogFacets(w http.ResponseWriter, r *http.Request) {
-	if h.deps.CatalogHelper == nil {
-		writeNotImplemented(w, "catalogue facets")
-		return
-	}
 	q := r.URL.Query()
 	facet := q.Get("facet")
 	if facet == "" {
@@ -147,10 +139,6 @@ type lookupResult struct {
 }
 
 func (h *Handler) handleCatalogLookup(w http.ResponseWriter, r *http.Request) {
-	if h.deps.CatalogHelper == nil {
-		writeNotImplemented(w, "catalogue lookup")
-		return
-	}
 	q := r.URL.Query()
 	kind := q.Get("kind")
 	switch kind {
@@ -205,10 +193,6 @@ func people(ps []core.Person, max int) []personCard {
 }
 
 func (h *Handler) handleCatalogTitle(w http.ResponseWriter, r *http.Request) {
-	if h.deps.CatalogHelper == nil {
-		writeNotImplemented(w, "catalogue titles")
-		return
-	}
 	key, err := core.ParseRatingKey(r.PathValue("key"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, "not_found", "no such title")
@@ -240,10 +224,6 @@ var errBadImagePath = errors.New("path must be a TMDB image path like /abc123.jp
 // are loaded by <img> tags, which cannot send the owner token) but only
 // ever serves TMDB image paths, so it is not an open proxy.
 func (h *Handler) handleImage(w http.ResponseWriter, r *http.Request) {
-	if h.deps.Images == nil {
-		writeNotImplemented(w, "the image proxy")
-		return
-	}
 	q := r.URL.Query()
 	path := q.Get("path")
 	if !validImagePath(path) {

@@ -31,7 +31,10 @@ type Config struct {
 	LLM           LLM           `json:"llm"`
 	Updates       Updates       `json:"updates"`
 	Spike         Spike         `json:"spike"`
+	Downloads     Downloads     `json:"downloads"`
 	Markers       Markers       `json:"markers"`
+	Personalize   Personalize   `json:"personalize"`
+	Extras        Extras        `json:"extras"`
 	SetupComplete bool          `json:"setupComplete"`
 }
 
@@ -75,6 +78,12 @@ type Plex struct {
 
 type Usenet struct {
 	Providers []UsenetProvider `json:"providers"`
+	// MinIdle is how many connections per primary (non-backfill) provider
+	// are kept warm (dialled, authenticated, DATE-pinged) at all times so
+	// Play never pays a cold handshake. 0 = default (2); negative = off
+	// (connections are dialled lazily and expire when idle). A provider's
+	// own MinIdle overrides this.
+	MinIdle int `json:"minIdle"`
 }
 
 type UsenetProvider struct {
@@ -90,6 +99,11 @@ type UsenetProvider struct {
 	Priority int  `json:"priority"`
 	Backfill bool `json:"backfill"` // only used for articles missing elsewhere
 	Enabled  bool `json:"enabled"`
+	// MinIdle overrides Usenet.MinIdle for this provider: 0 = inherit the
+	// global setting, positive = that many warm connections, negative =
+	// no warm floor for this provider. Backfill providers are never kept
+	// warm regardless.
+	MinIdle int `json:"minIdle,omitempty"`
 }
 
 type Indexer struct {
@@ -124,7 +138,6 @@ type Catalog struct {
 	MinVotes        int      `json:"minVotes"`
 	IncludeAdult    bool     `json:"includeAdult"`
 	RefreshInterval Duration `json:"refreshInterval"`
-	ShowUnreleased  bool     `json:"showUnreleased"` // Legacy field; release dates are always enforced.
 }
 
 type Resolver struct {
@@ -166,6 +179,44 @@ type Transcode struct {
 	TempDir              string `json:"tempDir"`
 	MaxTranscodes        int    `json:"maxTranscodes"`
 	RemoteMaxBitrateKbps int    `json:"remoteMaxBitrateKbps"`
+
+	// Adaptive HLS engine (additive). Numeric zero values select the
+	// transcode package defaults; see Defaults for the shipped values.
+	FastStart          bool     `json:"fastStart"`          // short, quick opening segments
+	FastStartSegments  int      `json:"fastStartSegments"`  // opening segments in the ramp (default 2)
+	FastStartSegment   Duration `json:"fastStartSegment"`   // ramp segment length (default 2s)
+	FastStartMaxHeight int      `json:"fastStartMaxHeight"` // ramp encode height cap (default 720)
+	ABRLadder          bool     `json:"abrLadder"`          // multi-rung master playlist / MPD
+	VBVReservoir       bool     `json:"vbvReservoir"`       // constant-quality + generous VBV for capped transcodes
+	VBVBufferSeconds   int      `json:"vbvBufferSeconds"`   // VBV buffer depth in seconds of maxrate (default 8)
+	SpikeGovernor      bool     `json:"spikeGovernor"`      // clamp VBR spikes in copy streams to measured goodput
+	SpikeMarginPercent int      `json:"spikeMarginPercent"` // spike threshold over goodput, percent (default 125)
+}
+
+// Downloads controls Plex offline downloads (allowSync + the Download
+// Queue API). A download resolves a compact mobile-native release and
+// remuxes it (stream copy) to a temporary MP4; nothing is stored
+// permanently. Enabled by default for the owner: it is bounded by the
+// disk budget, the concurrency caps and the normal stream limits, and
+// the owner can turn it off entirely here.
+type Downloads struct {
+	Enabled bool `json:"enabled"`
+	// AllowFriends lets shared (non-owner) users download. Off by
+	// default, matching PMS sharing where sync is a separate grant; an
+	// AccessPolicy AllowDownloads decision overrides this per user.
+	AllowFriends bool `json:"allowFriends"`
+	// MaxConcurrent bounds simultaneous remuxes server-wide (default 2),
+	// MaxConcurrentPerUser per viewer (default 1).
+	MaxConcurrent        int `json:"maxConcurrent"`
+	MaxConcurrentPerUser int `json:"maxConcurrentPerUser"`
+	// DiskBudgetBytes bounds the temporary remuxed files on disk at any
+	// time (default 20 GiB). 0 uses the default.
+	DiskBudgetBytes int64 `json:"diskBudgetBytes"`
+	// Expiry is how long a finished download stays fetchable before its
+	// temp file is deleted (default 24h).
+	Expiry Duration `json:"expiry"`
+	// MaxHeight caps the download profile's resolution (default 1080).
+	MaxHeight int `json:"maxHeight"`
 }
 
 type Trakt struct {

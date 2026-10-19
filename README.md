@@ -24,8 +24,8 @@ own Usenet providers and indexers.
   rows for each viewer, with optional Trakt and AI integrations.
 - **Playback that fits your devices** — quality profiles, hardware transcoding,
   audio and subtitle preferences, next-episode prefetch and resume caching.
-- **Local libraries and migration** — include existing media, import Plex
-  history and lists, and back up your configuration and watch state.
+- **Migration and backups** — import Plex history and lists, and back up your
+  configuration and watch state.
 - **Live TV** — build virtual channels or add an M3U playlist and XMLTV guide.
 - **Owner controls** — manage Home layouts, viewer restrictions, stream limits,
   notifications and activity from the browser.

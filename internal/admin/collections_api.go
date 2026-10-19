@@ -22,8 +22,9 @@ import (
 //
 // Errors are mapped by behaviour, so implementations need not import this
 // package: core.ErrNotFound → 404; an error with InvalidFields()
-// map[string]string → 400 with per-field messages; NotConfigured() bool →
-// 501; Conflict() bool → 409; Upstream() bool → 502.
+// map[string]string → 400 with per-field messages; NotConfigured() bool
+// (the owner has not enabled the LLM that Generate drafts with) → 501;
+// Conflict() bool → 409; Upstream() bool → 502.
 type CollectionStudio interface {
 	ListSpecs(ctx context.Context) ([]core.CollectionSpec, error)
 	GetSpec(ctx context.Context, id string) (*core.CollectionSpec, error)
@@ -81,14 +82,6 @@ func viewOf(s core.CollectionSpec) collectionView {
 	return v
 }
 
-func (h *Handler) studio(w http.ResponseWriter) bool {
-	if h.deps.Collections == nil {
-		writeNotImplemented(w, "the collection engine")
-		return false
-	}
-	return true
-}
-
 // decodeSpec reads a CollectionSpec, tolerating fields the server owns
 // (id, itemCount, artworkUrl…) that the UI sends back unchanged.
 func decodeSpec(r *http.Request) (core.CollectionSpec, error) {
@@ -104,9 +97,6 @@ func decodeSpec(r *http.Request) (core.CollectionSpec, error) {
 }
 
 func (h *Handler) handleListCollections(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	specs, err := h.deps.Collections.ListSpecs(r.Context())
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -127,9 +117,6 @@ func (h *Handler) handleListCollections(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) handleGetCollection(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	s, err := h.deps.Collections.GetSpec(r.Context(), r.PathValue("id"))
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -139,9 +126,6 @@ func (h *Handler) handleGetCollection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleCreateCollection(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	spec, err := decodeSpec(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -156,9 +140,6 @@ func (h *Handler) handleCreateCollection(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) handleUpdateCollection(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	spec, err := decodeSpec(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -173,9 +154,6 @@ func (h *Handler) handleUpdateCollection(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) handleDeleteCollection(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	if err := h.deps.Collections.DeleteSpec(r.Context(), r.PathValue("id")); err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -192,9 +170,6 @@ type previewResponse struct {
 }
 
 func (h *Handler) handlePreviewCollection(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	spec, err := decodeSpec(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
@@ -224,9 +199,6 @@ func (h *Handler) handlePreviewCollection(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handleRebuildCollection(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	s, err := h.deps.Collections.Rebuild(r.Context(), r.PathValue("id"))
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -236,9 +208,6 @@ func (h *Handler) handleRebuildCollection(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) handleCollectionTemplates(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	ts := h.deps.Collections.Templates()
 	if ts == nil {
 		ts = []core.CollectionTemplate{}
@@ -247,9 +216,6 @@ func (h *Handler) handleCollectionTemplates(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) handleGenerateCollection(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	var body struct {
 		Prompt    string `json:"prompt"`
 		MediaType string `json:"mediaType"`
@@ -273,9 +239,6 @@ func (h *Handler) handleGenerateCollection(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) handleCollectionArtwork(w http.ResponseWriter, r *http.Request) {
-	if !h.studio(w) {
-		return
-	}
 	width, _ := strconv.Atoi(r.URL.Query().Get("w"))
 	data, ct, mod, err := h.deps.Collections.Artwork(r.Context(), r.PathValue("id"), width)
 	if err != nil {

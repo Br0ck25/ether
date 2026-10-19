@@ -17,8 +17,8 @@
 //     LLM themes, Trakt, and popularity rows for new viewers;
 //   - assembly per request context (assemble.go): context-aware item
 //     scoring, MMR diversity, cross-row dedupe, bandit row ranking with
-//     daily-seeded Thompson exploration (bandit.go), the owner's layout
-//     rules (layout.go) and daily rotation;
+//     daily-seeded Thompson exploration (bandit.go), the owner's Home
+//     layout document (homelayout.go) and daily rotation;
 //   - a feedback loop: every served row is recorded as an impression
 //     (impressions.go) and every play is attributed to the row it came
 //     from (plays.go), which feeds both the taste model and the bandit.
@@ -85,6 +85,12 @@ type Options struct {
 	Logger   *slog.Logger
 	Now      func() time.Time
 	Location *time.Location // server local time (default time.Local)
+	// IntentEnabled reports whether live session intent (#32) is on
+	// (nil = on); consulted per signal so owner edits apply live.
+	IntentEnabled func() bool
+	// ClockFormat reports the micro-reason finish-time style (#31):
+	// "12h", "24h", a locale like "en-GB", or "" for 12h.
+	ClockFormat func() string
 
 	ModelTTL        time.Duration // rebuild an active viewer's model after this (default 3h)
 	RefreshEvery    time.Duration // background scheduler period (default 15m; <0 disables)
@@ -197,6 +203,10 @@ type Engine struct {
 	memoMu sync.Mutex
 	memo   map[memoKey]*memoEntry
 
+	// Netflix-style hooks state (hooks.go), created on first use.
+	hookOnce sync.Once
+	hook     *hookState
+
 	hubMu    sync.RWMutex
 	hubKinds map[string]string
 
@@ -255,7 +265,7 @@ func New(opts Options) (*Engine, error) {
 	}
 	e.rec = newRecorder(st, e.log, opts.ImpressionBuffer, opts.FlushEvery)
 	var err error
-	e.homeLayout, err = st.homeLayout(context.Background(), nil)
+	e.homeLayout, err = st.homeLayout(context.Background())
 	if err != nil {
 		return nil, err
 	}
@@ -399,11 +409,12 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 	}
 	layoutDoc := e.layoutForContext(ctx)
 	owner, ownerVer := e.ownerRows(ctx, &u, hc, section, layoutDoc, wait)
-	_, layoutVer := e.layoutState()
+	layoutVer := e.layoutVersion()
 	day := dayOf(hc.Now, e.loc)
+	intent, intentVer := e.intentFor(u.ID, hc.Now)
 	key := memoKey{user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
 		layout: layoutVer, stats: stats.at.UnixNano(), owner: ownerVer, cw: progressSig(inprog),
-		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner)}
+		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner), intent: intentVer}
 	_, draft := ctx.Value(draftLayoutKey{}).(core.HomeLayout)
 	if rows, ok := e.memoGet(key); ok && !draft {
 		p.Rows = rows
@@ -411,8 +422,9 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 	}
 	a := &assembly{
 		layout: &layoutDoc,
-		model:  m, user: u, hc: hc, section: section, limit: limit, rules: nil, owner: owner,
+		model:  m, user: u, hc: hc, section: section, limit: limit, owner: owner,
 		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration, day: day,
+		intent: intent,
 	}
 	if section == "" {
 		a.maxRows = e.opts.MaxHomeRows
@@ -449,6 +461,7 @@ type memoKey struct {
 	owner   int64
 	cw      string
 	limits  string
+	intent  uint64 // live session-intent version (#32); 0 = none
 }
 
 type memoEntry struct {
@@ -516,15 +529,11 @@ func (e *Engine) allowedFor(u *core.User) func(core.MediaType) bool {
 	return func(t core.MediaType) bool { return ok[t] }
 }
 
-func (e *Engine) layoutRules() []core.LayoutRule {
-	rules, _ := e.layoutState()
-	return rules
-}
-
-func (e *Engine) layoutState() ([]core.LayoutRule, uint64) {
+// layoutVersion counts saved layout changes; it keys the row memo.
+func (e *Engine) layoutVersion() uint64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return legacyLayoutView(e.homeLayout), e.layoutVer
+	return e.layoutVer
 }
 
 // ---- core.PersonalScorer ---------------------------------------------------------

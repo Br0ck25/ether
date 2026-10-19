@@ -112,7 +112,7 @@ func fakeTMDB(t *testing.T) *httptest.Server {
 
 func newTestCatalog(t *testing.T, srv *httptest.Server) *catalog.Catalog {
 	t.Helper()
-	return newTestCatalogCfg(t, srv, config.Catalog{Language: "en-US", Region: "US", MinPopularity: 5, MinVotes: 100, RefreshInterval: config.Duration(24 * time.Hour), ShowUnreleased: true})
+	return newTestCatalogCfg(t, srv, config.Catalog{Language: "en-US", Region: "US", MinPopularity: 5, MinVotes: 100, RefreshInterval: config.Duration(24 * time.Hour)})
 }
 
 func newTestCatalogCfg(t *testing.T, srv *httptest.Server, cfg config.Catalog) *catalog.Catalog {

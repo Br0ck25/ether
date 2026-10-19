@@ -10,11 +10,15 @@ import (
 // Transcoder (internal/transcode)
 
 type HLSRequest struct {
-	SessionID   string
-	InputURL    string // ffmpeg input; Ether serves sources on loopback HTTP with range support
-	Info        MediaInfo
-	Decision    Decision
-	StartOffset time.Duration
+	SessionID string
+	InputURL  string // ffmpeg input; Ether serves sources on loopback HTTP with range support
+	// InputHeaders are optional HTTP headers ffmpeg must send when reading
+	// InputURL (e.g. for resolved trailer URLs). Transcoders that cannot
+	// send headers ignore them; most resolved URLs need none (additive).
+	InputHeaders map[string]string
+	Info         MediaInfo
+	Decision     Decision
+	StartOffset  time.Duration
 	// SegmentDuration defaults to 4s when zero (5s for DASH).
 	SegmentDuration time.Duration
 	// Protocol is ProtocolHLS (default when empty) or ProtocolDASH. A DASH
@@ -109,6 +113,13 @@ type PlaySession struct {
 	SpeedBps       int64        // recent delivery rate, bytes per second
 	LastActive     time.Time
 	Failovers      int // mid-stream release swaps so far
+	// DownFailovers counts speed-driven swaps to a lower-bitrate release
+	// (a subset of Failovers) (additive).
+	DownFailovers int `json:"downFailovers,omitempty"`
+	// RequiresRemux is set when a direct-play failover could not splice or
+	// find an exact-size replacement: the next decision/start for this
+	// session must be a zero-encode remux (additive).
+	RequiresRemux bool `json:"requiresRemux,omitempty"`
 }
 
 type Playback interface {

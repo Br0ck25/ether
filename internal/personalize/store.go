@@ -3,7 +3,6 @@ package personalize
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"math"
 	"strings"
@@ -22,7 +21,8 @@ import (
 //	personalize_plays             plays observed from watch-state events,
 //	                              attributed to the row they came from.
 //	personalize_overrides         owner corrections to a viewer's taste.
-//	personalize_layout            consumed legacy rules (migration only).
+//	personalize_home_layout       the owner's Home layout document
+//	                              (homelayout.go).
 //
 // Impressions are compacted on write: repeated serves of the same row on
 // the same day bump a counter instead of adding rows, so a client that
@@ -88,11 +88,6 @@ CREATE TABLE personalize_overrides (
   weight REAL NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (user_id, kind, value)
-);
-CREATE TABLE personalize_layout (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  rules TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
 );`)
 }
 
@@ -510,27 +505,6 @@ func (s *sqlStore) setOverrides(ctx context.Context, userID int64, os []core.Tas
 		}
 	}
 	return tx.Commit()
-}
-
-// ---- layout --------------------------------------------------------------------
-
-func (s *sqlStore) layout(ctx context.Context) ([]core.LayoutRule, error) {
-	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT rules FROM personalize_layout WHERE id = 1`).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return []core.LayoutRule{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var rules []core.LayoutRule
-	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
-		return nil, err
-	}
-	if rules == nil {
-		rules = []core.LayoutRule{}
-	}
-	return rules, nil
 }
 
 // ---- retention -------------------------------------------------------------------

@@ -545,9 +545,8 @@ type env struct {
 type envOpt func(*envOptions)
 
 type envOptions struct {
-	opts      []collections.Option
-	noTMDB    bool
-	unrelease bool
+	opts   []collections.Option
+	noTMDB bool
 }
 
 func withOpts(o ...collections.Option) envOpt {
@@ -567,7 +566,7 @@ func newEnv(t *testing.T, eo ...envOpt) *env {
 	}
 	t.Cleanup(func() { db.Close() })
 	ft := newFakeTMDB(t)
-	cfg := config.Catalog{Language: "en-US", Region: "US", ShowUnreleased: o.unrelease}
+	cfg := config.Catalog{Language: "en-US", Region: "US"}
 	log := slog.New(slog.NewTextHandler(testWriter{t}, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	var client *tmdb.Client
 	var catClient catalog.TMDB

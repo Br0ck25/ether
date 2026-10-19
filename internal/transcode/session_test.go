@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -113,6 +114,38 @@ func TestSessionServesPlaylistAndSegments(t *testing.T) {
 	}
 	if p := s.Progress(); p.Speed != 4 {
 		t.Errorf("progress %+v", p)
+	}
+}
+
+func TestSpikeGovernorReplansUpcomingCopySegment(t *testing.T) {
+	segDur := 4 * time.Second
+	plan := buildTimeline(time.Minute, segDur, timelineOptions{steadyMode: ModeCopy})
+	s := &Session{
+		m:          &Manager{opts: options{maxAhead: 20 * time.Second}},
+		id:         "governor-test",
+		dir:        t.TempDir(),
+		segDur:     segDur,
+		container:  ContainerMPEGTS,
+		plan:       plan,
+		adapt:      adaptiveSettings{Governor: true, SpikeMargin: 1.25},
+		governorOn: true,
+		lastReq:    0,
+		done:       []map[int]bool{{1: true}},
+		segSizes:   map[int]int64{1: 2_000_000}, // 4 Mbps over a four-second segment
+		log:        slog.Default(),
+		cur:        &run{track: 0, mode: ModeCopy, planEnd: -1, maxDone: 1},
+	}
+	s.goodput.add(250_000, time.Second)
+	s.goodput.add(250_000, time.Second)
+	s.maybeGovernLocked()
+	if got := plan.ClampKbps(1); got != 1600 {
+		t.Fatalf("clamp = %d kbps, want 1600", got)
+	}
+	if s.cur.planEnd != 1 {
+		t.Fatalf("copy run boundary = %d, want 1", s.cur.planEnd)
+	}
+	if s.done[0][1] {
+		t.Fatal("stale copy segment remained eligible after clamp planning")
 	}
 }
 

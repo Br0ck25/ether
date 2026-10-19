@@ -154,7 +154,7 @@ func studioHandler(t *testing.T) (http.Handler, *fakeStudio, *fakeImages) {
 	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
 	st := newFakeStudio()
 	im := &fakeImages{}
-	return admin.New(admin.Deps{Config: store, Collections: st, CatalogHelper: fakeHelper{}, Images: im}), st, im
+	return admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Collections: st, CatalogHelper: fakeHelper{}, Images: im}), st, im
 }
 
 func authed(r *http.Request) *http.Request {
@@ -307,13 +307,6 @@ func TestCollectionsAPIAuthAndPublicImages(t *testing.T) {
 	}
 	if rec := serve(h, req(http.MethodGet, "/ether/api/image?path=/missing.jpg", "")); rec.Code != 404 {
 		t.Fatalf("missing image: %d", rec.Code)
-	}
-	// Nothing wired: 501.
-	bare := admin.New(admin.Deps{Config: newStore(t, seededConfig)})
-	for _, p := range []string{"/ether/api/collections", "/ether/api/catalog/search?q=x", "/ether/api/image?path=/a.jpg"} {
-		if rec := serve(bare, req(http.MethodGet, p, "")); rec.Code != 501 {
-			t.Errorf("%s unwired: %d", p, rec.Code)
-		}
 	}
 }
 

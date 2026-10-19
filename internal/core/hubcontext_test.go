@@ -1,7 +1,6 @@
 package core
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 )
@@ -77,29 +76,5 @@ func TestDaypartAndWeekend(t *testing.T) {
 	hc.SectionID = 2
 	if b := hc.Bucket(); b != "s2/tv/evening/weekend" {
 		t.Fatalf("section Bucket = %q", b)
-	}
-}
-
-func TestLayoutScopeJSON(t *testing.T) {
-	var r LayoutRule
-	if err := json.Unmarshal([]byte(`{"scope":"all","rows":[]}`), &r); err != nil || !r.Scope.All {
-		t.Fatalf("all: %+v %v", r.Scope, err)
-	}
-	if err := json.Unmarshal([]byte(`{"scope":{"userIds":[3,4]},"rows":[]}`), &r); err != nil || r.Scope.All || len(r.Scope.UserIDs) != 2 {
-		t.Fatalf("users: %+v %v", r.Scope, err)
-	}
-	if !r.Scope.AppliesTo(4) || r.Scope.AppliesTo(5) {
-		t.Fatal("AppliesTo")
-	}
-	if err := json.Unmarshal([]byte(`{"scope":"some"}`), &r); err == nil {
-		t.Fatal("want error for an unknown scope string")
-	}
-	b, _ := json.Marshal(LayoutScope{UserIDs: []int64{7}})
-	if string(b) != `{"userIds":[7]}` {
-		t.Fatalf("marshal users = %s", b)
-	}
-	b, _ = json.Marshal(LayoutScope{All: true})
-	if string(b) != `"all"` {
-		t.Fatalf("marshal all = %s", b)
 	}
 }

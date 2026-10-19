@@ -57,7 +57,7 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 	srcpos := s.toSource(g, vpos)
 	count := func(n int) { s.addBytes(n, m.now()) }
 	for vpos < vend {
-		n, rerr, werr := m.copyFrom(ctx, w, g, srcpos, vend-vpos, count)
+		n, rerr, werr := m.copyFrom(ctx, w, g, srcpos, vend-vpos, count, false)
 		vpos += n
 		srcpos += n
 		if werr != nil {
@@ -74,21 +74,26 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			if ng == g || ng == nil {
 				return rerr
 			}
-			at = g.tmap.TimeAt(srcpos)
-			if vpos == vstart {
+			at = g.timeMapSnapshot().TimeAt(srcpos)
+			if vpos == vstart && !m.RequiresRemux(s.id) {
 				g, srcpos = ng, s.toSource(ng, vpos)
 				continue
 			}
 			if !spliceable(s.container, s.name) {
 				return errEndResponse
 			}
-			srcpos = alignPacket(ng.tmap.OffsetAt(AlignTime(at, g.info.Duration, ng.info.Duration)))
+			srcpos = alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, ng.infoSnapshot().Duration)))
 			g = ng
 			continue
 		case recoverableSourceFailure(rerr) && ctx.Err() == nil:
 			g.noteReadFailure(rerr)
-			at = g.tmap.TimeAt(srcpos)
+			at = g.timeMapSnapshot().TimeAt(srcpos)
 			ng, err := m.failover(ctx, s, g, at, "source read failed during direct play")
+			if errors.Is(err, errRequireRemux) {
+				// Swapped, but the new release cannot continue this
+				// byte stream: end so the client re-decides as remux.
+				return errEndResponse
+			}
 			if err != nil {
 				return err
 			}
@@ -100,7 +105,7 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			if !spliceable(s.container, s.name) {
 				return errEndResponse
 			}
-			srcpos = alignPacket(ng.tmap.OffsetAt(AlignTime(at, g.info.Duration, ng.info.Duration)))
+			srcpos = alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, ng.infoSnapshot().Duration)))
 			g = ng
 			continue
 		case errors.Is(rerr, io.EOF):
@@ -123,7 +128,7 @@ type chunk struct {
 // written, the read error that stopped it (nil when length was copied) and
 // any write error. A read error is reported only after every byte before
 // the failure has been written.
-func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off, length int64, onWrite func(int)) (written int64, rerr, werr error) {
+func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off, length int64, onWrite func(int), background bool) (written int64, rerr, werr error) {
 	if length <= 0 {
 		return 0, nil, nil
 	}
@@ -148,12 +153,30 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			}
 			var n int
 			var err error
-			if cr, ok := g.src.(interface {
+			readAt := time.Now()
+			if background {
+				if cr, ok := g.src.(interface {
+					ReadAtPrefetchContext(context.Context, []byte, int64) (int, error)
+				}); ok {
+					n, err = cr.ReadAtPrefetchContext(ctx, (*bp)[:want], pos)
+				} else if cr, ok := g.src.(interface {
+					ReadAtContext(context.Context, []byte, int64) (int, error)
+				}); ok {
+					n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
+				} else {
+					n, err = g.src.ReadAt((*bp)[:want], pos)
+				}
+			} else if cr, ok := g.src.(interface {
 				ReadAtContext(context.Context, []byte, int64) (int, error)
 			}); ok {
 				n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
 			} else {
 				n, err = g.src.ReadAt((*bp)[:want], pos)
+			}
+			if n > 0 && g.sess.isRegistered() && !background {
+				now := m.now()
+				g.sess.noteFetch(n, time.Since(readAt), now)
+				g.sess.noteReadPos(pos, n, now, m.opts.SpeedGrace)
 			}
 			if int64(n) == want && errors.Is(err, io.EOF) {
 				err = nil
@@ -228,23 +251,21 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 		etag:        `"` + sum + "-" + g.token[:8] + `"`,
 		contentType: contentTypeFor("", g.src.Name()),
 	}
+	background := r.URL.Query().Get("background") == "1"
 	count := func(n int) {
-		if registered {
+		if registered && !background {
 			s.addBytes(n, m.now())
 		}
 	}
 	rep.body = func(w io.Writer, start, length int64) error {
-		n, rerr, werr := m.copyFrom(r.Context(), w, g, start, length, count)
+		n, rerr, werr := m.copyFrom(r.Context(), w, g, start, length, count, background)
 		if werr != nil {
 			return werr
 		}
-		if rerr != nil && recoverableSourceFailure(rerr) && r.Context().Err() == nil {
+		if rerr != nil && recoverableSourceFailure(rerr) && r.Context().Err() == nil && !background {
 			g.noteReadFailure(rerr)
 			if registered {
-				g.mu.Lock()
-				tm := g.tmap
-				g.mu.Unlock()
-				m.backgroundFailover(s, g, tm.TimeAt(start+n))
+				m.backgroundFailover(s, g, g.timeMapSnapshot().TimeAt(start+n))
 			}
 		}
 		return rerr
@@ -268,7 +289,7 @@ func (m *Manager) backgroundFailover(s *session, g *generation, at time.Duration
 		defer m.wg.Done()
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.FailoverTimeout)
 		defer cancel()
-		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil {
+		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil && !errors.Is(err, errRequireRemux) {
 			m.log.Error("background failover failed", "session", s.id, "err", err)
 		}
 	}()

@@ -1,7 +1,6 @@
 package personalize
 
 import (
-	"errors"
 	"math"
 	"testing"
 	"time"
@@ -11,38 +10,23 @@ import (
 
 func ip(v int) *int { return &v }
 
-func TestNormalizeLayoutValidates(t *testing.T) {
-	_, err := normalizeLayout([]core.LayoutRule{{
-		Section: "kitchen", MaxRows: -1,
-		Rows: []core.LayoutRowRule{
-			{HubID: "", Action: "pin"},
-			{HubID: "top-10", Action: "explode", Position: ip(-2)},
-			{HubID: "[", Action: "hide"},
-			{HubID: "x", Action: "bury", When: &core.LayoutWhen{Days: []int{9}, FromHour: ip(30), ToHour: ip(25), Devices: []string{"fridge"}}},
-		},
-	}})
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
-		t.Fatalf("want ValidationError, got %v", err)
-	}
+func TestValidateWhen(t *testing.T) {
+	ve := &ValidationError{}
+	validateWhen(ve, "global[0].rows[0].when", &core.LayoutWhen{Days: []int{9}, FromHour: ip(30), ToHour: ip(25), Devices: []string{"fridge"}})
 	fields := map[string]bool{}
 	for _, f := range ve.InvalidFields() {
 		fields[f[0]] = true
 	}
-	for _, want := range []string{"rules[0].section", "rules[0].maxRows", "rules[0].rows[0].hubId", "rules[0].rows[1].action",
-		"rules[0].rows[1].position", "rules[0].rows[2].hubId", "rules[0].rows[3].when.days", "rules[0].rows[3].when.fromHour",
-		"rules[0].rows[3].when.toHour", "rules[0].rows[3].when.devices"} {
+	for _, want := range []string{"global[0].rows[0].when.days", "global[0].rows[0].when.fromHour",
+		"global[0].rows[0].when.toHour", "global[0].rows[0].when.devices"} {
 		if !fields[want] {
 			t.Errorf("missing problem for %s (got %v)", want, ve.InvalidFields())
 		}
 	}
-
-	ok, err := normalizeLayout([]core.LayoutRule{{Rows: []core.LayoutRowRule{{HubID: "because.*", Action: "bury"}}}, {ID: "keep", Section: "movies", Scope: core.LayoutScope{UserIDs: []int64{2}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok[0].Section != "home" || ok[0].ID == "" || !ok[0].Scope.All || ok[1].ID != "keep" || ok[1].Rows == nil {
-		t.Fatalf("defaults not filled: %+v", ok)
+	ok := &ValidationError{}
+	validateWhen(ok, "w", &core.LayoutWhen{Days: []int{0, 6}, FromHour: ip(18), ToHour: ip(24), Devices: []string{core.DeviceTV}})
+	if ok.orNil() != nil {
+		t.Fatalf("valid schedule rejected: %v", ok)
 	}
 }
 
@@ -67,41 +51,6 @@ func TestWhenMatches(t *testing.T) {
 	}
 	if !whenMatches(nil, sat10) {
 		t.Fatal("nil when")
-	}
-}
-
-func TestLayoutPlanPrecedence(t *testing.T) {
-	hc := core.NewHubContext(time.Date(2026, 10, 14, 21, 0, 0, 0, time.UTC), "", "", "")
-	rules := []core.LayoutRule{
-		{Scope: core.LayoutScope{UserIDs: []int64{5}}, Section: "home", Rows: []core.LayoutRowRule{{HubID: "short-on-time", Action: "pin", Position: ip(1)}}, MaxRows: 6},
-		{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: "short-on-time", Action: "hide"}, {HubID: "because.*", Action: "bury"}}, MaxRows: 10},
-		{Scope: core.LayoutScope{All: true}, Section: "movies", Rows: []core.LayoutRowRule{{HubID: "top-10", Action: "hide"}}},
-	}
-	// Everyone else: hidden, server-wide max.
-	p := planFor(rules, 9, "home", hc)
-	if d := p.decide("home.shortontime", KindShortOnTime); !d.hidden || d.pinned {
-		t.Fatalf("server-wide hide = %+v", d)
-	}
-	if d := p.decide("home.because.1", KindBecause); !d.bury {
-		t.Fatalf("glob bury = %+v", d)
-	}
-	if p.maxRows != 10 {
-		t.Fatalf("maxRows = %d", p.maxRows)
-	}
-	// User 5's own rule wins over the server-wide one.
-	p = planFor(rules, 5, "home", hc)
-	if d := p.decide("home.shortontime", KindShortOnTime); !d.pinned || d.hidden || d.position != 1 {
-		t.Fatalf("per-user pin = %+v", d)
-	}
-	if p.maxRows != 6 {
-		t.Fatalf("per-user maxRows = %d", p.maxRows)
-	}
-	// Section rules only apply to their section.
-	if d := planFor(rules, 9, "movies", hc).decide("movie.top10", KindTop10); !d.hidden {
-		t.Fatalf("movies rule = %+v", d)
-	}
-	if d := planFor(rules, 9, "home", hc).decide("home.top10", KindTop10); d.hidden {
-		t.Fatal("movies rule leaked into home")
 	}
 }
 
