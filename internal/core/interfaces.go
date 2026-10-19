@@ -333,6 +333,10 @@ type StreamInfo struct {
 	BitrateKbps   int     `json:"bitrateKbps,omitempty"`
 	External      bool    `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
 	ExternalURL   string  `json:"externalUrl,omitempty"`
+
+	// DolbyVisionProfile is the DV profile (5, 7, 8...) from the DOVI
+	// configuration record; 0 when unknown or not Dolby Vision.
+	DolbyVisionProfile int `json:"dolbyVisionProfile,omitempty"`
 }
 
 type MediaInfo struct {
@@ -374,6 +378,10 @@ type Decision struct {
 	SubtitleStream int          `json:"subtitleStream"` // -1 none
 	BurnSubtitles  bool         `json:"burnSubtitles"`
 	Reason         string       `json:"reason"`
+
+	// ToneMap converts HDR (HDR10, HLG, Dolby Vision) video to SDR while
+	// transcoding, for clients without HDR support.
+	ToneMap bool `json:"toneMap,omitempty"`
 }
 
 type HWAccel struct {
