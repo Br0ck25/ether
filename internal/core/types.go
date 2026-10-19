@@ -98,6 +98,8 @@ var (
 	ErrNotFound        = errors.New("not found")
 	ErrNotAvailable    = errors.New("not available yet") // no acceptable release exists
 	ErrArticleMissing  = errors.New("article missing on all providers")
+	ErrArticleCorrupt  = errors.New("corrupt article or media data")
+	ErrReleaseRejected = errors.New("release cannot be streamed")
 	ErrBudgetExhausted = errors.New("indexer daily budget exhausted")
 	ErrStreamLimit     = errors.New("stream limit reached")
 	ErrUnauthorized    = errors.New("unauthorized")

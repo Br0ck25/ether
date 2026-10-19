@@ -159,8 +159,9 @@ type Service struct {
 	inflight    map[string]*call
 	ownerPlexID int64
 
-	seenMu sync.Mutex
-	seen   map[int64]time.Time // pending last_seen_at writes
+	membershipMu sync.Mutex // serializes validation writes with authoritative revocation
+	seenMu       sync.Mutex
+	seen         map[int64]time.Time // pending last_seen_at writes
 }
 
 type row struct {
@@ -388,6 +389,8 @@ func (s *Service) validate(ctx context.Context, token, h string) (*core.User, er
 }
 
 func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User, error) {
+	s.membershipMu.Lock()
+	defer s.membershipMu.Unlock()
 	acct, err := s.o.Validator.Account(ctx, token)
 	if err != nil {
 		if errors.Is(err, core.ErrUnauthorized) {
@@ -399,16 +402,21 @@ func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User
 	s.mu.RLock()
 	owner := s.ownerPlexID
 	localID, known := s.byPlex[acct.ID]
-	var knownActive bool
+	var knownFriend, revoked bool
 	if known {
-		knownActive = s.users[localID] != nil && s.users[localID].Active
+		revoked = s.users[localID] != nil && !s.users[localID].Active
+		knownFriend = s.users[localID] != nil && s.users[localID].Active && s.users[localID].Origin == originFriend
 	}
 	s.mu.RUnlock()
 
+	if revoked {
+		s.reject(h)
+		return nil, core.ErrUnauthorized
+	}
 	switch {
 	case owner != 0 && acct.ID == owner:
 		// The owner signed in on another device.
-	case knownActive:
+	case knownFriend:
 		// A friend from the last sync, using a personal token.
 	default:
 		ok, err := s.o.Validator.HasServer(ctx, token)
@@ -420,6 +428,14 @@ func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User
 			return s.stale(h, err)
 		}
 		if !ok {
+			if known {
+				if _, err := s.db.ExecContext(ctx, `UPDATE auth_users SET active=0 WHERE id=? AND is_owner=0`, localID); err != nil {
+					return nil, err
+				}
+				if err := s.reload(ctx); err != nil {
+					return nil, err
+				}
+			}
 			s.log.Info("token without access to this server", "plexId", acct.ID, "username", acct.Username)
 			s.reject(h)
 			return nil, core.ErrUnauthorized
@@ -640,9 +656,11 @@ ON CONFLICT(plex_id) DO UPDATE SET
 
 // SyncFriends implements plextv.UserSync: it replaces the synced access
 // tokens, upserts friends' profiles (never their Ether settings) and
-// deactivates friends who lost access. Users first seen through token
-// validation are left to the cache TTL to re-check.
+// deactivates every non-owner absent from the authoritative membership list,
+// including viewers first discovered through personal-token validation.
 func (s *Service) SyncFriends(ctx context.Context, friends []plextv.Friend) error {
+	s.membershipMu.Lock()
+	defer s.membershipMu.Unlock()
 	now := s.o.Now().Unix()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -658,9 +676,6 @@ func (s *Service) SyncFriends(ctx context.Context, friends []plextv.Friend) erro
 	}
 	keep := map[int64]bool{}
 	for _, f := range friends {
-		if f.Token == "" {
-			continue
-		}
 		var uid int64
 		switch {
 		case f.Owned:
@@ -695,13 +710,16 @@ RETURNING id`,
 			}
 			keep[uid] = true
 		}
+		if f.Token == "" {
+			continue // Membership is authoritative even without a shared token.
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO auth_tokens (token_hash, user_id, source, created_at) VALUES (?, ?, ?, ?)`,
 			HashToken(f.Token), uid, sourceFriend, now); err != nil {
 			return err
 		}
 	}
 	// Friends no longer in the list lost access.
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM auth_users WHERE origin='friend' AND is_owner=0 AND active=1`)
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM auth_users WHERE is_owner=0 AND active=1`)
 	if err != nil {
 		return err
 	}
@@ -774,6 +792,16 @@ func (s *Service) Users(ctx context.Context) ([]core.User, error) {
 		return out[i].ID < out[j].ID
 	})
 	return out, nil
+}
+
+// ActiveUser returns a current access snapshot, including for stream grants.
+func (s *Service) ActiveUser(ctx context.Context, id int64) (*core.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if u := s.activeUser(id); u != nil {
+		return u, nil
+	}
+	return nil, core.ErrUnauthorized
 }
 
 // UserInfo is a user plus bookkeeping for the admin UI.

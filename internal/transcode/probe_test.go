@@ -59,7 +59,7 @@ func TestParseProbeGolden(t *testing.T) {
 				Container: "mkv", Duration: sec(7081), Size: 14812345678, BitrateKbps: 16734,
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Default: true, Width: 3840, Height: 1608,
-						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", DolbyVision: true, DolbyVisionProfile: 8,
+						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", DolbyVision: true, DolbyVisionProfile: 8, DolbyVisionLevel: 6, DolbyVisionCompatibilityID: 1,
 						BitrateKbps: 15876},
 					{Index: 1, Type: "audio", Codec: "eac3", Profile: "Dolby Digital Plus + Dolby Atmos", Language: "eng",
 						Default: true, Channels: 6, ChannelLayout: "5.1(side)", SampleRate: 48000, BitrateKbps: 768},
