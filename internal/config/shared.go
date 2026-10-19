@@ -203,7 +203,15 @@ func (s *Store) AttachShared(ctx context.Context, b SharedBackend, o SharedOptio
 		s.SetNotifier(o.Notifier)
 	}
 	if o.PollInterval > 0 {
-		go s.watchShared(ctx, o.PollInterval)
+		wctx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		s.mu.Lock()
+		s.stopWatch = func() { cancel(); <-done }
+		s.mu.Unlock()
+		go func() {
+			defer close(done)
+			s.watchShared(wctx, o.PollInterval)
+		}()
 	}
 	if !sameConfig(before, next) {
 		for _, f := range subs {
@@ -211,6 +219,20 @@ func (s *Store) AttachShared(ctx context.Context, b SharedBackend, o SharedOptio
 		}
 	}
 	return nil
+}
+
+// Close stops following other nodes' changes (the watcher started by
+// AttachShared and the notifier subscriptions) and waits for an in-flight
+// refresh to finish. The store keeps working; it no longer refreshes.
+func (s *Store) Close() {
+	s.SetNotifier(nil)
+	s.mu.Lock()
+	stop := s.stopWatch
+	s.stopWatch = nil
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // SetNotifier connects (or, with nil, disconnects) the cluster event bus.

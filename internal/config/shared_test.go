@@ -156,6 +156,7 @@ func TestSharedSeedOverlayAndPropagation(t *testing.T) {
 	if err := b.AttachShared(ctx, backend, SharedOptions{Notifier: bus, PollInterval: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(b.Close)
 	got := b.Get()
 	if got.Server.MachineIdentifier != machine || got.Plex.Token != "owner-secret-token" || got.Server.FriendlyName != "Living room" {
 		t.Fatalf("node B did not adopt shared identity: %+v", got.Server)
@@ -220,6 +221,7 @@ func TestSharedPollFallback(t *testing.T) {
 	if err := b.AttachShared(ctx, backend, SharedOptions{PollInterval: 10 * time.Millisecond}); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(b.Close)
 	if err := a.Update(func(c *Config) error { c.Catalog.Language = "fr-FR"; return nil }); err != nil {
 		t.Fatal(err)
 	}

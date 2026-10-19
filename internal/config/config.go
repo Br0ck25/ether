@@ -292,6 +292,7 @@ type Store struct {
 	notifier   Notifier
 	unsubs     []func()
 	kick       chan struct{}
+	stopWatch  func()
 }
 
 func Open(dataDir string) (*Store, error) {
