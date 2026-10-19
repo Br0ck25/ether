@@ -330,7 +330,7 @@ func writeManifest(dir string, r pmsconform.Report, only string) error {
 	if e != nil {
 		return e
 	}
-	return os.WriteFile(filepath.Join(dir, "manifest.json"), b, 0644)
+	return os.WriteFile(filepath.Join(dir, "manifest.json"), append(b, '\n'), 0644)
 }
 func saveDiscovery(dir, profile string, ids pmsconform.DiscoveredIDs) error {
 	if e := os.MkdirAll(filepath.Join(dir, profile), 0755); e != nil {

@@ -560,6 +560,7 @@ func (c *fakeCollections) DeleteSmart(context.Context, core.RatingKey) error { r
 type fakeRecommender struct {
 	home    []core.Hub
 	section map[core.MediaType][]core.Hub
+	related []core.Hub
 }
 
 func (r *fakeRecommender) HomeHubs(context.Context, *core.User, int) ([]core.Hub, error) {
@@ -569,7 +570,7 @@ func (r *fakeRecommender) SectionHubs(_ context.Context, _ *core.User, t core.Me
 	return r.section[t], nil
 }
 func (r *fakeRecommender) Related(context.Context, *core.User, core.RatingKey, int) ([]core.Hub, error) {
-	return nil, nil
+	return r.related, nil
 }
 
 type fakePlaylists struct {
