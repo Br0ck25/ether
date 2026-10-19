@@ -30,6 +30,9 @@ type Options struct {
 	Now           func() time.Time
 	MaxTraces     int
 	RetentionDays int // posts older than this are penalised; 0 = no extra penalty
+	// HealthTTL is how long a passed health check is trusted before the
+	// release is sampled again (default 6h; negative disables the cache).
+	HealthTTL time.Duration
 }
 
 // CandidateTrace explains one candidate's fate in a resolution.
@@ -87,6 +90,8 @@ type Service struct {
 	avail         map[int64]availEntry
 	searchCache   map[string]searchCacheEntry
 	retentionDays int
+	verified      map[string]time.Time // release id -> last passed health check
+	healthTTL     time.Duration
 
 	tracesMu  sync.Mutex
 	traces    []Trace
@@ -109,6 +114,11 @@ func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config
 		flights:       map[string]*inflight{},
 		retentionDays: opts.RetentionDays,
 		maxTraces:     opts.MaxTraces,
+		verified:      map[string]time.Time{},
+		healthTTL:     opts.HealthTTL,
+	}
+	if s.healthTTL == 0 {
+		s.healthTTL = 6 * time.Hour
 	}
 	s.log = opts.Logger
 	if s.log == nil {
@@ -184,6 +194,7 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 	s.mu.Lock()
 	s.bad[releaseID] = reason
 	s.mu.Unlock()
+	s.forgetVerified(ctx, releaseID)
 	return s.persistBad(ctx, releaseID, reason)
 }
 
@@ -370,7 +381,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 				v.healthy = true
 				if s.health != nil {
 					phase = time.Now()
-					v.healthy, v.healthErr = s.health.Check(ctx, v.nzb)
+					v.healthy, v.healthErr = s.checkHealth(ctx, cands[i].rel.ID, v.nzb)
 					v.healthDuration = time.Since(phase)
 				}
 			}
@@ -397,7 +408,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 				v.healthy = true
 				if s.health != nil {
 					phase = time.Now()
-					v.healthy, v.healthErr = s.health.Check(ctx, v.nzb)
+					v.healthy, v.healthErr = s.checkHealth(ctx, cd.rel.ID, v.nzb)
 					v.healthDuration = time.Since(phase)
 				}
 			}

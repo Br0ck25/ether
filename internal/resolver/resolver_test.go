@@ -365,3 +365,48 @@ func TestConcurrentResolveSingleflight(t *testing.T) {
 		t.Errorf("searches=%d want 1 (singleflight)", idx.searches.Load())
 	}
 }
+
+type countingHealth struct{ n atomic.Int64 }
+
+func (c *countingHealth) Check(context.Context, []byte) (bool, error) {
+	c.n.Add(1)
+	return true, nil
+}
+
+func TestHealthCheckCachedUntilTTLOrMarkBad(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeClock{t: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
+	h := &countingHealth{}
+	idx := &fakeIndexer{releases: movieReleases()}
+	svc := New(idx, h, db, testCfg(), Options{Now: clock.now, HealthTTL: time.Hour})
+	req := core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()}
+	first, err := svc.Resolve(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := h.n.Load()
+
+	// Same release again within the TTL, even from a fresh service sharing
+	// the database: no new health checks for it.
+	svc2 := New(idx, h, db, testCfg(), Options{Now: clock.now, HealthTTL: time.Hour})
+	if _, err := svc2.checkHealth(ctx, first.Release.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if h.n.Load() != checked {
+		t.Fatalf("cached release was re-checked")
+	}
+	clock.add(2 * time.Hour)
+	if _, err := svc2.checkHealth(ctx, first.Release.ID, nil); err != nil || h.n.Load() != checked+1 {
+		t.Fatalf("expired entry not re-checked (checks %d)", h.n.Load())
+	}
+	if err := svc2.MarkBad(ctx, first.Release.ID, "dead"); err != nil {
+		t.Fatal(err)
+	}
+	if svc2.recentlyVerified(ctx, first.Release.ID) {
+		t.Fatal("MarkBad must drop the verified entry")
+	}
+}
