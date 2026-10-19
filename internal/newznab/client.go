@@ -367,6 +367,11 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	if cached, ok := c.cacheGet(ctx, key); ok {
 		return cached, nil
 	}
+	// Exhausted limits prohibit new requests, not reuse of already fetched
+	// results and NZBs. The manager must reach this cache before this check.
+	if c.Exhausted(ctx) {
+		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
+	}
 	caps, _ := c.Caps(ctx) // best effort; failures just mean no param gating
 	attempts := c.searchAttempts(req, caps)
 	if len(attempts) == 0 {
