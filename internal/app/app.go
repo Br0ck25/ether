@@ -235,7 +235,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	})
 
 	// Usenet, cache, stream engine.
-	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet")})
+	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet"), MinIdle: cfg.Usenet.MinIdle})
 	a.closers = append(a.closers, func() { a.fetcher.Close() })
 	if a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log); err != nil {
 		return fmt.Errorf("segment cache: %w", err)
@@ -406,7 +406,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 func (a *App) applyConfig(c config.Config) {
 	a.tmdb.UpdateConfig(c.Catalog)
 	a.llm.UpdateConfig(c.LLM)
-	a.fetcher.Update(c.Usenet.Providers)
+	a.fetcher.UpdateConfig(c.Usenet)
 	a.indexers.ApplyConfig(c)
 	a.resolver.UpdateConfig(c)
 	a.catalog.UpdateConfig(c.Catalog)

@@ -27,6 +27,11 @@ func newFetcher(t *testing.T, providers []config.UsenetProvider, o Options) *Fet
 	if o.Logger == nil {
 		o.Logger = quiet
 	}
+	// Tests assert exact lazy dial/idle counts, so the warm floor is opt-in
+	// here: a test that wants it sets MinIdle explicitly.
+	if o.MinIdle == 0 {
+		o.MinIdle = -1
+	}
 	if o.DialTimeout == 0 {
 		o.DialTimeout = 2 * time.Second
 	}
