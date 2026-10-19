@@ -354,9 +354,6 @@ func TestStartHLS(t *testing.T) {
 	if _, ok := f.trans.sessions["abc-123"]; ok {
 		t.Fatal("not stopped")
 	}
-	if rec := f.get(t, "/video/:/transcode/universal/start.mpd?path=/library/metadata/1000000000000550"); rec.Code != http.StatusBadRequest {
-		t.Fatalf("dash: %d", rec.Code)
-	}
 }
 
 func TestSegmentNumber(t *testing.T) {

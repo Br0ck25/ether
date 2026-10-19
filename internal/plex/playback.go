@@ -416,6 +416,9 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		kept = append(kept, st)
 	}
 	part.Stream = kept
+	if p.protocol == core.ProtocolDASH {
+		dashDecisionMedia(&m)
+	}
 	return m
 }
 
@@ -505,15 +508,6 @@ func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, ses
 	if r.Method != http.MethodHead {
 		_, _ = io.WriteString(w, body)
 	}
-}
-
-// handleStartDASH answers start.mpd. Ether's transcoder produces HLS
-// (MPEG-TS) only, so DASH requests are refused with a clear log line; see
-// docs/plex-api-notes.md.
-func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
-	s.log.Warn("DASH playback requested but not supported; client should use HLS",
-		"product", FromContext(r.Context()).Product, "platform", FromContext(r.Context()).Platform)
-	writeHTTPError(w, http.StatusBadRequest)
 }
 
 // handleTranscodeSession serves session/{id}/base/index.m3u8 and segments.

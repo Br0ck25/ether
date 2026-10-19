@@ -27,6 +27,11 @@ type runSpec struct {
 	Features features
 	// BigProbe raises probesize/analyzeduration (retry after a failed start).
 	BigProbe bool
+	// Protocol is core.ProtocolHLS or core.ProtocolDASH. For DASH, Dir is
+	// the run's own directory and Playlist ffmpeg's manifest in it.
+	Protocol string
+	// ChunkDur is the DASH muxer's chunk length (default 1s).
+	ChunkDur time.Duration
 }
 
 // segmentExt is the segment file extension for a decision's container.
@@ -77,8 +82,19 @@ func videoEncoder(codec string, accel core.HWAccel, f features) (name string, hw
 	}
 }
 
-// buildArgs assembles the ffmpeg command line for an HLS run.
+// buildArgs assembles the ffmpeg command line for a run: HLS, or DASH
+// when the spec says so.
 func buildArgs(s runSpec) []string {
+	args := buildCodecArgs(s)
+	if s.Protocol == core.ProtocolDASH {
+		return append(args, dashMuxArgs(s)...)
+	}
+	return append(args, hlsMuxArgs(s)...)
+}
+
+// buildCodecArgs is the input, stream mapping and codec part of a run's
+// command line, shared by HLS and DASH.
+func buildCodecArgs(s runSpec) []string {
 	d := s.Decision
 	v := s.Info.Video()
 	a := findStream(s.Info, d.AudioStream, "audio")
@@ -171,9 +187,21 @@ func buildArgs(s runSpec) []string {
 		}
 	}
 
-	// ---- muxer
+	return args
+}
+
+// hlsMuxArgs is the HLS muxer part of a run's command line.
+func hlsMuxArgs(s runSpec) []string {
+	segDur := s.SegDur
+	if segDur <= 0 {
+		segDur = DefaultSegmentDuration
+	}
+	container := s.Decision.Container
+	if container != ContainerFMP4 {
+		container = ContainerMPEGTS
+	}
 	ext := segmentExt(container)
-	args = append(args,
+	args := []string{
 		"-avoid_negative_ts", "disabled",
 		"-max_muxing_queue_size", "4096",
 		"-f", "hls",
@@ -182,7 +210,7 @@ func buildArgs(s runSpec) []string {
 		"-hls_playlist_type", "event",
 		"-hls_flags", "temp_file",
 		"-start_number", strconv.Itoa(s.StartSeg),
-	)
+	}
 	if container == ContainerFMP4 {
 		args = append(args, "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", s.InitName)
 	} else {
@@ -194,6 +222,48 @@ func buildArgs(s runSpec) []string {
 	)
 	return args
 }
+
+// dashMuxArgs is the DASH muxer part of a run's command line: fMP4 chunks
+// per representation (video 0, audio 1) with absolute decode times
+// (frag_discont), written into the run directory as
+// chunk-<rep>-<n>.m4s from n=1 with init-<rep>.m4s.
+func dashMuxArgs(s runSpec) []string {
+	chunk := s.ChunkDur
+	if chunk <= 0 {
+		chunk = dashChunkDuration
+	}
+	var sets []string
+	if s.Info.Video() != nil {
+		sets = append(sets, fmt.Sprintf("id=%d,streams=v", len(sets)))
+	}
+	if findStream(s.Info, s.Decision.AudioStream, "audio") != nil {
+		sets = append(sets, fmt.Sprintf("id=%d,streams=a", len(sets)))
+	}
+	return []string{
+		"-avoid_negative_ts", "disabled",
+		"-max_muxing_queue_size", "4096",
+		"-f", "dash",
+		"-dash_segment_type", "mp4",
+		"-format_options", "movflags=+frag_discont",
+		"-use_template", "1",
+		"-use_timeline", "0",
+		"-seg_duration", secs(chunk),
+		"-window_size", "0",
+		"-adaptation_sets", strings.Join(sets, " "),
+		"-init_seg_name", dashInitPattern,
+		"-media_seg_name", dashChunkPattern,
+		filepath.Join(s.Dir, s.Playlist),
+	}
+}
+
+// File names ffmpeg's dash muxer writes in a run directory.
+const (
+	dashInitPattern  = "init-$RepresentationID$.m4s"
+	dashChunkPattern = "chunk-$RepresentationID$-$Number%05d$.m4s"
+)
+
+func dashInitFile(rep int) string     { return fmt.Sprintf("init-%d.m4s", rep) }
+func dashChunkFile(rep, n int) string { return fmt.Sprintf("chunk-%d-%05d.m4s", rep, n) }
 
 func findStream(info core.MediaInfo, idx int, typ string) *core.StreamInfo {
 	if idx < 0 {
