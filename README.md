@@ -1,4 +1,15 @@
-# Ether
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/ether-logo-dark.svg" />
+    <img src=".github/assets/ether-logo.svg" alt="Ether" width="440" />
+  </picture>
+</p>
+
+<p align="center">
+  <strong>Your Plex. Beyond your library.</strong><br />
+  A TMDB catalogue, on-demand streaming and a Home that learns your taste.
+</p>
+
 
 Ether is an open-source server that presents itself to Plex apps as a
 Plex Media Server, but holds no media. Its library is a filtered TMDB

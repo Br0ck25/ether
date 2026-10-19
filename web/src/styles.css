@@ -61,3 +61,28 @@
     }
   }
 }
+
+/* Continuum identity: static in the shell, drawn once for a document cold start. */
+.ether-logo { --ether-ink: #1c2927; --ether-accent: #087f76; }
+.dark .ether-logo { --ether-ink: #f0f0e9; --ether-accent: #52dfc5; }
+.ether-ink { stroke: var(--ether-ink); }
+.ether-accent { stroke: var(--ether-accent); }
+.ether-trace { stroke-dasharray: 1; stroke-dashoffset: 0; }
+.ether-logo[data-motion="intro"] .ether-trace { animation: ether-draw .8s cubic-bezier(.22,.68,.16,1) var(--ether-delay,0s) backwards; }
+.ether-logo[data-motion="intro"] .ether-signal { animation: ether-draw .8s cubic-bezier(.22,.68,.16,1) var(--ether-delay,0s) backwards, ether-breathe 5s ease-in-out 2s infinite; }
+.ether-logo[data-motion="loop"] .ether-signal { animation: ether-breathe 3s ease-in-out infinite; }
+.ether-splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: var(--color-bg); opacity: 1; transition: opacity .4s ease; }
+.ether-splash-fading { opacity: 0; pointer-events: none; }
+.ether-splash-center { width: min(420px,76vw); text-align: center; }
+.ether-splash-center p { margin-top: 28px; color: var(--color-fg-muted); font-size: 10px; text-transform: uppercase; letter-spacing: .16em; animation: ether-caption .6s ease 1.15s backwards; }
+.ether-splash-progress { height: 2px; width: 90px; background: var(--color-border); border-radius: 3px; overflow: hidden; margin: 32px auto 0; }
+.ether-splash-progress::after { content: ""; display: block; height: 100%; background: #087f76; transform-origin: left; animation: ether-progress 2s ease-out both; }
+.dark .ether-splash-progress::after { background: #52dfc5; }
+@keyframes ether-draw { from { stroke-dashoffset: 1; } }
+@keyframes ether-breathe { 0%,20%,70%,100% { opacity: 1; } 45% { opacity: .5; } }
+@keyframes ether-caption { from { opacity: 0; transform: translateY(4px); } }
+@keyframes ether-progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@media (prefers-reduced-motion: reduce) {
+  .ether-logo .ether-trace, .ether-logo .ether-signal, .ether-splash-center p, .ether-splash-progress::after { animation: none !important; }
+  .ether-splash { transition: none; }
+}

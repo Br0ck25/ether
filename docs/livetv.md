@@ -119,3 +119,10 @@ checks on the claimed server when ready:
    and confirm blocked channels/programmes and cross-user session URLs fail.
 6. Repeat on iOS/Apple TV. Record the app/server versions and any additional
    endpoint requirements; compatibility with those clients is not yet claimed.
+
+The owner channel list uses searchable pagination and a **Favourites only**
+filter so imported lineups remain manageable. Edit a channel in its drawer to
+change its favourite status or delete it. Playlist URLs and test-channel choices
+are owner data, not shipped defaults. A playlist without XMLTV provides playable
+channels but no programme schedule; an owner must supply matching guide data
+for the grid to contain programmes.

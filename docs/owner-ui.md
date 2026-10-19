@@ -320,3 +320,21 @@ and the Designer's two columns each retain their appropriate vertical scroll are
 AppKit still owns drawer animation, focus restoration, Escape handling and scroll
 locking. A small Ether wrapper associates each visible title with its dialog name
 and automatically selects AppKit's stacked mode for nested editors.
+
+## Continuum identity
+
+Ether's logo is Continuum: an outer current, an inner current and a central
+signal, followed by custom SVG lettering. `web/src/lib/brand-art.json` is the
+shared geometry for the React logo and exported SVGs. The app uses a static
+lockup in its navigation, a quiet mark for loading, and a root splash that draws
+once on a document cold start. The splash waits for bootstrap and its two-second
+entrance, fades out, and stays retired through internal navigation. Reduced
+motion shortens the reveal and disables vector animation.
+
+The repository header uses `.github/assets/ether-logo.svg` and its dark variant
+inside a `picture`. They are standalone animated SVGs with fully drawn resting
+styles, no JavaScript and no font dependency. Static lockups, marks, favicon and
+app icons live under `web/public/`. Regenerate vector exports with
+`node web/scripts/generate-brand.mjs`. The PNG mark is a raster master rendered
+from the same SVG; tray variants are generated with
+`go run scripts/generate-tray-icons.go cmd/ether-tray/assets`.

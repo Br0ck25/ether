@@ -2,11 +2,12 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { describe, expect, it, vi } from "vitest";
 import LiveTV from "../pages/livetv/LiveTV";
 
-function backend() {
+function backend(channels: unknown[] = []) {
  const calls: { url: string; init?: RequestInit }[] = [];
  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input); calls.push({ url, init }); let data: unknown = [];
-  if (url.endsWith("/users")) data = { users: [{ id: 12, title: "Sam", username: "sam" }] };
+  if (url.endsWith("/livetv/channels")) data = channels;
+  else if (url.endsWith("/users")) data = { users: [{ id: 12, title: "Sam", username: "sam" }] };
   else if (url.endsWith("/collections")) data = { collections: [{ id: "42", ratingKey: "6000000000000042", name: "Family favourites", itemCount: 8 }] };
   else if (url.includes("/catalog/search")) data = { items: [{ key: "1000000000000007", type: "movie", title: "Adventure", runtimeMinutes: 108, contentRating: "PG" }] };
   else if (url.endsWith("/livetv/policies/12")) data = { userId: 12, disabled: false, channels: [], favorites: [], maxRating: "" };
@@ -17,6 +18,19 @@ function backend() {
 const channelSave = (calls: ReturnType<typeof backend>) => calls.find(c => c.url.endsWith("/livetv/channels") && c.init?.method === "POST");
 
 describe("Live TV owner programming", () => {
+ it("finds channels beyond the first page and narrows to favourites", async () => {
+  backend(Array.from({length: 25}, (_, i) => ({id: String(i), number: String(i + 1), name: `Station ${i + 1}`, kind: "iptv", enabled: true, favorite: i === 24, group: i === 24 ? "Weather" : "General"})));
+  render(<LiveTV />);
+  const search = await screen.findByRole("searchbox", {name: "Search channels"});
+  expect(screen.queryByText("★ Station 25")).not.toBeInTheDocument();
+  fireEvent.change(search, {target: {value: "Weather"}});
+  expect(screen.getByText("★ Station 25")).toBeInTheDocument();
+  expect(screen.queryByText("Station 1")).not.toBeInTheDocument();
+  fireEvent.change(search, {target: {value: ""}});
+  fireEvent.click(screen.getByRole("switch", {name: "Favourites only"}));
+  expect(screen.getByText("★ Station 25")).toBeInTheDocument();
+  expect(screen.queryByText("Station 1")).not.toBeInTheDocument();
+ });
  it("builds a channel from a catalogue search and named viewer without raw keys", async () => {
   const calls = backend(); render(<LiveTV />);
   await screen.findByRole("button", { name: "Create channel" });

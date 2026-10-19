@@ -9,7 +9,7 @@ import {
 import { forwardRef, lazy, Suspense, useCallback, useEffect, useState, type AnchorHTMLAttributes } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { AppProvider, useApp } from "./app-context";
-import { Brand, EtherMark } from "./components/brand";
+import { Brand, BrandSplash, EtherMark } from "./components/brand";
 import { ErrorPanel } from "./components/feedback";
 import { LEVEL_LABEL, LevelBadge, StatusDot } from "./components/status";
 import { api, getToken, setToken } from "./lib/api";
@@ -183,7 +183,7 @@ function Shell() {
   );
 }
 
-function Gate() {
+function Gate({ onReady }: { onReady: () => void }) {
   const [boot, setBoot] = useState<Bootstrap | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [unlocked, setUnlocked] = useState(false);
@@ -193,12 +193,13 @@ function Gate() {
     catch (e) { setError(e); }
   }, []);
   useEffect(() => { void loadBoot(); }, [loadBoot]);
+  useEffect(() => { if (boot || error) onReady(); }, [boot, error, onReady]);
 
   if (!boot) {
     return (
       <main className="grid min-h-screen place-items-center bg-bg-subtle p-4">
         {error ? <div className="w-full max-w-md"><ErrorPanel error={error} onRetry={() => void loadBoot()} /></div> : (
-          <div className="flex flex-col items-center gap-3 text-sm text-fg-muted"><EtherMark size={40} /><span role="status">Connecting to Ether…</span></div>
+          <div className="flex flex-col items-center gap-3 text-sm text-fg-muted"><EtherMark size={40} motion="loop" /><span role="status">Connecting to Ether…</span></div>
         )}
       </main>
     );
@@ -214,10 +215,13 @@ function Gate() {
 }
 
 export default function App() {
+  const [ready, setReady] = useState(false);
+  const onReady = useCallback(() => setReady(true), []);
   return (
     <ThemeProvider {...theme}>
       <UiLinkProvider link={RouterAnchor}>
-        <Gate />
+        <Gate onReady={onReady} />
+        <BrandSplash ready={ready} />
         <Toaster richColors closeButton position="bottom-right" />
         <ConfirmRoot />
         <PromptRoot />
