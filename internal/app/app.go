@@ -253,11 +253,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("certificates: %w", err)
 	}
 	if a.registrar, err = plextv.NewRegistrar(plextv.RegistrarOptions{
-		Config:  a.cfg,
-		Client:  a.plextv,
-		Users:   a.users,
-		Certs:   a.certs,
-		Logger:  log.With("component", "registrar"),
+		Config: a.cfg,
+		Client: a.plextv,
+		Users:  a.users,
+		Certs:  a.certs,
+		Logger: log.With("component", "registrar"),
 	}); err != nil {
 		return fmt.Errorf("registrar: %w", err)
 	}
