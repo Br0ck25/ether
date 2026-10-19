@@ -142,6 +142,13 @@ type Deps struct {
 
 	// DiskUsage overrides free-space reporting (tests). Nil → OS statfs.
 	DiskUsage func(path string) (total, free int64, err error)
+
+	// ---- Personalization engine (viewers, Home Designer, insights) ----
+
+	// Personalization backs /api/viewers/*, /api/layout and
+	// /api/insights/* (internal/personalize.Engine). Viewers are listed
+	// from Users. Nil → 501.
+	Personalization Personalization
 }
 
 // Handler is the admin HTTP handler. Use NewHandler when you need access
@@ -249,6 +256,8 @@ func (h *Handler) routes() *http.ServeMux {
 
 	api("GET /api/logs", h.handleLogs)
 	api("DELETE /api/logs", h.handleClearLogs)
+
+	h.personalizationRoutes(api)
 
 	mux.HandleFunc("/api/", h.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "no such API endpoint")

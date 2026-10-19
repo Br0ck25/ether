@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/state"
 )
@@ -155,7 +156,7 @@ func TestPreviewMatchesHubs(t *testing.T) {
 	u := core.User{ID: 1}
 	h.rebuild(u)
 	for _, hc := range []core.HubContext{hubContext(testNow, core.DeviceTV), hubContext(testNow.Add(-12*time.Hour), core.DeviceMobile)} {
-		p, err := h.e.PreviewHome(ctx, &u, hc, 12)
+		p, err := h.e.PreviewHome(ctx, &u, hc, "", 12)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -201,7 +202,7 @@ func TestPreviewMatchesHubs(t *testing.T) {
 	// Section preview includes the front end's own rows first.
 	sec := hubContext(testNow, core.DeviceTV)
 	sec.SectionID = 2
-	p, _ := h.e.PreviewHome(ctx, &u, sec, 12)
+	p, _ := h.e.PreviewHome(ctx, &u, sec, "shows", 12)
 	if len(p.Rows) < 3 || p.Rows[0].HubID != "tv.inprogress.2" || p.Rows[1].HubID != "tv.recentlyadded.2" || p.Rows[0].Source != core.RowSourcePlex {
 		t.Fatalf("section preview head = %v", kindsOf(p.Rows))
 	}
@@ -342,3 +343,7 @@ func TestScoreTitles(t *testing.T) {
 		t.Fatalf("a sci-fi fan should score sci-fi higher: %v", scores)
 	}
 }
+
+// The engine is what the admin API's viewers, layout and insights
+// endpoints are wired to.
+var _ admin.Personalization = (*Engine)(nil)

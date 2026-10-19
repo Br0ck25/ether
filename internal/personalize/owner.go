@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,16 +24,28 @@ const previewWait = 45 * time.Second
 // Watching and Recently Added in sections, Recent Playlists on Home),
 // marked source "plex". Rows hidden by a layout rule are included last
 // with Hidden set; Plex never receives them.
-func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubContext, limit int) (*core.HomePreview, error) {
+//
+// section is "" or "home", "movies", "shows", or a library section id.
+// The daypart and weekend flag are derived from hc.Now in server local
+// time (hc.Device is kept as given).
+func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubContext, sectionName string, limit int) (*core.HomePreview, error) {
 	if user == nil {
 		return nil, fmt.Errorf("personalize: no user")
 	}
+	sid, section, err := e.resolveSection(sectionName)
+	if err != nil {
+		return nil, err
+	}
+	if hc.Now.IsZero() {
+		hc.Now = e.now()
+	}
+	hc.Now = hc.Now.In(e.loc)
+	hc.Daypart, hc.Weekend, hc.SectionID = core.DaypartAt(hc.Now), core.IsWeekend(hc.Now), sid
+	if !validDevices[hc.Device] {
+		return nil, &ValidationError{Problems: []Problem{{"device", "must be tv, mobile, web or desktop"}}}
+	}
 	wctx, cancel := context.WithTimeout(ctx, previewWait)
 	defer cancel()
-	section := core.MediaType("")
-	if hc.SectionID > 0 {
-		section = e.opts.Sections[hc.SectionID]
-	}
 	p := e.home(wctx, user, hc, section, limit, true)
 	if limit <= 0 {
 		limit = 12
@@ -75,6 +88,36 @@ func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubCo
 		p.Rows = append(head, p.Rows...)
 	}
 	return &p, nil
+}
+
+// resolveSection maps a preview section name to a library section.
+func (e *Engine) resolveSection(name string) (int, core.MediaType, error) {
+	var want core.MediaType
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "home":
+		return 0, "", nil
+	case "movies", "movie":
+		want = core.TypeMovie
+	case "shows", "show", "tv":
+		want = core.TypeShow
+	default:
+		id, err := strconv.Atoi(name)
+		if t, ok := e.opts.Sections[id]; err == nil && ok {
+			return id, t, nil
+		}
+		return 0, "", &ValidationError{Problems: []Problem{{"section", "must be home, movies, shows or a library section id"}}}
+	}
+	ids := make([]int, 0, len(e.opts.Sections))
+	for id := range e.opts.Sections {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	for _, id := range ids {
+		if e.opts.Sections[id] == want {
+			return id, want, nil
+		}
+	}
+	return 0, "", &ValidationError{Problems: []Problem{{"section", "no " + string(want) + " library"}}}
 }
 
 func plexRow(hubID, title, kind, reason string, items []candItem) core.HomeRow {

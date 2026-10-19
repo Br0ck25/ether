@@ -107,7 +107,7 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 		if u.ID == carol.ID {
 			hc = hubContext(time.Date(2026, 10, 14, 23, 0, 0, 0, time.UTC), core.DeviceMobile) // Wed late, phone
 		}
-		p, err := h.e.PreviewHome(ctx, &u, hc, 12)
+		p, err := h.e.PreviewHome(ctx, &u, hc, "", 12)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -192,8 +192,8 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 
 	// Context changes Alice's Home too: Saturday night on the TV versus a
 	// weeknight on her phone.
-	sat, _ := h.e.PreviewHome(ctx, &alice, hubContext(time.Date(2026, 10, 17, 20, 30, 0, 0, time.UTC), core.DeviceTV), 12)
-	phone, _ := h.e.PreviewHome(ctx, &alice, hubContext(time.Date(2026, 10, 14, 23, 0, 0, 0, time.UTC), core.DeviceMobile), 12)
+	sat, _ := h.e.PreviewHome(ctx, &alice, hubContext(time.Date(2026, 10, 17, 20, 30, 0, 0, time.UTC), core.DeviceTV), "", 12)
+	phone, _ := h.e.PreviewHome(ctx, &alice, hubContext(time.Date(2026, 10, 14, 23, 0, 0, 0, time.UTC), core.DeviceMobile), "", 12)
 	t.Logf("alice, Saturday TV:\n%s\nalice, weeknight phone:\n%s", describe(sat.Rows), describe(phone.Rows))
 	same := true
 	sk, pk := kindsOf(sat.Rows), kindsOf(phone.Rows)

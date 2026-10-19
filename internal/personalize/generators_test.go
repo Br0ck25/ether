@@ -261,7 +261,7 @@ func TestOwnerCollectionRows(t *testing.T) {
 	}
 	u := core.User{ID: 4, Username: "dee"}
 	h.rebuild(u)
-	p, err := h.e.PreviewHome(context.Background(), &u, hubContext(testNow, core.DeviceTV), 12)
+	p, err := h.e.PreviewHome(context.Background(), &u, hubContext(testNow, core.DeviceTV), "", 12)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestOwnerCollectionRows(t *testing.T) {
 	}
 	sec := hubContext(testNow, core.DeviceTV)
 	sec.SectionID = 1
-	p, _ = h.e.PreviewHome(context.Background(), &u, sec, 12)
+	p, _ = h.e.PreviewHome(context.Background(), &u, sec, "movies", 12)
 	if rowByKind(p.Rows, KindCollectionPrefix+"secret") == nil {
 		t.Fatal("section row missing from the Movies section")
 	}
