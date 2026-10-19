@@ -20,6 +20,9 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/episodeorder"
+	"github.com/braedonsaunders/ether/internal/livetv"
+	"github.com/braedonsaunders/ether/internal/plexguid"
 )
 
 // DefaultPMSVersion is reported when Identity.Version is empty. Clients gate
@@ -67,14 +70,22 @@ type SessionToucher interface {
 // Deps are the server's dependencies. Catalog, State, Auth and Playback are
 // required; the rest degrade gracefully when nil.
 type Deps struct {
-	Catalog     core.Catalog
-	Collections core.Collections
-	Recommender core.Recommender
-	State       core.State
-	Playlists   core.Playlists
-	Auth        core.Auth
-	Playback    core.Playback
-	Transcoder  core.Transcoder
+	EpisodeOrder     *episodeorder.Service
+	PlexGUID         *plexguid.Service
+	Discovery        *DiscoveryFeatures
+	LiveTV           *livetv.Service
+	AccessPolicy     AccessPolicy
+	Catalog          core.Catalog
+	Collections      core.Collections
+	Recommender      core.Recommender
+	State            core.State
+	Playlists        core.Playlists
+	Auth             core.Auth
+	Playback         core.Playback
+	Transcoder       core.Transcoder
+	TrackPreferences TrackPreferences
+	Markers          MarkerProvider
+	Subtitles        SubtitleSource
 
 	// Config returns the current settings snapshot.
 	Config func() config.Config
@@ -216,6 +227,11 @@ func (s *Server) identity() Identity {
 	if id.FriendlyName == "" {
 		id.FriendlyName = "Ether"
 	}
+	if c.Plex.CompatibilityVersion != "" {
+		id.Version = c.Plex.CompatibilityVersion
+	} else if !c.Plex.DisableVersionTracking && c.Plex.LatestCompatibilityVersion != "" {
+		id.Version = c.Plex.LatestCompatibilityVersion
+	}
 	if id.Version == "" {
 		id.Version = DefaultPMSVersion
 	}
@@ -351,6 +367,9 @@ func (s *Server) TranscodeFor(playSessionID string) (core.HLSSession, bool) {
 		if hs, ok := s.d.Transcoder.Session(id); ok && hs != nil {
 			return hs, true
 		}
+	}
+	if s.d.LiveTV != nil {
+		return s.d.LiveTV.TranscodeFor(playSessionID)
 	}
 	return nil, false
 }

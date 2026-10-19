@@ -48,6 +48,8 @@ func (h *Handler) personalizationRoutes(api func(pattern string, fn http.Handler
 	api("POST /api/viewers/{id}/refresh", h.handleViewerRefresh)
 	api("GET /api/layout", h.handleGetLayout)
 	api("PUT /api/layout", h.handlePutLayout)
+	api("POST /api/layout/preview", h.handleLayoutPreview)
+	api("POST /api/layout/impact", h.handleLayoutImpact)
 	api("GET /api/insights/rows", h.handleInsightRows)
 	api("GET /api/insights/activity", h.handleInsightActivity)
 }
@@ -242,16 +244,23 @@ func (h *Handler) handleViewerOverrides(w http.ResponseWriter, r *http.Request) 
 
 // homeRow is the HomeRow shape of the contract.
 type homeRow struct {
-	HubID       string            `json:"hubId"`
-	Title       string            `json:"title"`
-	Kind        string            `json:"kind"`
-	Reason      string            `json:"reason"`
-	Score       float64           `json:"score"`
-	Pinned      bool              `json:"pinned,omitempty"`
-	Hidden      bool              `json:"hidden,omitempty"`
-	Source      string            `json:"source"`
-	Items       []homeTitleCard   `json:"items"`
-	ItemReasons map[string]string `json:"itemReasons,omitempty"`
+	HubID        string            `json:"hubId"`
+	Layer        string            `json:"layer,omitempty"`
+	Slot         int               `json:"slot,omitempty"`
+	AnchorSlot   int               `json:"anchorSlot,omitempty"`
+	Placement    string            `json:"placement,omitempty"`
+	HiddenReason string            `json:"hiddenReason,omitempty"`
+	Policy       *core.RowPolicy   `json:"policy,omitempty"`
+	PolicyLayer  string            `json:"policyLayer,omitempty"`
+	Title        string            `json:"title"`
+	Kind         string            `json:"kind"`
+	Reason       string            `json:"reason"`
+	Score        float64           `json:"score"`
+	Pinned       bool              `json:"pinned,omitempty"`
+	Hidden       bool              `json:"hidden,omitempty"`
+	Source       string            `json:"source"`
+	Items        []homeTitleCard   `json:"items"`
+	ItemReasons  map[string]string `json:"itemReasons,omitempty"`
 }
 
 func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
@@ -298,10 +307,14 @@ func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
 		writeEngineError(w, err)
 		return
 	}
+	h.writeHomePreview(w, p, nil)
+}
+
+func (h *Handler) writeHomePreview(w http.ResponseWriter, p *core.HomePreview, viewer any) {
 	rows := make([]homeRow, 0, len(p.Rows))
 	for _, row := range p.Rows {
 		hr := homeRow{HubID: row.HubID, Title: row.Title, Kind: row.Kind, Reason: row.Reason, Score: row.Score,
-			Pinned: row.Pinned, Hidden: row.Hidden, Source: row.Source, Items: make([]homeTitleCard, 0, len(row.Items))}
+			Layer: row.Layer, Slot: row.Slot, AnchorSlot: row.AnchorSlot, Placement: row.Placement, HiddenReason: row.HiddenReason, Policy: row.Policy, PolicyLayer: row.PolicyLayer, Pinned: row.Pinned, Hidden: row.Hidden, Source: row.Source, Items: make([]homeTitleCard, 0, len(row.Items))}
 		for _, t := range row.Items {
 			hr.Items = append(hr.Items, homeCard(t))
 		}
@@ -315,6 +328,7 @@ func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"rows":        rows,
+		"viewer":      viewer,
 		"generatedAt": p.GeneratedAt.UTC(),
 		"context":     map[string]any{"device": p.Context.Device, "daypart": p.Context.Daypart, "weekend": p.Context.Weekend},
 	})

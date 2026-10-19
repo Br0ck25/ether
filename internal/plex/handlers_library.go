@@ -676,15 +676,7 @@ func (s *Server) sectionSearch(w http.ResponseWriter, r *http.Request, sec Secti
 
 // filterAllowed drops titles in sections the user cannot see.
 func (s *Server) filterAllowed(u *core.User, ts []core.Title) []core.Title {
-	out := ts[:0:0]
-	for _, t := range ts {
-		sec, ok := s.sectionFor(t.Type)
-		if ok && !s.canSeeSection(u, sec.ID) {
-			continue
-		}
-		out = append(out, t)
-	}
-	return out
+	return s.visibleTitles(u, ts)
 }
 
 func (s *Server) sectionFacet(w http.ResponseWriter, r *http.Request, sec Section, sub string) {

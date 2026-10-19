@@ -243,16 +243,15 @@ func TestThemedRowsStaleServeAndBackoff(t *testing.T) {
 	if hubs, _ := svc.ThemedRows(ctx, user, seedB, 5); len(hubs) != 2 {
 		t.Fatalf("stale rows not served: %+v", hubs)
 	}
-	waitFor(t, func() bool { return calls.Load() == before+1 })
+	waitFor(t, func() bool {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		return len(svc.flights) == 0 && calls.Load() == before+1
+	})
 
 	// Endpoint down after TTL: stale rows still served, retries back off.
 	fail.Store(true)
 	now.Add(int64(2 * time.Hour))
-	waitFor(t, func() bool {
-		svc.mu.Lock()
-		defer svc.mu.Unlock()
-		return len(svc.flights) == 0
-	})
 	before = calls.Load()
 	if hubs, _ := svc.ThemedRows(ctx, user, seedB, 5); len(hubs) != 2 {
 		t.Fatalf("stale rows on failure: %+v", hubs)

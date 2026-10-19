@@ -145,7 +145,7 @@ func (c *Catalog) movieToTitle(ctx context.Context, m tmdb.Movie) core.Title {
 		Summary: m.Overview, Released: rel, Language: m.OriginalLanguage,
 		Rating: m.VoteAverage, VoteCount: m.VoteCount, Popularity: m.Popularity,
 		PosterPath: m.PosterPath, BackdropPath: m.BackdropPath,
-		Genres: c.genreNames(ctx, "movie", m.GenreIDs, m.Genres),
+		Genres: c.genreNames(ctx, "movie", m.GenreIDs, m.Genres), Adult: m.Adult,
 	}
 	if !rel.IsZero() {
 		t.Year = rel.Year()
@@ -230,7 +230,7 @@ func (c *Catalog) tvToTitle(ctx context.Context, s tmdb.TVShow) core.Title {
 		Summary: s.Overview, Released: rel, Language: s.OriginalLanguage,
 		Rating: s.VoteAverage, VoteCount: s.VoteCount, Popularity: s.Popularity,
 		PosterPath: s.PosterPath, BackdropPath: s.BackdropPath,
-		Genres: c.genreNames(ctx, "tv", s.GenreIDs, s.Genres), Countries: s.OriginCountry,
+		Genres: c.genreNames(ctx, "tv", s.GenreIDs, s.Genres), Countries: s.OriginCountry, Adult: s.Adult,
 	}
 	if !rel.IsZero() {
 		t.Year = rel.Year()
@@ -314,7 +314,7 @@ func seasonToTitle(show core.Title, s tmdb.SeasonSummary) core.Title {
 		SeasonTitle: name, Season: s.SeasonNumber, Title: name, SortTitle: sortTitle(name),
 		Summary: s.Overview, Released: rel, PosterPath: s.PosterPath, BackdropPath: show.BackdropPath,
 		ChildCount: s.EpisodeCount, Rating: s.VoteAverage,
-		Genres: show.Genres, ContentRating: show.ContentRating, Language: show.Language,
+		Genres: show.Genres, ContentRating: show.ContentRating, Language: show.Language, Adult: show.Adult,
 	}
 	if t.PosterPath == "" {
 		t.PosterPath = show.PosterPath
@@ -338,7 +338,7 @@ func episodeToTitle(show core.Title, seasonName string, e tmdb.Episode) core.Tit
 		Title: title, SortTitle: sortTitle(title), Summary: e.Overview, Released: rel,
 		StillPath: e.StillPath, PosterPath: e.StillPath, BackdropPath: show.BackdropPath,
 		Rating: e.VoteAverage, VoteCount: e.VoteCount,
-		Genres: show.Genres, ContentRating: show.ContentRating, Language: show.Language,
+		Genres: show.Genres, ContentRating: show.ContentRating, Language: show.Language, Adult: show.Adult,
 	}
 	if e.Runtime != nil && *e.Runtime > 0 {
 		t.Runtime = time.Duration(*e.Runtime) * time.Minute

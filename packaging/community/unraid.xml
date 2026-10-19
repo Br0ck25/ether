@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Container version="2">
+  <Name>Ether</Name>
+  <Repository>ghcr.io/braedonsaunders/ether:latest</Repository>
+  <Registry>https://ghcr.io/braedonsaunders/ether</Registry>
+  <Network>host</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/braedonsaunders/ether/issues</Support>
+  <Project>https://github.com/braedonsaunders/ether</Project>
+  <Overview>Plex-compatible TMDB catalogue and on-demand Usenet streaming. Supply your own providers and indexers. Optional local libraries. Open the web UI to configure Ether.</Overview>
+  <Category>MediaApp:Video MediaServer:Video</Category>
+  <WebUI>http://[IP]:[PORT:32400]/ether/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/braedonsaunders/ether/main/packaging/community/unraid.xml</TemplateURL>
+  <Config Name="Configuration" Target="/config" Default="/mnt/user/appdata/ether" Mode="rw" Description="SQLite and credentials. Prefer a local cache-pool path; network filesystems are unsuitable for the live database." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Segment cache" Target="/cache" Default="/mnt/cache/ether-cache" Mode="rw" Description="Segment cache; set the cache directory to /cache in setup." Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Local media" Target="/media" Default="/mnt/user/media" Mode="ro" Description="Optional read-only hybrid library. Add /media in Libraries." Type="Path" Display="always" Required="false" Mask="false"/>
+  <Config Name="Data directory" Target="ETHER_DATA_DIR" Default="/config" Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="Timezone" Target="TZ" Default="Etc/UTC" Type="Variable" Display="always" Required="true" Mask="false"/>
+</Container>

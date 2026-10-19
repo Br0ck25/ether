@@ -223,7 +223,7 @@ func (s *Server) artPath(ctx context.Context, key core.RatingKey, element string
 			return "", 0, err
 		}
 		for _, k := range pl.Items {
-			if t, err := s.d.Catalog.Get(ctx, k); err == nil {
+			if t, err := s.d.Catalog.Get(ctx, k); err == nil && s.visibleTitle(ctx, u, t) {
 				if element == "art" && t.BackdropPath != "" {
 					return t.BackdropPath, 1280, nil
 				}
@@ -237,6 +237,9 @@ func (s *Server) artPath(ctx context.Context, key core.RatingKey, element string
 	t, err := s.d.Catalog.Get(ctx, key)
 	if err != nil {
 		return "", 0, err
+	}
+	if !s.visibleTitle(ctx, FromContext(ctx).User, t) {
+		return "", 0, core.ErrNotFound
 	}
 	parent := func() *core.Title {
 		pk := t.ShowKey
@@ -340,7 +343,8 @@ func (s *Server) serveRemoteImage(w http.ResponseWriter, r *http.Request, u stri
 	}
 	h := w.Header()
 	h.Set("Content-Type", img.contentType)
-	h.Set("Cache-Control", "max-age=604800, public")
+	h.Set("Cache-Control", "max-age=604800, private")
+	h.Add("Vary", "X-Plex-Token")
 	h.Set("Content-Length", strconv.Itoa(len(img.data)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
@@ -375,6 +379,10 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u.IsAbs() && s.allowedImageHost(u.Host) {
+		if !s.remoteArtworkAllowed(r, u) {
+			writeHTTPError(w, http.StatusNotFound)
+			return
+		}
 		s.serveRemoteImage(w, r, resizeTMDBURL(u.String(), width))
 		return
 	}

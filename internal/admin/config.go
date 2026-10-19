@@ -11,7 +11,7 @@ import (
 
 // configSections maps URL section names to JSON field names on Config.
 var configSections = map[string]string{
-	"server": "server", "plex": "plex", "usenet": "usenet", "indexers": "indexers",
+	"markers": "markers", "server": "server", "plex": "plex", "usenet": "usenet", "indexers": "indexers",
 	"cache": "cache", "catalog": "catalog", "resolver": "resolver", "quality": "quality",
 	"transcode": "transcode", "trakt": "trakt", "opensubtitles": "openSubtitles",
 	"openSubtitles": "openSubtitles", "llm": "llm", "updates": "updates", "spike": "spike",
@@ -26,7 +26,11 @@ func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // saveConfig validates and persists next (secrets already unredacted),
 // preserving identity fields the UI must never rotate accidentally.
 func (h *Handler) saveConfig(next config.Config) ([]FieldError, error) {
-	if errs := ValidateConfig(next); len(errs) > 0 {
+	errs := ValidateConfig(next)
+	if h.deps.ValidateExtra != nil {
+		errs = append(errs, h.deps.ValidateExtra(next)...)
+	}
+	if len(errs) > 0 {
 		return errs, nil
 	}
 	err := h.deps.Config.Update(func(c *config.Config) error {

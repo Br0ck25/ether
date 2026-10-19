@@ -12,6 +12,7 @@ import { api, errorMessage, isUnavailable } from "../../lib/api";
 import type { Viewer, ViewerDetail } from "../../lib/contract";
 import { formatDateTime, formatNumber, relativeTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
+import { EMPTY_LAYOUT } from "../../lib/layout";
 import { ContextBar, type ViewContext } from "../designer/ContextBar";
 import { HomeCanvas } from "../designer/HomeCanvas";
 import { TasteView } from "./TasteView";
@@ -114,16 +115,16 @@ function Activity({ viewer }: { viewer: ViewerDetail }) {
 
 function TheirHome({ viewer }: { viewer: Viewer }) {
   const now = new Date();
-  const [ctx, setCtx] = useState<ViewContext>({ viewerId: viewer.id, device: "tv", day: now.getDay(), hour: now.getHours(), section: "home" });
+  const [ctx, setCtx] = useState<ViewContext>({ device: "tv", day: now.getDay(), hour: now.getHours(), section: "home" });
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <ContextBar ctx={ctx} onChange={(c) => setCtx({ ...c, viewerId: viewer.id })} viewers={[viewer]} idPrefix="Home" />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="w-full max-w-md"><ContextBar ctx={ctx} onChange={setCtx} /></div>
         <Link to="/designer" className="text-sm font-medium text-primary hover:underline">Shape it in Home Designer →</Link>
       </div>
       <div className="rounded-xl bg-bg p-2 sm:p-4">
-        <HomeCanvas label={`${viewerName(viewer)}'s Home`} ctx={ctx} rules={[]} dirty={false} refreshNonce={0} editable={false}
-          actionFor={() => undefined} onAction={() => undefined} onReorder={() => undefined} />
+        <HomeCanvas readOnly draft={EMPTY_LAYOUT} saved={EMPTY_LAYOUT} dirty={false} layer={viewer.id} layerName={viewerName(viewer)} ctx={ctx}
+          viewers={[viewer]} viewerId={viewer.id} onSpotCheck={() => undefined} refreshNonce={0} onChange={() => undefined} onEditRow={() => undefined} />
       </div>
     </div>
   );

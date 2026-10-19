@@ -231,7 +231,11 @@ func Normalize(raw []byte) (srt, vtt string, err error) { return NormalizeLang(r
 // NormalizeLang is Normalize with the subtitle's language, which picks the
 // legacy code page for non-UTF files (Windows-1251 for Russian, …).
 func NormalizeLang(raw []byte, lang string) (srt, vtt string, err error) {
-	cues, err := ParseCues(toUTF8Lang(raw, lang))
+	text := toUTF8Lang(raw, lang)
+	cues, err := ParseCues(text)
+	if err != nil && strings.Contains(strings.ToLower(text), "[events]") {
+		cues, err = ParseASS(text)
+	}
 	if err != nil {
 		return "", "", err
 	}

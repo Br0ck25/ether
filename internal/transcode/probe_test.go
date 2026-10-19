@@ -42,7 +42,7 @@ func TestParseProbeGolden(t *testing.T) {
 			want: core.MediaInfo{
 				Container: "mkv", Duration: sec(7950.125), Size: 59836712345, BitrateKbps: 60211,
 				Streams: []core.StreamInfo{
-					{Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Default: true, Width: 3840, Height: 2160,
+					{Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Level: 153, Default: true, Width: 3840, Height: 2160,
 						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", BitrateKbps: 58312},
 					{Index: 1, Type: "audio", Codec: "eac3", Language: "eng", Title: "English DD+ 5.1", Default: true,
 						Channels: 6, ChannelLayout: "5.1(side)", SampleRate: 48000, BitrateKbps: 768},
@@ -72,7 +72,7 @@ func TestParseProbeGolden(t *testing.T) {
 			want: core.MediaInfo{
 				Container: "mp4", Duration: sec(5400.042), Size: 4062345678, BitrateKbps: 6018,
 				Streams: []core.StreamInfo{
-					{Index: 0, Type: "video", Codec: "h264", Profile: "High", Default: true, Width: 1920, Height: 1080,
+					{Index: 0, Type: "video", Codec: "h264", Profile: "High", Level: 40, Default: true, Width: 1920, Height: 1080,
 						FrameRate: 24, BitDepth: 8, ColorTransfer: "bt709", BitrateKbps: 5823},
 					{Index: 1, Type: "audio", Codec: "aac", Profile: "LC", Language: "eng", Default: true,
 						Channels: 2, ChannelLayout: "stereo", SampleRate: 48000, BitrateKbps: 192},

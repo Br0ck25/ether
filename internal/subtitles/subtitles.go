@@ -179,12 +179,14 @@ type Candidate struct {
 	UploaderRank  string
 	HearingImp    bool
 	AITranslated  bool
+	HashMatch     bool
 	Score         float64 // filled by Rank
 }
 
 type searchResponse struct {
 	Data []struct {
 		Attributes struct {
+			HashMatch     bool    `json:"moviehash_match"`
 			Language      string  `json:"language"`
 			DownloadCount int     `json:"download_count"`
 			Ratings       float64 `json:"ratings"`
@@ -260,12 +262,29 @@ func searchQuery(title *core.Title, lang string) url.Values {
 
 // Search returns ranked candidates for a title and language.
 func (s *Service) Search(ctx context.Context, title *core.Title, lang, releaseName string) ([]Candidate, error) {
+	return s.SearchWithHash(ctx, title, lang, releaseName, "")
+}
+
+// SearchWithHash prefers exact cached-source matches; empty hash uses release ranking.
+func (s *Service) SearchWithHash(ctx context.Context, title *core.Title, lang, releaseName, movieHash string) ([]Candidate, error) {
 	if title == nil {
 		return nil, fmt.Errorf("nil title")
 	}
 	// OpenSubtitles redirects unless parameters are sorted and lower-case;
 	// url.Values.Encode sorts keys.
-	u := s.base + "/subtitles?" + searchQuery(title, lang).Encode()
+	q := searchQuery(title, lang)
+	if movieHash != "" {
+		if len(movieHash) != 16 {
+			return nil, fmt.Errorf("invalid moviehash")
+		}
+		for _, c := range movieHash {
+			if !strings.ContainsRune("0123456789abcdef", c) {
+				return nil, fmt.Errorf("invalid moviehash")
+			}
+		}
+		q.Set("moviehash", movieHash)
+	}
+	u := s.base + "/subtitles?" + q.Encode()
 	resp, err := s.send(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
@@ -299,7 +318,7 @@ func (s *Service) Search(ctx context.Context, title *core.Title, lang, releaseNa
 			continue // the API matched a different language variant
 		}
 		out = append(out, Candidate{
-			FileID: a.Files[0].FileID, FileName: a.Files[0].FileName, Language: a.Language,
+			HashMatch: a.HashMatch, FileID: a.Files[0].FileID, FileName: a.Files[0].FileName, Language: a.Language,
 			Release: a.Release, DownloadCount: a.DownloadCount, Ratings: a.Ratings,
 			Uploader: a.Uploader.Name, UploaderRank: a.Uploader.Rank,
 			HearingImp: a.HearingImp, AITranslated: a.AITranslated,
@@ -358,6 +377,9 @@ func Rank(cands []Candidate, releaseName string) {
 		}
 		if c.HearingImp {
 			score -= 2
+		}
+		if c.HashMatch {
+			score += 1000
 		}
 		c.Score = score
 	}
@@ -820,6 +842,15 @@ func sidecarTitle(lang, release string) string {
 // remembered. "Nothing found" is remembered for NegativeTTL. A quota error
 // stops downloads for the rest of the call.
 func (s *Service) SidecarsForRelease(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo, releaseName string) ([]core.StreamInfo, error) {
+	return s.SidecarsWithHash(ctx, title, user, embedded, releaseName, "")
+}
+
+// SidecarsWithHash uses an already-computed cached-source hash for exact release matching.
+func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user *core.User, embedded []core.StreamInfo, releaseName, movieHash string) ([]core.StreamInfo, error) {
+	cacheRelease := releaseName
+	if movieHash != "" {
+		cacheRelease += " hash-" + movieHash
+	}
 	if title == nil {
 		return nil, fmt.Errorf("nil title")
 	}
@@ -849,21 +880,21 @@ func (s *Service) SidecarsForRelease(ctx context.Context, title *core.Title, use
 		if ctx.Err() != nil {
 			return out, ctx.Err()
 		}
-		if sel, ok := s.loadSelection(title, lang, releaseName); ok {
+		if sel, ok := s.loadSelection(title, lang, cacheRelease); ok {
 			add(lang, sel.ID, sel.Release)
 			continue
 		}
 		if quotaHit {
 			continue
 		}
-		nk := negKey(title, lang, releaseName)
+		nk := negKey(title, lang, cacheRelease)
 		s.mu.Lock()
 		negAt, neg := s.negative[nk]
 		s.mu.Unlock()
 		if neg && s.now().Sub(negAt) < s.negTTL {
 			continue
 		}
-		cands, err := s.Search(ctx, title, lang, releaseName)
+		cands, err := s.SearchWithHash(ctx, title, lang, releaseName, movieHash)
 		if err != nil {
 			s.log.Debug("subtitle search failed", "lang", lang, "key", title.Key, "err", err)
 			continue
@@ -887,7 +918,7 @@ func (s *Service) SidecarsForRelease(ctx context.Context, title *core.Title, use
 			if release == "" {
 				release = c.FileName
 			}
-			s.saveSelection(title, lang, releaseName, selection{ID: id, FileID: c.FileID, Language: lang, Release: release, At: s.now().UTC()})
+			s.saveSelection(title, lang, cacheRelease, selection{ID: id, FileID: c.FileID, Language: lang, Release: release, At: s.now().UTC()})
 			add(lang, id, release)
 			found = true
 			break
@@ -926,6 +957,14 @@ func (s *Service) OpenFormat(id, format string) (io.ReadCloser, string, error) {
 	}
 	if s.dir == "" {
 		return nil, "", core.ErrNotFound
+	}
+	if raw, err := os.ReadFile(filepath.Join(s.dir, id+".sync.json")); err == nil {
+		override := string(raw)
+		if len(override) == 32 {
+			if _, err := hex.DecodeString(override); err == nil {
+				id = override
+			}
+		}
 	}
 	f, err := os.Open(filepath.Join(s.dir, id+"."+format))
 	if err != nil {

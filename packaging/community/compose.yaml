@@ -1,0 +1,22 @@
+# Host networking preserves Plex GDM discovery. Linux host required.
+# Choose a release tag or image digest before production use.
+services:
+  ether:
+    image: ghcr.io/braedonsaunders/ether:${ETHER_VERSION:-latest}
+    container_name: ether
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ETHER_DATA_DIR: /config
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - ${ETHER_CONFIG:-/var/lib/ether}:/config
+      - ${ETHER_CACHE:-/var/cache/ether}:/cache
+      # Optional hybrid library; add /media in Libraries. Keep media read-only.
+      # - /mnt/media:/media:ro
+    # Intel/AMD VAAPI: uncomment and grant the image user the host render GID.
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - "${RENDER_GID}"
+    stop_grace_period: 30s

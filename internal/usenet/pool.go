@@ -43,6 +43,9 @@ type pool struct {
 	bytes         atomic.Int64
 	articles      atomic.Int64
 	misses        atomic.Int64
+	backfillSaves atomic.Int64
+	bodyMisses    atomic.Int64
+	bodyTakedowns atomic.Int64
 	errs          atomic.Int64
 	dials         atomic.Int64
 	connSeq       atomic.Int64
@@ -434,6 +437,13 @@ func (p *pool) body(ctx context.Context, id string, groups []string, prio core.P
 	rtt := c.lastRTT
 	p.put(c, prio)
 	if err != nil {
+		if errors.Is(err, ErrNoSuchArticle) {
+			p.bodyMisses.Add(1)
+			var pe *ProtocolError
+			if errors.As(err, &pe) && pe.Code == 451 {
+				p.bodyTakedowns.Add(1)
+			}
+		}
 		return nil, p.failed(err, reused, ctx)
 	}
 	p.articles.Add(1)
@@ -587,11 +597,14 @@ type ProviderStats struct {
 	WaitingReadahead      int `json:"waitingReadahead"`
 	WaitingPrefetch       int `json:"waitingPrefetch"`
 
-	Bytes    int64 `json:"bytes"` // received off the wire
-	Articles int64 `json:"articles"`
-	Misses   int64 `json:"misses"`
-	Errors   int64 `json:"errors"`
-	Dials    int64 `json:"dials"`
+	Bytes         int64 `json:"bytes"` // received off the wire
+	Articles      int64 `json:"articles"`
+	Misses        int64 `json:"misses"`
+	BodyMisses    int64 `json:"bodyMisses"`    // BODY responses unavailable on this provider
+	BodyTakedowns int64 `json:"bodyTakedowns"` // subset of BodyMisses with status 451
+	BackfillSaves int64 `json:"backfillSaves"` // body fetches saved after earlier provider misses
+	Errors        int64 `json:"errors"`
+	Dials         int64 `json:"dials"`
 
 	AvgLatency       time.Duration `json:"avgLatency"`   // command round trip (EWMA)
 	AvgFetchTime     time.Duration `json:"avgFetchTime"` // whole article (EWMA)
@@ -634,6 +647,9 @@ func (p *pool) stats() ProviderStats {
 	st.Bytes = p.bytes.Load()
 	st.Articles = p.articles.Load()
 	st.Misses = p.misses.Load()
+	st.BackfillSaves = p.backfillSaves.Load()
+	st.BodyMisses = p.bodyMisses.Load()
+	st.BodyTakedowns = p.bodyTakedowns.Load()
 	st.Errors = p.errs.Load()
 	st.Dials = p.dials.Load()
 	st.TCPDialTime = time.Duration(p.tcpTime.Load())

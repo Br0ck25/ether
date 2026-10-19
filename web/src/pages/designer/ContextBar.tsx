@@ -1,13 +1,13 @@
-import { Avatar, SearchSelect } from "@braedonsaunders/appkit-ui";
+import { SearchSelect } from "@braedonsaunders/appkit-ui";
 import { Globe, Laptop, Smartphone, Tv } from "lucide-react";
 import { Segmented } from "../../components/fields";
-import { viewerName } from "../../components/pickers";
-import type { LayoutSection, Viewer } from "../../lib/contract";
+import type { Device, LayoutSection } from "../../lib/contract";
 import { WEEKDAYS_LONG, formatHour } from "../../lib/format";
+import { SECTIONS } from "../../lib/layout";
 
+/** The context a Home is previewed in (the viewer is chosen separately). */
 export interface ViewContext {
-  viewerId: number;
-  device: "tv" | "mobile" | "web" | "desktop";
+  device: Device;
   day: number;
   hour: number;
   section: LayoutSection;
@@ -20,31 +20,18 @@ export const DEVICE_OPTIONS = [
   { value: "desktop" as const, label: "Desktop", icon: <Laptop size={14} /> },
 ];
 
-export function ContextBar({ ctx, onChange, viewers, compact, idPrefix }: {
-  ctx: ViewContext; onChange: (c: ViewContext) => void; viewers: Viewer[]; compact?: boolean; idPrefix: string;
-}) {
-  const current = viewers.find((v) => v.id === ctx.viewerId);
+export function ContextBar({ ctx, onChange }: { ctx: ViewContext; onChange: (c: ViewContext) => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-2" role="group" aria-label={`${idPrefix} context`}>
-      <div className="flex min-w-48 items-center gap-2">
-        {current ? <Avatar src={current.thumb} name={viewerName(current)} size={28} /> : null}
-        <div className="min-w-40 flex-1">
-          <SearchSelect value={String(ctx.viewerId)} onChange={(v) => v && onChange({ ...ctx, viewerId: Number(v) })} ariaLabel={`${idPrefix} viewer`}
-            options={viewers.map((v) => ({ value: String(v.id), label: viewerName(v), hint: v.isOwner ? "Owner" : undefined }))} />
-        </div>
-      </div>
-      <Segmented ariaLabel={`${idPrefix} device`} size="sm" value={ctx.device} onChange={(d) => onChange({ ...ctx, device: d })}
-        options={DEVICE_OPTIONS.map((d) => ({ value: d.value, label: compact ? <span className="sr-only">{d.label}</span> : d.label, icon: d.icon }))} />
-      <div className="w-36">
-        <SearchSelect value={String(ctx.day)} onChange={(v) => v !== "" && onChange({ ...ctx, day: Number(v) })} ariaLabel={`${idPrefix} day`} searchable={false}
+    <div className="space-y-2" role="group" aria-label="Preview context">
+      <Segmented ariaLabel="Page" size="sm" value={ctx.section} onChange={(s) => onChange({ ...ctx, section: s })} options={SECTIONS} />
+      <Segmented ariaLabel="Device" size="sm" value={ctx.device} onChange={(d) => onChange({ ...ctx, device: d })}
+        options={DEVICE_OPTIONS.map((d) => ({ value: d.value, label: d.label, icon: d.icon }))} />
+      <div className="grid grid-cols-2 gap-2">
+        <SearchSelect value={String(ctx.day)} onChange={(v) => v !== "" && onChange({ ...ctx, day: Number(v) })} ariaLabel="Day" searchable={false}
           options={WEEKDAYS_LONG.map((d, i) => ({ value: String(i), label: d }))} />
-      </div>
-      <div className="w-28">
-        <SearchSelect value={String(ctx.hour)} onChange={(v) => v !== "" && onChange({ ...ctx, hour: Number(v) })} ariaLabel={`${idPrefix} time`}
+        <SearchSelect value={String(ctx.hour)} onChange={(v) => v !== "" && onChange({ ...ctx, hour: Number(v) })} ariaLabel="Time"
           options={Array.from({ length: 24 }, (_, h) => ({ value: String(h), label: formatHour(h) }))} />
       </div>
-      <Segmented ariaLabel={`${idPrefix} section`} size="sm" value={ctx.section} onChange={(s) => onChange({ ...ctx, section: s })}
-        options={[{ value: "home", label: "Home" }, { value: "movies", label: "Movies" }, { value: "shows", label: "TV" }]} />
     </div>
   );
 }

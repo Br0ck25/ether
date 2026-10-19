@@ -261,6 +261,8 @@ type Metadata struct {
 	// Children follow PMS's order: Media, Image, UltraBlurColors, then the
 	// tags (Genre, Country, Guid, Rating, Collection, Director, Writer,
 	// Role, Producer, Label, Similar).
+	Marker          []Marker         `plex:"Marker"`
+	Chapter         []Chapter        `plex:"Chapter"`
 	Media           []Media          `plex:"Media"`
 	Image           []Image          `plex:"Image"`
 	UltraBlurColors *UltraBlurColors `plex:"UltraBlurColors,object"`
@@ -381,6 +383,7 @@ type UltraBlurColors struct {
 
 // Media is one version of an item. Ether always exposes exactly one.
 type Media struct {
+	Extra                 []Attr `plex:",attrs"`
 	alpha                 bool
 	lead                  []string // decision: attributes before the alphabetical rest
 	ID                    int64    `plex:"id"`
@@ -557,6 +560,7 @@ type Operator struct {
 
 // MediaProvider is one entry of /media/providers.
 type MediaProvider struct {
+	Extra      []Attr    `plex:",attrs"`
 	Identifier string    `plex:"identifier"`
 	Title      string    `plex:"title"`
 	Types      string    `plex:"types"`

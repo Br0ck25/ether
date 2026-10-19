@@ -87,7 +87,7 @@ func rangeOK(v *core.StreamInfo, caps core.ClientCaps) string {
 		}
 		return fmt.Sprintf("client lacks HDR (%s source)", hdrLabel(v))
 	case rangeDV:
-		if caps.DolbyVision {
+		if SupportsDVProfile(caps, v.DolbyVisionProfile) {
 			return ""
 		}
 		base, ok := dvBaseLayer(v)
@@ -361,13 +361,31 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	}
 	bitrateCap := minPositive(opts.MaxBitrateKbps, caps.MaxBitrateKbps, remoteCap)
 	heightCap := minPositive(caps.MaxHeight, opts.MaxHeight)
-	burn := sub != nil && (opts.BurnSubtitles || IsImageSubtitle(sub.Codec))
+	// Text subtitles always remain sidecars, including legacy burn requests.
+	burn := sub != nil && IsImageSubtitle(sub.Codec) && (opts.BurnSubtitles || !supportsSubtitle(caps, sub.Codec))
+	if a != nil && len(opts.AudioFilters) > 0 {
+		d.AudioFilters = append([]string(nil), opts.AudioFilters...)
+	}
 
 	// What blocks keeping the video and audio as they are.
 	var videoIssues, audioIssues, otherIssues []string
 	if v != nil {
 		if len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(v.Codec) {
 			videoIssues = append(videoIssues, fmt.Sprintf("video codec %s not supported", v.Codec))
+		}
+		if profiles := caps.VideoProfiles[v.Codec]; len(profiles) > 0 {
+			supported := false
+			for _, p := range profiles {
+				if strings.EqualFold(p, v.Profile) {
+					supported = true
+				}
+			}
+			if !supported {
+				videoIssues = append(videoIssues, fmt.Sprintf("video profile %s not supported", v.Profile))
+			}
+		}
+		if level := caps.VideoLevels[v.Codec]; level > 0 && v.Level > level {
+			videoIssues = append(videoIssues, fmt.Sprintf("video level %d exceeds %d", v.Level, level))
 		}
 		if heightCap > 0 && v.Height > heightCap {
 			videoIssues = append(videoIssues, fmt.Sprintf("%dp exceeds %dp limit", v.Height, heightCap))
@@ -378,6 +396,9 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	}
 	if a != nil && len(caps.AudioCodecs) > 0 && !caps.SupportsAudio(a.Codec) {
 		audioIssues = append(audioIssues, fmt.Sprintf("audio codec %s not supported", a.Codec))
+	}
+	if a != nil && len(d.AudioFilters) > 0 {
+		audioIssues = append(audioIssues, "audio processing requested")
 	}
 	if bitrateCap > 0 && info.BitrateKbps > bitrateCap {
 		otherIssues = append(otherIssues, fmt.Sprintf("bitrate %d kbps exceeds %d kbps limit", info.BitrateKbps, bitrateCap))
@@ -402,6 +423,14 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 			d.AudioCodec = a.Codec
 		}
 		d.Reason = fmt.Sprintf("direct play: %s supports %s", name, describeSource(info, v, a))
+		if v != nil && v.DolbyVision && !SupportsDVProfile(caps, v.DolbyVisionProfile) {
+			if base, ok := dvBaseLayer(v); ok {
+				d.Reason += "; using compatible " + base + " base layer"
+			}
+		}
+		if sub != nil && !IsImageSubtitle(sub.Codec) {
+			d.Reason += "; text subtitles served separately"
+		}
 		return d
 	}
 
@@ -455,6 +484,11 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 			d.BitrateKbps = info.BitrateKbps - copiedAudioKbps(a) + audioKbps
 		}
 		parts := []string{fmt.Sprintf("remux to HLS (%s)", d.Container)}
+		if v != nil && v.DolbyVision && !SupportsDVProfile(caps, v.DolbyVisionProfile) {
+			if base, ok := dvBaseLayer(v); ok {
+				parts = append(parts, "using compatible "+base+" base layer")
+			}
+		}
 		if len(why) > 0 {
 			parts = append(parts, strings.Join(why, ", "))
 		}

@@ -5,6 +5,7 @@ go 1.27.2
 require (
 	fyne.io/systray v1.12.2
 	github.com/coder/websocket v1.8.15
+	github.com/dlclark/regexp2 v1.11.5
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/kardianos/service v1.3.0
 	github.com/ulikunitz/xz v0.5.15

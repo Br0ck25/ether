@@ -17,10 +17,22 @@ The point is a library you never manage. Nothing is added, downloaded or organis
 
 **Non-goals for v1**
 
-- Anime, music, live TV and DVR.
+- Anime-specific catalogue behavior, music and DVR recording.
 - Torrent or debrid backends.
 - A hosted service run by the project. Ether is software people run themselves.
 - Ether's own client apps, unless the Plex spike fails.
+
+## Roadmap additions — October 19, 2026
+
+Optional local libraries now supplement the TMDB catalogue and play before an
+on-demand source. Owners can also build virtual 24/7 channels and supply their
+own IPTV playlists and XMLTV guides. These extend the original catalogue-only
+and Live TV exclusions. Ether continues to ship no content or provider accounts.
+Official Plex apps remain the viewer interface, with real account entitlements.
+
+The expanded playback, adoption, safety, discovery and operations features are
+summarized in [roadmap-delivery.md](roadmap-delivery.md), with their protocol and
+measurement limits recorded alongside each feature.
 
 ## Decisions
 

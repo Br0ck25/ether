@@ -1,6 +1,6 @@
 import type {
   ActivityDay, CollectionPreview, CollectionSpec, CollectionTemplate, FacetName, FacetValue,
-  LayoutDoc, LayoutRule, LookupKind, LookupResult, RowInsight, TasteOverride, TasteProfile,
+  HomeLayout, LayoutDoc, LayoutImpactResult, PreviewContext, LookupKind, LookupResult, RowInsight, TasteOverride, TasteProfile,
   TitleCard, TitleDetail, Viewer, ViewerDetail, ViewerHome,
 } from "./contract";
 import type {
@@ -178,7 +178,12 @@ export const api = {
 
   // ---- Home Designer -----------------------------------------------------------
   layout: () => apiFetch<LayoutDoc>("/layout"),
-  putLayout: (rules: LayoutRule[]) => put<LayoutDoc>("/layout", { rules }),
+  putLayout: (layout: HomeLayout) => put<LayoutDoc>("/layout", { layout }),
+  /** The Plex Home a viewer (null = the typical viewer) gets with a draft layout (omitted = saved). */
+  previewLayout: (body: PreviewContext & { viewerId: number | null; layout?: HomeLayout; count?: number }, signal?: AbortSignal) =>
+    post<ViewerHome>("/layout/preview", body, signal),
+  layoutImpact: (body: PreviewContext & { layout: HomeLayout }, signal?: AbortSignal) =>
+    post<LayoutImpactResult>("/layout/impact", body, signal),
 
   // ---- Insights ---------------------------------------------------------------------
   rowInsights: async () => (await apiFetch<{ rows: RowInsight[] | null }>("/insights/rows")).rows ?? [],

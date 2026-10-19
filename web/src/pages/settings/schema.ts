@@ -19,6 +19,11 @@ export const SERVER: FieldGroup[] = [
 ];
 
 export const PLEX: FieldGroup[] = [
+ {title:"Compatibility",fields:[
+ {key:"disableVersionTracking",label:"Keep the current compatibility version",kind:"bool",help:"Disable automatic public Plex release tracking."},
+ {key:"compatibilityVersion",label:"Compatibility version override",kind:"text",help:"Leave empty to use the tracked public PMS version."},
+ {key:"latestCompatibilityVersion",label:"Latest public PMS version",kind:"readonly"},
+ ]},
   {
     title: "Remote access", description: "Let Plex apps reach Ether from outside your network.", fields: [
       { key: "remoteAccess", label: "Allow remote access", kind: "bool", help: "Publishes your public address to plex.tv." },
@@ -166,3 +171,9 @@ export const SPIKE: FieldGroup[] = [{
 export const QUALITY_SOURCES = ["remux", "bluray", "webdl", "webrip", "hdtv", "dvd", "screener", "cam"];
 export const QUALITY_CODECS = ["av1", "hevc", "h264", "vp9", "mpeg2"];
 export const QUALITY_AUDIO = ["truehd", "dtshd", "eac3", "ac3", "dts", "aac", "flac", "opus"];
+
+export const MARKERS: FieldGroup[] = [{title:"Chapters and skip markers",fields:[
+{key:"theIntroDb",label:"Look up intro and credits markers",kind:"bool",help:"Use the public TheIntroDB lookup, cached per episode and runtime."},
+{key:"apiKey",label:"Optional TheIntroDB key",kind:"secret"},
+{key:"detectCached",label:"Detect markers from local media",kind:"bool",help:"Analyze complete local files in the background. Detection is bounded and does not download entire Usenet releases."},
+]}];

@@ -16,6 +16,7 @@ func isRedacted(s string) bool { return s == RedactedSecret }
 // "unset" from "set". The input is not modified.
 func RedactConfig(cfg config.Config) config.Config {
 	out := cfg
+	out.Markers.APIKey = redact(out.Markers.APIKey)
 	out.Plex.Token = redact(out.Plex.Token)
 	out.Catalog.TMDBKey = redact(out.Catalog.TMDBKey)
 	out.Trakt.ClientSecret = redact(out.Trakt.ClientSecret)
@@ -55,6 +56,7 @@ func preserve(next, prev string) string {
 // match becomes empty (validation then decides whether that is acceptable).
 func UnredactConfig(next, prev config.Config) config.Config {
 	out := next
+	out.Markers.APIKey = preserve(out.Markers.APIKey, prev.Markers.APIKey)
 	out.Plex.Token = preserve(out.Plex.Token, prev.Plex.Token)
 	out.Catalog.TMDBKey = preserve(out.Catalog.TMDBKey, prev.Catalog.TMDBKey)
 	out.Trakt.ClientSecret = preserve(out.Trakt.ClientSecret, prev.Trakt.ClientSecret)

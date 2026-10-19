@@ -143,6 +143,7 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 		t = sec.Type
 	}
 	items, state := s.inProgressTitles(ctx, pr, t, count+1)
+	items = s.discoveryContinue(ctx, pr, items)
 	hs := hubSpec{Hub: core.Hub{Title: "Continue Watching", Style: "hero", Promoted: true}, state: state}
 	switch v {
 	case cwHome:
@@ -274,9 +275,17 @@ func (s *Server) homeHubs(w http.ResponseWriter, r *http.Request, promotedOnly b
 			mc.Hub = append(mc.Hub, h)
 		}
 	}
+	for _, hs := range s.discoveryHubs(ctx, pr, count) {
+		mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hs, hubCtx{}))
+		served[hs.ID] = hs.Hub
+	}
+	if h := s.liveTVHub(r); h != nil {
+		mc.Hub = append(mc.Hub, *h)
+	}
 	if ids := q["identifier"]; len(ids) > 0 {
 		mc.Hub = filterHubs(mc.Hub, ids)
 	}
+	mc.Hub = s.finalizeHomeRows(ctx, pr, hc, "home", mc.Hub)
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
 	s.recordImpressions(pr, hc, mc.Hub, served)
@@ -304,6 +313,11 @@ func (s *Server) hubContext(pr *Request, section int) core.HubContext {
 // recommendHome asks for Home rows, with the request context when the
 // recommender adapts to it.
 func (s *Server) recommendHome(ctx context.Context, pr *Request, hc core.HubContext, count int) ([]core.Hub, error) {
+	if c, ok := s.d.Recommender.(interface {
+		HomeCandidatesFor(context.Context, *core.User, core.HubContext, int) ([]core.Hub, error)
+	}); ok {
+		return c.HomeCandidatesFor(ctx, pr.User, hc, count)
+	}
 	if cr, ok := s.d.Recommender.(core.ContextualRecommender); ok {
 		return cr.HomeHubsFor(ctx, pr.User, hc, count)
 	}
@@ -312,6 +326,11 @@ func (s *Server) recommendHome(ctx context.Context, pr *Request, hc core.HubCont
 
 // recommendSection asks for a library section's rows.
 func (s *Server) recommendSection(ctx context.Context, pr *Request, t core.MediaType, hc core.HubContext, count int) ([]core.Hub, error) {
+	if c, ok := s.d.Recommender.(interface {
+		SectionCandidatesFor(context.Context, *core.User, core.MediaType, core.HubContext, int) ([]core.Hub, error)
+	}); ok {
+		return c.SectionCandidatesFor(ctx, pr.User, t, hc, count)
+	}
 	if cr, ok := s.d.Recommender.(core.ContextualRecommender); ok {
 		return cr.SectionHubsFor(ctx, pr.User, t, hc, count)
 	}
@@ -470,6 +489,16 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 			add(hubSpec{Hub: h})
 		}
 	}
+	for _, hs := range s.discoveryHubs(ctx, pr, count) {
+		if hs.Type == sec.Type {
+			add(hs)
+		}
+	}
+	sectionName := "movies"
+	if sec.Type == core.TypeShow {
+		sectionName = "shows"
+	}
+	mc.Hub = s.finalizeHomeRows(ctx, pr, pc, sectionName, mc.Hub)
 	mc.Size = len(mc.Hub)
 	s.write(w, r, mc)
 	s.recordImpressions(pr, pc, mc.Hub, served)
@@ -532,6 +561,11 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 			}
 		}
 		return hubSpec{}, false
+	}
+	for _, h := range s.discoveryHubs(ctx, pr, count) {
+		if h.ID == id && s.hubInSections(h.Hub, sections) {
+			return h, true
+		}
 	}
 	if s.d.Recommender == nil {
 		return hubSpec{}, false
@@ -642,6 +676,19 @@ func (s *Server) runSearch(ctx context.Context, pr *Request, query string, secti
 	types := s.searchTypes(pr.User, sectionID)
 	if strings.TrimSpace(query) == "" || len(types) == 0 {
 		return nil, nil
+	}
+	if items, ok := s.discoverySearch(ctx, pr, query, limit); ok {
+		allowed := map[core.MediaType]bool{}
+		for _, typ := range types {
+			allowed[typ] = true
+		}
+		filtered := items[:0:0]
+		for _, item := range items {
+			if allowed[item.Type] {
+				filtered = append(filtered, item)
+			}
+		}
+		return filtered, nil
 	}
 	res, err := s.d.Catalog.Search(ctx, query, types, limit)
 	if err != nil {

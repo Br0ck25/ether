@@ -52,7 +52,7 @@ export default function Logs() {
       header={
         <>
           <PageHeader title="Logs" description={`What the server has been doing. ${total.toLocaleString()} entries retained in memory.`}
-            actions={<div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => void load()}><RefreshCw size={14} /> Reload</Button><Button variant="ghost" size="sm" onClick={() => void clear()}><Trash2 size={14} /> Clear</Button></div>} />
+            actions={<><Button variant="outline" size="sm" onClick={() => void load()}><RefreshCw size={14} /> Reload</Button><Button variant="ghost" size="sm" onClick={() => void clear()}><Trash2 size={14} /> Clear</Button></>} />
           <div className="flex flex-wrap items-center gap-3" role="search">
             <div className="relative min-w-52 flex-1 sm:max-w-sm">
               <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" aria-hidden />

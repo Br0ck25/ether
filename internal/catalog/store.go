@@ -13,7 +13,7 @@ import (
 const titleCols = `key,type,tmdb_id,imdb,tvdb,show_key,show_tmdb,show_title,season_title,season,episode,
 title,original_title,sort_title,tagline,summary,year,released_ts,runtime_sec,status,language,
 content_rating,rating,vote_count,popularity,poster,backdrop,still,logo,collection_id,collection_name,
-child_count,leaf_count,browsable,added_at,fetched_at,detail`
+child_count,leaf_count,browsable,added_at,fetched_at,detail,adult`
 
 type storedTitle struct {
 	t         core.Title
@@ -47,14 +47,14 @@ func scanTitle(s scanner) (*storedTitle, error) {
 	var key, showKey int64
 	var typ, imdb, showTitle, seasonTitle, title, orig, sortT, tagline, summary, status, lang, crating string
 	var tmdbID, tvdb, showTMDB int64
-	var season, episode, year, voteCount, collID, child, leaf, browsable, detail int
+	var season, episode, year, voteCount, collID, child, leaf, browsable, detail, adult int
 	var releasedTS, runtimeSec, addedAt, fetchedAt int64
 	var rating, pop float64
 	var collName, poster, backdrop, still, logo string
 	err := s.Scan(&key, &typ, &tmdbID, &imdb, &tvdb, &showKey, &showTMDB, &showTitle, &seasonTitle, &season, &episode,
 		&title, &orig, &sortT, &tagline, &summary, &year, &releasedTS, &runtimeSec, &status, &lang,
 		&crating, &rating, &voteCount, &pop, &poster, &backdrop, &still, &logo, &collID, &collName,
-		&child, &leaf, &browsable, &addedAt, &fetchedAt, &detail)
+		&child, &leaf, &browsable, &addedAt, &fetchedAt, &detail, &adult)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +64,7 @@ func scanTitle(s scanner) (*storedTitle, error) {
 		ShowKey: core.RatingKey(showKey), ShowTitle: showTitle, SeasonTitle: seasonTitle,
 		Season: season, Episode: episode, Title: title, OriginalTitle: orig, SortTitle: sortT,
 		Tagline: tagline, Summary: summary, Year: year, Runtime: time.Duration(runtimeSec) * time.Second,
-		Status: status, Language: lang, ContentRating: crating, Rating: rating, VoteCount: voteCount,
+		Status: status, Language: lang, ContentRating: crating, Adult: adult != 0, Rating: rating, VoteCount: voteCount,
 		Popularity: pop, PosterPath: poster, BackdropPath: backdrop, StillPath: still, LogoPath: logo,
 		CollectionID: int64(collID), CollectionName: collName, ChildCount: child, LeafCount: leaf,
 	}
@@ -270,10 +270,10 @@ func upsertOne(ctx context.Context, tx *sql.Tx, t core.Title, o upsertOpts, now 
 INSERT INTO catalog_titles (key,type,tmdb_id,imdb,tvdb,show_key,show_tmdb,show_title,season_title,season,episode,
  title,original_title,sort_title,tagline,summary,year,released_ts,runtime_sec,status,language,
  content_rating,content_rating_rank,rating,vote_count,popularity,poster,backdrop,still,logo,
- collection_id,collection_name,child_count,leaf_count,browsable,added_at,fetched_at,detail)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ collection_id,collection_name,child_count,leaf_count,browsable,added_at,fetched_at,detail,adult)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(key) DO UPDATE SET
- type=excluded.type, tmdb_id=excluded.tmdb_id,
+ type=excluded.type, tmdb_id=excluded.tmdb_id, adult=excluded.adult,
  imdb=CASE WHEN excluded.imdb<>'' THEN excluded.imdb ELSE catalog_titles.imdb END,
  tvdb=CASE WHEN excluded.tvdb<>0 THEN excluded.tvdb ELSE catalog_titles.tvdb END,
  show_key=excluded.show_key, show_tmdb=excluded.show_tmdb, show_title=excluded.show_title,
@@ -307,7 +307,7 @@ ON CONFLICT(key) DO UPDATE SET
 		int64(t.Key), string(t.Type), t.IDs.TMDB, t.IDs.IMDB, t.IDs.TVDB, int64(t.ShowKey), showTMDB, t.ShowTitle, t.SeasonTitle, t.Season, t.Episode,
 		t.Title, t.OriginalTitle, t.SortTitle, t.Tagline, t.Summary, t.Year, releasedTS, int64(t.Runtime.Seconds()), t.Status, t.Language,
 		t.ContentRating, RatingRank(t.ContentRating), t.Rating, t.VoteCount, t.Popularity, t.PosterPath, t.BackdropPath, t.StillPath, t.LogoPath,
-		t.CollectionID, t.CollectionName, t.ChildCount, t.LeafCount, browsableInt, addedAtFor(browsableInt, now), now, detailInt)
+		t.CollectionID, t.CollectionName, t.ChildCount, t.LeafCount, browsableInt, addedAtFor(browsableInt, now), now, detailInt, t.Adult)
 	if err != nil {
 		return fmt.Errorf("catalog: upsert %d: %w", t.Key, err)
 	}
@@ -395,7 +395,9 @@ func (c *Catalog) queryTitles(ctx context.Context, q string, args ...any) ([]cor
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, st.t)
+		if !st.t.Adult {
+			out = append(out, st.t)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -60,6 +60,17 @@ jobs:
             GOOS=${t%/*} GOARCH=${t#*/} go build ./cmd/ether ./cmd/ether-tray ./internal/...
           done
 
+  vulnerabilities:
+    name: Go vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   web:
     name: Web UI
     runs-on: ubuntu-latest

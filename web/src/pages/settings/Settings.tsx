@@ -31,6 +31,7 @@ const SECTIONS: SectionDef[] = [
   { id: "catalog", key: "catalog", label: "Catalogue", description: "TMDB, language and what's browsable.", icon: <Film />, schema: S.CATALOG },
   { id: "llm", key: "llm", label: "LLM", description: "The optional language model behind “Describe it” and themed rows.", icon: <Bot />, schema: S.LLM },
   { id: "trakt", key: "trakt", label: "Trakt", description: "Optional Trakt sync.", icon: <Layers />, schema: S.TRAKT },
+  { id:"markers",key:"markers",label:"Chapters & markers",description:"Intro and credit markers, chapters, and local detection.",icon:<Captions/>,schema:S.MARKERS },
   { id: "opensubtitles", key: "openSubtitles", label: "OpenSubtitles", description: "Subtitle fallback.", icon: <Captions />, schema: S.OPENSUBTITLES },
   { id: "updates", key: "updates", label: "Updates", description: "Release channel and automatic updates.", icon: <ArrowDownToLine />, schema: S.UPDATES },
   { id: "spike", key: "spike", label: "Local files", description: "Play local files to troubleshoot a Plex app.", icon: <Gauge />, schema: S.SPIKE },
@@ -40,12 +41,12 @@ const GROUPS: { label: string; ids: string[] }[] = [
   { label: "Server", ids: ["server", "plex", "users"] },
   { label: "Streaming", ids: ["usenet", "indexers", "cache", "resolver", "quality", "transcode"] },
   { label: "Catalogue", ids: ["catalog"] },
-  { label: "Integrations", ids: ["llm", "trakt", "opensubtitles"] },
+  { label: "Integrations", ids: ["llm", "trakt", "opensubtitles", "markers"] },
   { label: "System", ids: ["updates", "spike"] },
 ];
 
-const KNOWN_KEYS = new Set(["server", "plex", "usenet", "indexers", "cache", "catalog", "resolver", "quality", "transcode", "trakt", "openSubtitles", "llm", "updates", "spike", "setupComplete"]);
-const SECTION_ENDPOINT = new Set(["server", "plex", "usenet", "indexers", "cache", "catalog", "resolver", "quality", "transcode", "trakt", "opensubtitles", "llm", "updates", "spike"]);
+const KNOWN_KEYS = new Set(["server", "plex", "usenet", "indexers", "cache", "catalog", "resolver", "quality", "transcode", "trakt", "openSubtitles", "llm", "updates", "spike", "markers", "setupComplete"]);
+const SECTION_ENDPOINT = new Set(["server", "plex", "usenet", "indexers", "cache", "catalog", "resolver", "quality", "transcode", "trakt", "opensubtitles", "llm", "updates", "spike", "markers"]);
 
 export default function Settings() {
   const { section: param } = useParams();

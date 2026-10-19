@@ -27,6 +27,7 @@ import (
 	"embed"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -83,6 +84,9 @@ type StatusFuncE func(ctx context.Context) (any, error)
 // Deps are the dependencies of the admin handler. Config is required;
 // everything else is optional and degrades to 501/empty responses.
 type Deps struct {
+	// Extensions are owner-authenticated API subtrees keyed by relative path.
+	Extensions    map[string]http.Handler
+	ValidateExtra func(config.Config) []FieldError
 	// Config is the owner settings store. Required.
 	Config *config.Store
 	// Logger defaults to slog.Default().
@@ -165,12 +169,13 @@ type Deps struct {
 // Handler is the admin HTTP handler. Use NewHandler when you need access
 // to the log buffer the handler created.
 type Handler struct {
-	deps    Deps
-	log     *slog.Logger
-	logs    *LogBuffer
-	mux     *http.ServeMux
-	version string
-	pins    *pinHandles
+	deps      Deps
+	log       *slog.Logger
+	logs      *LogBuffer
+	mux       *http.ServeMux
+	version   string
+	pins      *pinHandles
+	authLimit *authLimiter
 }
 
 // New returns the admin handler per the work-package contract.
@@ -197,7 +202,7 @@ func NewHandler(deps Deps) *Handler {
 	if version == "" {
 		version = "dev"
 	}
-	h := &Handler{deps: deps, log: deps.Logger, logs: deps.Logs, version: version, pins: newPINHandles()}
+	h := &Handler{deps: deps, log: deps.Logger, logs: deps.Logs, version: version, pins: newPINHandles(), authLimit: newAuthLimiter()}
 	h.mux = h.routes()
 	return h
 }
@@ -218,6 +223,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		w.Header().Set("Cache-Control", "no-store")
+	}
 	h.mux.ServeHTTP(w, r)
 }
 
@@ -231,8 +241,8 @@ func (h *Handler) routes() *http.ServeMux {
 	mux.HandleFunc("GET /api/health", h.handleBootstrap)
 	// Public sign-in: yields a token only to the browser that started the
 	// PIN, and only if it belongs to the owner.
-	mux.HandleFunc("POST /api/auth/pin", h.handleSignInStart)
-	mux.HandleFunc("GET /api/auth/pin/{handle}", h.handleSignInPoll)
+	mux.HandleFunc("POST /api/auth/pin", h.limitAuth(h.handleSignInStart))
+	mux.HandleFunc("GET /api/auth/pin/{handle}", h.limitAuth(h.handleSignInPoll))
 
 	api("GET /api/config", h.handleGetConfig)
 	api("PUT /api/config", h.handlePutConfig)
@@ -257,6 +267,7 @@ func (h *Handler) routes() *http.ServeMux {
 	api("POST /api/test/trakt", h.handleTestTrakt)
 
 	api("GET /api/dashboard", h.handleDashboard)
+	api("GET /api/status", h.handleWidget)
 	api("GET /api/status/{name}", h.handleStatus)
 	api("GET /api/traces", h.handleTraces)
 	api("GET /api/disk", h.handleDisk)
@@ -268,6 +279,10 @@ func (h *Handler) routes() *http.ServeMux {
 	api("GET /api/logs", h.handleLogs)
 	api("DELETE /api/logs", h.handleClearLogs)
 
+	for path, handler := range h.deps.Extensions {
+		prefix := "/api/" + path
+		mux.Handle(prefix+"/", h.requireAuth(http.StripPrefix(prefix, handler).ServeHTTP))
+	}
 	h.personalizationRoutes(api)
 	h.collectionRoutes(mux, api)
 

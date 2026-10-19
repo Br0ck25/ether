@@ -2,7 +2,9 @@ package personalize
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"time"
@@ -585,11 +587,14 @@ const ownerRowsTTL = 5 * time.Minute
 // ownerRows returns owner collection rows for the viewer and context from a
 // per-context cache. Misses fetch in the background; the request waits at
 // most OwnerRowsWait for a context it has never fetched.
-func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType) ([]*candRow, int64) {
+func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubContext, section core.MediaType, d core.HomeLayout, wait bool) ([]*candRow, int64) {
 	if e.opts.Collections == nil {
 		return nil, 0
 	}
-	key := strconv.FormatInt(user.ID, 10) + "|" + hc.Bucket()
+	raw, _ := json.Marshal(d)
+	hash := fnv.New64a()
+	_, _ = hash.Write(raw)
+	key := strconv.FormatInt(user.ID, 10) + "|" + hc.Bucket() + "|" + hc.Now.Format("2006-01-02-15") + "|" + string(section) + "|" + fmt.Sprint(hash.Sum64(), user.MaxContentRating, user.AllowedSections, user.IsOwner)
 	e.mu.Lock()
 	ent := e.owner[key]
 	now := e.now()
@@ -602,12 +607,16 @@ func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubCont
 		ent.loading = true
 		ent.done = make(chan struct{})
 		u := *user
-		go e.fetchOwnerRows(key, &u, hc, ent)
+		go e.fetchOwnerRows(key, &u, hc, ent, selectedCollections(d, user.ID, sectionName(section), hc))
 	}
 	done, have := ent.done, !ent.at.IsZero()
 	e.mu.Unlock()
 	if !have && done != nil {
-		t := time.NewTimer(e.opts.OwnerRowsWait)
+		delay := e.opts.OwnerRowsWait
+		if wait {
+			delay = e.opts.SourceTimeout
+		}
+		t := time.NewTimer(delay)
 		select {
 		case <-done:
 		case <-t.C:
@@ -627,7 +636,7 @@ func (e *Engine) ownerRows(ctx context.Context, user *core.User, hc core.HubCont
 	return out, at.UnixNano()
 }
 
-func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext, ent *ownerEntry) {
+func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext, ent *ownerEntry, selected []string) {
 	defer func() {
 		if v := recover(); v != nil {
 			e.log.Error("personalize: owner rows panicked", "panic", v)
@@ -643,6 +652,28 @@ func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext,
 	if err != nil {
 		e.log.Debug("personalize: owner rows failed", "err", err)
 		return
+	}
+	if source, ok := e.opts.Collections.(interface {
+		LayoutRow(context.Context, *core.User, core.HubContext, string) (*core.CollectionRow, error)
+	}); ok {
+		seen := map[string]bool{}
+		for _, row := range rows {
+			seen[row.CollectionID] = true
+		}
+		for _, id := range selected {
+			if seen[id] {
+				continue
+			}
+			row, err := source.LayoutRow(ctx, user, hc, id)
+			if err != nil {
+				e.log.Debug("personalize: selected collection unavailable", "id", id, "err", err)
+				continue
+			}
+			if row != nil {
+				rows = append(rows, *row)
+				seen[row.CollectionID] = true
+			}
+		}
 	}
 	e.mu.Lock()
 	ent.rows, ent.at = rows, e.now()

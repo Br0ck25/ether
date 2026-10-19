@@ -1,13 +1,14 @@
 # Ether owner UI
 
 The `/ether/` web app for the server owner: setup wizard, Home dashboard,
-Collection Studio, Home Designer, Viewers, Settings, Logs and Resolver
-traces. Viewers never see it; they only use Plex. The API contract is
+Collection Studio, Home Designer, Viewers, Discovery, Live TV, Insights,
+Libraries & backups, Playback, Audio & subtitles, Safety, Settings and traces. Viewers never see it; they only use Plex. The API contract is
 [`docs/owner-ui.md`](../docs/owner-ui.md).
 
 Built with React 19, react-router, Vite and the AppKit design system
 (`@braedonsaunders/appkit-ui` + `@braedonsaunders/appkit-tokens`, Tailwind v4).
-Colours come from semantic tokens only; dark is the default theme.
+Colours come from semantic tokens only; dark is the default theme. AppKit owns
+the theme provider/toggle and pre-paint script, shared through `src/theme.ts`.
 
 ```sh
 pnpm install
@@ -40,5 +41,6 @@ array (facet keys as strings, lookup ids as numbers), `is`/`isNot` a single
 value, `gte`/`lte` a number or `YYYY-MM-DD`, `between` a `[min, max]` pair,
 and `within` a relative window such as `"30d"`, `"12w"`, `"6m"`, `"1y"`.
 Lookup-backed rules carry the display names in `label`, joined by `", "`.
-Layout pins use a 0-based `position`. Taste overrides use the genre name,
+The layered Home document uses one-based `slot`, `minSlot` and `maxSlot`;
+legacy zero-based layout rules are migrated. Taste overrides use the genre name,
 keyword name, or TMDB person id (decimal string) as `value`.

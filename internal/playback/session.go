@@ -97,14 +97,15 @@ func (g *generation) releaseID() string {
 
 // session is the internal, mutable form of a core.PlaySession.
 type session struct {
-	id        string
-	ident     identity
-	user      core.User
-	caps      core.ClientCaps
-	title     *core.Title
-	titleName string
-	profile   string
-	startedAt time.Time
+	playbackGroup string
+	id            string
+	ident         identity
+	user          core.User
+	caps          core.ClientCaps
+	title         *core.Title
+	titleName     string
+	profile       string
+	startedAt     time.Time
 
 	// virtual is the byte/time layout of the first generation: the file the
 	// client was told about. Direct-play byte offsets are always in these
@@ -120,18 +121,19 @@ type session struct {
 	bytes   atomic.Int64
 	rate    rateMeter
 
-	mu         sync.Mutex
-	cur        *generation
-	gens       int
-	tried      []string
-	alternates []core.Release
-	failovers  int
-	lastActive time.Time
-	stopAt     time.Time // set by a "stopped" timeline; expiry after a grace
-	decision   core.DecisionKind
-	explicit   bool // decision set by SetDecision
-	closed     bool
-	registered bool
+	mu             sync.Mutex
+	cur            *generation
+	gens           int
+	tried          []string
+	alternates     []core.Release
+	failovers      int
+	lastActive     time.Time
+	stopAt         time.Time // set by a "stopped" timeline; expiry after a grace
+	decision       core.DecisionKind
+	decisionReason string
+	explicit       bool // decision set by SetDecision
+	closed         bool
+	registered     bool
 }
 
 func newSession(id string, ident identity, user *core.User, caps core.ClientCaps, title *core.Title, profile string, now time.Time) *session {
@@ -228,19 +230,21 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ps := &core.PlaySession{
-		ID:          s.id,
-		UserID:      s.ident.userID,
-		ClientID:    s.ident.clientID,
-		Key:         s.ident.key,
-		StartedAt:   s.startedAt,
-		TitleName:   s.titleName,
-		Username:    s.user.Username,
-		Client:      s.caps,
-		Decision:    s.decision,
-		BytesServed: s.bytes.Load(),
-		SpeedBps:    s.rate.rate(now),
-		LastActive:  s.lastActive,
-		Failovers:   s.failovers,
+		ID:             s.id,
+		UserID:         s.ident.userID,
+		ClientID:       s.ident.clientID,
+		PlaybackGroup:  s.playbackGroup,
+		Key:            s.ident.key,
+		StartedAt:      s.startedAt,
+		TitleName:      s.titleName,
+		Username:       s.user.Username,
+		Client:         s.caps,
+		Decision:       s.decision,
+		DecisionReason: s.decisionReason,
+		BytesServed:    s.bytes.Load(),
+		SpeedBps:       s.rate.rate(now),
+		LastActive:     s.lastActive,
+		Failovers:      s.failovers,
 	}
 	if s.user.Username == "" {
 		ps.Username = s.user.Title

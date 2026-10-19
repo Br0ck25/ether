@@ -1,0 +1,484 @@
+// Package backup creates integrity-checked, portable snapshots without copying live WAL files.
+package backup
+
+import (
+	"archive/tar"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/store"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+func init() {
+	store.Register("backup", 1, `CREATE TABLE backup_settings(id INTEGER PRIMARY KEY CHECK(id=1),interval_hours INTEGER NOT NULL DEFAULT 24,retain INTEGER NOT NULL DEFAULT 7,last_run INTEGER NOT NULL DEFAULT 0); INSERT INTO backup_settings(id)VALUES(1);`)
+}
+
+const maxBundleFile int64 = 8 << 30
+
+type Service struct {
+	db              *sql.DB
+	configPath, dir string
+	retain          int
+	mu              sync.Mutex
+}
+
+func New(db *sql.DB, configPath, dir string, retain int) *Service {
+	if retain < 1 {
+		retain = 7
+	}
+	return &Service{db: db, configPath: configPath, dir: dir, retain: retain}
+}
+
+type Snapshot struct {
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	Created time.Time `json:"created"`
+}
+type Settings struct {
+	IntervalHours int   `json:"intervalHours"`
+	Retain        int   `json:"retain"`
+	LastRun       int64 `json:"lastRun"`
+}
+type Manifest struct {
+	Version int               `json:"version"`
+	Created time.Time         `json:"created"`
+	SHA256  map[string]string `json:"sha256"`
+}
+
+func (s *Service) Settings(ctx context.Context) (Settings, error) {
+	var v Settings
+	e := s.db.QueryRowContext(ctx, `SELECT interval_hours,retain,last_run FROM backup_settings WHERE id=1`).Scan(&v.IntervalHours, &v.Retain, &v.LastRun)
+	return v, e
+}
+func (s *Service) Configure(ctx context.Context, v Settings) error {
+	if v.IntervalHours < 0 || v.IntervalHours > 8760 || v.Retain < 1 || v.Retain > 365 {
+		return errors.New("intervalHours must be 0..8760 and retain 1..365")
+	}
+	_, e := s.db.ExecContext(ctx, `UPDATE backup_settings SET interval_hours=?,retain=? WHERE id=1`, v.IntervalHours, v.Retain)
+	return e
+}
+func (s *Service) List() ([]Snapshot, error) {
+	entries, e := os.ReadDir(s.dir)
+	if os.IsNotExist(e) {
+		return []Snapshot{}, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	out := []Snapshot{}
+	for _, d := range entries {
+		if !d.Type().IsRegular() || !strings.HasPrefix(d.Name(), "ether-") || !strings.HasSuffix(d.Name(), ".tar.gz") {
+			continue
+		}
+		st, e := d.Info()
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, Snapshot{Name: d.Name(), Size: st.Size(), Created: st.ModTime().UTC()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name > out[j].Name })
+	return out, nil
+}
+func validateDB(ctx context.Context, path string) error {
+	db, e := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro")
+	if e != nil {
+		return e
+	}
+	defer db.Close()
+	var status string
+	if e = db.QueryRowContext(ctx, `PRAGMA integrity_check`).Scan(&status); e != nil {
+		return e
+	}
+	if status != "ok" {
+		return fmt.Errorf("SQLite integrity check: %s", status)
+	}
+	var n int
+	if e = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&n); e != nil {
+		return errors.New("bundle is not an Ether database")
+	}
+	return nil
+}
+func validateConfig(b []byte) error {
+	var c map[string]json.RawMessage
+	if e := json.Unmarshal(b, &c); e != nil {
+		return e
+	}
+	if c == nil || c["server"] == nil {
+		return errors.New("bundle config has no server settings")
+	}
+	return nil
+}
+func hashFile(path string) (string, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return "", e
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, e = io.Copy(h, f); e != nil {
+		return "", e
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+func (s *Service) Create(ctx context.Context) (Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out Snapshot
+	if e := os.MkdirAll(s.dir, 0700); e != nil {
+		return out, e
+	}
+	stage, e := os.MkdirTemp(s.dir, ".snapshot-")
+	if e != nil {
+		return out, e
+	}
+	defer os.RemoveAll(stage)
+	conf, e := os.ReadFile(s.configPath)
+	if e != nil {
+		return out, e
+	}
+	if e = validateConfig(conf); e != nil {
+		return out, e
+	}
+	if e = os.WriteFile(filepath.Join(stage, "config.json"), conf, 0600); e != nil {
+		return out, e
+	}
+	dbPath := filepath.Join(stage, "ether.db")
+	if _, e = s.db.ExecContext(ctx, `VACUUM INTO '`+strings.ReplaceAll(dbPath, "'", "''")+`'`); e != nil {
+		return out, e
+	}
+	if e = validateDB(ctx, dbPath); e != nil {
+		return out, e
+	}
+	names := []string{"config.json", "ether.db"}
+	if key, keyErr := os.ReadFile(filepath.Join(filepath.Dir(s.configPath), config.CredentialKeyFile)); keyErr == nil {
+		if len(key) != 32 {
+			return out, errors.New("invalid credential key")
+		}
+		if e = os.WriteFile(filepath.Join(stage, config.CredentialKeyFile), key, 0600); e != nil {
+			return out, e
+		}
+		names = append(names, config.CredentialKeyFile)
+	} else if !os.IsNotExist(keyErr) {
+		return out, keyErr
+	} else if strings.Contains(string(conf), "ether-sealed:v1:") {
+		return out, errors.New("encrypted config has no credential key")
+	}
+	manifest := Manifest{Version: 1, Created: time.Now().UTC(), SHA256: map[string]string{}}
+	if len(names) == 3 {
+		manifest.Version = 2
+	}
+	for _, name := range names {
+		h, e := hashFile(filepath.Join(stage, name))
+		if e != nil {
+			return out, e
+		}
+		manifest.SHA256[name] = h
+	}
+	b, e := json.Marshal(manifest)
+	if e != nil {
+		return out, e
+	}
+	if e = os.WriteFile(filepath.Join(stage, "manifest.json"), b, 0600); e != nil {
+		return out, e
+	}
+	name := "ether-" + manifest.Created.Format("20060102T150405.000000000Z") + ".tar.gz"
+	temp := filepath.Join(stage, "bundle")
+	f, e := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if e != nil {
+		return out, e
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for _, name := range append([]string{"manifest.json"}, names...) {
+		path := filepath.Join(stage, name)
+		st, se := os.Stat(path)
+		if se != nil {
+			e = se
+			break
+		}
+		if e = tw.WriteHeader(&tar.Header{Name: name, Mode: 0600, Size: st.Size(), ModTime: manifest.Created}); e != nil {
+			break
+		}
+		src, se := os.Open(path)
+		if se != nil {
+			e = se
+			break
+		}
+		_, e = io.Copy(tw, src)
+		src.Close()
+		if e != nil {
+			break
+		}
+	}
+	for _, ce := range []error{tw.Close(), gz.Close(), f.Sync(), f.Close()} {
+		if e == nil {
+			e = ce
+		}
+	}
+	if e != nil {
+		return out, e
+	}
+	target := filepath.Join(s.dir, name)
+	if e = os.Rename(temp, target); e != nil {
+		return out, e
+	}
+	settings, se := s.Settings(ctx)
+	retain := s.retain
+	if se == nil {
+		retain = settings.Retain
+	}
+	if _, e = s.db.ExecContext(ctx, `UPDATE backup_settings SET last_run=? WHERE id=1`, manifest.Created.Unix()); e != nil {
+		return out, e
+	}
+	snaps, e := s.List()
+	if e != nil {
+		return out, e
+	}
+	for i, snap := range snaps {
+		if snap.Name == name {
+			out = snap
+		}
+		if i >= retain {
+			if e = os.Remove(filepath.Join(s.dir, snap.Name)); e != nil {
+				return out, e
+			}
+		}
+	}
+	return out, nil
+}
+
+// RestoreBundle validates all content before atomically installing into a new directory.
+// It deliberately refuses existing destinations and never replaces a running database.
+func RestoreBundle(ctx context.Context, r io.Reader, destination string) error {
+	if _, e := os.Lstat(destination); e == nil {
+		return errors.New("restore destination already exists")
+	} else if !os.IsNotExist(e) {
+		return e
+	}
+	parent := filepath.Dir(destination)
+	if e := os.MkdirAll(parent, 0700); e != nil {
+		return e
+	}
+	stage, e := os.MkdirTemp(parent, ".restore-")
+	if e != nil {
+		return e
+	}
+	defer os.RemoveAll(stage)
+	gz, e := gzip.NewReader(r)
+	if e != nil {
+		return e
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	seen := map[string]bool{}
+	for {
+		h, e := tr.Next()
+		if e == io.EOF {
+			break
+		}
+		if e != nil {
+			return e
+		}
+		if h.Typeflag != tar.TypeReg || (h.Name != "manifest.json" && h.Name != "config.json" && h.Name != "ether.db" && h.Name != config.CredentialKeyFile) || seen[h.Name] || h.Size < 0 || h.Size > maxBundleFile {
+			return errors.New("invalid or unsafe bundle entry")
+		}
+		if h.Name != "ether.db" && h.Size > 16<<20 {
+			return errors.New("bundle metadata too large")
+		}
+		seen[h.Name] = true
+		f, e := os.OpenFile(filepath.Join(stage, h.Name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if e != nil {
+			return e
+		}
+		_, e = io.CopyN(f, tr, h.Size)
+		ce := f.Close()
+		if e != nil {
+			return e
+		}
+		if ce != nil {
+			return ce
+		}
+	}
+	tail, te := io.ReadAll(io.LimitReader(gz, (1<<20)+1))
+	if te != nil {
+		return te
+	}
+	if len(tail) > 1<<20 || strings.Trim(string(tail), "\x00") != "" {
+		return errors.New("unexpected trailing bundle content")
+	}
+	if len(seen) != 3 && len(seen) != 4 {
+		return errors.New("incomplete backup bundle")
+	}
+	raw, e := os.ReadFile(filepath.Join(stage, "manifest.json"))
+	if e != nil {
+		return e
+	}
+	var m Manifest
+	if e = json.Unmarshal(raw, &m); e != nil {
+		return e
+	}
+	names := []string{"config.json", "ether.db"}
+	if m.Version == 2 {
+		names = append(names, config.CredentialKeyFile)
+	}
+	if (m.Version != 1 && m.Version != 2) || len(m.SHA256) != len(names) || len(seen) != len(names)+1 {
+		return errors.New("unsupported backup manifest")
+	}
+	for _, name := range names {
+		sum, e := hashFile(filepath.Join(stage, name))
+		if e != nil {
+			return e
+		}
+		if sum != m.SHA256[name] {
+			return fmt.Errorf("checksum mismatch for %s", name)
+		}
+	}
+	raw, e = os.ReadFile(filepath.Join(stage, "config.json"))
+	if e != nil {
+		return e
+	}
+	if e = validateConfig(raw); e != nil {
+		return e
+	}
+	if strings.Contains(string(raw), "ether-sealed:v1:") {
+		if _, e = config.Open(stage); e != nil {
+			return e
+		}
+	}
+	if e = validateDB(ctx, filepath.Join(stage, "ether.db")); e != nil {
+		return e
+	}
+	if e = ctx.Err(); e != nil {
+		return e
+	}
+	return os.Rename(stage, destination)
+}
+func (s *Service) Run(ctx context.Context, onError func(error)) {
+	tick := time.NewTicker(time.Minute)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			v, e := s.Settings(ctx)
+			if e == nil && v.IntervalHours > 0 && time.Now().Unix()-v.LastRun >= int64(v.IntervalHours)*3600 {
+				_, e = s.Create(ctx)
+			}
+			if e != nil && onError != nil {
+				onError(e)
+			}
+		}
+	}
+}
+
+// FilesystemWarning detects the mount containing dataDir on Linux and macOS.
+func FilesystemWarning(ctx context.Context, dataDir string) string {
+	out, e := exec.CommandContext(ctx, "mount").Output()
+	if e != nil {
+		return ""
+	}
+	abs, e := filepath.Abs(dataDir)
+	if e != nil {
+		return ""
+	}
+	bestLen := 0
+	kind := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.SplitN(line, " on ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		rest := parts[1]
+		cut := strings.Index(rest, " type ")
+		mount := ""
+		typ := ""
+		if cut >= 0 {
+			mount = rest[:cut]
+			typ = strings.Fields(rest[cut+6:])[0]
+		} else if cut = strings.Index(rest, " ("); cut >= 0 {
+			mount = rest[:cut]
+			typ = strings.Trim(strings.Split(rest[cut+2:], ",")[0], ") ")
+		}
+		mount = strings.ReplaceAll(mount, `\040`, " ")
+		if mount != "" && (abs == mount || strings.HasPrefix(abs, strings.TrimRight(mount, "/")+"/")) && len(mount) > bestLen {
+			bestLen = len(mount)
+			kind = strings.ToLower(typ)
+		}
+	}
+	if strings.Contains(kind, "nfs") || strings.Contains(kind, "smb") || strings.Contains(kind, "cifs") {
+		return "Data directory is on " + kind + "; keep the live SQLite database on a local filesystem and copy backup bundles to network storage."
+	}
+	return ""
+}
+func (s *Service) Handler() http.Handler {
+	m := http.NewServeMux()
+	reply := func(w http.ResponseWriter, v any, e error) {
+		w.Header().Set("Content-Type", "application/json")
+		if e != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "invalid_request", "message": e.Error()}})
+			return
+		}
+		json.NewEncoder(w).Encode(v)
+	}
+	m.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		snaps, e := s.List()
+		v, se := s.Settings(r.Context())
+		if e == nil {
+			e = se
+		}
+		reply(w, map[string]any{"snapshots": snaps, "settings": v, "warning": FilesystemWarning(r.Context(), filepath.Dir(s.configPath))}, e)
+	})
+	m.HandleFunc("POST /settings", func(w http.ResponseWriter, r *http.Request) {
+		var q Settings
+		e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&q)
+		if e == nil {
+			e = s.Configure(r.Context(), q)
+		}
+		reply(w, map[string]bool{"ok": e == nil}, e)
+	})
+	m.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) { v, e := s.Create(r.Context()); reply(w, v, e) })
+	m.HandleFunc("GET /export/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if filepath.Base(name) != name || !strings.HasPrefix(name, "ether-") || !strings.HasSuffix(name, ".tar.gz") {
+			http.NotFound(w, r)
+			return
+		}
+		f, e := os.Open(filepath.Join(s.dir, name))
+		if e != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		st, e := f.Stat()
+		if e != nil || !st.Mode().IsRegular() {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+		http.ServeContent(w, r, name, st.ModTime(), f)
+	})
+	m.HandleFunc("POST /restore", func(w http.ResponseWriter, r *http.Request) {
+		dest := filepath.Join(filepath.Dir(s.configPath), "restored-"+time.Now().UTC().Format("20060102T150405.000000000"))
+		e := RestoreBundle(r.Context(), http.MaxBytesReader(w, r.Body, maxBundleFile+32<<20), dest)
+		reply(w, map[string]string{"path": dest, "message": "Validated restore staged. Stop Ether and start it with ETHER_DATA_DIR pointing to this directory."}, e)
+	})
+	return m
+}

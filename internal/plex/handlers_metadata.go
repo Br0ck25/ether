@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -50,6 +51,9 @@ func (s *Server) itemContainer(t core.MediaType) *model.MediaContainer {
 
 // titleVisible reports whether the user may see the title's section.
 func (s *Server) titleVisible(u *core.User, t *core.Title) bool {
+	if !s.titleAllowed(u, t) {
+		return false
+	}
 	sec, ok := s.sectionFor(t.Type)
 	return !ok || s.canSeeSection(u, sec.ID)
 }
@@ -94,7 +98,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				mc = libraryContainer()
 			}
 		default:
-			t, err := s.d.Catalog.Get(ctx, k)
+			t, err := s.metadataTitle(ctx, pr, k)
 			if err == nil && !s.titleVisible(pr.User, t) {
 				err = core.ErrNotFound
 			}
@@ -104,6 +108,18 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				continue
+			}
+			if len(keys) == 1 && isPlayable(t.Type) {
+				if warm, ok := s.d.Playback.(interface {
+					PreResolve(context.Context, *core.User, core.RatingKey, core.ClientCaps) bool
+				}); ok {
+					warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+				}
+			}
+			if len(keys) == 1 && s.d.PlexGUID != nil && (t.Type == core.TypeMovie || t.Type == core.TypeShow) {
+				matchCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_, _ = s.d.PlexGUID.Resolve(matchCtx, t.Key)
+				cancel()
 			}
 			md = s.detail(ctx, pr, t, q.Get("includeChildren") == "1", q.Get("includeOnDeck") == "1", q.Get("includeRelated") == "1", q.Get("includeExtras") == "1")
 			if mc == nil {
@@ -127,7 +143,7 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 	s.applyLeafCounts(ctx, pr, items, ts)
 	md := items[0]
 	if children && (t.Type == core.TypeShow || t.Type == core.TypeSeason) {
-		if kids, err := s.d.Catalog.Children(ctx, t.Key); err == nil {
+		if kids, err := s.metadataChildren(ctx, pr, t.Key); err == nil {
 			rendered := s.renderTitles(ctx, pr, kids, renderOpts{media: true})
 			if t.Type == core.TypeShow {
 				s.applyLeafCounts(ctx, pr, rendered, kids)
@@ -155,7 +171,7 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 
 // showOnDeck picks the episode to resume or start next.
 func (s *Server) showOnDeck(ctx context.Context, pr *Request, show core.RatingKey) (*core.Title, map[core.RatingKey]core.WatchStatus) {
-	eps, err := s.d.Catalog.Grandchildren(ctx, show)
+	eps, err := s.metadataGrandchildren(ctx, pr, show)
 	if err != nil || len(eps) == 0 {
 		return nil, nil
 	}
@@ -201,7 +217,7 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 		s.handlePlaylistItems(w, r)
 		return
 	}
-	parent, err := s.d.Catalog.Get(ctx, k)
+	parent, err := s.metadataTitle(ctx, pr, k)
 	if err == nil && !s.titleVisible(pr.User, parent) {
 		err = core.ErrNotFound
 	}
@@ -210,7 +226,7 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rememberTitle(parent) // seasons render the show's studio/year/logo
-	kids, err := s.d.Catalog.Children(ctx, k)
+	kids, err := s.metadataChildren(ctx, pr, k)
 	if err != nil && !errors.Is(err, core.ErrNotFound) {
 		s.writeErr(w, r, err)
 		return
@@ -266,6 +282,7 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 	default:
 		mc.ViewMode = viewModeList
 	}
+	kids = s.visibleTitles(pr.User, kids)
 	lo, hi := pr.window(len(kids))
 	page := kids[lo:hi]
 	mc.Metadata = s.renderTitles(ctx, pr, page, renderOpts{media: true, inSection: true})
@@ -297,7 +314,7 @@ func (s *Server) handleAllLeaves(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
-	parent, err := s.d.Catalog.Get(ctx, k)
+	parent, err := s.metadataTitle(ctx, pr, k)
 	if err == nil && !s.titleVisible(pr.User, parent) {
 		err = core.ErrNotFound
 	}
@@ -308,9 +325,9 @@ func (s *Server) handleAllLeaves(w http.ResponseWriter, r *http.Request) {
 	var eps []core.Title
 	switch parent.Type {
 	case core.TypeShow:
-		eps, err = s.d.Catalog.Grandchildren(ctx, k)
+		eps, err = s.metadataGrandchildren(ctx, pr, k)
 	case core.TypeSeason:
-		eps, err = s.d.Catalog.Children(ctx, k)
+		eps, err = s.metadataChildren(ctx, pr, k)
 	default:
 		eps = []core.Title{*parent}
 	}
@@ -341,6 +358,11 @@ func (s *Server) handleParent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	up := k.Parent()
+	if s.d.EpisodeOrder != nil && k.Kind() == core.KindEpisode {
+		if n, _, _, ok := s.d.EpisodeOrder.Position(r.Context(), FromContext(r.Context()).User, k); ok {
+			up = core.SeasonKey(k.TMDB(), n)
+		}
+	}
 	if strings.HasSuffix(r.URL.Path, "/grandparent") {
 		up = up.Parent()
 	}
@@ -355,7 +377,10 @@ func (s *Server) handleParent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderSingle(w http.ResponseWriter, r *http.Request, k core.RatingKey) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
-	t, err := s.d.Catalog.Get(ctx, k)
+	t, err := s.metadataTitle(ctx, pr, k)
+	if err == nil && !s.titleVisible(pr.User, t) {
+		err = core.ErrNotFound
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return

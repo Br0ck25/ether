@@ -19,6 +19,7 @@ type assembly struct {
 	hc      core.HubContext
 	section core.MediaType // "" = Home
 	limit   int            // items per row
+	layout  *core.HomeLayout
 	rules   []core.LayoutRule
 	global  map[string]arm // server-wide evidence by prior kind
 	arms    map[string]arm // this viewer's evidence by kind
@@ -74,7 +75,17 @@ func (a *assembly) run() []core.HomeRow {
 		}
 		rr := &rankedRow{c: c, items: items, hubID: a.hubID(c)}
 		rr.d = plan.decide(rr.hubID, c.kind)
-		if c.source == core.RowSourcePlex {
+		if a.layout != nil {
+			p, _ := effectiveHomePolicy(*a.layout, a.user.ID, sectionName(a.section), core.HomeRow{HubID: rr.hubID, Kind: c.kind})
+			if p != nil {
+				rr.d.hidden = p.Status == "off" || !whenMatches(p.When, a.hc) || !weekEligible(a.user.ID, p.Row, a.hc, p.MaxDaysPerWeek)
+				rr.d.pinned = !rr.d.hidden && p.Status == "always"
+				if p.Slot > 0 {
+					rr.d.position = p.Slot - 1
+				}
+			}
+		}
+		if c.source == core.RowSourcePlex && a.layout == nil {
 			// The front end always shows its own rows; layout rules can
 			// move them (pin, bury) but not remove them.
 			rr.d.hidden = false

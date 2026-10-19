@@ -463,3 +463,67 @@ func TestGeneratedArtworkForStudioAndPlex(t *testing.T) {
 		t.Fatalf("custom art: %v", err)
 	}
 }
+
+func TestLayoutRowAddsUnpromotedCollectionAndPreservesRestrictions(t *testing.T) {
+	e := newEnv(t)
+	sp := spec("Designer only", "movie", catalogSource())
+	sp.Targets.HomeRow = false
+	sp.Targets.Users = core.UserTargets{IDs: []int64{1}}
+	saved, err := e.svc.CreateSpec(e.ctx, sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc := core.HubContext{Device: core.DeviceTV, Now: time.Now()}
+	before, err := e.svc.HomeRowsFor(e.ctx, guest, hc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range before {
+		if row.CollectionID == saved.ID {
+			t.Fatal("unpromoted collection appeared without an explicit layout selection")
+		}
+	}
+	limited := *guest
+	limited.MaxContentRating = "G"
+	row, err := e.svc.LayoutRow(e.ctx, &limited, hc, saved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row == nil || !row.HomeRow || !row.SectionRow {
+		t.Fatalf("selected row = %+v", row)
+	}
+	for _, title := range row.Hub.Items {
+		if title.ContentRating != "G" && title.ContentRating != "" {
+			t.Fatalf("content restriction escaped: %+v", title)
+		}
+	}
+	private, err := e.svc.CreateSmart(e.ctx, core.Collection{Title: "Private", OwnerUserID: owner.ID, Filter: &core.Filter{Type: core.TypeMovie}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateID := ""
+	specs, err := e.svc.ListSpecs(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range specs {
+		if s.Name == private.Title {
+			privateID = s.ID
+		}
+	}
+	if privateID == "" {
+		t.Fatal("private collection missing")
+	}
+	if _, err := e.svc.LayoutRow(e.ctx, guest, hc, privateID); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("private collection leaked: %v", err)
+	}
+
+	disabled := *saved
+	disabled.Enabled = false
+	if _, err := e.svc.UpdateSpec(e.ctx, saved.ID, disabled); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.LayoutRow(e.ctx, guest, hc, saved.ID); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("disabled collection selection = %v", err)
+	}
+}

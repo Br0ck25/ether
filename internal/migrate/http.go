@@ -1,0 +1,60 @@
+package migrate
+
+import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"strconv"
+)
+
+// Handler is intentionally unauthenticated: mount inside the owner's authenticated router.
+func (s *Service) Handler() http.Handler {
+	m := http.NewServeMux()
+	reply := func(w http.ResponseWriter, v any, e error) {
+		w.Header().Set("Content-Type", "application/json")
+		if e != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "invalid_request", "message": e.Error()}})
+			return
+		}
+		json.NewEncoder(w).Encode(v)
+	}
+	m.HandleFunc("POST /preview", func(w http.ResponseWriter, r *http.Request) {
+		var q Request
+		e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&q)
+		var p Plan
+		if e == nil {
+			p, e = s.Preview(r.Context(), q)
+		}
+		reply(w, p, e)
+	})
+	m.HandleFunc("POST /import", func(w http.ResponseWriter, r *http.Request) {
+		var q struct {
+			ID string `json:"id"`
+		}
+		e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&q)
+		var p Plan
+		if e == nil {
+			p, e = s.Import(r.Context(), q.ID)
+		}
+		reply(w, p, e)
+	})
+	m.HandleFunc("POST /csv/preview", func(w http.ResponseWriter, r *http.Request) {
+		viewer, _ := strconv.ParseInt(r.URL.Query().Get("viewer"), 10, 64)
+		p, e := s.PreviewCSV(r.Context(), viewer, r.URL.Query().Get("format"), r.URL.Query().Get("kind"), http.MaxBytesReader(w, r.Body, 16<<20))
+		reply(w, p, e)
+	})
+	m.HandleFunc("GET /csv/export", func(w http.ResponseWriter, r *http.Request) {
+		viewer, _ := strconv.ParseInt(r.URL.Query().Get("viewer"), 10, 64)
+		var buf bytes.Buffer
+		e := s.ExportCSV(r.Context(), viewer, r.URL.Query().Get("format"), r.URL.Query().Get("kind"), &buf)
+		if e != nil {
+			reply(w, nil, e)
+			return
+		}
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="ether-export.csv"`)
+		w.Write(buf.Bytes())
+	})
+	return m
+}

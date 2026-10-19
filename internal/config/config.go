@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,6 +31,7 @@ type Config struct {
 	LLM           LLM           `json:"llm"`
 	Updates       Updates       `json:"updates"`
 	Spike         Spike         `json:"spike"`
+	Markers       Markers       `json:"markers"`
 	SetupComplete bool          `json:"setupComplete"`
 }
 
@@ -47,6 +49,11 @@ type Server struct {
 }
 
 type Plex struct {
+	// DisableCleanHome opts out of automatic account source cleanup.
+	DisableCleanHome           bool   `json:"disableCleanHome"`
+	CompatibilityVersion       string `json:"compatibilityVersion,omitempty"`
+	LatestCompatibilityVersion string `json:"latestCompatibilityVersion,omitempty"`
+	DisableVersionTracking     bool   `json:"disableVersionTracking"`
 	// Token is the owner's plex.tv token from sign-in; the server token.
 	Token            string `json:"token"`
 	ClientIdentifier string `json:"clientIdentifier"` // X-Plex-Client-Identifier Ether uses towards plex.tv
@@ -121,13 +128,18 @@ type Catalog struct {
 }
 
 type Resolver struct {
-	AllowCam           bool     `json:"allowCam"` // owner setting, off by default
-	HealthSamples      int      `json:"healthSamples"`
-	SearchCacheTTL     Duration `json:"searchCacheTtl"`
-	UnavailableCooloff Duration `json:"unavailableCooloff"` // hide titles with no release this long
-	MaxCandidates      int      `json:"maxCandidates"`
-	BlockedGroups      []string `json:"blockedGroups"`
-	BlockedTerms       []string `json:"blockedTerms"`
+	HealthRace           int                 `json:"healthRace"`      // 0 = ranked checks; >0 = first healthy of bounded concurrent candidates
+	OptimisticStart      bool                `json:"optimisticStart"` // return top NZB before background health check
+	CustomFormats        []core.CustomFormat `json:"customFormats,omitempty"`
+	CustomFormatScores   map[string]int      `json:"customFormatScores,omitempty"`
+	MinCustomFormatScore *int                `json:"minCustomFormatScore,omitempty"`
+	AllowCam             bool                `json:"allowCam"` // owner setting, off by default
+	HealthSamples        int                 `json:"healthSamples"`
+	SearchCacheTTL       Duration            `json:"searchCacheTtl"`
+	UnavailableCooloff   Duration            `json:"unavailableCooloff"` // hide titles with no release this long
+	MaxCandidates        int                 `json:"maxCandidates"`
+	BlockedGroups        []string            `json:"blockedGroups"`
+	BlockedTerms         []string            `json:"blockedTerms"`
 }
 
 type Quality struct {
@@ -240,10 +252,11 @@ func DefaultDataDir() string {
 
 // Store loads, saves and broadcasts the config.
 type Store struct {
-	path string
-	mu   sync.RWMutex
-	cfg  Config
-	subs []func(Config)
+	path          string
+	credentialKey []byte
+	mu            sync.RWMutex
+	cfg           Config
+	subs          []func(Config)
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -252,10 +265,26 @@ func Open(dataDir string) (*Store, error) {
 	}
 	s := &Store{path: filepath.Join(dataDir, "config.json"), cfg: Defaults(dataDir)}
 	b, err := os.ReadFile(s.path)
+	readErr := err
+	key, keyErr := credentialKey(dataDir, b)
+	if keyErr != nil {
+		return nil, keyErr
+	}
+	s.credentialKey = key
+	err = readErr
 	switch {
 	case err == nil:
-		if err := json.Unmarshal(b, &s.cfg); err != nil {
+		plain, err := transformCredentials(b, s.credentialKey, false)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(plain, &s.cfg); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", s.path, err)
+		}
+		if !strings.Contains(string(b), sealedPrefix) {
+			if err := s.save(); err != nil {
+				return nil, err
+			}
 		}
 	case os.IsNotExist(err):
 		if err := s.save(); err != nil {
@@ -272,13 +301,13 @@ func (s *Store) Path() string { return s.path }
 func (s *Store) Get() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg
+	return clone(s.cfg)
 }
 
 // Update applies fn to a copy of the config, saves it and notifies subscribers.
 func (s *Store) Update(fn func(*Config) error) error {
 	s.mu.Lock()
-	next := s.cfg
+	next := clone(s.cfg)
 	if err := fn(&next); err != nil {
 		s.mu.Unlock()
 		return err
@@ -293,7 +322,7 @@ func (s *Store) Update(fn func(*Config) error) error {
 	subs := append([]func(Config){}, s.subs...)
 	s.mu.Unlock()
 	for _, f := range subs {
-		f(next)
+		f(clone(next))
 	}
 	return nil
 }
@@ -306,6 +335,10 @@ func (s *Store) Subscribe(fn func(Config)) {
 
 func (s *Store) save() error {
 	b, err := json.MarshalIndent(s.cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	b, err = transformCredentials(b, s.credentialKey, true)
 	if err != nil {
 		return err
 	}

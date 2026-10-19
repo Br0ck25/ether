@@ -237,13 +237,13 @@ func (s *Server) continuousKeys(ctx context.Context, pr *Request, uri string, co
 	}
 	ep := keys[0]
 	show := ep.Parent().Parent()
-	eps, err := s.d.Catalog.Grandchildren(ctx, show)
+	eps, err := s.metadataGrandchildren(ctx, pr, show)
 	if err != nil {
 		return keys, nil
 	}
 	for i, e := range eps {
 		if e.Key == ep {
-			return capKeys(titleKeys(eps[i:])), nil
+			return capKeys(titleKeys(s.visibleTitles(pr.User, eps[i:]))), nil
 		}
 	}
 	return keys, nil

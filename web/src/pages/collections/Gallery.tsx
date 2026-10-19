@@ -45,10 +45,10 @@ export default function CollectionsGallery() {
             title="Collections"
             description="Design collections and rows that show up in Plex for the people you choose."
             actions={
-              <div className="flex gap-2">
+              <>
                 <Button variant="outline" size="sm" onClick={() => setDescribe(true)}><Sparkles size={15} /> Describe it</Button>
                 <Button size="sm" onClick={() => navigate(newCollectionHref())}><Plus size={15} /> New collection</Button>
-              </div>
+              </>
             }
           />
           <div className="flex flex-wrap items-end justify-between gap-3">

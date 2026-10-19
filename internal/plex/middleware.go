@@ -145,6 +145,9 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		u, err := s.d.Auth.Authenticate(r.Context(), pr.Token)
 		switch {
 		case err == nil && u != nil:
+			if policy, ok := s.d.AccessPolicy.(interface{ UserPolicy(*core.User) *core.User }); ok {
+				u = policy.UserPolicy(u)
+			}
 			pr.User = u
 			next.ServeHTTP(w, r)
 		case err == nil, errors.Is(err, core.ErrUnauthorized), errors.Is(err, core.ErrNotFound):

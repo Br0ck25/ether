@@ -9,6 +9,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/plex"
+	"github.com/braedonsaunders/ether/internal/plexguid"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/spike"
 )
@@ -54,7 +55,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 	} else {
 		deps = plex.Deps{
 			Catalog:     a.catalog,
-			Collections: a.collections,
+			Collections: a.discoveryPersonal.ReviewCollections(a.collections),
 			Recommender: a.personalize,
 			State:       a.state,
 			Playlists:   a.state.Playlists(),
@@ -65,6 +66,14 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 			DB:          a.db, // plex_ultrablur
 		}
 	}
+	deps.PlexGUID = plexguid.New(a.db, plexguid.Options{Token: func() string { return a.cfg.Get().Plex.Token }})
+	deps.EpisodeOrder = a.episodeorder
+	deps.Discovery = a.plexDiscovery
+	deps.LiveTV = a.livetv
+	deps.Subtitles = a.subtitles
+	deps.TrackPreferences = a.trackprefs
+	deps.Markers = a.markers
+	deps.AccessPolicy = a.safety
 	deps.Config = a.cfg.Get
 	deps.Logger = a.log.With("component", "plex")
 	deps.Identity = identity

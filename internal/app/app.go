@@ -22,30 +22,44 @@ import (
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/auth"
+	"github.com/braedonsaunders/ether/internal/backup"
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/collections"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/episodeorder"
+	"github.com/braedonsaunders/ether/internal/invites"
+	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/llm"
+	"github.com/braedonsaunders/ether/internal/localmedia"
+	"github.com/braedonsaunders/ether/internal/markers"
+	"github.com/braedonsaunders/ether/internal/migrate"
 	"github.com/braedonsaunders/ether/internal/newznab"
+	"github.com/braedonsaunders/ether/internal/notify"
+	"github.com/braedonsaunders/ether/internal/overlays"
 	"github.com/braedonsaunders/ether/internal/personalize"
 	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/plex"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/prefetch"
+	"github.com/braedonsaunders/ether/internal/ratings"
 	"github.com/braedonsaunders/ether/internal/recommend"
 	"github.com/braedonsaunders/ether/internal/remote"
 	"github.com/braedonsaunders/ether/internal/resolver"
+	"github.com/braedonsaunders/ether/internal/safety"
 	"github.com/braedonsaunders/ether/internal/segcache"
 	"github.com/braedonsaunders/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/stats"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/stream"
 	"github.com/braedonsaunders/ether/internal/subtitles"
 	"github.com/braedonsaunders/ether/internal/tmdb"
+	"github.com/braedonsaunders/ether/internal/trackprefs"
 	"github.com/braedonsaunders/ether/internal/trakt"
 	"github.com/braedonsaunders/ether/internal/transcode"
 	"github.com/braedonsaunders/ether/internal/updater"
 	"github.com/braedonsaunders/ether/internal/usenet"
+	"github.com/braedonsaunders/ether/internal/watchlist"
 )
 
 // Options configure a run.
@@ -92,9 +106,27 @@ type App struct {
 	registrar   *plextv.Registrar
 	gdm         *remote.GDMResponder
 
-	plexServer *plex.Server
-	handler    http.Handler
-	closers    []func()
+	episodeorder      *episodeorder.Service
+	watchlist         *watchlist.Service
+	ratings           *ratings.Service
+	overlays          *overlays.Service
+	discoveryPersonal *personalize.Discovery
+	plexDiscovery     *plex.DiscoveryFeatures
+	stats             *stats.Service
+	notifications     *notify.Service
+	livetv            *livetv.Service
+	trackprefs        *trackprefs.Service
+	markers           *markers.Service
+	localmedia        *localmedia.Service
+	backups           *backup.Service
+	migration         *migrate.Service
+	invites           *invites.Service
+	safety            *safety.Service
+	cleanHome         *cleanHomeStatus
+	plexServer        *plex.Server
+	handler           http.Handler
+	closers           []func()
+	closeOnce         sync.Once
 }
 
 // New builds every component. Nothing listens until Run.
@@ -149,6 +181,9 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	dataDir := a.opts.DataDir
 	var err error
 
+	if a.safety, err = safety.New(ctx, a.db); err != nil {
+		return fmt.Errorf("safety: %w", err)
+	}
 	// Catalogue.
 	a.tmdb = tmdb.NewFromConfig(cfg.Catalog, log.With("component", "tmdb"))
 	a.closers = append(a.closers, a.tmdb.Close)
@@ -179,6 +214,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// Per-viewer Homes, built in the background and served to Plex.
 	if a.personalize, err = personalize.New(personalize.Options{
 		DB: a.db, Catalog: a.catalog, State: a.state, Events: a.state, Users: a.usersSource(),
+		UserPolicy: a.safety.UserPolicy, Allowed: a.safety.Allowed,
 		LLM: a.llm, Trakt: a.trakt, Playlists: a.state.Playlists(), Base: a.recommend,
 		Collections: a.collections, // owner collections as targeted Home/section rows
 		ServerName:  func() string { return a.cfg.Get().Server.FriendlyName },
@@ -213,6 +249,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		NZBDir:         filepath.Join(dataDir, "nzb"),
 	})
 	a.resolver = resolver.New(a.indexers, a.engine, a.db, cfg, resolver.Options{Logger: log.With("component", "resolver")})
+	a.closers = append(a.closers, func() { a.resolver.Close() })
 
 	// Transcoder. A missing ffmpeg is not fatal: direct play still works.
 	a.transcoder, err = transcode.New(cfg.Transcode, log)
@@ -222,19 +259,33 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	} else {
 		a.closers = append(a.closers, func() { a.transcoder.Close() })
 	}
-	var tc core.Transcoder
+	var tc core.Transcoder = directOnly{}
 	if a.transcoder != nil {
 		tc = a.transcoder
 	}
 
+	a.trackprefs = trackprefs.New(a.db, trackprefs.Options{ShowName: func(ctx context.Context, id int64) string {
+		var name string
+		_ = a.db.QueryRowContext(ctx, `SELECT title FROM catalog_titles WHERE key=?`, int64(core.ShowKey(id))).Scan(&name)
+		return name
+	}})
+	markerFFmpeg := cfg.Transcode.FFmpegPath
+	if a.transcoder != nil {
+		markerFFmpeg = a.transcoder.FFmpegPath()
+	}
+	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}})
+	a.closers = append(a.closers, func() { a.markers.Close() })
+	a.buildAdoption()
 	// Playback and prefetch.
 	a.playback, err = playback.New(playback.Deps{
-		Resolver:   a.resolver,
-		Engine:     a.engine,
-		Transcoder: tc,
-		Catalog:    a.catalog,
-		Cache:      a.cache,
-		State:      a.state,
+		LocalMedia:   a.localmedia,
+		AugmentMedia: a.enrichSubtitles,
+		Resolver:     a.resolver,
+		Engine:       a.engine,
+		Transcoder:   tc,
+		Catalog:      a.catalog,
+		Cache:        a.cache,
+		State:        a.state,
 		SelectProfile: func(caps core.ClientCaps, u *core.User) core.QualityProfile {
 			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
 		},
@@ -262,7 +313,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.cache.Protect(a.protectedReleases)
 
 	// plex.tv, users, certificates, LAN discovery.
-	if a.plextv, err = plextv.New(plextv.Options{Identity: plextv.ServerIdentity(cfg, "")}); err != nil {
+	if a.plextv, err = plextv.New(plextv.Options{Identity: plextv.ServerIdentity(cfg, ""), VersionSource: func() string { return plextv.PMSVersion(a.cfg.Get()) }}); err != nil {
 		return fmt.Errorf("plex.tv client: %w", err)
 	}
 	if a.users, err = auth.New(context.Background(), a.db, auth.Options{
@@ -306,7 +357,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Info: func() remote.GDMInfo {
 			c := a.cfg.Get()
 			return remote.GDMInfo{Name: c.Server.FriendlyName, MachineIdentifier: c.Server.MachineIdentifier,
-				Port: c.Server.Port, Version: plextv.DefaultServerVersion, UpdatedAt: time.Now()}
+				Port: c.Server.Port, Version: plextv.PMSVersion(c), UpdatedAt: time.Now()}
 		},
 		Logger: log.With("component", "gdm"),
 	})
@@ -321,6 +372,15 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 	a.closers = append(a.closers, func() { a.prefetch.Close() })
 
+	a.buildInsights()
+	a.buildDiscovery()
+	a.episodeorder = episodeorder.New(a.db, a.tmdb, a.catalog)
+	if err := a.buildLiveTV(); err != nil {
+		return fmt.Errorf("live TV: %w", err)
+	}
+	a.personalize.SetExtraHomeRows(a.extraHomeRows)
+	a.buildInvites()
+	a.cleanHome = &cleanHomeStatus{app: a}
 	a.cfg.Subscribe(a.applyConfig)
 
 	plexHandler, err := a.buildPlex(cfg)
@@ -328,6 +388,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("plex front end: %w", err)
 	}
 	mux := http.NewServeMux()
+	mux.Handle("/invite/", http.StripPrefix("/invite", a.invites.PublicHandler()))
 	mux.Handle("/ether/", lanOnly(a.buildAdmin()))
 	mux.HandleFunc("/ether", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ether/", http.StatusFound)
@@ -387,7 +448,19 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.gdm.Start(ctx); err != nil {
 		a.log.Warn("GDM discovery responder", "err", err)
 	}
-	go a.housekeeping(ctx)
+	var background backgroundGroup
+	defer background.Wait()
+	defer cancel()
+	background.start(func() { a.housekeeping(ctx) })
+	background.start(func() { a.stats.Run(ctx) })
+	background.start(func() { a.notifications.Run(ctx) })
+	background.start(func() { a.watchlist.Run(ctx) })
+	background.start(func() { a.ratings.Run(ctx) })
+	background.start(func() { a.plexDiscovery.Run(ctx) })
+	background.start(func() { a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) }) })
+	background.start(func() {
+		a.localmedia.Watch(ctx, time.Minute, func(err error) { a.log.Warn("local library scan", "err", err) })
+	})
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)
@@ -424,6 +497,8 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) housekeeping(ctx context.Context) {
 	pins := time.NewTicker(5 * time.Minute)
 	defer pins.Stop()
+	a.cleanHome.run(ctx)
+	a.refreshCompatibility(ctx)
 	_ = a.playback.ReconcilePins(ctx)
 	for {
 		select {
@@ -431,6 +506,10 @@ func (a *App) housekeeping(ctx context.Context) {
 			_ = a.users.FlushSeen(context.Background())
 			return
 		case <-pins.C:
+			if a.cleanHome.due() {
+				a.cleanHome.run(ctx)
+				a.refreshCompatibility(ctx)
+			}
 			_ = a.playback.ReconcilePins(ctx)
 			_ = a.users.FlushSeen(ctx)
 		}
@@ -439,8 +518,7 @@ func (a *App) housekeeping(ctx context.Context) {
 
 // Close releases every component in reverse order of construction.
 func (a *App) Close() {
-	var once sync.Once
-	once.Do(func() {
+	a.closeOnce.Do(func() {
 		for i := len(a.closers) - 1; i >= 0; i-- {
 			a.closers[i]()
 		}

@@ -129,3 +129,40 @@ func scheduleAllows(sc *core.CollectionSchedule, device string, now time.Time) b
 	}
 	return true
 }
+
+// LayoutRow serves a collection explicitly selected by the owner's Home
+// template or viewer override, even when its default publication targets do
+// not include Home. Private ownership and viewer content limits still apply.
+// The layout policy supplies the publication scope and schedule.
+func (s *Service) LayoutRow(ctx context.Context, user *core.User, hc core.HubContext, id string) (*core.CollectionRow, error) {
+	row, err := s.rowByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !row.enabled || row.owner != 0 && (user == nil || row.owner != user.ID) {
+		return nil, core.ErrNotFound
+	}
+	keys, err := s.serve(ctx, row, user, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	count := len(keys)
+	if len(keys) > rowItems {
+		keys = keys[:rowItems]
+	}
+	items, err := loadTitles(ctx, s.db, keys)
+	if err != nil {
+		return nil, err
+	}
+	hub := core.Hub{ID: "collection." + row.publicID(), Title: row.spec.Name, Style: "shelf", Promoted: true, Items: items, More: count > len(items), Key: row.key(), Context: "hub.home.collection"}
+	switch row.spec.MediaType {
+	case MediaMovie:
+		hub.Type = core.TypeMovie
+	case MediaShow:
+		hub.Type = core.TypeShow
+	}
+	return &core.CollectionRow{Hub: hub, CollectionID: row.publicID(), HomeRow: true, SectionRow: true}, nil
+}

@@ -28,11 +28,14 @@ const previewWait = 45 * time.Second
 // section is "" or "home", "movies", "shows", or a library section id.
 // The daypart and weekend flag are derived from hc.Now in server local
 // time (hc.Device is kept as given).
-func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubContext, sectionName string, limit int) (*core.HomePreview, error) {
+func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubContext, sectionArg string, limit int) (*core.HomePreview, error) {
 	if user == nil {
 		return nil, fmt.Errorf("personalize: no user")
 	}
-	sid, section, err := e.resolveSection(sectionName)
+	if e.opts.UserPolicy != nil {
+		user = e.opts.UserPolicy(user)
+	}
+	sid, section, err := e.resolveSection(sectionArg)
 	if err != nil {
 		return nil, err
 	}
@@ -81,12 +84,37 @@ func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubCo
 		}
 		head := []core.HomeRow{plexRow(prefix+".inprogress."+sid, "Continue Watching", KindContinue,
 			"Titles you're part-way through in this library (Plex's own row).", cw)}
-		if ra := e.recentlyAdded(ctx, user, section, limit); len(ra) > 0 {
-			head = append(head, plexRow(prefix+".recentlyadded."+sid, "Recently Added", KindRecentlyAdded,
-				"The newest additions to this library (Plex's own row).", ra))
-		}
+		ra := e.recentlyAdded(ctx, user, section, limit)
+		head = append(head, plexRow(prefix+".recentlyadded."+sid, "Recently Added", KindRecentlyAdded,
+			"The newest additions to this library (Plex's own row).", ra))
 		p.Rows = append(head, p.Rows...)
 	}
+	if e.extraHomeRows != nil {
+		p.Rows = append(p.Rows, rowsFromHubs(e.extraHomeRows(ctx, user, hc, sectionName(section), limit))...)
+	}
+	if e.opts.Allowed != nil {
+		for i := range p.Rows {
+			row := &p.Rows[i]
+			items := make([]core.Title, 0, len(row.Items))
+			reasons := map[core.RatingKey]string{}
+			for _, title := range row.Items {
+				if title.Type == "playlist" || e.opts.Allowed(user, &title) {
+					items = append(items, title)
+					if reason, ok := row.ItemReasons[title.Key]; ok {
+						reasons[title.Key] = reason
+					}
+				}
+			}
+			row.Items = items
+			row.Hub.Items = items
+			row.ItemReasons = reasons
+		}
+	}
+	def := e.opts.MaxHomeRows
+	if section != "" {
+		def = e.opts.MaxSectionRows
+	}
+	p.Rows = arrangeLayout(p.Rows, e.layoutForContext(ctx), user.ID, hc, sectionName(section), def)
 	return &p, nil
 }
 
@@ -279,8 +307,12 @@ func (e *Engine) SetLayout(ctx context.Context, rules []core.LayoutRule) ([]core
 	if err := e.store.setLayout(ctx, norm, e.now()); err != nil {
 		return nil, err
 	}
+	if err := e.store.setHomeLayout(ctx, migrateLayout(norm)); err != nil {
+		return nil, err
+	}
 	e.mu.Lock()
 	e.layout = norm
+	e.homeLayout = migrateLayout(norm)
 	e.layoutVer++
 	e.mu.Unlock()
 	return e.Layout(ctx)
@@ -299,6 +331,39 @@ func (e *Engine) AvailableRows(ctx context.Context) ([]core.RowDescriptor, error
 		if strings.HasPrefix(kind, KindCollectionPrefix) {
 			extra = append(extra, core.RowDescriptor{HubID: kind, Title: st.title, Kind: kind,
 				Description: "Owner collection row (" + st.hubID + ")."})
+		}
+	}
+	if source, ok := e.opts.Collections.(interface {
+		ListSpecs(context.Context) ([]core.CollectionSpec, error)
+	}); ok {
+		specs, err := source.ListSpecs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		seen := map[string]bool{}
+		for _, d := range extra {
+			seen[d.HubID] = true
+		}
+		for _, sp := range specs {
+			key := KindCollectionPrefix + sp.ID
+			if !seen[key] && sp.Enabled {
+				extra = append(extra, core.RowDescriptor{HubID: key, Title: sp.Name, Kind: key, Description: "Owner collection; choose Always or Eligible to add it to this Home layer."})
+				seen[key] = true
+			}
+		}
+	}
+	if e.extraHomeRows != nil {
+		seen := map[string]bool{}
+		for _, d := range extra {
+			seen[d.HubID] = true
+		}
+		hc := core.NewHubContext(e.now(), "", "", "")
+		hc.Device = core.DeviceTV
+		for _, hub := range e.extraHomeRows(ctx, &core.User{IsOwner: true}, hc, "home", 1) {
+			if !seen[hub.ID] {
+				extra = append(extra, core.RowDescriptor{HubID: hub.ID, Kind: hubKind(hub.ID), Title: hub.Title, Description: "Additional Plex Home row."})
+				seen[hub.ID] = true
+			}
 		}
 	}
 	return descriptors(extra), nil

@@ -43,7 +43,7 @@ func (s *Server) serverInfoAttrs(providers bool) []model.Attr {
 		model.A("allowMediaDeletion", false),
 		model.A("allowSharing", true),
 		model.A("allowSync", false),
-		model.A("allowTuners", false),
+		model.A("allowTuners", s.liveTVEnabled()),
 		model.A("apiVersion", APIVersion),
 		model.A("backgroundProcessing", false),
 		model.A("certificate", c.Plex.CertFile != ""),
@@ -57,7 +57,7 @@ func (s *Server) serverInfoAttrs(providers bool) []model.Attr {
 		attrs = append(attrs, model.A("hubSearch", true), model.A("itemClusters", false))
 	}
 	attrs = append(attrs,
-		model.A("livetv", 0),
+		model.A("livetv", s.liveTVAPIVersion()),
 		model.A("machineIdentifier", id.MachineIdentifier),
 	)
 	if !providers {
@@ -201,6 +201,10 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	mc := &model.MediaContainer{Size: 1, Extra: s.serverInfoAttrs(true), MediaProvider: []model.MediaProvider{provider}}
+	if p := s.liveTVProvider(); p != nil {
+		mc.MediaProvider = append(mc.MediaProvider, *p)
+		mc.Size++
+	}
 	s.write(w, r, mc)
 }
 

@@ -1,0 +1,638 @@
+package livetv
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
+)
+
+func init() {
+	store.Register("livetv", 1, `CREATE TABLE livetv_channels(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE livetv_sources(id TEXT PRIMARY KEY, data TEXT NOT NULL);
+CREATE TABLE livetv_programmes(source_id TEXT NOT NULL, channel_id TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,channel_id,start_ms));
+CREATE INDEX livetv_programmes_window ON livetv_programmes(channel_id,start_ms,end_ms);
+CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
+}
+
+type Service struct {
+	transMu    sync.RWMutex
+	transcodes map[string]core.HLSSession
+	o          Options
+	mu         sync.Mutex
+	sessions   map[string]*session
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+}
+
+func New(o Options) (*Service, error) {
+	if o.DB == nil {
+		return nil, fmt.Errorf("livetv requires a database")
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.HTTPClient == nil {
+		o.HTTPClient = &http.Client{Timeout: 20 * time.Second}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Service{o: o, sessions: map[string]*session{}, transcodes: map[string]core.HLSSession{}, ctx: ctx, cancel: cancel}
+	s.wg.Add(1)
+	go s.maintain()
+	return s, nil
+}
+func (s *Service) Close() error {
+	s.cancel()
+	s.wg.Wait()
+	s.mu.Lock()
+	all := s.sessions
+	s.sessions = map[string]*session{}
+	s.mu.Unlock()
+	for _, ss := range all {
+		ss.close(s)
+	}
+	return nil
+}
+func (s *Service) stopTrack(t *track) {
+	s.transMu.Lock()
+	delete(s.transcodes, t.playbackID)
+	s.transMu.Unlock()
+	if t.hls != nil {
+		t.hls.Close()
+	}
+	if s.o.Playback != nil {
+		s.o.Playback.Stop(t.playbackID)
+	}
+}
+func (s *Service) invalidate(channelID, sourceID string) {
+	s.mu.Lock()
+	var stale []*session
+	for id, ss := range s.sessions {
+		if ss.info.Channel.ID == channelID || sourceID != "" && ss.info.Channel.SourceID == sourceID {
+			stale = append(stale, ss)
+			delete(s.sessions, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, ss := range stale {
+		ss.close(s)
+	}
+}
+
+func randomID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b[:])
+}
+func (s *Service) maintain() {
+	defer s.wg.Done()
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	warmed := map[core.RatingKey]time.Time{}
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+			s.mu.Lock()
+			var stale []*session
+			for id, ss := range s.sessions {
+				ss.mu.Lock()
+				expired := s.o.Now().Sub(ss.last) > 2*time.Minute
+				ss.mu.Unlock()
+				if expired {
+					stale = append(stale, ss)
+					delete(s.sessions, id)
+				}
+			}
+			s.mu.Unlock()
+			for _, ss := range stale {
+				ss.close(s)
+			}
+			if s.o.Warm != nil {
+				cs, err := s.Channels(s.ctx)
+				if err != nil {
+					continue
+				}
+				for _, c := range cs {
+					if !c.Enabled || c.Kind != "virtual" {
+						continue
+					}
+					ps := Schedule(c, s.o.Now(), s.o.Now().Add(3*time.Minute))
+					for _, p := range ps {
+						if p.Item.Key == 0 || s.o.Now().Sub(warmed[p.Item.Key]) < 10*time.Minute {
+							continue
+						}
+						ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+						err := s.o.Warm(ctx, p.Item.Key)
+						cancel()
+						if err == nil {
+							warmed[p.Item.Key] = s.o.Now()
+						}
+					}
+				}
+				for k, t := range warmed {
+					if s.o.Now().Sub(t) > time.Hour {
+						delete(warmed, k)
+					}
+				}
+			}
+		}
+	}
+}
+func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT data FROM livetv_channels ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Channel{}
+	for rows.Next() {
+		var b []byte
+		var c Channel
+		if err = rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(b, &c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return naturalNumber(out[i].Number) < naturalNumber(out[j].Number) })
+	return out, rows.Err()
+}
+func naturalNumber(n string) string {
+	var a, b int
+	fmt.Sscanf(n, "%d.%d", &a, &b)
+	return fmt.Sprintf("%09d.%09d/%s", a, b, n)
+}
+func (s *Service) Channel(ctx context.Context, id string) (Channel, error) {
+	var b []byte
+	err := s.o.DB.QueryRowContext(ctx, `SELECT data FROM livetv_channels WHERE id=?`, id).Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Channel{}, core.ErrNotFound
+	}
+	var c Channel
+	if err == nil {
+		err = json.Unmarshal(b, &c)
+	}
+	return c, err
+}
+func itemFromTitle(t core.Title) Item {
+	return Item{Key: t.Key, Title: t.Title, DurationMS: t.Runtime.Milliseconds(), Summary: t.Summary, Rating: t.ContentRating, Thumb: t.PosterPath}
+}
+func (s *Service) expand(ctx context.Context, c *Channel) error {
+	if c.Collection == 0 && c.Filter == nil {
+		return nil
+	}
+	var page core.Page
+	var err error
+	if c.Collection != 0 {
+		if s.o.Collections == nil {
+			return fmt.Errorf("collections unavailable")
+		}
+		page, err = s.o.Collections.Items(ctx, &core.User{IsOwner: true}, c.Collection, 0, 2000)
+	} else {
+		if s.o.Catalog == nil {
+			return fmt.Errorf("catalogue unavailable")
+		}
+		page, err = s.o.Catalog.Browse(ctx, core.BrowseQuery{Filter: *c.Filter, Sort: core.SortTitle, Limit: 2000})
+	}
+	if err != nil {
+		return err
+	}
+	c.Items = nil
+	for _, t := range page.Items {
+		ts := []core.Title{t}
+		if t.Type == core.TypeShow {
+			if s.o.Catalog == nil {
+				return fmt.Errorf("catalogue unavailable")
+			}
+			ts, err = s.o.Catalog.Grandchildren(ctx, t.Key)
+			if err != nil {
+				return err
+			}
+		}
+		for _, t := range ts {
+			if !t.Adult && t.Runtime > 0 && (t.Type == core.TypeMovie || t.Type == core.TypeEpisode) {
+				c.Items = append(c.Items, itemFromTitle(t))
+			}
+			if len(c.Items) >= 10000 {
+				return fmt.Errorf("channel exceeds 10000 programmes")
+			}
+		}
+	}
+	return nil
+}
+func validateChannel(c *Channel) error {
+	c.Name = strings.TrimSpace(c.Name)
+	c.Number = strings.TrimSpace(c.Number)
+	if c.Name == "" || c.Number == "" || len(c.Name) > 200 || len(c.Number) > 32 {
+		return fmt.Errorf("channel needs a name and number")
+	}
+	if c.Kind != "virtual" && c.Kind != "iptv" {
+		return fmt.Errorf("kind must be virtual or iptv")
+	}
+	if c.Kind == "iptv" && !validHTTP(c.StreamURL) {
+		return fmt.Errorf("IPTV stream must use HTTP(S)")
+	}
+	if c.Kind == "virtual" && len(c.Items) == 0 {
+		return fmt.Errorf("virtual channel needs base programming")
+	}
+	check := func(items []Item) error {
+		if len(items) > 10000 {
+			return fmt.Errorf("too many items")
+		}
+		for _, it := range items {
+			if it.Key <= 0 || it.DurationMS < 1000 || it.DurationMS > 24*60*60*1000 {
+				return fmt.Errorf("programme needs a catalogue key and duration of 1 second to 24 hours")
+			}
+		}
+		return nil
+	}
+	if err := check(c.Items); err != nil {
+		return err
+	}
+	blocks := append([]Block(nil), c.Blocks...)
+	sort.Slice(blocks, func(i, j int) bool { return blocks[i].Start < blocks[j].Start })
+	prev := 0
+	for _, b := range blocks {
+		if b.Start < prev || b.Start < 0 || b.End <= b.Start || b.End > 1440 || len(b.Items) == 0 {
+			return fmt.Errorf("UTC time blocks must be nonoverlapping, within 00:00–24:00, and contain programming")
+		}
+		if err := check(b.Items); err != nil {
+			return err
+		}
+		prev = b.End
+	}
+	if c.Epoch.IsZero() {
+		c.Epoch = time.Unix(0, 0).UTC()
+	}
+	return nil
+}
+func (s *Service) SaveChannel(ctx context.Context, c Channel) (Channel, error) {
+	if c.ID == "" {
+		c.ID = randomID()
+	}
+	if err := s.expand(ctx, &c); err != nil {
+		return c, err
+	}
+	if err := validateChannel(&c); err != nil {
+		return c, err
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return c, err
+	}
+	_, err = s.o.DB.ExecContext(ctx, `INSERT INTO livetv_channels(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, c.ID, b)
+	if err == nil {
+		s.invalidate(c.ID, "")
+	}
+	return c, err
+}
+func (s *Service) DeleteChannel(ctx context.Context, id string) error {
+	_, err := s.o.DB.ExecContext(ctx, `DELETE FROM livetv_channels WHERE id=?`, id)
+	if err == nil {
+		s.invalidate(id, "")
+	}
+	return err
+}
+func (s *Service) Policy(ctx context.Context, userID int64) (Policy, error) {
+	p := Policy{UserID: userID}
+	var b []byte
+	err := s.o.DB.QueryRowContext(ctx, `SELECT data FROM livetv_policies WHERE user_id=?`, userID).Scan(&b)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, nil
+	}
+	if err == nil {
+		err = json.Unmarshal(b, &p)
+	}
+	return p, err
+}
+func (s *Service) SavePolicy(ctx context.Context, p Policy) error {
+	if p.UserID <= 0 {
+		return fmt.Errorf("userId must be positive")
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	_, err = s.o.DB.ExecContext(ctx, `INSERT INTO livetv_policies(user_id,data) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET data=excluded.data`, p.UserID, b)
+	return err
+}
+func containsUser(ids []int64, id int64) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+func containsString(ids []string, id string) bool {
+	for _, v := range ids {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+func (s *Service) allowed(ctx context.Context, u *core.User, c Channel, p *Programme) bool {
+	if u == nil || !c.Enabled {
+		return false
+	}
+	pol, err := s.Policy(ctx, u.ID)
+	if err != nil {
+		return false
+	}
+	if !u.IsOwner && (pol.Disabled || len(pol.Channels) > 0 && !containsString(pol.Channels, c.ID) || len(c.AllowedUsers) > 0 && !containsUser(c.AllowedUsers, u.ID)) {
+		return false
+	}
+	rating := c.Rating
+	if p != nil {
+		rating = p.Item.Rating
+		if rating == "" {
+			rating = c.Rating
+		}
+	}
+	if catalog.RatingExceeds(rating, u.MaxContentRating) || catalog.RatingExceeds(rating, pol.MaxRating) {
+		return false
+	}
+	if p != nil && p.Item.Key != 0 && s.o.Catalog != nil {
+		t, err := s.o.Catalog.Get(ctx, p.Item.Key)
+		if err != nil || t.Adult || catalog.RatingExceeds(t.ContentRating, u.MaxContentRating) || catalog.RatingExceeds(t.ContentRating, pol.MaxRating) {
+			return false
+		}
+		if len(u.AllowedSections) > 0 {
+			section := 1
+			if t.Type != core.TypeMovie {
+				section = 2
+			}
+			ok := false
+			for _, id := range u.AllowedSections {
+				if id == section {
+					ok = true
+				}
+			}
+			if !ok {
+				return false
+			}
+		}
+		if s.o.Allowed != nil && !s.o.Allowed(u, t) {
+			return false
+		}
+	}
+	return true
+}
+func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel, error) {
+	cs, err := s.Channels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []Channel{}
+	for _, c := range cs {
+		ps, err := s.programmes(ctx, c, s.o.Now(), s.o.Now().Add(time.Second))
+		if err != nil {
+			return nil, err
+		}
+		var p *Programme
+		if len(ps) > 0 {
+			p = &ps[0]
+		}
+		if s.allowed(ctx, u, c, p) {
+			c.StreamURL = ""
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+func (s *Service) programmes(ctx context.Context, c Channel, from, until time.Time) ([]Programme, error) {
+	if c.Kind == "virtual" {
+		return Schedule(c, from, until), nil
+	}
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT data FROM livetv_programmes WHERE source_id=? AND channel_id=? AND start_ms<? AND end_ms>? ORDER BY start_ms`, c.SourceID, c.GuideID, until.UnixMilli(), from.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Programme{}
+	for rows.Next() {
+		var b []byte
+		var p Programme
+		if err = rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(b, &p); err != nil {
+			return nil, err
+		}
+		p.ChannelID = c.ID
+		p.ID = fmt.Sprintf("%s-%d", c.ID, p.Start.UnixMilli())
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+func (s *Service) Guide(ctx context.Context, u *core.User, from, until time.Time) ([]Programme, error) {
+	if !until.After(from) || until.Sub(from) > 7*24*time.Hour {
+		return nil, fmt.Errorf("guide window must be positive and at most 7 days")
+	}
+	cs, err := s.Channels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []Programme{}
+	for _, c := range cs {
+		if !c.Enabled {
+			continue
+		}
+		ps, err := s.programmes(ctx, c, from, until)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range ps {
+			if s.allowed(ctx, u, c, &p) {
+				out = append(out, p)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Start.Before(out[j].Start) })
+	return out, nil
+}
+func (s *Service) Sources(ctx context.Context) ([]Source, error) {
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT data FROM livetv_sources ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Source{}
+	for rows.Next() {
+		var b []byte
+		var v Source
+		if err = rows.Scan(&b); err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(b, &v); err != nil {
+			return nil, err
+		}
+		v.Playlist = ""
+		v.Guide = ""
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+func (s *Service) readURL(ctx context.Context, raw string, max int64) (string, error) {
+	if !validHTTP(raw) {
+		return "", fmt.Errorf("source must use HTTP(S)")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return "", err
+	}
+	res, err := s.o.HTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("source fetch failed")
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return "", fmt.Errorf("source returned HTTP %d", res.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(res.Body, max+1))
+	if int64(len(b)) > max {
+		return "", fmt.Errorf("source exceeds size limit")
+	}
+	return string(b), err
+}
+
+// ImportSource atomically replaces source programming. Owner changes to mapping,
+// enabled state, channel numbering, favourites and restrictions survive refresh.
+func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) {
+	if src.ID == "" {
+		src.ID = randomID()
+	}
+	if strings.TrimSpace(src.Name) == "" {
+		return src, fmt.Errorf("source needs a name")
+	}
+	var err error
+	if src.PlaylistURL != "" {
+		src.Playlist, err = s.readURL(ctx, src.PlaylistURL, 16<<20)
+		if err != nil {
+			return src, err
+		}
+	}
+	if src.GuideURL != "" {
+		src.Guide, err = s.readURL(ctx, src.GuideURL, 64<<20)
+		if err != nil {
+			return src, err
+		}
+	}
+	if len(src.Playlist) > 16<<20 || len(src.Guide) > 64<<20 {
+		return src, fmt.Errorf("source upload exceeds size limit")
+	}
+	cs, err := ParseM3U(strings.NewReader(src.Playlist), src.ID)
+	if err != nil {
+		return src, err
+	}
+	g := XMLGuide{}
+	if src.Guide != "" {
+		g, err = ParseXMLTV(strings.NewReader(src.Guide))
+		if err != nil {
+			return src, err
+		}
+	}
+	old, err := s.Channels(ctx)
+	if err != nil {
+		return src, err
+	}
+	oldByID := map[string]Channel{}
+	for _, c := range old {
+		if c.SourceID == src.ID {
+			oldByID[c.ID] = c
+		}
+	}
+	tx, err := s.o.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return src, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_programmes WHERE source_id=?`, src.ID); err != nil {
+		return src, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM livetv_channels WHERE json_extract(data,'$.sourceId')=?`, src.ID); err != nil {
+		return src, err
+	}
+	for _, c := range cs {
+		if previous, ok := oldByID[c.ID]; ok {
+			c.Number = previous.Number
+			c.Enabled = previous.Enabled
+			c.Favorite = previous.Favorite
+			c.AllowedUsers = previous.AllowedUsers
+			c.Rating = previous.Rating
+			c.GuideID = previous.GuideID
+		}
+		if guide, ok := g.Channels[c.GuideID]; ok && c.Logo == "" {
+			c.Logo = guide.Logo
+		}
+		b, e := json.Marshal(c)
+		if e != nil {
+			return src, e
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_channels(id,data) VALUES(?,?)`, c.ID, b); err != nil {
+			return src, err
+		}
+	}
+	for _, p := range g.Programmes {
+		b, e := json.Marshal(p)
+		if e != nil {
+			return src, e
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT OR REPLACE INTO livetv_programmes(source_id,channel_id,start_ms,end_ms,data) VALUES(?,?,?,?,?)`, src.ID, p.ChannelID, p.Start.UnixMilli(), p.End.UnixMilli(), b); err != nil {
+			return src, err
+		}
+	}
+	src.UpdatedAt = s.o.Now()
+	b, err := json.Marshal(src)
+	if err != nil {
+		return src, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_sources(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, src.ID, b); err != nil {
+		return src, err
+	}
+	err = tx.Commit()
+	if err == nil {
+		s.invalidate("", src.ID)
+	}
+	src.Playlist = ""
+	src.Guide = ""
+	return src, err
+}
+func (s *Service) DeleteSource(ctx context.Context, id string) error {
+	tx, err := s.o.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{`DELETE FROM livetv_channels WHERE json_extract(data,'$.sourceId')=?`, `DELETE FROM livetv_programmes WHERE source_id=?`, `DELETE FROM livetv_sources WHERE id=?`} {
+		if _, err = tx.ExecContext(ctx, q, id); err != nil {
+			return err
+		}
+	}
+	err = tx.Commit()
+	if err == nil {
+		s.invalidate("", id)
+	}
+	return err
+}

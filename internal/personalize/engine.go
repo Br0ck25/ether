@@ -57,9 +57,12 @@ type UserSource interface {
 // Options build an Engine. DB and Catalog are required; every other
 // dependency is optional and its rows simply drop out when absent.
 type Options struct {
-	DB      *sql.DB
-	Catalog core.Catalog
-	State   core.State
+	// Owner previews use the same effective viewer and title policy as Plex.
+	UserPolicy func(*core.User) *core.User
+	Allowed    func(*core.User, *core.Title) bool
+	DB         *sql.DB
+	Catalog    core.Catalog
+	State      core.State
 	// Events delivers watch-state changes (internal/state.State).
 	Events recommend.EventSource
 	// Users lists viewers for background precompute (core.Auth).
@@ -93,7 +96,7 @@ type Options struct {
 	SourceTimeout   time.Duration // Trakt and owner collection calls (default 10s)
 	LLMTimeout      time.Duration // LLM themed rows during a build (default 60s)
 	BuildTimeout    time.Duration // one model build (default 3m)
-	MaxHomeRows     int           // default 14 (Plex's own rows not counted)
+	MaxHomeRows     int           // default 14 across the complete composed page
 	MaxSectionRows  int           // default 10
 	// Exploration scales Thompson sampling (0 = pure exploitation, 1 =
 	// full sampling; default 0.5; negative = 0).
@@ -178,17 +181,19 @@ type Engine struct {
 	rec     *recorder
 	loc     *time.Location
 
-	mu        sync.Mutex
-	closed    bool
-	models    map[int64]*userModel
-	users     map[int64]core.User
-	lastCtx   map[int64]core.HubContext
-	flights   map[int64]*flight
-	debounce  map[int64]*time.Timer
-	version   uint64
-	layout    []core.LayoutRule
-	layoutVer uint64
-	owner     map[string]*ownerEntry
+	mu            sync.Mutex
+	closed        bool
+	models        map[int64]*userModel
+	users         map[int64]core.User
+	lastCtx       map[int64]core.HubContext
+	flights       map[int64]*flight
+	debounce      map[int64]*time.Timer
+	version       uint64
+	homeLayout    core.HomeLayout
+	extraHomeRows func(context.Context, *core.User, core.HubContext, string, int) []core.Hub
+	layout        []core.LayoutRule
+	layoutVer     uint64
+	owner         map[string]*ownerEntry
 
 	memoMu sync.Mutex
 	memo   map[memoKey]*memoEntry
@@ -255,6 +260,10 @@ func New(opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("personalize: loading layout: %w", err)
 	}
 	e.layout = rules
+	e.homeLayout, err = st.homeLayout(context.Background(), rules)
+	if err != nil {
+		return nil, err
+	}
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); e.rec.run(e.ctx) }()
@@ -339,6 +348,7 @@ func (e *Engine) Related(ctx context.Context, user *core.User, key core.RatingKe
 // marking where the Plex front end should put its own.
 func (e *Engine) HomeHubsFor(ctx context.Context, user *core.User, hc core.HubContext, limit int) ([]core.Hub, error) {
 	p := e.home(ctx, user, hc, "", limit, false)
+	p.Rows = arrangeLayout(p.Rows, e.layoutForContext(ctx), userID(user), hc, sectionName(""), e.opts.MaxHomeRows)
 	return toHubs(p.Rows), nil
 }
 
@@ -347,6 +357,7 @@ func (e *Engine) HomeHubsFor(ctx context.Context, user *core.User, hc core.HubCo
 // Added).
 func (e *Engine) SectionHubsFor(ctx context.Context, user *core.User, t core.MediaType, hc core.HubContext, limit int) ([]core.Hub, error) {
 	p := e.home(ctx, user, hc, t, limit, false)
+	p.Rows = arrangeLayout(p.Rows, e.layoutForContext(ctx), userID(user), hc, sectionName(t), e.opts.MaxSectionRows)
 	return toHubs(p.Rows), nil
 }
 
@@ -391,18 +402,21 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 			e.log.Debug("personalize: in progress failed", "err", err)
 		}
 	}
-	owner, ownerVer := e.ownerRows(ctx, &u, hc, section)
-	rules, layoutVer := e.layoutState()
+	layoutDoc := e.layoutForContext(ctx)
+	owner, ownerVer := e.ownerRows(ctx, &u, hc, section, layoutDoc, wait)
+	_, layoutVer := e.layoutState()
 	day := dayOf(hc.Now, e.loc)
 	key := memoKey{user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
 		layout: layoutVer, stats: stats.at.UnixNano(), owner: ownerVer, cw: progressSig(inprog),
 		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner)}
-	if rows, ok := e.memoGet(key); ok {
+	_, draft := ctx.Value(draftLayoutKey{}).(core.HomeLayout)
+	if rows, ok := e.memoGet(key); ok && !draft {
 		p.Rows = rows
 		return p
 	}
 	a := &assembly{
-		model: m, user: u, hc: hc, section: section, limit: limit, rules: rules, owner: owner,
+		layout: &layoutDoc,
+		model:  m, user: u, hc: hc, section: section, limit: limit, rules: nil, owner: owner,
 		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration, day: day,
 	}
 	if section == "" {
@@ -411,11 +425,14 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 	} else {
 		a.maxRows = e.opts.MaxSectionRows
 	}
+	a.maxRows = 100
 	p.Rows = a.run()
 	for _, r := range p.Rows {
 		e.registerHub(r.HubID, r.Kind)
 	}
-	e.memoPut(key, p.Rows)
+	if !draft {
+		e.memoPut(key, p.Rows)
+	}
 	return p
 }
 
@@ -540,4 +557,11 @@ func (e *Engine) ScoreTitles(ctx context.Context, user *core.User, titles []core
 		out[titles[i].Key] = round3(0.7*fit + 0.3*quality(&titles[i]))
 	}
 	return out, nil
+}
+
+func userID(u *core.User) int64 {
+	if u == nil {
+		return 0
+	}
+	return u.ID
 }

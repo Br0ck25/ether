@@ -176,16 +176,33 @@ For a request (viewer, context, Home or section):
    Context multipliers: Short on Time ×1.3 weeknights, ×1.4 on phones,
    ×0.55 on Saturday-night TVs; Comfort ×1.3 late; film-heavy rows up on
    weekend-evening TVs and where the viewer watches films, down on phones.
-4. **Layout rules** (Home Designer): server-wide rules apply first, then
-   rules for specific viewers; pin (at a position), hide, boost (×1.5),
-   bury (below every unburied row), with day/hour/device schedules and
-   `maxRows`.
+4. **Layered Home policies**: the owner curates the global candidate pool
+   with always/eligible/off states, anchors, bounds, schedules and priorities.
+   Explicit per-viewer policies replace matching global policies. Exact hub ids
+   beat kinds, which beat globs within a layer. Hidden or out-of-schedule rows
+   give their titles back before drafting, so they cannot starve visible rows.
 5. **Caps and dedupe**: per-kind caps; then titles are allocated so each
-   appears once per screen: anchored rows (franchise, Up Next, owner
-   collections, watchlist) keep theirs, the rest draft titles in turns in
-   display order so no row is starved by a greedy one above it. Rows left
-   under their minimum are dropped and the draft reruns. Default maxRows:
-   14 on Home, 10 in sections (Plex's own rows not counted).
+   appears once per screen. Anchored content rows keep their titles; other rows
+   draft in turns. Underfilled rows are dropped and their titles returned.
+6. **Complete-page placement**: Plex requests obtain the full candidate pool,
+   add Plex rows and discovery/Live TV producers, and run `FinalizeHome`.
+   Owner previews use the same `arrangeLayout` function after the same producers.
+   Page limits (14 Home, 10 section by default) count all producers. Device limits
+   override section limits; viewer limits override global limits. Anchors are
+   one-based and viewer anchors win collisions. Position bounds, schedules,
+   per-policy page caps and deterministic weekly day caps are hard constraints.
+   An infeasible row is hidden with a reason instead of violating its constraints.
+   Preview exposes policy provenance, final slot and placement explanation.
+
+This adapts the candidate-pool and complete-page approach described in Netflix's
+[Learning a Personalized Homepage](https://netflixtechblog.com/learning-a-personalized-homepage-aa8ec670359a):
+rows have their own ranking and evidence, while the page selects among them under
+device and diversity constraints. Ether adds explicit owner controls and inheritance.
+
+`personalize_home_layout` stores the layered JSON document. The prior rules remain
+available for old API callers and migrate to global/viewer pages on startup.
+Draft preview uses request-local data and bypasses saved-layout memo entries;
+it never changes the saved document or records an impression.
 
 Assembled screens are memoised for two minutes, keyed by everything they
 depend on (model version, layout, statistics, owner rows, Continue

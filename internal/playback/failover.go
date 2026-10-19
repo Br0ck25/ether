@@ -18,7 +18,13 @@ var errSourceBroken = fmt.Errorf("playback: source broken: %w", core.ErrArticleM
 // resume release when it was resolved for the same profile, else the
 // resolver's answer, moving to the next candidate when a release fails.
 func (m *Manager) openInitial(ctx context.Context, s *session, profile core.QualityProfile) (*generation, error) {
-	res := m.resumeResolution(ctx, s.ident.userID, s.ident.key, profile.Name)
+	if g, err := m.openLocal(ctx, s, profile); g != nil || err != nil {
+		return g, err
+	}
+	res := m.takeWarmResolution(ctx, s.ident, s.caps)
+	if res == nil {
+		res = m.resumeResolution(ctx, s.ident.userID, s.ident.key, profile.Name)
+	}
 	var (
 		tried      []string
 		alternates []core.Release
@@ -121,6 +127,10 @@ func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Reso
 		src.Close()
 		return nil, fmt.Errorf("open %s: empty media file", res.Release.Name)
 	}
+	return m.probeGeneration(ctx, s, res, src, fallback)
+}
+
+func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Resolution, src core.MediaSource, fallback func(int64) core.MediaInfo) (*generation, error) {
 	g := &generation{sess: s, n: s.nextGen(), token: randomID(16), src: src, res: res}
 	m.mu.Lock()
 	m.tokens[s.id+"/"+g.token] = g
@@ -150,6 +160,9 @@ func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Reso
 	}
 	if mi.Container == "" {
 		mi.Container = containerFromName(src.Name())
+	}
+	if m.deps.AugmentMedia != nil {
+		m.deps.AugmentMedia(ctx, s.title, &s.user, res, src, &mi)
 	}
 	// The loopback server may already hold g; publish under its lock.
 	g.mu.Lock()
@@ -257,6 +270,7 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 		if lastErr == nil {
 			lastErr = core.ErrNotAvailable
 		}
+		m.emitEvent("error", s, lastErr)
 		return nil, fmt.Errorf("playback: failover: %w", lastErr)
 	}
 
@@ -291,6 +305,7 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 			return g, fmt.Errorf("playback: swap hls input: %w", err)
 		}
 	}
+	m.emitEvent("failover", s, nil)
 	log.Info("failed over", "release", g.res.Release.Name, "size", g.tmap.Size, "duration", g.info.Duration)
 	return g, nil
 }
@@ -349,7 +364,7 @@ func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.R
 
 // saveResume remembers the release now serving a session.
 func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
-	if m.resume == nil {
+	if m.resume == nil || g.res == nil || len(g.res.NZB) == 0 {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)

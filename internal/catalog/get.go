@@ -16,6 +16,14 @@ func (c *Catalog) fresh(st *storedTitle) bool {
 
 // Get returns a title from the mirror, fetching on demand when missing/stale.
 func (c *Catalog) Get(ctx context.Context, key core.RatingKey) (*core.Title, error) {
+	t, err := c.get(ctx, key)
+	if err == nil && t.Adult {
+		return nil, core.ErrNotFound
+	}
+	return t, err
+}
+
+func (c *Catalog) get(ctx context.Context, key core.RatingKey) (*core.Title, error) {
 	switch key.Kind() {
 	case core.KindMovie:
 		return c.getMovie(ctx, key.TMDB())

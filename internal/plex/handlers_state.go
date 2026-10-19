@@ -37,6 +37,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
+	s.rememberStreamRequest(r, pr.User, key)
 	state := q.Get("state")
 	offset := msParam(q.Get("time"))
 	duration := msParam(q.Get("duration"))
@@ -214,6 +215,10 @@ func (s *Server) handleRemoveFromContinueWatching(w http.ResponseWriter, r *http
 	key := stateKey(r)
 	if key == 0 || pr.User == nil || s.d.State == nil {
 		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
+	if err := s.discoveryRemoveContinue(ctx, pr, key); err != nil {
+		s.writeErr(w, r, err)
 		return
 	}
 	if err := s.d.State.Progress(ctx, pr.User.ID, key, 0, 0, "stopped"); err != nil {
