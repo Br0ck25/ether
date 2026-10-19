@@ -268,6 +268,9 @@ func applyProfileExtra(c *core.ClientCaps, extra string) {
 			c.AudioCodecs = addUnique(c.AudioCodecs, splitList(a["audioCodec"])...)
 			if ct := a["container"]; ct != "" {
 				c.Containers = addUnique(c.Containers, splitList(ct)...)
+				if a["protocol"] == core.ProtocolHLS {
+					c.HLSContainers = addUnique(c.HLSContainers, splitList(ct)...)
+				}
 			}
 		case "add-direct-play-profile":
 			if t := a["type"]; t != "" && t != "videoProfile" {

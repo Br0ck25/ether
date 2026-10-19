@@ -78,6 +78,12 @@ type Plex struct {
 
 type Usenet struct {
 	Providers []UsenetProvider `json:"providers"`
+	// MinIdle is how many connections per primary (non-backfill) provider
+	// are kept warm (dialled, authenticated, DATE-pinged) at all times so
+	// Play never pays a cold handshake. 0 = default (2); negative = off
+	// (connections are dialled lazily and expire when idle). A provider's
+	// own MinIdle overrides this.
+	MinIdle int `json:"minIdle"`
 }
 
 type UsenetProvider struct {
@@ -93,6 +99,11 @@ type UsenetProvider struct {
 	Priority int  `json:"priority"`
 	Backfill bool `json:"backfill"` // only used for articles missing elsewhere
 	Enabled  bool `json:"enabled"`
+	// MinIdle overrides Usenet.MinIdle for this provider: 0 = inherit the
+	// global setting, positive = that many warm connections, negative =
+	// no warm floor for this provider. Backfill providers are never kept
+	// warm regardless.
+	MinIdle int `json:"minIdle,omitempty"`
 }
 
 type Indexer struct {

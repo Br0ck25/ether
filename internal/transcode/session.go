@@ -143,7 +143,7 @@ func (s *Session) HWAccelerated() bool {
 // SegmentDuration is the session's segment length.
 func (s *Session) SegmentDuration() time.Duration { return s.segDur }
 
-// Container is "mpegts" or "fmp4".
+// Container is "mpegts", "fmp4", or explicitly negotiated "mkv".
 func (s *Session) Container() string { return s.container }
 
 // Protocol is core.ProtocolHLS or core.ProtocolDASH.
@@ -426,6 +426,8 @@ func (s *Session) setSegmentHeaders(w http.ResponseWriter) {
 		ct = "application/octet-stream" // as PMS serves DASH segments
 	case s.container == ContainerFMP4:
 		ct = "video/mp4"
+	case s.container == ContainerMatroska:
+		ct = "video/x-matroska"
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "no-cache")
