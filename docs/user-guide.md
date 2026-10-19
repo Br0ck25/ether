@@ -23,6 +23,12 @@ viewer to preview their Home and make personal exceptions. **Collections** lets
 you build and edit themed lists. Recommendations improve as viewers watch and
 rate titles.
 
+A collection can mix movies and TV shows in one Home row. In its editor, choose
+**Contains → Both**, add sources or individual titles, and enable its Home row
+or place it in Home Designer. Each item opens its own movie or show page.
+Viewer access and age limits still apply; Movies and TV library pages keep their
+respective types.
+
 Movies appear from their theatrical release date. Shows, seasons and episodes
 appear from their air dates. Items with no known release date stay hidden.
 

@@ -230,13 +230,19 @@ func (c *Client) shouldScrobble(userID int64, key core.RatingKey, action string)
 //     /sync/history and /sync/history/remove.
 //   - Ratings go to /sync/ratings (0 removes the rating).
 func (c *Client) HandleEvent(ctx context.Context, ev state.Event) {
+	if err := c.handleEvent(ctx, ev); err != nil {
+		c.log.Debug("trakt sync failed", "kind", ev.Kind, "user", ev.UserID, "key", ev.Key, "err", err)
+	}
+}
+
+func (c *Client) handleEvent(ctx context.Context, ev state.Event) error {
 	if !c.Enabled() || !c.Connected(ctx, ev.UserID) {
-		return
+		return nil
 	}
 	var err error
 	progress := min(max(ev.Fraction*100, 0), 100)
 	if ev.Imported && (ev.Kind == state.EventProgress || ev.At.IsZero()) {
-		return
+		return nil
 	}
 	switch ev.Kind {
 	case state.EventProgress:
@@ -274,9 +280,7 @@ func (c *Client) HandleEvent(ctx context.Context, ev state.Event) {
 			err = c.RemoveRating(ctx, ev.UserID, ev.Key)
 		}
 	}
-	if err != nil {
-		c.log.Debug("trakt sync failed", "kind", ev.Kind, "user", ev.UserID, "key", ev.Key, "err", err)
-	}
+	return err
 }
 
 // SubscribeTo feeds state events into the scrobble queue (non-blocking).
@@ -284,6 +288,12 @@ func (c *Client) SubscribeTo(src interface {
 	Subscribe(func(state.Event)) func()
 }) func() {
 	return src.Subscribe(func(ev state.Event) {
+		if ev.Imported {
+			// Bulk history must not compete with disposable timeline updates.
+			// Persist it before returning to the importer, without network I/O.
+			c.enqueueImport(ev)
+			return
+		}
 		c.evMu.Lock()
 		if len(c.queue) >= c.qsize {
 			c.queue = c.queue[1:] // drop the oldest; Trakt is unreachable or slow
@@ -302,6 +312,13 @@ func (c *Client) SubscribeTo(src interface {
 //	go traktClient.Start(ctx)
 //	unsub := traktClient.SubscribeTo(stateSvc)
 func (c *Client) Start(ctx context.Context) {
+	retry := time.NewTicker(30 * time.Second)
+	defer retry.Stop()
+	// Drain records persisted by an earlier process immediately on startup.
+	select {
+	case c.notify <- struct{}{}:
+	default:
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -309,6 +326,7 @@ func (c *Client) Start(ctx context.Context) {
 		case <-c.done:
 			return
 		case <-c.notify:
+		case <-retry.C:
 		}
 		for {
 			c.evMu.Lock()
@@ -322,6 +340,9 @@ func (c *Client) Start(ctx context.Context) {
 			ectx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			c.HandleEvent(ectx, ev)
 			cancel()
+		}
+		if err := c.drainImports(ctx); err != nil && ctx.Err() == nil {
+			c.log.Warn("trakt imported history sync deferred", "err", err)
 		}
 	}
 }
