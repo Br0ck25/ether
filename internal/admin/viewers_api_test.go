@@ -24,10 +24,10 @@ type fakeEngine struct {
 	fail      error
 }
 
-type fieldErr struct{ field, msg string }
+type viewerFieldErr struct{ field, msg string }
 
-func (e fieldErr) Error() string              { return e.field + ": " + e.msg }
-func (e fieldErr) InvalidFields() [][2]string { return [][2]string{{e.field, e.msg}} }
+func (e viewerFieldErr) Error() string              { return e.field + ": " + e.msg }
+func (e viewerFieldErr) InvalidFields() [][2]string { return [][2]string{{e.field, e.msg}} }
 
 var poster = core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Matrix", Year: 1999, PosterPath: "/m.jpg",
 	BackdropPath: "/b.jpg", Runtime: 136 * time.Minute, Genres: []string{"Science Fiction"}, ContentRating: "R", Rating: 8.2}
@@ -50,7 +50,7 @@ func (f *fakeEngine) Taste(_ context.Context, u *core.User) (*core.TasteProfile,
 func (f *fakeEngine) SetTasteOverrides(ctx context.Context, u *core.User, o []core.TasteOverride) (*core.TasteProfile, error) {
 	for _, x := range o {
 		if x.Weight > 1 {
-			return nil, fieldErr{"overrides[0].weight", "must be between -1 and 1"}
+			return nil, viewerFieldErr{"overrides[0].weight", "must be between -1 and 1"}
 		}
 	}
 	f.mu.Lock()
@@ -82,7 +82,7 @@ func (f *fakeEngine) SetLayout(_ context.Context, rules []core.LayoutRule) ([]co
 	for i, r := range rules {
 		for _, rr := range r.Rows {
 			if rr.Action == "explode" {
-				return nil, fieldErr{"rules[" + string(rune('0'+i)) + "].rows[0].action", "must be pin, hide, boost or bury"}
+				return nil, viewerFieldErr{"rules[" + string(rune('0'+i)) + "].rows[0].action", "must be pin, hide, boost or bury"}
 			}
 		}
 		if rules[i].ID == "" {
@@ -213,7 +213,7 @@ func TestViewerHomeEndpoint(t *testing.T) {
 	if eng.hc.Device != core.DeviceTV || time.Since(eng.hc.Now) > time.Minute || eng.limit != 12 {
 		t.Fatalf("defaults = %+v %d", eng.hc, eng.limit)
 	}
-	eng.fail = fieldErr{"section", "must be home, movies, shows or a library section id"}
+	eng.fail = viewerFieldErr{"section", "must be home, movies, shows or a library section id"}
 	if rec := serve(h, req(http.MethodGet, "/ether/api/viewers/1/home?section=kitchen", "")); rec.Code != http.StatusBadRequest {
 		t.Fatalf("engine validation: %d", rec.Code)
 	}

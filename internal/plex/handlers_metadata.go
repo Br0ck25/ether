@@ -418,8 +418,6 @@ func (s *Server) collection(ctx context.Context, u *core.User, k core.RatingKey)
 	return s.d.Collections.Get(ctx, u, k)
 }
 
-func collectionStamp(c *core.Collection) string { return "1" }
-
 func (s *Server) collectionMetadata(c *core.Collection) model.Metadata {
 	rk := c.Key.String()
 	m := model.Metadata{

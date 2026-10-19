@@ -112,6 +112,9 @@ type Collection struct {
 	PosterPath   string    `json:"posterPath,omitempty"`
 	BackdropPath string    `json:"backdropPath,omitempty"`
 	ChildCount   int       `json:"childCount"`
+	// UpdatedAt changes when the collection's members or artwork change, so
+	// Plex clients refetch artwork (additive).
+	UpdatedAt time.Time `json:"updatedAt,omitempty"`
 }
 
 type Collections interface {

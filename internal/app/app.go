@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/admin"
+	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/auth"
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/collections"
@@ -70,6 +71,7 @@ type App struct {
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
 	collections *collections.Service
+	images      *artwork.Images
 	state       *state.State
 	trakt       *trakt.Client
 	llm         *llm.Service
@@ -153,7 +155,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog")); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
-	if a.collections, err = collections.New(a.db, a.catalog, log.With("component", "collections")); err != nil {
+	if a.collections, err = collections.New(a.db, a.catalog, log.With("component", "collections"), a.collectionOptions(cfg)...); err != nil {
 		return fmt.Errorf("collections: %w", err)
 	}
 
@@ -161,6 +163,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state")})
 	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, Logger: log.With("component", "trakt")})
 	a.trakt.SubscribeTo(a.state)
+	a.collections.SetState(a.state)
 	a.closers = append(a.closers, a.trakt.Close)
 	a.llm = llm.New(llm.ServiceOptions{
 		Client:  llm.NewClient(llm.ClientOptions{Config: cfg.LLM, Logger: log.With("component", "llm")}),
@@ -177,12 +180,14 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	if a.personalize, err = personalize.New(personalize.Options{
 		DB: a.db, Catalog: a.catalog, State: a.state, Events: a.state, Users: a.usersSource(),
 		LLM: a.llm, Trakt: a.trakt, Playlists: a.state.Playlists(), Base: a.recommend,
-		ServerName: func() string { return a.cfg.Get().Server.FriendlyName },
-		Logger:     log.With("component", "personalize"),
+		Collections: a.collections, // owner collections as targeted Home/section rows
+		ServerName:  func() string { return a.cfg.Get().Server.FriendlyName },
+		Logger:      log.With("component", "personalize"),
 	}); err != nil {
 		return fmt.Errorf("personalization: %w", err)
 	}
 	a.recommend.SetScorer(a.personalize)
+	a.collections.SetScorer(a.personalize) // "personal" collection sort
 	a.closers = append(a.closers, a.personalize.Close)
 	a.subtitles = subtitles.New(subtitles.Options{
 		Config:    cfg.OpenSubtitles,
@@ -266,6 +271,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}); err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
+	a.collections.SetAuth(a.users)
 	if cfg.Plex.Token != "" {
 		if err := a.users.BootstrapOwner(context.Background(), cfg.Plex); err != nil {
 			log.Warn("owner bootstrap", "err", err)
@@ -373,6 +379,7 @@ func (a *App) Run(ctx context.Context) error {
 	cfg := a.cfg.Get()
 
 	go a.catalog.Run(ctx)
+	go a.collections.Run(ctx)
 	go a.trakt.Start(ctx)
 	if err := a.registrar.Start(ctx); err != nil {
 		a.log.Warn("plex.tv registrar", "err", err)
