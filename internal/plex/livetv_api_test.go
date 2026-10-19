@@ -14,7 +14,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
-func liveFixture(t *testing.T) (*fixture, *livetv.Service, livetv.Channel) {
+func liveFixture(t *testing.T, transcoders ...core.Transcoder) (*fixture, *livetv.Service, livetv.Channel) {
 	t.Helper()
 	f := newFixture()
 	t.Cleanup(func() { f.srv.Close() })
@@ -28,7 +28,11 @@ func liveFixture(t *testing.T) (*fixture, *livetv.Service, livetv.Channel) {
 		fmt.Fprint(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4,\nsegment.ts\n")
 	}))
 	t.Cleanup(up.Close)
-	service, e := livetv.New(livetv.Options{DB: db, Now: func() time.Time { return fixedNow }, HTTPClient: up.Client()})
+	var tc core.Transcoder
+	if len(transcoders) > 0 {
+		tc = transcoders[0]
+	}
+	service, e := livetv.New(livetv.Options{Transcoder: tc, DB: db, Now: func() time.Time { return fixedNow }, HTTPClient: up.Client()})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -175,5 +179,56 @@ func TestLiveTVHonestPassAndViewerRestrictions(t *testing.T) {
 	guide := f.request(t, "GET", liveProviderPath+"/grid?date=2026-10-18", map[string]string{"X-Plex-Token": "kid-live"})
 	if strings.Contains(guide.Body.String(), "Owner programme") {
 		t.Fatal("programme rating restriction leaked")
+	}
+}
+
+// Native clients require usable source analysis at tune, before requesting media.
+type liveProbeTranscoder struct {
+	*fakeTranscoder
+	info   core.MediaInfo
+	probes int
+}
+
+func (t *liveProbeTranscoder) Probe(context.Context, string) (*core.MediaInfo, error) {
+	t.probes++
+	v := t.info
+	return &v, nil
+}
+func TestAppleTVTuneReturnsAnalyzedMediaAndCanonicalUUID(t *testing.T) {
+	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
+	f, service, c := liveFixture(t, tc)
+	for _, format := range []string{"application/json", "application/xml"} {
+		tune := f.request(t, "POST", "/livetv/dvrs/1/channels/"+c.ID+"/tune", map[string]string{"Accept": format, "X-Plex-Product": "Plex for Apple TV", "X-Plex-Platform": "tvOS"})
+		if tune.Code != 200 {
+			t.Fatalf("tune: %d %s", tune.Code, tune.Body.String())
+		}
+		body := tune.Body.String()
+		if strings.Contains(body, "MediaSubscription") || strings.Contains(body, `decision="copy"`) {
+			t.Fatalf("native response contains web bootstrap or invalid part decision: %s", body)
+		}
+		if format == "application/json" {
+			mc := decodeJSON(t, tune)
+			md := mc["Metadata"].([]any)[0].(map[string]any)
+			if md["ratingKey"] != nil || md["type"] != nil || tune.Header().Get("X-Plex-Activity") != "" {
+				t.Fatal("native tune must be source analysis, without a fake library identity or asynchronous activity")
+			}
+			if md["genuineMediaAnalysis"] != true {
+				t.Fatal(body)
+			}
+			media := md["Media"].([]any)[0].(map[string]any)
+			uuid := media["uuid"].(string)
+			if len(uuid) != 36 || uuid[8] != '-' || uuid[13] != '-' || uuid[14] != '4' || uuid[18] != '-' || uuid[23] != '-' {
+				t.Fatalf("invalid UUID %q", uuid)
+			}
+			part := media["Part"].([]any)[0].(map[string]any)
+			if media["videoCodec"] != "h264" || part["decision"] != nil || len(part["Stream"].([]any)) < 2 {
+				t.Fatal(body)
+			}
+		} else if !strings.Contains(body, `genuineMediaAnalysis="1"`) || !strings.Contains(body, `streamType="1"`) || !strings.Contains(body, `streamType="2"`) {
+			t.Fatal(body)
+		}
+	}
+	if len(service.Sessions(context.Background(), &ownerUser)) != 1 {
+		t.Fatal("abandoned native tune was not reclaimed")
 	}
 }

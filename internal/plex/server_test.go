@@ -707,3 +707,18 @@ func TestTranscodeSessionPathsAuthorizedBySession(t *testing.T) {
 		}
 	}
 }
+
+func TestHLSInitializationSegmentServedForNativePlayer(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.trans.decision = core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true, Container: "fmp4"}
+	start := f.get(t, "/video/:/transcode/universal/start.m3u8?path=%2Flibrary%2Fmetadata%2F1000000000000550&session=native-fmp4&directPlay=0&directStream=1")
+	if start.Code != 200 {
+		t.Fatal(start.Code, start.Body.String())
+	}
+	// AVPlayer's segment requests do not carry the original Plex headers.
+	init := f.request(t, "GET", "/video/:/transcode/universal/session/native-fmp4/base/init.mp4", map[string]string{"X-Plex-Token": ""})
+	if init.Code != 200 || init.Body.String() != "segment--1" {
+		t.Fatalf("init was not routed to InitSegment: %d %s", init.Code, init.Body.String())
+	}
+}

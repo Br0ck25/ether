@@ -670,6 +670,9 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 // segmentNumber extracts the segment index from names like "00012.ts",
 // "12.ts", "segment-12.m4s".
 func segmentNumber(name string) (int, bool) {
+	if name == transcode.InitSegmentName {
+		return transcode.InitSegment, true
+	}
 	base := strings.TrimSuffix(name, filepath.Ext(name))
 	end := len(base)
 	start := end

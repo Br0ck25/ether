@@ -33,6 +33,7 @@ type track struct {
 	count      int
 }
 type session struct {
+	consumed        bool
 	reserved        bool
 	ready           bool
 	nextSequence    int64
@@ -99,6 +100,25 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 	if c.Kind == "virtual" && p == nil {
 		return SessionInfo{}, core.ErrNotAvailable
 	}
+	// A client can abandon a successful tune before requesting any media.
+	// Reclaim only its unused session; other viewers/active players stay intact.
+	if caps.ClientID != "" {
+		var abandoned []*session
+		s.mu.Lock()
+		for id, old := range s.sessions {
+			old.mu.Lock()
+			unused := old.ready && !old.consumed && old.info.UserID == u.ID && old.caps.ClientID == caps.ClientID
+			old.mu.Unlock()
+			if unused {
+				delete(s.sessions, id)
+				abandoned = append(abandoned, old)
+			}
+		}
+		s.mu.Unlock()
+		for _, old := range abandoned {
+			old.close(s)
+		}
+	}
 	var playbackSessions []*core.PlaySession
 	if s.o.Playback != nil {
 		playbackSessions = s.o.Playback.Sessions()
@@ -125,7 +145,7 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 		s.mu.Unlock()
 		return SessionInfo{}, core.ErrStreamLimit
 	}
-	ss := &session{info: SessionInfo{ID: randomID(), UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now()}, user: *u, caps: caps, last: s.o.Now(), resources: map[string]string{}}
+	ss := &session{info: SessionInfo{ID: liveSessionID(), UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now()}, user: *u, caps: caps, last: s.o.Now(), resources: map[string]string{}}
 	s.sessions[ss.info.ID] = ss
 	s.mu.Unlock()
 	if limiter, ok := s.o.Playback.(channelLimiter); ok {
@@ -295,6 +315,7 @@ func (s *Service) prepareTrack(ctx context.Context, ss *session, p Programme) (*
 		return nil, err
 	}
 	info := ps.Info
+	ss.info.MediaInfo = &info
 	info.Duration = p.End.Sub(p.Start)
 	decision := s.o.Transcoder.Decide(info, caps, core.DecideOptions{DirectStream: true, AudioStream: -1, SubtitleStream: -1})
 	if decision.Kind == core.DecisionDirectPlay {
@@ -339,6 +360,9 @@ func (s *Service) ServePlaylist(w http.ResponseWriter, r *http.Request, id strin
 		writeStreamError(w, err)
 		return
 	}
+	ss.mu.Lock()
+	ss.consumed = true
+	ss.mu.Unlock()
 	if ss.relay != nil {
 		s.serveRelayPlaylist(w, r, ss)
 		return
@@ -536,6 +560,18 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 	}
 	isHLS := strings.HasPrefix(strings.TrimSpace(string(prefix[:n])), "#EXTM3U") || strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "mpegurl")
 	if isHLS && !c.Transcode {
+		if s.o.Transcoder != nil && (strings.Contains(strings.ToLower(ss.caps.Product), "apple") || strings.EqualFold(ss.caps.Platform, "tvos") || strings.EqualFold(ss.caps.Platform, "ios")) {
+			info, err := s.o.Transcoder.Probe(ctx, c.StreamURL)
+			if err != nil {
+				return err
+			}
+			if info == nil || info.Video() == nil {
+				return core.ErrNotAvailable
+			}
+			copy := *info
+			copy.Duration = 0
+			ss.info.MediaInfo = &copy
+		}
 		ss.resources["index.m3u8"] = c.StreamURL
 		return nil
 	}
@@ -547,6 +583,7 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 		return err
 	}
 	info.Duration = 0
+	ss.info.MediaInfo = info
 	dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectStream: !c.Transcode, AudioStream: -1, SubtitleStream: -1})
 	if dec.Kind == core.DecisionDirectPlay {
 		dec.Kind = core.DecisionRemux

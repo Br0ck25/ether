@@ -552,3 +552,40 @@ func TestChannelReservationReleasedOnStopAndPrepareFailure(t *testing.T) {
 		t.Fatal("stop leaked a viewing reservation")
 	}
 }
+
+func TestAbandonedTunesReclaimedOnlyForSameViewerAndClient(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "#EXTM3U\n#EXTINF:4,\npart.ts\n") }))
+	defer up.Close()
+	s := testService(t, Options{HTTPClient: up.Client()})
+	c, err := s.SaveChannel(context.Background(), Channel{Name: "Test", Number: "1", Kind: "iptv", Enabled: true, StreamURL: up.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := &core.User{ID: 1, StreamLimit: 1}
+	caps := core.ClientCaps{ClientID: "apple-tv"}
+	first, err := s.Tune(context.Background(), u, c.ID, caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Tune(context.Background(), u, c.ID, caps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("new tune reused its old session")
+	}
+	if _, err = s.Session(context.Background(), first.ID, u); err != core.ErrNotFound {
+		t.Fatalf("unused tune survived: %v", err)
+	}
+	if _, err = s.Tune(context.Background(), u, c.ID, core.ClientCaps{ClientID: "other-device"}); err != core.ErrStreamLimit {
+		t.Fatalf("another device evaded stream limit: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	s.ServePlaylist(rec, httptest.NewRequest("GET", "/", nil), second.ID, u)
+	if rec.Code != 200 {
+		t.Fatal(rec.Code)
+	}
+	if _, err = s.Tune(context.Background(), u, c.ID, caps); err != core.ErrStreamLimit {
+		t.Fatalf("active media session was reaped: %v", err)
+	}
+}

@@ -103,9 +103,10 @@ type Options struct {
 	Warm func(context.Context, core.RatingKey) error
 }
 type SessionInfo struct {
-	ID        string     `json:"id"`
-	UserID    int64      `json:"userId"`
-	Channel   Channel    `json:"channel"`
-	Programme *Programme `json:"programme,omitempty"`
-	StartedAt time.Time  `json:"startedAt"`
+	MediaInfo *core.MediaInfo `json:"-"` // Actual source analysis for native clients.
+	ID        string          `json:"id"`
+	UserID    int64           `json:"userId"`
+	Channel   Channel         `json:"channel"`
+	Programme *Programme      `json:"programme,omitempty"`
+	StartedAt time.Time       `json:"startedAt"`
 }
