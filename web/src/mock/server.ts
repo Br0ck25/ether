@@ -142,7 +142,42 @@ function defaultConfig(): EtherConfig {
         movieCategories: null,
         tvCategories: null,
       },
+      {
+        id: "i3",
+        name: "Torrent Tracker",
+        url: "https://tracker.example.org/api/v2.0/indexers/example/results/torznab",
+        apiKey: "••••",
+        dailyLimit: 0,
+        dailyGrabs: 0,
+        priority: 2,
+        enabled: true,
+        movieCategories: null,
+        tvCategories: null,
+        protocol: "torrent",
+      },
     ],
+    debrid: {
+      providers: [
+        {
+          id: "rd-1",
+          name: "Real-Debrid",
+          kind: "realdebrid",
+          apiKey: "••••",
+          priority: 0,
+          enabled: true,
+        },
+        {
+          id: "tb-1",
+          name: "TorBox backup",
+          kind: "torbox",
+          apiKey: "••••",
+          priority: 1,
+          enabled: true,
+        },
+      ],
+      cachedOnly: true,
+      removeUncached: true,
+    },
     cache: {
       dir: "/var/lib/ether/cache",
       budgetBytes: 200 * 1024 ** 3,
@@ -1146,10 +1181,103 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return out;
   }
 
+  function debridStatus() {
+    const debrid = state.config.debrid;
+    const providers = debrid?.providers ?? [];
+    return {
+      enabled: providers.some((p) => p.enabled && p.apiKey),
+      cachedOnly: debrid?.cachedOnly ?? true,
+      engine: {
+        openFiles: 1,
+        blockBytes: 524288,
+        memoryHits: 10,
+        diskHits: 40,
+        blocksFetched: 120,
+        bytesFetched: 62914560,
+        hedges: 2,
+        hedgeWins: 1,
+        linkRefreshes: 3,
+        errors: 0,
+      },
+      providers: providers.map((p, i) => {
+        const base = {
+          id: p.id,
+          name: p.name,
+          kind: p.kind,
+          enabled: p.enabled,
+          priority: p.priority,
+        };
+        const idle = {
+          resolveMs: 0,
+          linkMs: 0,
+          connectMs: 0,
+          ttfbMs: 0,
+          throughputBps: 0,
+          samples: 0,
+        };
+        if (!p.enabled || !p.apiKey)
+          return {
+            ...base,
+            state: "disabled",
+            requests: 0,
+            failures: 0,
+            cached: 0,
+            notCached: 0,
+            reused: 0,
+            latency: idle,
+          };
+        if (i === 0)
+          return {
+            ...base,
+            state: "ok",
+            lastError: "",
+            requests: 48,
+            failures: 1,
+            cached: 17,
+            notCached: 6,
+            linksRefreshed: 3,
+            reused: 5,
+            latency: {
+              resolveMs: 812.5,
+              linkMs: 140.2,
+              connectMs: 35.1,
+              ttfbMs: 92.4,
+              throughputBps: 48_000_000,
+              samples: 12,
+            },
+            lastSuccess: new Date(Date.now() - 4 * 60_000).toISOString(),
+          };
+        return {
+          ...base,
+          state: "backoff",
+          lastError: "rate limited by the service; retrying shortly",
+          backoffUntil: new Date(Date.now() + 5 * 60_000).toISOString(),
+          requests: 9,
+          failures: 3,
+          cached: 2,
+          notCached: 4,
+          linksRefreshed: 0,
+          reused: 0,
+          latency: idle,
+          lastSuccess: new Date(Date.now() - 3 * 3600_000).toISOString(),
+        };
+      }),
+    };
+  }
+
   function dashboard() {
     const session = catalog[3]!;
     return {
-      names: ["cache", "catalog", "hwaccel", "indexers", "providers", "remote", "sessions"],
+      names: [
+        "cache",
+        "catalog",
+        "debrid",
+        "hwaccel",
+        "indexers",
+        "providers",
+        "remote",
+        "sessions",
+      ],
       setupComplete: state.config.setupComplete,
       version: state.boot.version,
       sections: {
@@ -1162,6 +1290,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
           lastSync: new Date(Date.now() - 5 * 3600_000).toISOString(),
           sync: { running: false, titlesSeen: 63500 },
         },
+        debrid: debridStatus(),
         hwaccel: {
           ffmpeg: "8.0.1",
           hwaccel: { name: "videotoolbox", encoders: ["h264_videotoolbox", "hevc_videotoolbox"] },
@@ -1266,11 +1395,40 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ handle: "h1", code: "ABCD", authUrl: "https://app.plex.tv/auth#?code=ABCD" });
       case "POST /test/usenet":
       case "POST /test/indexer":
+      case "POST /test/debrid":
       case "POST /test/tmdb":
       case "POST /test/llm":
       case "POST /test/trakt":
       case "POST /test/opensubtitles":
         return json({ ok: true, durationMs: 40 + (hash(route) % 200) });
+      case "POST /playback/prowlarr": {
+        const req = body as {
+          config?: { dailyLimit?: number; dailyGrabs?: number };
+          import?: boolean;
+        };
+        const found = [
+          { id: "prowlarr-1", name: "Prowlarr Usenet", protocol: "usenet" as const },
+          { id: "prowlarr-2", name: "Prowlarr Torrents", protocol: "torrent" as const },
+        ].map((ix, i) => ({
+          ...ix,
+          url: `http://localhost:9696/${i + 1}/`,
+          apiKey: "••••",
+          dailyLimit: req.config?.dailyLimit ?? 0,
+          dailyGrabs: req.config?.dailyGrabs ?? 0,
+          priority: (state.config.indexers ?? []).length + i,
+          enabled: true,
+          movieCategories: null,
+          tvCategories: null,
+        }));
+        if (req.import) {
+          const have = new Set((state.config.indexers ?? []).map((ix) => ix.id));
+          state.config.indexers = [
+            ...(state.config.indexers ?? []),
+            ...found.filter((ix) => !have.has(ix.id)),
+          ];
+        }
+        return json({ indexers: found, imported: Boolean(req.import) });
+      }
       case "GET /disk":
         return json({
           path: q.get("path") ?? "",

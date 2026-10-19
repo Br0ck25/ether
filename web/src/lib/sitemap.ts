@@ -79,7 +79,16 @@ export const PAGES: PageDef[] = [
     title: "Sources",
     sections: [
       { key: "usenet", title: "Usenet providers", keywords: "nntp backfill connections" },
-      { key: "indexers", title: "Indexers", keywords: "newznab prowlarr budget api" },
+      {
+        key: "indexers",
+        title: "Indexers",
+        keywords: "newznab torznab torrent prowlarr budget api",
+      },
+      {
+        key: "debrid",
+        title: "Debrid",
+        keywords: "real-debrid realdebrid torbox alldebrid premiumize torrent cached",
+      },
       { key: "usage", title: "Usage & costs", keywords: "quota price plan cost" },
     ],
   },
