@@ -99,6 +99,30 @@ type GDMOptions struct {
 	Announce         bool
 	AnnounceInterval time.Duration
 	Logger           *slog.Logger
+
+	// rejoinInterval overrides gdmRejoinInterval (tests).
+	rejoinInterval time.Duration
+}
+
+// gdmRejoinInterval is how often each multicast socket is reopened, which
+// re-joins the group. Membership is silently lost when interfaces change
+// (DHCP renewals, Wi-Fi roaming, sleep/wake), and the standard library has
+// no explicit re-join.
+const gdmRejoinInterval = 10 * time.Minute
+
+// Backoff for consecutive socket read errors, so a persistently failing
+// socket (e.g. ICMP port-unreachable resets on Windows) cannot spin a core.
+const (
+	gdmErrBackoffMin = 10 * time.Millisecond
+	gdmErrBackoffMax = 5 * time.Second
+)
+
+// nextGDMBackoff returns the delay after another consecutive read error.
+func nextGDMBackoff(d time.Duration) time.Duration {
+	if d < gdmErrBackoffMin {
+		return gdmErrBackoffMin
+	}
+	return min(d*2, gdmErrBackoffMax)
 }
 
 // GDMResponder answers GDM discovery on the LAN.
@@ -120,6 +144,9 @@ func NewGDMResponder(o GDMOptions) *GDMResponder {
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
+	}
+	if o.rejoinInterval <= 0 {
+		o.rejoinInterval = gdmRejoinInterval
 	}
 	return &GDMResponder{o: o}
 }
@@ -153,14 +180,8 @@ func (g *GDMResponder) Start(ctx context.Context) error {
 			conns = append(conns, c)
 		}
 	} else {
-		group := net.ParseIP(GDMMulticastGroup)
 		for _, p := range g.o.Ports {
-			// ListenMulticastUDP binds the wildcard address with
-			// SO_REUSEADDR, so it receives multicast, broadcast and unicast.
-			c, err := net.ListenMulticastUDP("udp4", nil, &net.UDPAddr{IP: group, Port: p})
-			if err != nil {
-				c, err = net.ListenUDP("udp4", &net.UDPAddr{Port: p})
-			}
+			c, err := listenGDM(p)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("port %d: %w", p, err))
 				continue
@@ -177,9 +198,10 @@ func (g *GDMResponder) Start(ctx context.Context) error {
 	g.conns = conns
 	ctx, cancel := context.WithCancel(ctx)
 	g.cancel = cancel
-	for _, c := range conns {
+	rejoin := len(g.o.ListenAddrs) == 0
+	for i, c := range conns {
 		g.wg.Add(1)
-		go g.serve(ctx, c)
+		go g.serve(ctx, i, c, rejoin)
 	}
 	if g.o.Announce && len(g.o.ListenAddrs) == 0 {
 		g.wg.Add(1)
@@ -187,11 +209,46 @@ func (g *GDMResponder) Start(ctx context.Context) error {
 	}
 	go func() {
 		<-ctx.Done()
-		for _, c := range conns {
+		g.mu.Lock()
+		for _, c := range g.conns {
 			_ = c.Close()
 		}
+		g.mu.Unlock()
 	}()
 	return nil
+}
+
+// listenGDM opens one GDM socket. ListenMulticastUDP binds the wildcard
+// address with SO_REUSEADDR (so a replacement can be opened before the old
+// socket closes) and receives multicast, broadcast and unicast.
+func listenGDM(port int) (*net.UDPConn, error) {
+	c, err := net.ListenMulticastUDP("udp4", nil, &net.UDPAddr{IP: net.ParseIP(GDMMulticastGroup), Port: port})
+	if err != nil {
+		c, err = net.ListenUDP("udp4", &net.UDPAddr{Port: port})
+	}
+	return c, err
+}
+
+// rejoin replaces socket i with a freshly opened one on the same port,
+// re-joining the multicast group. It returns the socket to keep serving on
+// and false when the responder is stopping.
+func (g *GDMResponder) rejoin(ctx context.Context, i int, old *net.UDPConn) (*net.UDPConn, bool) {
+	port := old.LocalAddr().(*net.UDPAddr).Port
+	c, err := listenGDM(port)
+	if err != nil {
+		g.o.Logger.Debug("gdm rejoin failed; keeping the current socket", "port", port, "err", err)
+		return old, ctx.Err() == nil
+	}
+	g.mu.Lock()
+	if ctx.Err() != nil || i >= len(g.conns) || g.conns[i] != old {
+		g.mu.Unlock()
+		_ = c.Close()
+		return old, false
+	}
+	g.conns[i] = c
+	g.mu.Unlock()
+	_ = old.Close()
+	return c, true
 }
 
 // Addrs returns the bound local addresses.
@@ -226,18 +283,45 @@ func (g *GDMResponder) Stop() {
 	g.mu.Unlock()
 }
 
-func (g *GDMResponder) serve(ctx context.Context, c *net.UDPConn) {
+// serve answers M-SEARCH on socket i. With rejoin, the socket is reopened
+// every rejoinInterval to refresh its multicast membership.
+func (g *GDMResponder) serve(ctx context.Context, i int, c *net.UDPConn, rejoin bool) {
 	defer g.wg.Done()
 	buf := make([]byte, 2048)
+	var backoff time.Duration
+	nextRejoin := time.Now().Add(g.o.rejoinInterval)
 	for {
+		if rejoin {
+			if !time.Now().Before(nextRejoin) {
+				var ok bool
+				if c, ok = g.rejoin(ctx, i, c); !ok {
+					return
+				}
+				nextRejoin = time.Now().Add(g.o.rejoinInterval)
+			}
+			_ = c.SetReadDeadline(nextRejoin)
+		}
 		n, src, err := c.ReadFromUDP(buf)
 		if err != nil {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			g.o.Logger.Debug("gdm read", "err", err)
+			var ne net.Error
+			if rejoin && errors.As(err, &ne) && ne.Timeout() {
+				continue // time to rejoin
+			}
+			backoff = nextGDMBackoff(backoff)
+			g.o.Logger.Debug("gdm read", "err", err, "retry_in", backoff)
+			t := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return
+			case <-t.C:
+			}
 			continue
 		}
+		backoff = 0
 		if !isMSearch(buf[:n]) {
 			continue
 		}
