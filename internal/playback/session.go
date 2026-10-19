@@ -31,6 +31,15 @@ type generation struct {
 	info  core.MediaInfo
 	tmap  TimeMap
 
+	// indexReady is closed once the container keyframe index has been
+	// read (or given up on); the prewarm path waits for it, Play does not.
+	// ctx is cancelled on retire so a background index fill stops with
+	// the generation instead of holding its source open.
+	indexReady chan struct{}
+	indexOnce  sync.Once
+	ctx        context.Context
+	cancel     context.CancelFunc
+
 	// articleMissing records that a read hit core.ErrArticleMissing.
 	articleMissing atomic.Bool
 	readFailure    error // protected by mu; distinguishes transient failover from bad data
@@ -67,6 +76,9 @@ func (g *generation) release() {
 
 // retire stops new reads and closes the source when the last read ends.
 func (g *generation) retire() {
+	if g.cancel != nil {
+		g.cancel()
+	}
 	g.mu.Lock()
 	if g.retired {
 		g.mu.Unlock()
@@ -87,6 +99,39 @@ func (g *generation) closeSource() {
 	if g.src != nil {
 		_ = g.src.Close()
 	}
+}
+
+// markIndexReady records that no background index fill is outstanding.
+func (g *generation) markIndexReady() {
+	g.indexOnce.Do(func() {
+		if g.indexReady != nil {
+			close(g.indexReady)
+		}
+	})
+}
+
+// setIndex installs keyframe points read in the background, updating the
+// generation's TimeMap and published MediaInfo atomically.
+func (g *generation) setIndex(points []IndexPoint) {
+	g.mu.Lock()
+	g.tmap.Points = points
+	g.info.Keyframes = keyframesOf(points)
+	g.mu.Unlock()
+}
+
+// infoSnapshot copies the generation's info under its lock (the background
+// index fill may still be updating Keyframes).
+func (g *generation) infoSnapshot() core.MediaInfo {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.info
+}
+
+// timeMapSnapshot copies the generation's TimeMap under its lock.
+func (g *generation) timeMapSnapshot() TimeMap {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.tmap
 }
 
 func (g *generation) releaseID() string {
@@ -124,10 +169,14 @@ type session struct {
 
 	mu             sync.Mutex
 	cur            *generation
+	virtualGen     *generation // generation whose layout virtual mirrors
 	gens           int
 	tried          []string
 	alternates     []core.Release
 	failovers      int
+	downFailovers  int
+	requiresRemux  bool
+	prefer         string // release ID the viewer picked (PrepareVariant); read-only after creation
 	lastActive     time.Time
 	stopAt         time.Time // set by a "stopped" timeline; expiry after a grace
 	decision       core.DecisionKind
@@ -135,6 +184,15 @@ type session struct {
 	explicit       bool // decision set by SetDecision
 	closed         bool
 	registered     bool
+
+	// Speed-coupled down-failover state (guarded by speedMu).
+	speedMu    sync.Mutex
+	speed      speedTracker
+	genSince   time.Time // when the current generation started serving
+	graceUntil time.Time // slow-source checks are ignored before this
+	slowChecks int       // consecutive slow evaluations
+	lastSrcPos int64     // furthest source offset read on the current generation
+	expectPos  int64     // next sequential read offset (-1 = unknown)
 }
 
 func newSession(id string, ident identity, user *core.User, caps core.ClientCaps, title *core.Title, profile string, now time.Time) *session {
@@ -150,6 +208,9 @@ func newSession(id string, ident identity, user *core.User, caps core.ClientCaps
 		lastActive: now,
 		failSem:    make(chan struct{}, 1),
 		rate:       rateMeter{},
+		genSince:   now,
+		graceUntil: now,
+		expectPos:  -1,
 	}
 }
 
@@ -158,13 +219,15 @@ func (s *session) adopt(g *generation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cur = g
+	s.virtualGen = g
 	s.gens = g.n + 1
 	s.alternates = g.res.Alternates
-	s.virtual = g.tmap
-	s.container = g.info.Container
+	s.virtual = g.timeMapSnapshot()
+	info := g.infoSnapshot()
+	s.container = info.Container
 	s.name = g.src.Name()
-	s.contentType = contentTypeFor(g.info.Container, s.name)
-	sum := sha1.Sum(fmt.Appendf(nil, "%s:%d", g.releaseID(), g.tmap.Size))
+	s.contentType = contentTypeFor(info.Container, s.name)
+	sum := sha1.Sum(fmt.Appendf(nil, "%s:%d", g.releaseID(), s.virtual.Size))
 	s.etag = `"` + hex.EncodeToString(sum[:10]) + `"`
 	s.modTime = g.res.Release.PubDate
 	if s.modTime.IsZero() {
@@ -185,6 +248,12 @@ func (s *session) nextGen() int {
 	n := s.gens
 	s.gens++
 	return n
+}
+
+func (s *session) isRegistered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registered
 }
 
 func (s *session) isClosed() bool {
@@ -224,7 +293,7 @@ func (s *session) toSource(g *generation, v int64) int64 {
 	if g.n == 0 {
 		return v
 	}
-	return MapOffset(v, virtual, g.tmap)
+	return MapOffset(v, virtual, g.timeMapSnapshot())
 }
 
 func (s *session) snapshot(now time.Time) *core.PlaySession {
@@ -246,6 +315,8 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 		SpeedBps:       s.rate.rate(now),
 		LastActive:     s.lastActive,
 		Failovers:      s.failovers,
+		DownFailovers:  s.downFailovers,
+		RequiresRemux:  s.requiresRemux,
 	}
 	if s.user.Username == "" {
 		ps.Username = s.user.Title
@@ -254,7 +325,7 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 		res := *g.res
 		ps.Resolution = &res
 		ps.Source = g.src
-		ps.Info = g.info
+		ps.Info = g.infoSnapshot()
 	}
 	return ps
 }

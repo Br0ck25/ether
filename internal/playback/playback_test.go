@@ -566,6 +566,10 @@ func TestFailoverMidResponseEndsMKV(t *testing.T) {
 }
 
 func TestDirectPlayRejectsDifferentSizeReplacement(t *testing.T) {
+	// No exact-size repost exists, so the mismatched release must never be
+	// spliced into A's byte coordinates: the response ends at the failure
+	// point, the session swaps to B, and the next decision must be a
+	// remux (RequiresRemux).
 	a := mkv("A", 200000, 100*time.Second)
 	a.FailFrom, a.FailTo = 120000, 130000
 	h := newHarness(t, []*fakeRelease{a, mkv("B", 400000, 100*time.Second)}, []string{"A", "B"})
@@ -576,11 +580,17 @@ func TestDirectPlayRejectsDifferentSizeReplacement(t *testing.T) {
 		t.Fatalf("expected source to stop safely: bytes=%d err=%v", len(body), err)
 	}
 	st, _ := h.m.Session(ps.ID)
-	if st.Resolution.Release.ID != "A" || st.Failovers != 0 {
-		t.Fatalf("incompatible headers were replaced: %+v", st)
+	if st.Resolution.Release.ID != "B" || st.Failovers != 1 {
+		t.Fatalf("session did not swap to the healthy release: %+v", st)
 	}
-	if h.cache.pinned("B", PinReasonLive) {
-		t.Fatal("rejected candidate was pinned")
+	if !st.RequiresRemux || !h.m.RequiresRemux(ps.ID) {
+		t.Fatalf("remux switch not flagged: %+v", st)
+	}
+	if !h.cache.pinned("B", PinReasonLive) {
+		t.Fatal("swapped candidate was not pinned")
+	}
+	if h.resolver.isBad("B") {
+		t.Fatal("healthy candidate marked bad")
 	}
 }
 

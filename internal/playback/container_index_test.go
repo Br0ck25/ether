@@ -156,6 +156,68 @@ func FuzzContainerIndex(f *testing.F) {
 
 var _ io.ReaderAt = (*recordIndexReader)(nil)
 
+// indexedMKVNoSeekHead is indexedMKV without a SeekHead: the Cues sit
+// after the clusters and must be found by walking segment elements.
+func indexedMKVNoSeekHead() ([]byte, []IndexPoint) {
+	info := elementBytes(0x1549a966, elementBytes(0x2ad7b1, words(1000000)))
+	tracks := elementBytes(0x1654ae6b, elementBytes(0xae, elementBytes(0xd7, []byte{2}), elementBytes(0x83, []byte{1})))
+	cluster := elementBytes(0x1f43b675, make([]byte, 200))
+	p1 := uint32(len(info) + len(tracks))
+	p2 := p1 + uint32(len(cluster))
+	cues := elementBytes(0x1c53bb6b, cue(0, p1, 2), cue(3000, p2, 2))
+	payload := bytes.Join([][]byte{info, tracks, cluster, cluster, cues}, nil)
+	header := elementBytes(0x1a45dfa3)
+	b := append(header, elementBytes(0x18538067, payload)...)
+	base := len(b) - len(payload)
+	return b, []IndexPoint{{int64(base) + int64(p1), 0}, {int64(base) + int64(p2), 3 * time.Second}}
+}
+
+func TestMatroskaTailCuesWithoutSeekHead(t *testing.T) {
+	b, want := indexedMKVNoSeekHead()
+	r := &recordIndexReader{Reader: bytes.NewReader(b)}
+	p := containerIndex(context.Background(), r, int64(len(b)))
+	if len(p) != len(want) {
+		t.Fatalf("cues: %+v want %+v", p, want)
+	}
+	for i := range want {
+		if p[i] != want[i] {
+			t.Fatalf("point %d: %+v want %+v", i, p[i], want[i])
+		}
+	}
+	// Cluster payloads are skipped, never read.
+	for _, read := range r.reads {
+		if read[1] > 64 && read[0] > 40 {
+			// Only small element headers and the small metadata/cues
+			// elements may be read; a 200-byte cluster read would show here.
+			if read[1] >= 200 {
+				t.Fatalf("read cluster payload: %v", read)
+			}
+		}
+	}
+}
+
+// Fragmented MP4: empty sample tables in moov, timing in sidx.
+func TestFragmentedMP4SidxIndex(t *testing.T) {
+	ftyp := box("ftyp", []byte("iso60000"))
+	moov := box("moov", box("mvhd", words(0, 0, 0, 1000)))
+	// sidx v0: timescale 1000, EPT 0, first_offset 0, 3 refs of 100 bytes
+	// and 2s each (subsegment sizes include their moof+mdat).
+	sidx := box("sidx", words(0, 1, 1000, 0, 0, 0x00000003, 100, 2000, 0, 100, 2000, 0, 100, 2000, 0))
+	media := make([]byte, 300)
+	b := bytes.Join([][]byte{ftyp, moov, sidx, media}, nil)
+	base := int64(len(ftyp) + len(moov) + len(sidx))
+	p := containerIndex(context.Background(), bytes.NewReader(b), int64(len(b)))
+	want := []IndexPoint{{base, 0}, {base + 100, 2 * time.Second}, {base + 200, 4 * time.Second}}
+	if len(p) != len(want) {
+		t.Fatalf("sidx points: %+v want %+v", p, want)
+	}
+	for i := range want {
+		if p[i] != want[i] {
+			t.Fatalf("point %d: %+v want %+v", i, p[i], want[i])
+		}
+	}
+}
+
 func TestMP4EditListShiftsPresentationTime(t *testing.T) {
 	trak := box("edts", box("elst", words(0, 1, 10000, 400, 65536)))
 	off, err := mp4EditOffset(trak, 1000, 1000)

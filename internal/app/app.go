@@ -293,6 +293,12 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
 		},
 		FetchNZB: a.indexers.FetchNZB,
+		Aligner: func() core.TimelineAligner {
+			if a.subtitles == nil {
+				return nil
+			}
+			return a.subtitles.TimelineAligner()
+		}(),
 		// Transcode sessions are keyed by the client's session id; the Plex
 		// front end (built below) maps playback sessions to them.
 		HLSLookup: func(id string) (core.HLSSession, bool) {

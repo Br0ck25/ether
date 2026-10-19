@@ -74,21 +74,26 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			if ng == g || ng == nil {
 				return rerr
 			}
-			at = g.tmap.TimeAt(srcpos)
-			if vpos == vstart {
+			at = g.timeMapSnapshot().TimeAt(srcpos)
+			if vpos == vstart && !m.RequiresRemux(s.id) {
 				g, srcpos = ng, s.toSource(ng, vpos)
 				continue
 			}
 			if !spliceable(s.container, s.name) {
 				return errEndResponse
 			}
-			srcpos = alignPacket(ng.tmap.OffsetAt(AlignTime(at, g.info.Duration, ng.info.Duration)))
+			srcpos = alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, ng.infoSnapshot().Duration)))
 			g = ng
 			continue
 		case recoverableSourceFailure(rerr) && ctx.Err() == nil:
 			g.noteReadFailure(rerr)
-			at = g.tmap.TimeAt(srcpos)
+			at = g.timeMapSnapshot().TimeAt(srcpos)
 			ng, err := m.failover(ctx, s, g, at, "source read failed during direct play")
+			if errors.Is(err, errRequireRemux) {
+				// Swapped, but the new release cannot continue this
+				// byte stream: end so the client re-decides as remux.
+				return errEndResponse
+			}
 			if err != nil {
 				return err
 			}
@@ -100,7 +105,7 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			if !spliceable(s.container, s.name) {
 				return errEndResponse
 			}
-			srcpos = alignPacket(ng.tmap.OffsetAt(AlignTime(at, g.info.Duration, ng.info.Duration)))
+			srcpos = alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, ng.infoSnapshot().Duration)))
 			g = ng
 			continue
 		case errors.Is(rerr, io.EOF):
@@ -148,12 +153,18 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			}
 			var n int
 			var err error
+			readAt := time.Now()
 			if cr, ok := g.src.(interface {
 				ReadAtContext(context.Context, []byte, int64) (int, error)
 			}); ok {
 				n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
 			} else {
 				n, err = g.src.ReadAt((*bp)[:want], pos)
+			}
+			if n > 0 && g.sess.isRegistered() {
+				now := m.now()
+				g.sess.noteFetch(n, time.Since(readAt), now)
+				g.sess.noteReadPos(pos, n, now, m.opts.SpeedGrace)
 			}
 			if int64(n) == want && errors.Is(err, io.EOF) {
 				err = nil
@@ -241,10 +252,7 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 		if rerr != nil && recoverableSourceFailure(rerr) && r.Context().Err() == nil {
 			g.noteReadFailure(rerr)
 			if registered {
-				g.mu.Lock()
-				tm := g.tmap
-				g.mu.Unlock()
-				m.backgroundFailover(s, g, tm.TimeAt(start+n))
+				m.backgroundFailover(s, g, g.timeMapSnapshot().TimeAt(start+n))
 			}
 		}
 		return rerr
@@ -268,7 +276,7 @@ func (m *Manager) backgroundFailover(s *session, g *generation, at time.Duration
 		defer m.wg.Done()
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.FailoverTimeout)
 		defer cancel()
-		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil {
+		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil && !errors.Is(err, errRequireRemux) {
 			m.log.Error("background failover failed", "session", s.id, "err", err)
 		}
 	}()
