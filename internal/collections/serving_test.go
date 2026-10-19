@@ -291,11 +291,26 @@ func TestSchedulerRebuildsWhenDue(t *testing.T) {
 	if n := e.svc.RunDue(e.ctx); n != 0 {
 		t.Fatalf("nothing should be due right after a run, built %d", n)
 	}
+	hkey := core.SmartKey(mustInt(t, h.ID))
 	advance(61 * time.Minute)
 	n := e.svc.RunDue(e.ctx) // hourly owner + hourly built-ins
 	got, _ := e.svc.GetSpec(e.ctx, h.ID)
 	if n == 0 || !got.LastBuiltAt.Equal(now.Truncate(time.Second)) {
 		t.Fatalf("hourly not rebuilt: n=%d %+v", n, got.LastBuiltAt)
+	}
+	// The built-ins joined a popular title, so this rebuild changed the
+	// members; the next one does not, and Plex keeps its cached artwork.
+	before, err := e.svc.Get(e.ctx, owner, hkey)
+	if err != nil || !before.UpdatedAt.Equal(now.Truncate(time.Second)) {
+		t.Fatalf("stamp after a changed rebuild: %+v %v", before, err)
+	}
+	advance(61 * time.Minute)
+	if n := e.svc.RunDue(e.ctx); n == 0 {
+		t.Fatal("hourly not rebuilt again")
+	}
+	after, _ := e.svc.Get(e.ctx, owner, hkey)
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("stamp moved on an unchanged rebuild: %v -> %v", before.UpdatedAt, after.UpdatedAt)
 	}
 	ctx, cancel := context.WithCancel(e.ctx)
 	done := make(chan struct{})
@@ -316,7 +331,8 @@ func TestLegacySmartCollectionsMigrateWithStableKeys(t *testing.T) {
 	}
 	defer db.Close()
 	if _, err := db.Exec(`INSERT INTO collections_smart(id,title,summary,type,filter_json,sort,owner_user_id,created_at)
-		VALUES(7,'Old Sci-Fi','legacy','movie','{"type":"movie","genres":["Science Fiction"],"yearTo":1990,"maxRuntime":7200000000000}','rating',0,1)`); err != nil {
+		VALUES(7,'Old Sci-Fi','legacy','movie','{"type":"movie","genres":["Science Fiction"],"yearTo":1990,"maxRuntime":7200000000000}','rating',0,1),
+		      (8,'Recently Released Movies','','movie','{"type":"movie","yearFrom":2025}','released',0,1)`); err != nil {
 		t.Fatal(err)
 	}
 	e := newEnv(t)
@@ -339,6 +355,10 @@ func TestLegacySmartCollectionsMigrateWithStableKeys(t *testing.T) {
 	}
 	if !fields["genre:in"] || !fields["year:lte"] || !fields["runtime:lte"] {
 		t.Fatalf("rules: %+v", got.Rules)
+	}
+	starter, err := svc.GetSpec(ctx, "8")
+	if err != nil || len(starter.Rules) != 1 || starter.Rules[0].Field != "released" || starter.Rules[0].Op != "within" {
+		t.Fatalf("v1 starter collection not upgraded: %+v %v", starter, err)
 	}
 	var left int
 	_ = db.QueryRow(`SELECT COUNT(*) FROM collections_smart`).Scan(&left)

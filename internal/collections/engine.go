@@ -47,6 +47,9 @@ func (b *buildResult) itemCount() int {
 
 type evalOptions struct {
 	seed string // stable id for random sort
+	// persist joins external titles to the catalogue (builds); previews
+	// only overlay them.
+	persist bool
 }
 
 // cand is a candidate title with the rules a source already guarantees.
@@ -154,9 +157,7 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	if len(keyOnly) > 0 {
 		external = append(external, s.titlesFor(ctx, keyOnly)...)
 	}
-	if joined := s.join(ctx, snap, external); joined > 0 {
-		snap = s.idx.current()
-	}
+	snap = s.join(ctx, snap, external, opt.persist)
 
 	// Watch-provider rules need the provider's catalogue from TMDB.
 	ec := &evalCtx{now: s.now(), providers: map[*rule]map[core.RatingKey]bool{}}
@@ -164,9 +165,7 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 		if r.field == "watchProvider" {
 			set, titles := s.providerSet(ctx, &sp, r, warn)
 			ec.providers[r] = set
-			if s.join(ctx, snap, titles) > 0 {
-				snap = s.idx.current()
-			}
+			snap = s.join(ctx, snap, titles, opt.persist)
 		}
 	}
 
@@ -402,8 +401,10 @@ func buildHash(sp core.CollectionSpec, keys []core.RatingKey) string {
 
 // join makes TMDB titles part of the browsable catalogue (as a search
 // does) so Plex can browse and play every member, and adds them to the
-// index. It returns how many were new to the index.
-func (s *Service) join(ctx context.Context, snap *snapshot, titles []core.Title) int {
+// index. Previews (persist=false) only overlay them on the snapshot, so
+// trying out a source never changes the library. It returns the snapshot
+// to evaluate against.
+func (s *Service) join(ctx context.Context, snap *snapshot, titles []core.Title, persist bool) *snapshot {
 	var fresh []core.Title
 	seen := map[core.RatingKey]bool{}
 	for _, t := range titles {
@@ -417,7 +418,30 @@ func (s *Service) join(ctx context.Context, snap *snapshot, titles []core.Title)
 		fresh = append(fresh, t)
 	}
 	if len(fresh) == 0 {
-		return 0
+		return snap
+	}
+	if !persist {
+		keys := make([]core.RatingKey, len(fresh))
+		for i, t := range fresh {
+			keys[i] = t.Key
+		}
+		known := map[core.RatingKey]core.Title{}
+		if loaded, err := loadTitles(ctx, s.db, keys); err == nil {
+			for _, t := range loaded {
+				if len(t.Genres) > 0 {
+					known[t.Key] = t
+				}
+			}
+		}
+		in := newInterner()
+		entries := make([]*entry, 0, len(fresh))
+		for _, t := range fresh {
+			if k, ok := known[t.Key]; ok {
+				t = k
+			}
+			entries = append(entries, entryFromTitle(t, in))
+		}
+		return mergeEntries(snap, entries)
 	}
 	if s.upserter != nil {
 		for _, t := range fresh {
@@ -436,7 +460,10 @@ func (s *Service) join(ctx context.Context, snap *snapshot, titles []core.Title)
 		}
 	}
 	s.idx.add(fresh)
-	return len(fresh)
+	if cur := s.idx.current(); cur != nil {
+		return cur
+	}
+	return snap
 }
 
 // resolveRuleRefs completes rule refs: names for local matching, ids for
@@ -528,10 +555,14 @@ func (s *Service) pushdown(ctx context.Context, sp *core.CollectionSpec, rules [
 			if r.personal() {
 				continue
 			}
-			if s.translate(ctx, r, kind, q) {
+			extra := url.Values{}
+			switch {
+			case !s.translate(ctx, r, kind, extra):
+				if r.detailOnly() {
+					ok = false // TMDB can't express it for this kind
+				}
+			case mergeParams(q, extra):
 				covers = append(covers, r)
-			} else if r.detailOnly() {
-				ok = false // TMDB can't express it for this kind
 			}
 		}
 		if ok && len(covers) > 0 {

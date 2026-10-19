@@ -288,6 +288,9 @@ func (h *Handler) handleCollectionArtwork(w http.ResponseWriter, r *http.Request
 	}
 	hdr := w.Header()
 	hdr.Set("Content-Type", ct)
+	// Images (SVG logos, owner-supplied custom art) must never run script on
+	// the owner UI origin.
+	hdr.Set("Content-Security-Policy", imageCSP)
 	// The UI versions the URL (?v=) by build time, so a day of caching is safe.
 	hdr.Set("Cache-Control", "public, max-age=86400")
 	if !mod.IsZero() {

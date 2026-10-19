@@ -240,10 +240,7 @@ func (s *Service) CollectionArtwork(ctx context.Context, user *core.User, key co
 }
 
 func (s *Service) artworkFor(ctx context.Context, row *specRow, keys []core.RatingKey, w int) ([]byte, string, time.Time, error) {
-	stamp := row.lastBuilt
-	if row.updatedAt.After(stamp) {
-		stamp = row.updatedAt
-	}
+	stamp := row.stamp()
 	art := row.spec.Artwork
 	if s.images != nil {
 		switch art.Mode {

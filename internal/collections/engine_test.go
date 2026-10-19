@@ -128,10 +128,34 @@ func TestPushdownFindsDetailOnlyMatchesAndJoinsCatalog(t *testing.T) {
 	if !found {
 		t.Fatalf("no pushdown discover request: %v", reqs)
 	}
-	// The joined title is now part of the browsable catalogue.
-	page, err := e.cat.Browse(e.ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Query: "Short and Sweet"}})
-	if err != nil || page.Total != 1 {
-		t.Fatalf("joined title not browsable: %+v %v", page, err)
+	// Rules on the same discover parameter are combined, never overwritten:
+	// a title TMDB returns for one genre rule is still checked for the other.
+	p2, err := e.svc.Preview(e.ctx, spec("short comedy", "movie", catalogSource(), rl("genre", "is", "Comedy"),
+		rl("genre", "in", []string{"Family", "Drama"}), rl("runtime", "lte", 90)), 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := titlesOf(p2); len(got) != 1 || got[0] != "Laugh Riot" {
+		t.Fatalf("combined genre rules: %v", got)
+	}
+	// A preview never changes the library…
+	browse := func() int {
+		page, err := e.cat.Browse(e.ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Query: "Short and Sweet"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page.Total
+	}
+	if browse() != 0 {
+		t.Fatal("preview joined a title to the catalogue")
+	}
+	// …saving does: members found on TMDB join the browsable catalogue.
+	created, err := e.svc.CreateSpec(e.ctx, spec("short", "movie", catalogSource(), rl("runtime", "lte", 90), rl("votes", "gte", 500)))
+	if err != nil || created.ItemCount != p.Total {
+		t.Fatalf("create: %+v %v", created, err)
+	}
+	if browse() != 1 {
+		t.Fatal("joined title not browsable after a build")
 	}
 }
 

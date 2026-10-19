@@ -290,7 +290,8 @@ func TestCollectionsAPIAuthAndPublicImages(t *testing.T) {
 		t.Fatalf("missing artwork: %d", rec.Code)
 	}
 	rec = serve(h, req(http.MethodGet, "/ether/api/image?path=/abc_1-x.jpg&w=342", ""))
-	if rec.Code != 200 || rec.Body.String() != "IMG/abc_1-x.jpg" || !strings.Contains(rec.Header().Get("Cache-Control"), "immutable") {
+	if rec.Code != 200 || rec.Body.String() != "IMG/abc_1-x.jpg" || !strings.Contains(rec.Header().Get("Cache-Control"), "immutable") ||
+		!strings.Contains(rec.Header().Get("Content-Security-Policy"), "sandbox") {
 		t.Fatalf("image: %d %s %v", rec.Code, rec.Body, rec.Header())
 	}
 	r = req(http.MethodGet, "/ether/api/image?path=/abc_1-x.jpg&w=342", "")

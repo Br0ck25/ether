@@ -31,7 +31,9 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 | `modernc.org/sqlite` (+ its modernc.org support modules) | Pure-Go SQLite store | BSD-3-Clause (module); SQLite itself is public domain |
 | `github.com/kardianos/service` | OS service (systemd/launchd/Windows SCM), `internal/service` | Zlib-style (“as-is”, © Daniel Theophanes) |
 | `github.com/ulikunitz/xz` | 7z header LZMA decoding, `internal/archive` | BSD-3-Clause |
-| `golang.org/x/text` | Legacy subtitle code pages, `internal/subtitles` | BSD-3-Clause |
+| `golang.org/x/text` | Legacy subtitle code pages, `internal/subtitles`; language names, `internal/collections` | BSD-3-Clause |
+| `golang.org/x/image` | Collection poster rendering (scaling, WebP decoding, OpenType text), `internal/artwork` | BSD-3-Clause |
+| Go fonts (`golang.org/x/image/font/gofont`: Go Bold, Go Medium), embedded | Title text on generated collection posters, `internal/artwork` | BSD-3-Clause-style (© 2016 Bigelow & Holmes Inc., distributed by the Go Authors; see `golang.org/x/image/font/gofont/ttfs/README`) |
 | `github.com/go-chi/chi/v5` | HTTP routing (wired by other packages) | MIT |
 | `fyne.io/systray` | Tray/menu-bar icon, `cmd/ether-tray` | Apache-2.0 |
 | `github.com/godbus/dbus/v5` | Linux StatusNotifier (systray transport) | BSD-2-Clause |
@@ -43,6 +45,41 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 Other work packages may add modules; they must extend this table in the
 same PR (see CONTRIBUTING.md). Regenerate the ground truth any time
 with `go list -m all` and each module's `LICENSE` file.
+
+## Go fonts (embedded in the binary)
+
+Generated collection posters (`internal/artwork`) set titles in Go Bold
+and Go Medium from `golang.org/x/image/font/gofont`, compiled into the
+Ether binary.
+
+> These fonts were created by the Bigelow & Holmes foundry specifically
+> for the Go project. Copyright (c) 2016 Bigelow & Holmes Inc.. All
+> rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are
+> met:
+>
+> - Redistributions of source code must retain the above copyright
+>   notice, this list of conditions and the following disclaimer.
+> - Redistributions in binary form must reproduce the above copyright
+>   notice, this list of conditions and the following disclaimer in the
+>   documentation and/or other materials provided with the distribution.
+> - Neither the name of Google Inc. nor the names of its contributors may
+>   be used to endorse or promote products derived from this software
+>   without specific prior written permission.
+>
+> DISCLAIMER: THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
+> CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
+> BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+> FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+> COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+> INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+> NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF
+> USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+> ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+> (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+> THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## AltMount (reference only)
 
@@ -105,3 +142,6 @@ MIT License text:
   API but is not endorsed or certified by TMDB.
 - Watch sync (optional): **Trakt**. Subtitles (optional):
   **OpenSubtitles**. Both are off until the owner configures accounts.
+- Collection sources (optional): public **Trakt**, **Letterboxd** and
+  **MDBList** lists, fetched only when the owner adds one to a
+  collection, identified, rate-limited and cached.

@@ -251,8 +251,8 @@ func (h *Handler) handleImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	width, _ := strconv.Atoi(q.Get("w"))
-	if width < 0 || width > 4000 {
-		width = 0
+	if width <= 0 || width > 4000 {
+		width = 500 // never pull TMDB originals (often several MB) by default
 	}
 	etag := `"` + strconv.Itoa(width) + path + `"`
 	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
@@ -273,6 +273,9 @@ func (h *Handler) handleImage(w http.ResponseWriter, r *http.Request) {
 	}
 	hdr := w.Header()
 	hdr.Set("Content-Type", ct)
+	// Images (SVG logos, owner-supplied custom art) must never run script on
+	// the owner UI origin.
+	hdr.Set("Content-Security-Policy", imageCSP)
 	// TMDB image paths are content-addressed: a path never changes.
 	hdr.Set("Cache-Control", "public, max-age=2592000, immutable")
 	hdr.Set("ETag", etag)
@@ -282,6 +285,10 @@ func (h *Handler) handleImage(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(data)
 	}
 }
+
+// imageCSP sandboxes proxied images: an SVG opened directly cannot run
+// script or load anything.
+const imageCSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox"
 
 // validImagePath accepts a single TMDB file name: "/abc_123-x.jpg".
 func validImagePath(p string) bool {

@@ -382,7 +382,7 @@ func (s *Service) build(ctx context.Context, row *specRow) (*memberSet, error) {
 
 func (s *Service) buildNow(ctx context.Context, row *specRow) (*memberSet, error) {
 	started := time.Now()
-	res, err := s.evaluate(ctx, row.spec, evalOptions{seed: row.publicID()})
+	res, err := s.evaluate(ctx, row.spec, evalOptions{seed: row.publicID(), persist: true})
 	if err != nil {
 		return nil, err
 	}
@@ -400,6 +400,9 @@ func (s *Service) buildNow(ctx context.Context, row *specRow) (*memberSet, error
 		"warnings", len(res.warnings), "took", time.Since(started).Round(time.Millisecond))
 	ms := &memberSet{keys: res.keys, personal: res.personal, personalX: res.personalX, spec: row.spec,
 		builtAt: at, hash: res.hash, loadedAt: s.now()}
+	if row.buildHash != res.hash {
+		row.changedAt = at
+	}
 	row.lastBuilt, row.buildHash, row.itemCount, row.warnings = at, res.hash, res.itemCount(), res.warnings
 	return ms, nil
 }
@@ -564,10 +567,7 @@ func (s *Service) collectionFor(ctx context.Context, row *specRow, user *core.Us
 	if c.Type == "" {
 		c.Type = core.TypeMovie
 	}
-	c.UpdatedAt = row.lastBuilt
-	if row.updatedAt.After(c.UpdatedAt) {
-		c.UpdatedAt = row.updatedAt
-	}
+	c.UpdatedAt = row.stamp()
 	return c
 }
 

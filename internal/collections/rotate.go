@@ -111,11 +111,14 @@ func (s *Service) RunDue(ctx context.Context) int {
 }
 
 func (s *Service) due(row *specRow) bool {
-	if !row.enabled || row.spec.Refresh == RefreshLive {
+	if !row.enabled {
 		return false
 	}
 	if row.lastBuilt.IsZero() || row.buildHash == "" {
-		return true
+		return true // includes live collections, so the Studio has a count
+	}
+	if row.spec.Refresh == RefreshLive {
+		return false
 	}
 	return s.now().Sub(row.lastBuilt) >= refreshInterval(row.spec.Refresh)
 }

@@ -46,7 +46,8 @@ CREATE TABLE collections_specs (
   last_built_at INTEGER NOT NULL DEFAULT 0,
   item_count INTEGER NOT NULL DEFAULT 0,
   warnings_json TEXT NOT NULL DEFAULT '[]',
-  build_hash TEXT NOT NULL DEFAULT ''
+  build_hash TEXT NOT NULL DEFAULT '',
+  changed_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX collections_specs_slug ON collections_specs(slug);
 CREATE TABLE collections_members (
@@ -91,9 +92,20 @@ type specRow struct {
 	itemCount int
 	warnings  []string
 	buildHash string
+	changedAt time.Time // last build whose members differed from the one before
 }
 
 func (r *specRow) key() core.RatingKey { return core.SmartKey(r.id) }
+
+// stamp is when what Plex shows last changed: an edit, or a build with
+// different members. Rebuilding an unchanged collection keeps the stamp,
+// so clients keep their cached artwork.
+func (r *specRow) stamp() time.Time {
+	if r.updatedAt.After(r.changedAt) {
+		return r.updatedAt
+	}
+	return r.changedAt
+}
 
 // publicID is the id clients use: the slug for built-ins, the number otherwise.
 func (r *specRow) publicID() string {
@@ -126,15 +138,15 @@ func (r *specRow) view() core.CollectionSpec {
 	return s
 }
 
-const specCols = `id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at,last_built_at,item_count,warnings_json,build_hash`
+const specCols = `id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at,last_built_at,item_count,warnings_json,build_hash,changed_at`
 
 func scanSpecRow(sc interface{ Scan(...any) error }) (*specRow, error) {
 	var r specRow
 	var builtin, enabled int
 	var specJSON, warnJSON string
-	var created, updated, built int64
+	var created, updated, built, changed int64
 	if err := sc.Scan(&r.id, &r.slug, &builtin, &r.owner, &specJSON, &enabled, &created, &updated, &built,
-		&r.itemCount, &warnJSON, &r.buildHash); err != nil {
+		&r.itemCount, &warnJSON, &r.buildHash, &changed); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(specJSON), &r.spec); err != nil {
@@ -151,6 +163,9 @@ func scanSpecRow(sc interface{ Scan(...any) error }) (*specRow, error) {
 	}
 	if built > 0 {
 		r.lastBuilt = time.Unix(built, 0).UTC()
+	}
+	if changed > 0 {
+		r.changedAt = time.Unix(changed, 0).UTC()
 	}
 	_ = json.Unmarshal([]byte(warnJSON), &r.warnings)
 	return &r, nil
@@ -312,8 +327,9 @@ func (s *Service) saveBuild(ctx context.Context, id int64, keys []core.RatingKey
 			return err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE collections_specs SET last_built_at=?, item_count=?, warnings_json=?, build_hash=? WHERE id=?`,
-		at.Unix(), itemCount, string(wj), hash, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE collections_specs SET changed_at=CASE WHEN build_hash<>? THEN ? ELSE changed_at END,
+		last_built_at=?, item_count=?, warnings_json=?, build_hash=? WHERE id=?`,
+		hash, at.Unix(), at.Unix(), itemCount, string(wj), hash, id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -398,6 +414,15 @@ func (s *Service) migrateLegacy(ctx context.Context) error {
 		}
 		sp := specFromLegacy(core.Collection{Title: l.title, Summary: l.summary, Type: core.MediaType(l.typ),
 			Sort: core.SortOrder(l.sort), OwnerUserID: l.owner, Filter: &f})
+		// The v1 starter collections become their improved definitions
+		// (v1 froze "recently released" to the install year, for example).
+		if l.owner == 0 {
+			for _, d := range defaultSpecs() {
+				if d.Name == l.title {
+					sp = d
+				}
+			}
+		}
 		js, err := specJSON(sp)
 		if err != nil {
 			return err
