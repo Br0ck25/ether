@@ -145,6 +145,11 @@ type ClientCaps struct {
 	VideoProfiles  map[string][]string `json:"videoProfiles,omitempty"`
 	VideoLevels    map[string]int      `json:"videoLevels,omitempty"` // codec level in ffprobe units (H.264 51 = 5.1)
 	Remote         bool                `json:"remote"`                // not on the server's LAN
+
+	// Download marks a request for an offline download (Plex Downloads /
+	// Sync) rather than live playback: the resolver prefers compact,
+	// mobile-native releases and the whole file is remuxed (additive).
+	Download bool `json:"download,omitempty"`
 }
 
 func (c ClientCaps) SupportsVideo(codec string) bool  { return contains(c.VideoCodecs, codec) }
