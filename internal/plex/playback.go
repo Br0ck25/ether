@@ -252,8 +252,14 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 		}
 	}
 	// On-demand sources can change during failover. A copy-only remux gives
-	// MDE clients fresh container headers at the resumed timestamp.
-	if p.mde && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
+	// MDE clients fresh container headers at the resumed timestamp. A
+	// session flagged RequiresRemux (direct-play failover found no
+	// exact-size replacement) gets the same treatment for every client.
+	requiresRemux := ps.RequiresRemux
+	if rr, ok := s.d.Playback.(core.RemuxRequirer); ok && rr.RequiresRemux(ps.ID) {
+		requiresRemux = true
+	}
+	if (p.mde || requiresRemux) && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
 		dec.Kind = core.DecisionRemux
 		dec.VideoCopy, dec.AudioCopy = true, true
 		videoCodec, audioCodec := "", ""
@@ -266,7 +272,11 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 				break
 			}
 		}
-		dec.Container = transcode.HLSContainer(p.caps, videoCodec, audioCodec)
+		if p.protocol == core.ProtocolDASH {
+			dec.Container = transcode.ContainerFMP4
+		} else {
+			dec.Container = transcode.HLSContainer(p.caps, videoCodec, audioCodec)
+		}
 		dec.Reason = "Direct stream preserves playback across source changes."
 	}
 	if v := ps.Info.Video(); v != nil {

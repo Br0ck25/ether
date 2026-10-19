@@ -4,7 +4,34 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
+
+// keyframesOf converts internal index points to the published
+// core.KeyframePoint form (MediaInfo.Keyframes).
+func keyframesOf(points []IndexPoint) []core.KeyframePoint {
+	if len(points) == 0 {
+		return nil
+	}
+	out := make([]core.KeyframePoint, len(points))
+	for i, p := range points {
+		out[i] = core.KeyframePoint{Offset: p.Offset, Time: p.Time}
+	}
+	return out
+}
+
+// indexPointsOf converts published keyframes back to index points.
+func indexPointsOf(kf []core.KeyframePoint) []IndexPoint {
+	if len(kf) == 0 {
+		return nil
+	}
+	out := make([]IndexPoint, len(kf))
+	for i, p := range kf {
+		out[i] = IndexPoint{Offset: p.Offset, Time: p.Time}
+	}
+	return out
+}
 
 // IndexPoint ties a byte offset in a media file to a presentation timestamp,
 // e.g. a Matroska cue point or an MP4 sync sample. Points let TimeMap follow
@@ -26,8 +53,35 @@ type TimeMap struct {
 	Points []IndexPoint
 }
 
+// TimeMapFor builds the TimeMap of a probed source from its MediaInfo,
+// including the container keyframe index when one was read, so callers
+// outside playback (resume prefetch, trickplay) map with the same points.
+func TimeMapFor(info core.MediaInfo) TimeMap {
+	return TimeMap{Size: info.Size, Duration: info.Duration, Points: indexPointsOf(info.Keyframes)}
+}
+
 // Valid reports whether the map has enough information to convert.
 func (m TimeMap) Valid() bool { return m.Size > 0 && m.Duration > 0 }
+
+// KeyframeOffsetAt is OffsetAt snapped down to the keyframe at or before
+// t — the offset a player or ffmpeg seek will actually start reading
+// from — when index points are known; plain OffsetAt otherwise.
+func (m TimeMap) KeyframeOffsetAt(t time.Duration) int64 {
+	off := m.OffsetAt(t)
+	if len(m.Points) == 0 {
+		return off
+	}
+	var best int64
+	for _, p := range m.Points {
+		if p.Time > t {
+			break
+		}
+		if p.Offset > best && p.Offset <= off {
+			best = p.Offset
+		}
+	}
+	return best
+}
 
 // anchors returns the interpolation points including the implicit ends,
 // dropping entries that are out of range or not monotonic.
