@@ -26,7 +26,7 @@ type fakeEngine struct {
 
 type fieldErr struct{ field, msg string }
 
-func (e fieldErr) Error() string                { return e.field + ": " + e.msg }
+func (e fieldErr) Error() string              { return e.field + ": " + e.msg }
 func (e fieldErr) InvalidFields() [][2]string { return [][2]string{{e.field, e.msg}} }
 
 var poster = core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Matrix", Year: 1999, PosterPath: "/m.jpg",
