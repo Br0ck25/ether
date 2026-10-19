@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:newznab="http://www.newznab.com/DTD/2010/feeds/attributes/">
+  <channel>
+    <title>FakeIndexer</title>
+    <item>
+      <title>The.Matrix.1999.1080p.BluRay.x264-GRP</title>
+      <guid isPermaLink="false">guid-matrix-1080</guid>
+      <link>{{BASE}}/nzb?id=guid-matrix-1080</link>
+      <pubDate>Mon, 02 Jan 2023 15:04:05 +0000</pubDate>
+      <enclosure url="{{BASE}}/nzb?id=guid-matrix-1080" length="8000000000" type="application/x-nzb"/>
+      <newznab:attr name="size" value="8000000000"/>
+      <newznab:attr name="grabs" value="42"/>
+      <newznab:attr name="category" value="2040"/>
+      <newznab:attr name="imdb" value="133093"/>
+      <newznab:attr name="password" value="0"/>
+    </item>
+    <item>
+      <title>The.Matrix.1999.720p.BluRay.x264-PWD</title>
+      <guid isPermaLink="false">guid-matrix-720</guid>
+      <link>{{BASE}}/nzb?id=guid-matrix-720</link>
+      <pubDate>Tue, 03 Jan 2023 15:04:05 +0000</pubDate>
+      <enclosure url="{{BASE}}/nzb?id=guid-matrix-720" length="4000000000" type="application/x-nzb"/>
+      <newznab:attr name="size" value="4000000000"/>
+      <newznab:attr name="grabs" value="3"/>
+      <newznab:attr name="category" value="2040"/>
+      <newznab:attr name="password" value="1"/>
+    </item>
+  </channel>
+</rss>
