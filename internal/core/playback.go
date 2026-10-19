@@ -10,15 +10,15 @@ import (
 // Transcoder (internal/transcode)
 
 type HLSRequest struct {
-	SessionID   string
-	InputURL    string // ffmpeg input; Ether serves sources on loopback HTTP with range support
+	SessionID string
+	InputURL  string // ffmpeg input; Ether serves sources on loopback HTTP with range support
 	// InputHeaders are optional HTTP headers ffmpeg must send when reading
 	// InputURL (e.g. for resolved trailer URLs). Transcoders that cannot
 	// send headers ignore them; most resolved URLs need none (additive).
 	InputHeaders map[string]string
-	Info        MediaInfo
-	Decision    Decision
-	StartOffset time.Duration
+	Info         MediaInfo
+	Decision     Decision
+	StartOffset  time.Duration
 	// SegmentDuration defaults to 4s when zero (5s for DASH).
 	SegmentDuration time.Duration
 	// Protocol is ProtocolHLS (default when empty) or ProtocolDASH. A DASH
