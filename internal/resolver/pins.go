@@ -254,8 +254,10 @@ func (s *Service) pinRejectReason(rel core.Release, sreq core.SearchRequest, cap
 		return "excluded (already tried)"
 	case s.isBad(rel.ID):
 		return "marked bad"
-	case sreq.Type == core.TypeEpisode && rel.Info.FullSeason:
+	case sreq.Type == core.TypeEpisode && rel.Info.FullSeason && rel.Protocol != core.ProtocolTorrent:
 		return "season pack (skipped in v1)"
+	case sreq.Type == core.TypeEpisode && rel.Info.FullSeason && !packCoversSeason(rel.Info, sreq.Season):
+		return "season/episode mismatch"
 	case rel.Info.VideoCodec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(rel.Info.VideoCodec):
 		return "video codec unsupported by client"
 	case rel.Info.DolbyVision && !rel.Info.HDR10 && !caps.DolbyVision && len(caps.VideoCodecs) > 0:

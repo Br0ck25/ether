@@ -1,4 +1,6 @@
 import {
+  Alert,
+  AlertDescription,
   Badge,
   Button,
   EmptyState,
@@ -8,16 +10,18 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import { Plus, Search } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { Meter } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
-import { ListInput, SecretInput, TestButton } from "../../components/fields";
+import { ListInput, SecretInput, Segmented, TestButton } from "../../components/fields";
 import { Section } from "../../components/layout";
 import { SettingsRow } from "../../components/SettingsRow";
 import { api, newId } from "../../lib/api";
 import { isPlainObject } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
-import type { Indexer } from "../../lib/types";
+import type { Indexer, IndexerProtocol } from "../../lib/types";
+import { hasUsableDebrid } from "./Debrid";
 import {
   BoolRow,
   NumRow,
@@ -44,7 +48,22 @@ function blankIndexer(priority: number): Indexer {
     enabled: true,
     movieCategories: null,
     tvCategories: null,
+    protocol: "usenet",
   };
+}
+
+const PROTOCOLS: { value: IndexerProtocol; label: string }[] = [
+  { value: "usenet", label: "Usenet (Newznab)" },
+  { value: "torrent", label: "Torrent (Torznab)" },
+];
+
+export function isTorrent(ix: { protocol?: string }) {
+  return ix.protocol === "torrent";
+}
+
+/** The indexer API name for a protocol, as shown on badges. */
+export function protocolLabel(ix: { protocol?: string }) {
+  return isTorrent(ix) ? "Torznab" : "Newznab";
 }
 
 function indexerName(ix: Indexer, i: number) {
@@ -52,7 +71,7 @@ function indexerName(ix: Indexer, i: number) {
 }
 
 /**
- * Newznab indexers in search order; each indexer is edited in a drawer.
+ * Newznab and Torznab indexers in search order; each indexer is edited in a drawer.
  * `version` changes when indexers were added elsewhere (Prowlarr import).
  */
 export function IndexerList({ version = 0 }: { version?: number }) {
@@ -68,6 +87,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
   const indexers = cfg?.indexers ?? [];
   const status = dashboard?.sections?.indexers;
   const live = Array.isArray(status) ? status.filter(isPlainObject) : [];
+  const mixed = indexers.some(isTorrent) && indexers.some((ix) => !isTorrent(ix));
   const statFor = (ix: Indexer) => live.find((s) => s.indexer === ix.name || s.id === ix.id);
 
   async function commit(list: Indexer[], message: string) {
@@ -153,9 +173,20 @@ export function IndexerList({ version = 0 }: { version?: number }) {
   const isNew = editing ? editing.index >= indexers.length : false;
   const stat = draft ? statFor(draft) : undefined;
   const used = Number(stat?.hitsUsed ?? 0);
+  const needsDebrid = indexers.some((ix) => isTorrent(ix) && ix.enabled) && !hasUsableDebrid(cfg);
 
   return (
     <>
+      {needsDebrid ? (
+        <Alert variant="info" role="status">
+          <AlertDescription>
+            Torrent indexers need a debrid account to stream from.{" "}
+            <Link to="/sources/debrid" className="font-medium underline underline-offset-2">
+              Add a debrid provider
+            </Link>
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <Section
         title="Indexers"
         description="Searched in order. Daily budgets keep Ether inside each plan's API limits."
@@ -170,7 +201,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
           <EmptyState
             icon={<Search />}
             title="No indexers"
-            description="Add a Newznab indexer so Ether can find releases."
+            description="Add a Newznab or Torznab indexer so Ether can find releases."
           />
         ) : (
           <ul className="divide-y divide-border">
@@ -195,6 +226,9 @@ export function IndexerList({ version = 0 }: { version?: number }) {
                     .join(" · ")}
                   meta={
                     <>
+                      {isTorrent(ix) || mixed ? (
+                        <Badge variant="outline">{protocolLabel(ix)}</Badge>
+                      ) : null}
                       {!ix.enabled ? <Badge variant="secondary">Off</Badge> : null}
                       {s && ix.dailyLimit > 0 && hits >= ix.dailyLimit ? (
                         <Badge variant="destructive">Out of searches</Badge>
@@ -222,7 +256,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
         open={editing !== null}
         onClose={close}
         title={isNew ? "New indexer" : draft && editing ? indexerName(draft, editing.index) : ""}
-        description="Newznab indexer"
+        description={draft && isTorrent(draft) ? "Torznab indexer" : "Newznab indexer"}
         onSave={() => void save()}
         saving={saving}
         saveLabel="Save indexer"
@@ -256,6 +290,23 @@ export function IndexerList({ version = 0 }: { version?: number }) {
               />
             ) : null}
             <SettingsSection title="Connection">
+              <SettingsRow
+                title="Protocol"
+                description={
+                  isTorrent(draft)
+                    ? "Torrent releases stream through your debrid account."
+                    : "Usenet releases stream from your Usenet providers."
+                }
+                control={
+                  <Segmented
+                    ariaLabel="Protocol"
+                    size="sm"
+                    options={PROTOCOLS}
+                    value={isTorrent(draft) ? "torrent" : "usenet"}
+                    onChange={(v) => set({ protocol: v })}
+                  />
+                }
+              />
               <TextRow label="Name" value={draft.name} onChange={(v) => set({ name: v })} />
               <TextRow
                 label="URL"
@@ -292,7 +343,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
                 label="Daily downloads"
                 value={draft.dailyGrabs}
                 min={0}
-                help="NZB downloads allowed per day. 0 = unlimited."
+                help={`${isTorrent(draft) ? "Torrent" : "NZB"} downloads allowed per day. 0 = unlimited.`}
                 error={errors.dailyGrabs}
                 onChange={(n) => set({ dailyGrabs: n })}
               />
@@ -301,7 +352,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
               <SettingsRow
                 stacked
                 title="Movie categories"
-                description="Newznab category ids. Empty uses the standard movie categories."
+                description={`${protocolLabel(draft)} category ids. Empty uses the standard movie categories.`}
               >
                 <ListInput
                   numeric

@@ -25,6 +25,7 @@ const KNOWN_KEYS = new Set([
   "plex",
   "usenet",
   "indexers",
+  "debrid",
   "cache",
   "catalog",
   "resolver",

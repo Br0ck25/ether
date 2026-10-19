@@ -13,6 +13,11 @@ const ACTIONS = [
   { title: "Invite a friend", href: "/viewers/invitations", keywords: "share add user" },
   { title: "Add an indexer", href: "/sources/indexers", keywords: "newznab prowlarr" },
   { title: "Add a Usenet provider", href: "/sources/usenet", keywords: "nntp" },
+  {
+    title: "Add a debrid provider",
+    href: "/sources/debrid",
+    keywords: "real-debrid torbox alldebrid premiumize torrent",
+  },
   { title: "New collection", href: "/collections/new", keywords: "create" },
   { title: "New notification channel", href: "/notifications/channels", keywords: "alert" },
   { title: "Back up now", href: "/backups", keywords: "backup snapshot" },

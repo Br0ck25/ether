@@ -38,6 +38,9 @@ func (a *App) buildAdmin() http.Handler {
 		TestIndexer: func(ctx context.Context, ix config.Indexer) error {
 			return newznab.Test(ctx, ix)
 		},
+		TestDebrid: func(ctx context.Context, p config.DebridProvider) error {
+			return a.debrid.Test(ctx, p)
+		},
 		TestTMDB: func(ctx context.Context, key string) error {
 			c := tmdb.New(key, a.log)
 			defer c.Close()
@@ -77,6 +80,7 @@ func (a *App) buildAdmin() http.Handler {
 			"stream":   func(context.Context) any { return a.engine.Stats() },
 			"widget":   a.widgetStatus,
 			"prefetch": func(context.Context) any { return a.prefetch.Stats() },
+			"debrid":   a.debridStatus,
 		},
 		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
 		Users:           a.users,
@@ -85,6 +89,15 @@ func (a *App) buildAdmin() http.Handler {
 		CatalogHelper:   a.collections,
 		Images:          a.images,
 	})
+}
+
+// debridStatus is provider health, counters and latency EWMAs plus the
+// streaming engine's counters.
+func (a *App) debridStatus(context.Context) any {
+	st := a.debrid.Status()
+	es := a.media.Stats()
+	st.Engine = &es
+	return st
 }
 
 func (a *App) cacheStatus(context.Context) any {

@@ -9,6 +9,11 @@ Sign in to Plex, add your Usenet providers and Newznab indexers, and choose a
 cache folder and budget. Configure quality profiles for your network and remote
 connections. Ether supplies no media, provider accounts or indexer access.
 
+You can also stream torrents that your own debrid account (Real-Debrid, TorBox,
+AllDebrid or Premiumize) already holds. Add Torznab indexers under **Sources ›
+Indexers** and your debrid account under **Sources › Debrid**. See
+[debrid.md](debrid.md) for how it works.
+
 ## Share with viewers
 
 Use Plex library sharing to invite people or remove their access. They appear

@@ -37,6 +37,13 @@ func RedactConfig(cfg config.Config) config.Config {
 			out.Indexers[i] = ix
 		}
 	}
+	if cfg.Debrid.Providers != nil {
+		out.Debrid.Providers = make([]config.DebridProvider, len(cfg.Debrid.Providers))
+		for i, p := range cfg.Debrid.Providers {
+			p.APIKey = redact(p.APIKey)
+			out.Debrid.Providers[i] = p
+		}
+	}
 	return out
 }
 
@@ -65,7 +72,50 @@ func UnredactConfig(next, prev config.Config) config.Config {
 	out.LLM.APIKey = preserve(out.LLM.APIKey, prev.LLM.APIKey)
 	out.Usenet.Providers = unredactProviders(next.Usenet.Providers, prev.Usenet.Providers)
 	out.Indexers = unredactIndexers(next.Indexers, prev.Indexers)
+	out.Debrid.Providers = unredactDebrid(next.Debrid.Providers, prev.Debrid.Providers)
 	return out
+}
+
+func unredactDebrid(next, prev []config.DebridProvider) []config.DebridProvider {
+	if next == nil {
+		return nil
+	}
+	byID := make(map[string]string, len(prev))
+	for _, p := range prev {
+		if p.ID != "" {
+			byID[p.ID] = p.APIKey
+		}
+	}
+	out := make([]config.DebridProvider, len(next))
+	for i, p := range next {
+		if isRedacted(p.APIKey) {
+			switch {
+			case p.ID != "" && byID[p.ID] != "":
+				p.APIKey = byID[p.ID]
+			case i < len(prev):
+				p.APIKey = prev[i].APIKey
+			default:
+				p.APIKey = ""
+			}
+		}
+		out[i] = p
+	}
+	return out
+}
+
+// unredactDebridProvider restores one debrid provider's key (test calls).
+func unredactDebridProvider(p config.DebridProvider, prev config.Config) config.DebridProvider {
+	if !isRedacted(p.APIKey) {
+		return p
+	}
+	for _, old := range prev.Debrid.Providers {
+		if (p.ID != "" && old.ID == p.ID) || (p.ID == "" && old.Kind == p.Kind) {
+			p.APIKey = old.APIKey
+			return p
+		}
+	}
+	p.APIKey = ""
+	return p
 }
 
 func unredactProviders(next, prev []config.UsenetProvider) []config.UsenetProvider {

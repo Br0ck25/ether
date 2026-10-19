@@ -240,6 +240,26 @@ func (h *Handler) handleTestIndexer(w http.ResponseWriter, r *http.Request) {
 	h.runTest(w, r, "indexer", fn)
 }
 
+func (h *Handler) handleTestDebrid(w http.ResponseWriter, r *http.Request) {
+	var p config.DebridProvider
+	if err := decodeJSONLenient(r, &p); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	p = unredactDebridProvider(p, h.deps.Config.Get())
+	c := config.Defaults(os.TempDir())
+	c.Debrid.Providers = []config.DebridProvider{p}
+	if errs := ValidateConfig(c); len(errs) > 0 {
+		writeValidationError(w, errs)
+		return
+	}
+	var fn func(ctx context.Context) error
+	if h.deps.TestDebrid != nil {
+		fn = func(ctx context.Context) error { return h.deps.TestDebrid(ctx, p) }
+	}
+	h.runTest(w, r, "debrid", fn)
+}
+
 func (h *Handler) handleTestTMDB(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Key string `json:"key"`

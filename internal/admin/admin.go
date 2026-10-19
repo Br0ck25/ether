@@ -113,6 +113,7 @@ type Deps struct {
 	// Provider/integration testers used by the wizard. Nil → 501.
 	TestUsenet        func(ctx context.Context, p config.UsenetProvider) error
 	TestIndexer       func(ctx context.Context, ix config.Indexer) error
+	TestDebrid        func(ctx context.Context, p config.DebridProvider) error
 	TestTMDB          func(ctx context.Context, key string) error
 	TestOpenSubtitles func(ctx context.Context, cfg config.OpenSubtitles) error
 	TestLLM           func(ctx context.Context, cfg config.LLM) error
@@ -261,6 +262,7 @@ func (h *Handler) routes() *http.ServeMux {
 
 	api("POST /api/test/usenet", h.handleTestUsenet)
 	api("POST /api/test/indexer", h.handleTestIndexer)
+	api("POST /api/test/debrid", h.handleTestDebrid)
 	api("POST /api/test/tmdb", h.handleTestTMDB)
 	api("POST /api/test/opensubtitles", h.handleTestOpenSubtitles)
 	api("POST /api/test/llm", h.handleTestLLM)

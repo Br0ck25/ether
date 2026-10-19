@@ -23,6 +23,8 @@ import type {
 import type {
   Bootstrap,
   DashboardData,
+  DebridProvider,
+  DebridStatus,
   DiskInfo,
   EtherConfig,
   EtherUser,
@@ -178,6 +180,7 @@ export const api = {
   // ---- Integration tests ----------------------------------------------------
   testUsenet: (p: UsenetProvider) => post<TestResult>("/test/usenet", p),
   testIndexer: (ix: Indexer) => post<TestResult>("/test/indexer", ix),
+  testDebrid: (p: DebridProvider) => post<TestResult>("/test/debrid", p),
   testTMDB: (key: string) => post<TestResult>("/test/tmdb", { key }),
   testOpenSubtitles: (cfg: EtherConfig["openSubtitles"]) =>
     post<TestResult>("/test/opensubtitles", cfg),
@@ -186,6 +189,8 @@ export const api = {
 
   // ---- Status ----------------------------------------------------------------
   dashboard: () => apiFetch<DashboardData>("/dashboard"),
+  debridStatus: async () =>
+    (await apiFetch<{ value: DebridStatus | null }>("/status/debrid")).value,
   disk: (path: string) => apiFetch<DiskInfo>(`/disk${qs({ path })}`),
   logs: (params: { limit?: number; level?: string; q?: string }) =>
     apiFetch<{ entries: LogEntry[]; total: number }>(`/logs${qs(params)}`),

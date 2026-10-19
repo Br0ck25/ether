@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Drawer } from "../../components/Drawer";
 import { DomainPage, useRouteTab } from "../../components/layout";
 import { ProwlarrImport } from "../../components/ProwlarrImport";
+import { DebridSources } from "./Debrid";
 import { HealthStrip } from "./form";
 import { IndexerList } from "./Indexers";
 import { UsenetProviders } from "./Usenet";
@@ -12,10 +13,11 @@ import { SourceUsage } from "./Usage";
 const TABS = [
   { key: "usenet", label: "Usenet providers" },
   { key: "indexers", label: "Indexers" },
+  { key: "debrid", label: "Debrid" },
   { key: "usage", label: "Usage & costs" },
 ] as const;
 
-/** Where releases come from: Usenet providers, indexers, and what they cost. */
+/** Where releases come from: Usenet providers, indexers, debrid accounts, and what they cost. */
 export default function Sources() {
   const tab = useRouteTab(TABS);
   const [importing, setImporting] = useState(false);
@@ -23,7 +25,7 @@ export default function Sources() {
   return (
     <DomainPage
       title="Sources"
-      description="The Usenet providers and indexers Ether streams from."
+      description="The Usenet providers, indexers and debrid accounts Ether streams from."
       base="/sources"
       tabs={TABS}
       active={tab}
@@ -38,12 +40,13 @@ export default function Sources() {
     >
       {tab === "usenet" ? <UsenetProviders /> : null}
       {tab === "indexers" ? <IndexerList version={version} /> : null}
+      {tab === "debrid" ? <DebridSources /> : null}
       {tab === "usage" ? <SourceUsage /> : null}
       <Drawer
         open={importing}
         onClose={() => setImporting(false)}
         title="Import from Prowlarr"
-        description="Reuse the Usenet indexers you already manage."
+        description="Reuse the Usenet and torrent indexers you already manage."
         size="lg"
       >
         <ProwlarrImport onImported={() => setVersion((v) => v + 1)} />

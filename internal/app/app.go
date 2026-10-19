@@ -27,6 +27,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/collections"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/debrid"
 	"github.com/braedonsaunders/ether/internal/episodeorder"
 	"github.com/braedonsaunders/ether/internal/extras"
 	"github.com/braedonsaunders/ether/internal/invites"
@@ -97,15 +98,21 @@ type App struct {
 	cache       *segcache.Cache
 	engine      *stream.Engine
 	indexers    *newznab.Manager
-	resolver    *resolver.Service
-	transcoder  *transcode.Manager
-	playback    *playback.Manager
-	prefetch    *prefetch.Prefetcher
-	plextv      *plextv.Client
-	users       *auth.Service
-	certs       *plextv.CertManager
-	registrar   *plextv.Registrar
-	gdm         *remote.GDMResponder
+	// Debrid: torrent releases stream through owner debrid accounts. The
+	// wrappers dispatch on the payload and delegate Usenet to engine and
+	// indexers, so every consumer uses media and sources.
+	debrid     *debrid.Service
+	media      *debrid.Engine  // core.Engine + core.HealthChecker over engine
+	sources    *debrid.Indexer // core.Indexer over indexers
+	resolver   *resolver.Service
+	transcoder *transcode.Manager
+	playback   *playback.Manager
+	prefetch   *prefetch.Prefetcher
+	plextv     *plextv.Client
+	users      *auth.Service
+	certs      *plextv.CertManager
+	registrar  *plextv.Registrar
+	gdm        *remote.GDMResponder
 
 	episodeorder      *episodeorder.Service
 	watchlist         *watchlist.Service
@@ -262,7 +269,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		SearchCacheTTL: cfg.Resolver.SearchCacheTTL.D(),
 		NZBDir:         filepath.Join(dataDir, "nzb"),
 	})
-	a.resolver = resolver.New(a.indexers, a.engine, a.db, cfg, resolver.Options{Logger: log.With("component", "resolver")})
+	a.debrid = debrid.NewService(cfg.Debrid, debrid.Options{DB: a.db, Logger: log.With("component", "debrid")})
+	a.media = debrid.NewEngine(a.debrid, debrid.EngineOptions{Inner: a.engine, Health: a.engine, Cache: a.cache, Logger: log.With("component", "debrid")})
+	a.closers = append(a.closers, func() { a.media.Close() })
+	a.sources = debrid.NewIndexer(a.indexers, a.debrid)
+	a.resolver = resolver.New(a.sources, a.media, a.db, cfg, resolver.Options{Logger: log.With("component", "resolver")})
 	a.closers = append(a.closers, func() { a.resolver.Close() })
 
 	// Transcoder. A missing ffmpeg is not fatal: direct play still works.
@@ -296,7 +307,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		LocalMedia:   a.localmedia,
 		AugmentMedia: a.enrichSubtitles,
 		Resolver:     a.resolver,
-		Engine:       a.engine,
+		Engine:       a.media,
 		Transcoder:   tc,
 		Catalog:      a.catalog,
 		Cache:        a.cache,
@@ -304,7 +315,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		SelectProfile: func(caps core.ClientCaps, u *core.User) core.QualityProfile {
 			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
 		},
-		FetchNZB: a.indexers.FetchNZB,
+		FetchNZB: a.sources.FetchNZB,
 		Aligner: func() core.TimelineAligner {
 			if a.subtitles == nil {
 				return nil
@@ -391,7 +402,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		prewarmer = pw
 	}
 	a.prefetch, err = prefetch.New(prefetch.Deps{
-		Catalog: a.catalog, Resolver: a.resolver, Engine: a.engine,
+		Catalog: a.catalog, Resolver: a.resolver, Engine: a.media,
 		State: a.state, Auth: a.users, Hints: a.playback,
 		Logger:   log.With("component", "prefetch"),
 		PostPlay: a.personalize, Prewarmer: prewarmer, Markers: a.markers,
@@ -438,6 +449,7 @@ func (a *App) applyConfig(c config.Config) {
 	a.llm.UpdateConfig(c.LLM)
 	a.fetcher.UpdateConfig(c.Usenet)
 	a.indexers.ApplyConfig(c)
+	a.debrid.UpdateConfig(c.Debrid)
 	a.resolver.UpdateConfig(c)
 	a.catalog.UpdateConfig(c.Catalog)
 	a.cache.SetBudget(c.Cache.BudgetBytes)
