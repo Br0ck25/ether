@@ -48,6 +48,12 @@ type candRow struct {
 	// hub is set for rows that arrive as finished hubs (owner collections,
 	// Continue Watching); assembly keeps their identity.
 	hub *core.Hub
+	// coldHome section rows also appear on new viewers' Homes; coldOnly
+	// rows appear only for new viewers.
+	coldHome, coldOnly bool
+	// group: at most one row per group of the same kind on a screen
+	// (showcase genre clusters).
+	group string
 }
 
 // userModel is everything precomputed for one viewer: the taste model and
@@ -77,8 +83,11 @@ type builder struct {
 
 	statuses map[core.RatingKey]core.WatchStatus
 	memo     map[string][]core.Title
-	fits     map[core.RatingKey]fitMemo
-	rowsOut  []*candRow
+	fl       *floors
+	// hydrateLeft is the remaining catalogue detail fetches of this build.
+	hydrateLeft int
+	fits        map[core.RatingKey]fitMemo
+	rowsOut     []*candRow
 }
 
 type fitMemo struct {
@@ -90,6 +99,14 @@ type fitMemo struct {
 // (Top 10, Because you watched…) are not generated: popularity rows do a
 // better job for brand-new viewers.
 const minPersonalConfidence = 0.08
+
+// Confidence thresholds: Top 10 for You needs a real taste; below
+// coldStartConfidence a viewer gets the curated cold-start Home (Top 10
+// today, genre showcases, acclaimed and new titles) leading.
+const (
+	top10Confidence     = 0.25
+	coldStartConfidence = 0.3
+)
 
 func (b *builder) personal() bool {
 	return !b.generic && b.taste != nil && b.taste.Confidence >= minPersonalConfidence
@@ -206,15 +223,21 @@ func (b *builder) fit(t *core.Title) (float64, string) {
 // and the taste reason) into a score and an item reason.
 type scorer func(t *core.Title, idx, n int, fit float64, why string) (float64, string)
 
-// rank keeps fresh, unique titles and scores them, best first.
+// rank keeps fresh, unique, notable titles and scores them, best first.
 func (b *builder) rank(items []core.Title, score scorer) []candItem {
+	return b.rankWith(items, score, true)
+}
+
+// rankWith is rank, optionally keeping obscure titles (rows whose source
+// already vouches for them: what other viewers here watched, Trakt).
+func (b *builder) rankWith(items []core.Title, score scorer, requireNotable bool) []candItem {
 	b.loadStatuses(items)
 	seen := map[core.RatingKey]bool{}
 	var out []candItem
 	n := len(items)
 	for i := range items {
 		t := &items[i]
-		if seen[t.Key] || !b.fresh(t) {
+		if seen[t.Key] || !b.fresh(t) || requireNotable && !b.notable(t) {
 			continue
 		}
 		seen[t.Key] = true
@@ -282,21 +305,6 @@ func capItems(items []candItem, n int) []candItem {
 }
 
 // ---- item features -------------------------------------------------------------
-
-// quality is a Bayesian-shrunk TMDB rating mapped to 0..1 (5.0 → 0,
-// 8.5 → 1), so a 9.0 from 12 votes does not beat an 8.2 from 20,000.
-func quality(t *core.Title) float64 {
-	if t.Rating <= 0 {
-		return 0.3
-	}
-	v := float64(t.VoteCount)
-	if v <= 0 {
-		v = 50
-	}
-	const m, c = 150.0, 6.4
-	bayes := (v*t.Rating + m*c) / (v + m)
-	return clamp((bayes-5)/3.5, 0, 1)
-}
 
 // popularity maps TMDB popularity onto 0..1 on a log scale.
 func popularity(t *core.Title) float64 {

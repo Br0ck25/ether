@@ -49,12 +49,15 @@ func (a *assembly) run() []core.HomeRow {
 	var rows []*rankedRow
 	cands := append([]*candRow{}, a.model.rows...)
 	cands = append(cands, a.owner...)
-	// New viewers' Homes also get the catalogue-wide rows that otherwise
-	// live in sections (Top Rated, Popular…): there is nothing personal to
-	// put there yet.
-	newViewer := a.model.taste == nil || a.model.taste.Confidence < minPersonalConfidence
+	// New viewers get the curated cold-start rows (Top 10 today, genre
+	// showcases) and acclaimed section rows on Home: there is little
+	// personal to put there yet.
+	newViewer := a.newViewer()
 	for _, c := range cands {
-		if a.section == "" && c.sectionOnly && !newViewer || a.section != "" && c.homeOnly {
+		if a.section == "" && c.sectionOnly && !(newViewer && c.coldHome) || a.section != "" && c.homeOnly {
+			continue
+		}
+		if c.coldOnly && !newViewer {
 			continue
 		}
 		if c.kind == KindContinue {
@@ -105,9 +108,13 @@ func (a *assembly) run() []core.HomeRow {
 	})
 	// Per-kind caps (pinned rows count but are never dropped).
 	perKind := map[string]int{}
+	groups := map[string]bool{}
 	owners := 0
 	for _, r := range pinned {
 		perKind[r.c.kind]++
+		if r.c.group != "" {
+			groups[r.c.kind+"/"+r.c.group] = true
+		}
 		if r.c.source == core.RowSourceOwner {
 			owners++
 		}
@@ -117,6 +124,12 @@ func (a *assembly) run() []core.HomeRow {
 		info := infoFor(r.c.kind)
 		if perKind[r.c.kind] >= info.cap {
 			continue
+		}
+		if r.c.group != "" {
+			if groups[r.c.kind+"/"+r.c.group] {
+				continue // one showcase per genre family
+			}
+			groups[r.c.kind+"/"+r.c.group] = true
 		}
 		if r.c.source == core.RowSourceOwner && owners >= maxOwnerRows {
 			continue
@@ -269,6 +282,26 @@ func (a *assembly) rowCap(c *candRow) int {
 	return a.limit
 }
 
+// newViewer reports whether the viewer's taste is still too thin for a
+// personal Home.
+func (a *assembly) newViewer() bool {
+	return a.model.taste == nil || a.model.taste.Confidence < coldStartConfidence
+}
+
+// coldBoost lifts the curated cold-start rows on a new viewer's Home so
+// it leads with Top 10 today, genre showcases and new releases.
+func coldBoost(kind string) float64 {
+	switch kind {
+	case KindTop10Today:
+		return 1.8
+	case KindShowcase:
+		return 1.5
+	case KindNewReleases:
+		return 1.6
+	}
+	return 1
+}
+
 // typeOK reports whether an item belongs on this screen.
 func (a *assembly) typeOK(t *core.Title) bool {
 	switch a.section {
@@ -303,10 +336,8 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 		if !a.typeOK(&it.t) {
 			continue
 		}
-		if c.kind == KindShortOnTime {
-			if m := minutes(&it.t); m <= 0 || m > math.Max(target*1.25, 30) {
-				continue
-			}
+		if c.kind == KindShortOnTime && !isShort(&it.t) {
+			continue // the context target orders the row (adjust), isShort bounds it
 		}
 		if !c.keepOrder {
 			it.base += a.adjust(c, &it, target)
@@ -352,6 +383,13 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 		switch {
 		case c.kind == KindShortOnTime:
 			adj += 0.35 * fitR
+			// Films or episodes, as this viewer watches in this context.
+			share := 2*a.model.taste.movieShareFor(a.hc) - 1
+			if t.Type == core.TypeMovie {
+				adj += 0.1 * share
+			} else {
+				adj -= 0.1 * share
+			}
 		case a.hc.Device == core.DeviceMobile || (!a.hc.Weekend && a.hc.Daypart == core.DaypartLate):
 			adj += 0.05 * fitR
 		}
@@ -385,6 +423,9 @@ func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float
 		return 0, 0
 	}
 	mult := ctxMult(c.kind, a.hc) * a.typeMix(items) * (0.7 + 0.6*strength)
+	if a.newViewer() {
+		mult *= coldBoost(c.kind)
+	}
 	scale := c.scale
 	if scale <= 0 {
 		scale = 1

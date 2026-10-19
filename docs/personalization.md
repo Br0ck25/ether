@@ -102,24 +102,56 @@ rules and insights.
 | --- | --- | --- |
 | `continue-watching` | in progress | Plex's own row; the engine only ranks it |
 | `up-next` | next episode of recently finished shows | |
-| `top-10` | best fits from a shared pool (similar to favourites, trending, top rated, popular, favourite genres) | 10 items |
+| `top-10-today` | "Top 10 on <server> Today": TMDB trending (day, week) blended with catalogue popularity and what viewers here watched this week, vote-floored | 10 items; leads new viewers' Homes |
+| `top-10` | best fits from a shared pool (similar to favourites, trending, top rated, popular, favourite genres), weighted rating ≥ 6.8 | 10 items; needs taste confidence ≥ 0.25 |
+| `genre-showcase` | "Acclaimed <Genre>": acclaimed (full vote floor, weighted ≥ 7.0) popular titles of one broad genre | new viewers only: three, one per genre family (thrills / light / serious), rotating daily — what they play is the first taste evidence |
 | `because-you-watched` | TMDB similar to a recent favourite | up to 3 per screen, rotating daily, recent seeds favoured |
 | `more-from-person` | a director/writer/actor with affinity ≥ 0.35 | up to 2 |
 | `trending-in-your-taste` | trending titles with fit > 0.08 | |
-| `hidden-gems` | rated ≥ 7.2, under the 40th popularity percentile, fit ≥ 0.12 | |
+| `hidden-gems` | half the vote floor, weighted rating ≥ 7.0, under the 40th popularity percentile, fit ≥ 0.12 | |
 | `new-this-week` | released in 7 days (21 if thin) in the top genres | |
 | `comfort-rewatches` | finished favourites (rewatched, rated 8+, or 6+ episodes) not seen for 45 days | |
-| `something-different` | acclaimed titles outside the top genres, nothing disliked | exploration |
-| `short-on-time` | films ≤ 100 min, episodes ≤ 35 min | runtime fitted to the context at assembly |
+| `something-different` | acclaimed titles (full vote floor, weighted ≥ 7.2) outside the top genres, nothing disliked | exploration |
+| `short-on-time` | films ≤ 100 min; series only with episodes ≤ 35 min **and** a short commitment (≤ 30 episodes) or self-contained sitcom episodes (comedy, not animation, ≤ 250 episodes); never news/talk/reality/soap | ordered by runtime fit to the context and the viewer's film/episode habit; missing runtimes and episode counts are fetched for the best candidates (80 per build) |
 | `finish-the-franchise` | the unwatched rest of a started TMDB collection, in order | |
 | `collection:<id>` | owner collections targeted at the viewer and context (`core.CollectionRows`) | owner's order |
 | `llm` | themed rows from the owner's LLM, seeded by favourites | optional |
 | `trakt-recommendations`, `trakt-watchlist` | connected Trakt account | optional |
-| `trending`, `popular-on-server`, `new-releases`, `top-rated`, `popular`, `airing-today` | catalogue-wide | the last three live in sections, and on Home for new viewers |
+| `trending`, `popular-on-server` | catalogue-wide | |
+| `new-releases` | released in the last 120 days, notable only, by recency and popularity | |
+| `top-rated` | 1.5× the vote floor, weighted rating ≥ 7.4, by weighted rating | sections, and new viewers' Homes |
+| `popular`, `airing-today` | TMDB lists | sections only |
 
 Discovery rows never contain anything the viewer has watched, started or
 given any signal about; every row honours the viewer's content-rating
 limit and allowed sections.
+
+### Quality guards
+
+TMDB ratings from few votes are noise (a new release at 9.1 from 470
+votes), so:
+
+- **Weighted rating** (IMDb-style): `(v·R + m·C) / (v + m)` with C = 6.4
+  and m = 1,000 for films, 300 for series. It drives `quality` everywhere.
+- **Vote floor** per type, scaled to the catalogue: half the median vote
+  count of its 200 most popular titles, capped at 1,000 films / 300
+  series and at least a tenth of that. Rating-driven rows ("acclaimed")
+  need a multiple of it, and titles released in the last year need three
+  times as many votes (early ratings come from fans).
+- **Notable**: every discovery row except what viewers here watched, Trakt
+  and LLM picks skips titles that are not: the full vote floor; a fifth of
+  it with TMDB popularity ≥ 10; or a release of the last 120 days with 25+
+  votes and popularity in the top quarter of recent releases. Titles rated
+  under 6 by 20+ voters, or with a weighted rating under 6 on 200+ votes,
+  are never notable.
+
+### Cold start
+
+Below taste confidence 0.3 a viewer's Home leads with the curated
+cold-start rows: Top 10 today (×1.8), three genre showcases (×1.5), new
+releases (×1.6), plus Top Rated. Top 10 for You waits for confidence 0.25;
+Because you watched and the other personal rows start at 0.08 and take
+over as evidence grows.
 
 ## Assembly
 

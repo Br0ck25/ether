@@ -328,9 +328,11 @@ func TestAssemblyContextShapesRows(t *testing.T) {
 	cat := newFakeCatalog(testNow)
 	var short, long []core.RatingKey
 	for g := 0; g < 8; g++ {
-		short = append(short, showKey(g, 0)) // 24-50 minute episodes
-		long = append(long, movieKey(g, 13)) // 158-minute films
+		short = append(short, movieKey(g, 3)) // 98-minute films
+		long = append(long, movieKey(g, 13))  // 158-minute films
 	}
+	// 24-minute sitcom and cartoon episodes, 8 per series.
+	short = append(short, showKey(2, 0), showKey(2, 1), showKey(4, 0), showKey(4, 1))
 	sot := testRow(KindShortOnTime, "shortontime", items(cat, append(short, long...)...))
 	films := testRow(KindNewReleases, "newreleases", items(cat, long...))
 	m := emptyModel(sot, films)
@@ -355,9 +357,37 @@ func TestAssemblyContextShapesRows(t *testing.T) {
 	if s1/f1 <= s2/f2 {
 		t.Fatalf("Short on Time should matter more on a weeknight phone (%v/%v) than a Saturday-night TV (%v/%v)", s1, f1, s2, f2)
 	}
-	for _, it := range row.Items {
-		if it.Runtime > 60*time.Minute {
-			t.Fatalf("%s (%v) in Short on Time on a phone at 22:30", it.Title, it.Runtime)
+	for i, it := range row.Items {
+		if it.Runtime > shortMovieMinutes*time.Minute {
+			t.Fatalf("%s (%v) in Short on Time", it.Title, it.Runtime)
+		}
+		// On a phone late at night the episodes lead.
+		if i < 4 && it.Runtime > 30*time.Minute {
+			t.Fatalf("%s (%v) leads Short on Time on a phone at 22:30: %v", it.Title, it.Runtime, row.Items)
+		}
+	}
+}
+
+func TestIsShort(t *testing.T) {
+	cases := []struct {
+		name string
+		t    core.Title
+		want bool
+	}{
+		{"95-minute film", core.Title{Type: core.TypeMovie, Runtime: 95 * time.Minute}, true},
+		{"2-hour film", core.Title{Type: core.TypeMovie, Runtime: 120 * time.Minute}, false},
+		{"unknown runtime", core.Title{Type: core.TypeMovie}, false},
+		{"8-episode half-hour series", core.Title{Type: core.TypeShow, Runtime: 30 * time.Minute, LeafCount: 8, Genres: []string{"Drama"}}, true},
+		{"sitcom", core.Title{Type: core.TypeShow, Runtime: 22 * time.Minute, LeafCount: 186, Genres: []string{"Comedy"}}, true},
+		{"1000-episode anime", core.Title{Type: core.TypeShow, Runtime: 24 * time.Minute, LeafCount: 1180, Genres: []string{"Animation", "Action & Adventure", "Comedy"}}, false},
+		{"long anime", core.Title{Type: core.TypeShow, Runtime: 24 * time.Minute, LeafCount: 196, Genres: []string{"Animation", "Comedy"}}, false},
+		{"hour-long drama", core.Title{Type: core.TypeShow, Runtime: 55 * time.Minute, LeafCount: 8}, false},
+		{"unknown episode count", core.Title{Type: core.TypeShow, Runtime: 25 * time.Minute}, false},
+		{"daily news", core.Title{Type: core.TypeShow, Runtime: 30 * time.Minute, LeafCount: 20, Genres: []string{"News"}}, false},
+	}
+	for _, c := range cases {
+		if got := isShort(&c.t); got != c.want {
+			t.Errorf("%s: isShort = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

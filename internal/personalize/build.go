@@ -18,6 +18,11 @@ import (
 func (e *Engine) request(userID int64) *flight {
 	e.mu.Lock()
 	if f, ok := e.flights[userID]; ok {
+		if f.started {
+			// The running build may predate what triggered this request
+			// (a watch-state change): build again when it finishes.
+			f.again = true
+		}
 		e.mu.Unlock()
 		return f
 	}
@@ -69,7 +74,21 @@ func (e *Engine) worker(ctx context.Context) {
 				}
 			}
 		case id := <-e.queue:
-			e.buildAndStore(ctx, id)
+			for {
+				e.mu.Lock()
+				if f := e.flights[id]; f != nil {
+					f.started, f.again = true, false
+				}
+				e.mu.Unlock()
+				e.buildAndStore(ctx, id)
+				e.mu.Lock()
+				f := e.flights[id]
+				again := f != nil && f.again && ctx.Err() == nil
+				e.mu.Unlock()
+				if !again {
+					break
+				}
+			}
 			e.finish(id)
 		}
 	}
@@ -259,7 +278,8 @@ func (e *Engine) refreshActive(ctx context.Context) {
 func (e *Engine) buildModel(ctx context.Context, user core.User, generic bool) (*userModel, error) {
 	start := e.now()
 	b := &builder{e: e, ctx: ctx, user: user, generic: generic, now: start, touched: map[core.RatingKey]bool{},
-		statuses: map[core.RatingKey]core.WatchStatus{}, memo: map[string][]core.Title{}, fits: map[core.RatingKey]fitMemo{}}
+		statuses: map[core.RatingKey]core.WatchStatus{}, memo: map[string][]core.Title{}, fits: map[core.RatingKey]fitMemo{},
+		hydrateLeft: hydrateBudget}
 	fatigue := map[core.RatingKey]float64{}
 	if generic {
 		b.taste = buildTaste(tasteInput{userID: user.ID, now: start, loc: e.loc})

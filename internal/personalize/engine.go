@@ -217,6 +217,9 @@ type Engine struct {
 
 type flight struct {
 	done chan struct{}
+	// started: a worker is building; again: a request arrived after the
+	// build read its inputs, so it must run once more (guarded by e.mu).
+	started, again bool
 }
 
 var (

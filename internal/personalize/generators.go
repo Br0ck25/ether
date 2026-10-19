@@ -23,7 +23,9 @@ type generator struct {
 var generators = []generator{
 	{KindContinue, (*builder).genContinue},
 	{KindUpNext, (*builder).genUpNext},
+	{KindTop10Today, (*builder).genTop10Today},
 	{KindTop10, (*builder).genTop10},
+	{KindShowcase, (*builder).genShowcase},
 	{KindBecause, (*builder).genBecause},
 	{KindPerson, (*builder).genPerson},
 	{KindTrendingTaste, (*builder).genTrendingTaste},
@@ -185,18 +187,18 @@ func (b *builder) pool() []core.Title {
 // ---- taste rows ------------------------------------------------------------------
 
 func (b *builder) genTop10() []*candRow {
-	if !b.personal() {
-		return nil
+	if !b.personal() || b.taste.Confidence < top10Confidence {
+		return nil // "Top 10 on <server> Today" leads instead
 	}
 	items := b.rank(b.pool(), func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
 		if why == "" {
 			why = "Highly rated and widely loved"
 		}
-		return 0.62*fit + 0.2*quality(t) + 0.1*popularity(t) + 0.08*recency(t, b.now), why
+		return 0.5*fit + 0.3*quality(t) + 0.1*popularity(t) + 0.1*recency(t, b.now), why
 	})
 	kept := items[:0:0]
 	for _, it := range items {
-		if it.fit > 0 {
+		if it.fit > 0 && weightedRating(&it.t) >= 6.8 {
 			kept = append(kept, it)
 		}
 	}
@@ -214,7 +216,7 @@ func (b *builder) genBecause() []*candRow {
 		seed := s.Title
 		sim := b.similar(s.Key, 30)
 		items := b.rank(sim, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
-			return 0.45*fit + 0.35*rankScore(idx, n) + 0.2*quality(t), "Because you watched " + seed.Title
+			return 0.4*fit + 0.3*rankScore(idx, n) + 0.3*quality(t), "Because you watched " + seed.Title
 		})
 		if len(items) == 0 {
 			continue
@@ -361,16 +363,23 @@ func (b *builder) genHiddenGems() []*candRow {
 	}
 	var src []core.Title
 	for _, g := range b.taste.TopGenres(4) {
-		src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}, MinRating: 7.2}, Sort: core.SortRating, Desc: true, Limit: 60})...)
+		// Popular-first within the genre: obscure titles sort first by raw
+		// rating, and are filtered out by the vote floor anyway.
+		src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}, MinRating: 7}, Sort: core.SortPopularity, Desc: true, Limit: 300})...)
 	}
 	src = append(src, b.pool()...)
-	// "Little-known" relative to this catalogue: under the 40th popularity
-	// percentile of the candidates.
-	var pops []float64
+	// Trustworthy rating (half the vote floor, weighted 7.0+) …
+	var rated []core.Title
 	for _, t := range src {
-		if t.Popularity > 0 {
-			pops = append(pops, t.Popularity)
+		if b.acclaimed(&t, 0.5, 7.0) {
+			rated = append(rated, t)
 		}
+	}
+	// … and little known relative to this catalogue: under the 40th
+	// popularity percentile of those.
+	var pops []float64
+	for _, t := range rated {
+		pops = append(pops, t.Popularity)
 	}
 	sort.Float64s(pops)
 	popCap := math.Inf(1)
@@ -378,13 +387,13 @@ func (b *builder) genHiddenGems() []*candRow {
 		popCap = pops[len(pops)*2/5]
 	}
 	var gems []core.Title
-	for _, t := range src {
-		if t.Rating >= 7.2 && (t.VoteCount == 0 || t.VoteCount >= 50) && t.Popularity <= popCap {
+	for _, t := range rated {
+		if t.Popularity <= popCap {
 			gems = append(gems, t)
 		}
 	}
 	items := b.rank(gems, func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
-		r := fmt.Sprintf("Rated %.1f but little known", t.Rating)
+		r := fmt.Sprintf("Rated %.1f by %s viewers but little known", t.Rating, votesPhrase(t.VoteCount))
 		if why != "" {
 			r += " · " + why
 		}
@@ -400,6 +409,17 @@ func (b *builder) genHiddenGems() []*candRow {
 		"Highly rated titles few people have found, that fit your taste.", capItems(kept, 40))
 	r.minItems = 5
 	return []*candRow{r}
+}
+
+// votesPhrase renders a vote count for a reason ("12k").
+func votesPhrase(n int) string {
+	switch {
+	case n >= 10000:
+		return fmt.Sprintf("%dk", n/1000)
+	case n >= 1000:
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	}
+	return fmt.Sprint(n)
 }
 
 func (b *builder) genNewThisWeek() []*candRow {
@@ -435,7 +455,7 @@ func (b *builder) genNewThisWeek() []*candRow {
 		if why != "" {
 			r += " · " + why
 		}
-		return 0.5*fit + 0.3*recency(t, b.now) + 0.2*quality(t), r
+		return 0.45*fit + 0.25*recency(t, b.now) + 0.15*popularity(t) + 0.15*quality(t), r
 	})
 	title := "New This Week in " + genres[0]
 	if len(genres) > 1 {
@@ -495,8 +515,8 @@ func (b *builder) genDifferent() []*candRow {
 	for _, g := range top {
 		topSet[g] = true
 	}
-	src := append(b.browse(core.BrowseQuery{Filter: core.Filter{MinRating: 7.5}, Sort: core.SortPopularity, Desc: true, Limit: 120}),
-		b.both(func(t core.MediaType) []core.Title { return b.list("top_rated", t, 40) })...)
+	src := append(b.browse(core.BrowseQuery{Filter: core.Filter{MinRating: 7}, Sort: core.SortPopularity, Desc: true, Limit: 400}),
+		b.both(func(t core.MediaType) []core.Title { return b.list("top_rated", t, 100) })...)
 	var outside []core.Title
 	for _, t := range src {
 		ok := len(t.Genres) > 0
@@ -506,7 +526,7 @@ func (b *builder) genDifferent() []*candRow {
 				break
 			}
 		}
-		if ok && t.Rating >= 7.5 {
+		if ok && b.acclaimed(&t, 1, 7.2) {
 			outside = append(outside, t)
 		}
 	}
@@ -519,6 +539,7 @@ func (b *builder) genDifferent() []*candRow {
 		if len(t.Genres) > 0 {
 			r = "Acclaimed " + strings.ToLower(t.Genres[0])
 		}
+		r += fmt.Sprintf(" (%.1f from %s votes)", t.Rating, votesPhrase(t.VoteCount))
 		if len(top) > 0 {
 			r += ", a change from your usual " + top[0]
 		}
@@ -536,33 +557,41 @@ func (b *builder) genDifferent() []*candRow {
 	return []*candRow{r}
 }
 
-// Runtime limits for "Short on Time".
-const (
-	shortMovieMinutes = 100
-	shortShowMinutes  = 35
-)
-
-func isShort(t *core.Title) bool {
-	m := minutes(t)
-	if m <= 0 {
-		return false
-	}
-	if t.Type == core.TypeShow {
-		return m <= shortShowMinutes
-	}
-	return m <= shortMovieMinutes
-}
-
 func (b *builder) genShortOnTime() []*candRow {
-	src := append([]core.Title{},
-		b.browse(core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, MaxRuntime: shortMovieMinutes * time.Minute, MinRuntime: 60 * time.Minute}, Sort: core.SortPopularity, Desc: true, Limit: 60})...)
-	src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Type: core.TypeShow, MaxRuntime: shortShowMinutes * time.Minute, MinRuntime: 15 * time.Minute}, Sort: core.SortPopularity, Desc: true, Limit: 40})...)
+	var src []core.Title
 	if b.personal() {
-		src = append(b.pool(), src...)
+		src = append(src, b.pool()...)
 	}
-	var short []core.Title
+	for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
+		// Titles whose runtime is already known…
+		max := shortMovieMinutes * time.Minute
+		if typ == core.TypeShow {
+			max = shortEpisodeMinutes * time.Minute
+		}
+		src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Type: typ, MaxRuntime: max}, Sort: core.SortPopularity, Desc: true, Limit: 100})...)
+		// …and the most popular titles, whose details are fetched below.
+		src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Type: typ}, Sort: core.SortPopularity, Desc: true, Limit: 80})...)
+	}
+	// Keep notable, unseen candidates, best-known first, then fetch the
+	// details that decide "short" (runtime, episode count) for those that
+	// lack them.
+	var cands []core.Title
+	seen := map[core.RatingKey]bool{}
+	b.loadStatuses(src)
 	for _, t := range src {
-		if isShort(&t) {
+		if seen[t.Key] || !b.fresh(&t) || !b.notable(&t) {
+			continue
+		}
+		seen[t.Key] = true
+		cands = append(cands, t)
+	}
+	sort.SliceStable(cands, func(i, j int) bool {
+		return quality(&cands[i])+popularity(&cands[i]) > quality(&cands[j])+popularity(&cands[j])
+	})
+	cands = b.hydrate(cands, needsShortDetails)
+	var short []core.Title
+	for _, t := range cands {
+		if isShort(&t) && weightedRating(&t) >= 6.3 {
 			short = append(short, t)
 		}
 	}
@@ -573,7 +602,7 @@ func (b *builder) genShortOnTime() []*candRow {
 	items := b.rank(short, func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
 		r := fmt.Sprintf("%d min", int(minutes(t)))
 		if t.Type == core.TypeShow {
-			r = fmt.Sprintf("%d-minute episodes", int(minutes(t)))
+			r = fmt.Sprintf("%d-minute episodes, %d in all", int(minutes(t)), t.LeafCount)
 		}
 		if why != "" {
 			r += " · " + why
@@ -581,7 +610,7 @@ func (b *builder) genShortOnTime() []*candRow {
 		return fitW*fit + 0.25*quality(t) + 0.15*popularity(t), r
 	})
 	r := newRow(KindShortOnTime, "shortontime", "Short on Time",
-		"Shorter films and episodes that fit the time you usually have.", capItems(items, 60))
+		"Films under 100 minutes and short series you can start and finish now, fitted to the time you usually have.", capItems(items, 60))
 	r.minItems = 5
 	return []*candRow{r}
 }
@@ -689,9 +718,9 @@ func (b *builder) genLLM() []*candRow {
 	}
 	var rows []*candRow
 	for _, h := range hubs {
-		items := b.rank(h.Items, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
+		items := b.rankWith(h.Items, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
 			return 0.7*rankScore(idx, n) + 0.3*fit, "Picked by your AI model for this theme"
-		})
+		}, false)
 		id := h.ID
 		if !strings.HasPrefix(id, "llm.") {
 			id = "llm." + id
@@ -709,9 +738,9 @@ func (b *builder) genTrakt() []*candRow {
 	defer cancel()
 	var rows []*candRow
 	if recs, err := b.e.trakt.Recommendations(ctx, b.user.ID, 40); err == nil && len(recs) > 0 {
-		items := b.rank(recs, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
+		items := b.rankWith(recs, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
 			return 0.6*rankScore(idx, n) + 0.4*fit, "Recommended by Trakt"
-		})
+		}, false)
 		rows = append(rows, newRow(KindTraktRecs, "trakt.recommendations", "Trakt Recommendations", "From your connected Trakt account.", items))
 	}
 	if wl, err := b.e.trakt.Watchlist(ctx, b.user.ID, 60); err == nil && len(wl) > 0 {
@@ -786,14 +815,14 @@ func (b *builder) genPopularServer() []*candRow {
 			titles = append(titles, *t)
 		}
 	}
-	items := b.rank(titles, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
+	items := b.rankWith(titles, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
 		v := len(viewers[t.Key])
 		r := "Watched by another viewer here"
 		if v > 1 {
 			r = fmt.Sprintf("Watched by %d viewers here", v)
 		}
 		return 0.7*rankScore(idx, n) + 0.3*fit, r
-	})
+	}, false)
 	name := b.e.serverName()
 	r := newRow(KindPopularServer, "popular.server", "Popular on "+name,
 		"What other viewers on this server watched most in the last 30 days.", items)
@@ -802,14 +831,33 @@ func (b *builder) genPopularServer() []*candRow {
 
 func (b *builder) genNewReleases() []*candRow {
 	src := b.both(func(t core.MediaType) []core.Title {
-		return b.browse(core.BrowseQuery{Filter: core.Filter{Type: t}, Sort: core.SortReleased, Desc: true, Limit: 300})
+		return b.browse(core.BrowseQuery{Filter: core.Filter{Type: t}, Sort: core.SortReleased, Desc: true, Limit: 400})
 	})
-	items := b.rank(src, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
-		return 0.6*recency(t, b.now) + 0.25*fit + 0.15*quality(t), "Recently released"
+	var recent []core.Title
+	for _, t := range src {
+		if !t.Released.IsZero() && !t.Released.After(b.now) && b.now.Sub(t.Released) <= recentDays*24*time.Hour {
+			recent = append(recent, t)
+		}
+	}
+	// rank keeps only notable releases (as popular as the median new
+	// release, or already well rated by enough people).
+	items := b.rank(recent, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
+		return 0.4*recency(t, b.now) + 0.35*popularity(t) + 0.1*quality(t) + 0.15*fit, "New " + releasedPhrase(t.Released, b.now)
 	})
-	r := newRow(KindNewReleases, "newreleases", "New Releases", "The newest releases in the catalogue.", capItems(items, 40))
+	r := newRow(KindNewReleases, "newreleases", "New Releases", "Notable releases of the last few months, newest and most talked-about first.", capItems(items, 40))
 	r.minItems = 5
 	return []*candRow{r}
+}
+
+func releasedPhrase(rel, now time.Time) string {
+	d := int(now.Sub(rel).Hours() / 24)
+	switch {
+	case d <= 7:
+		return "this week"
+	case d <= 31:
+		return "this month"
+	}
+	return "in " + rel.Format("January")
 }
 
 func (b *builder) listRow(kind, id, title, reason, list, itemReason string, types ...core.MediaType) *candRow {
@@ -827,8 +875,27 @@ func (b *builder) listRow(kind, id, title, reason, list, itemReason string, type
 	return r
 }
 
+// genTopRated ranks by weighted rating among titles with enough votes,
+// from TMDB's list and the catalogue's most popular titles (TMDB's list
+// alone admits new releases with a few hundred enthusiastic votes).
 func (b *builder) genTopRated() []*candRow {
-	return []*candRow{b.listRow(KindTopRated, "toprated", "Top Rated", "TMDB's top rated titles.", "top_rated", "Top rated on TMDB", core.TypeMovie, core.TypeShow)}
+	var src []core.Title
+	for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
+		src = append(src, b.list("top_rated", typ, 100)...)
+		src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Type: typ, MinRating: 7}, Sort: core.SortPopularity, Desc: true, Limit: 400})...)
+	}
+	var good []core.Title
+	for _, t := range src {
+		if b.acclaimed(&t, 1.5, 7.4) {
+			good = append(good, t)
+		}
+	}
+	items := b.rank(good, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
+		return 0.8*quality(t) + 0.2*fit, fmt.Sprintf("Rated %.1f by %s viewers", t.Rating, votesPhrase(t.VoteCount))
+	})
+	r := newRow(KindTopRated, "toprated", "Top Rated", "The best-rated titles with enough votes to trust the rating.", capItems(items, 40))
+	r.sectionOnly, r.coldHome, r.minItems = true, true, 5
+	return []*candRow{r}
 }
 
 func (b *builder) genPopular() []*candRow {
@@ -837,4 +904,119 @@ func (b *builder) genPopular() []*candRow {
 
 func (b *builder) genAiringToday() []*candRow {
 	return []*candRow{b.listRow(KindAiringToday, "airing", "Airing Today", "Shows with a new episode today.", "airing_today", "New episode today", core.TypeShow)}
+}
+
+// ---- cold start: Top 10 today and genre showcases ---------------------------------
+
+// genTop10Today is the server's Top 10 today: what is trending right now
+// blended with catalogue popularity and what viewers here are watching,
+// limited to titles with a trustworthy rating. It leads a new viewer's
+// Home and is a reliable row for everyone.
+func (b *builder) genTop10Today() []*candRow {
+	trendRank := map[core.RatingKey]float64{}
+	var src []core.Title
+	for _, list := range []struct {
+		name string
+		w    float64
+	}{{"trending_day", 1}, {"trending_week", 0.7}} {
+		for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
+			items := b.list(list.name, typ, 40)
+			for i, t := range items {
+				if v := list.w * rankScore(i, len(items)); v > trendRank[t.Key] {
+					trendRank[t.Key] = v
+				}
+			}
+			src = append(src, items...)
+		}
+	}
+	src = append(src, b.both(func(t core.MediaType) []core.Title {
+		return b.browse(core.BrowseQuery{Filter: core.Filter{Type: t}, Sort: core.SortPopularity, Desc: true, Limit: 60})
+	})...)
+	here := b.serverPlays(7)
+	maxHere := 0
+	for _, n := range here {
+		maxHere = max(maxHere, n)
+	}
+	var ok []core.Title
+	for _, t := range src {
+		// Vote-floored: a tenth of the floor and a decent weighted rating,
+		// so a week-old blockbuster qualifies and an obscure title with a
+		// burst of traffic does not.
+		if b.acclaimed(&t, 0.1, 6.0) {
+			ok = append(ok, t)
+		}
+	}
+	items := b.rank(ok, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
+		h := 0.0
+		if maxHere > 0 {
+			h = float64(here[tasteKey(t.Key)]) / float64(maxHere)
+		}
+		reason := "Trending today"
+		switch {
+		case h > 0:
+			reason = "Popular with viewers here"
+		case trendRank[t.Key] == 0:
+			reason = "One of the most popular titles right now"
+		}
+		return 0.45*trendRank[t.Key] + 0.25*popularity(t) + 0.15*quality(t) + 0.1*h + 0.05*fit, reason
+	})
+	r := newRow(KindTop10Today, "top10.today", "Top 10 on "+b.e.serverName()+" Today",
+		"Today's most watched and talked-about titles with a trustworthy rating: trending now, catalogue popularity and what viewers here are watching.", capItems(items, 40))
+	r.maxItems, r.minItems = 10, 5
+	return []*candRow{r}
+}
+
+// serverPlays counts other viewers' plays per title over the last days.
+func (b *builder) serverPlays(days int) map[core.RatingKey]int {
+	out := map[core.RatingKey]int{}
+	plays, err := b.e.store.plays(b.ctx, 0, b.now.AddDate(0, 0, -days))
+	if err != nil {
+		return out
+	}
+	for _, p := range plays {
+		if (b.generic || p.userID != b.user.ID) && !p.abandoned {
+			out[p.tasteKey]++
+		}
+	}
+	return out
+}
+
+// genShowcase builds one acclaimed-and-popular row per broad genre. New
+// viewers get three of them, one per genre cluster, rotating daily: what
+// they play from them is the first evidence of their taste.
+func (b *builder) genShowcase() []*candRow {
+	if b.taste != nil && b.taste.Confidence >= coldStartConfidence {
+		return nil
+	}
+	var rows []*candRow
+	for ci, cluster := range showcaseClusters {
+		for _, g := range cluster {
+			src := b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 200})
+			var ok []core.Title
+			for _, t := range src {
+				if b.acclaimed(&t, 1, 7.0) {
+					ok = append(ok, t)
+				}
+			}
+			items := b.rank(ok, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
+				return 0.5*quality(t) + 0.35*popularity(t) + 0.15*fit, fmt.Sprintf("Rated %.1f by %s viewers", t.Rating, votesPhrase(t.VoteCount))
+			})
+			if len(items) < 6 {
+				continue
+			}
+			name := genrePlural[g]
+			if name == "" {
+				name = g
+			}
+			r := newRow(KindShowcase, "showcase."+genreSlug(g), "Acclaimed "+name,
+				fmt.Sprintf("A taste of the best %s, to learn what you like.", strings.ToLower(name)), capItems(items, 40))
+			r.coldOnly, r.group, r.minItems = true, fmt.Sprint(ci), 6
+			rows = append(rows, r)
+		}
+	}
+	return rows
+}
+
+func genreSlug(g string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.ReplaceAll(g, "&", "and")), " ", "-")
 }
