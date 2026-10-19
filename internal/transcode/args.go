@@ -555,7 +555,11 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", peak, "-bufsize", buf, "-x265-params", params)
 	case "h264_videotoolbox", "hevc_videotoolbox":
-		e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		if s.Rate.Quality {
+			e = append(e, "-q:v", "65", "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		} else {
+			e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		}
 		if s.FastStart {
 			e = append(e, "-realtime", "1")
 		}
@@ -580,14 +584,22 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_qsv", "hevc_qsv":
-		e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
+		if s.Rate.Quality {
+			e = append(e, "-preset", "veryfast", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "1")
+		} else {
+			e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
+		}
 		if enc == "h264_qsv" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_vaapi", "hevc_vaapi":
-		e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
+		if s.Rate.Quality {
+			e = append(e, "-rc_mode", "QVBR", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf)
+		} else {
+			e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
+		}
 		if enc == "h264_vaapi" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {

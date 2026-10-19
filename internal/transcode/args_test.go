@@ -46,6 +46,28 @@ func TestVBVReservoirArgs(t *testing.T) {
 	mustNotContain(t, args, "-b:v 1800k")
 }
 
+func TestVBVHardwareQualityModes(t *testing.T) {
+	info := mustParse(t, "mkv_truehd_atmos.json")
+	d := Decide(info, appleTV, allow(), Policy{})
+	d.Kind, d.VideoCopy, d.VideoCodec = core.DecisionTranscode, false, "h264"
+	for _, tc := range []struct {
+		accel string
+		want  []string
+	}{
+		{AccelNVENC, []string{"-rc vbr", "-cq 21", "-maxrate 2400k", "-bufsize 19200k"}},
+		{AccelVideoToolbox, []string{"-q:v 65", "-maxrate 2400k", "-bufsize 19200k"}},
+		{AccelQSV, []string{"-global_quality 23", "-maxrate 2400k", "-bufsize 19200k"}},
+		{AccelVAAPI, []string{"-rc_mode QVBR", "-global_quality 23", "-maxrate 2400k", "-bufsize 19200k"}},
+	} {
+		t.Run(tc.accel, func(t *testing.T) {
+			s := baseSpec(info, d)
+			s.Accel = core.HWAccel{Name: tc.accel, Encoders: []string{"h264_" + tc.accel}}
+			s.Rate = rateControl{Quality: true, MaxrateKbps: 2400, BufsizeKbps: 19200, TargetKbps: 1800}
+			mustContain(t, buildArgs(s), tc.want...)
+		})
+	}
+}
+
 func joined(args []string) string { return strings.Join(args, " ") }
 
 func mustContain(t *testing.T, args []string, parts ...string) {
