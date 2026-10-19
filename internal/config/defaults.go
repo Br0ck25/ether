@@ -19,6 +19,9 @@ func randomID(n int) string {
 func Defaults(dataDir string) Config {
 	return Config{
 		Markers: Markers{TheIntroDB: true, DetectCached: true},
+		Personalize: Personalize{
+			PostPlay: true, PostPlayPrebuffer: true, MicroReasons: true, SessionIntent: true,
+		},
 		Server: Server{
 			Port:               32400,
 			BindAddress:        "0.0.0.0",
