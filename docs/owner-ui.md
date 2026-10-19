@@ -1,0 +1,221 @@
+# Owner UI and personalization: product spec and API contract
+
+## The principle
+
+Viewers never see Ether. They open Plex on a TV, phone or browser and see a
+Home screen and libraries that feel hand-curated for them, the way Netflix
+does. Everything clever happens on the server, in the background, and reaches
+viewers only through what Ether returns to Plex: Home rows (`/hubs`), section
+rows, collections, playlists, artwork and ordering.
+
+The web UI at `/ether/` is for the **owner**: set up the server, design
+collections and rows, see exactly what each person's Plex Home looks like,
+understand why, and tune it. It is built on AppKit
+(`@braedonsaunders/appkit-ui`, `@braedonsaunders/appkit-tokens`).
+
+## What viewers get (through Plex)
+
+A personal Home per Plex user, rebuilt in the background and served instantly:
+
+- **Row selection and order are personal.** Each user gets the rows most
+  likely to lead to a play, ranked by predicted engagement, not a fixed list.
+- **Context-aware.** Time of day, weekday versus weekend, and device class
+  (TV, mobile, web, from `X-Plex-Product`/`X-Plex-Platform`) change which rows
+  appear and what's in them: shorter titles on weeknights and phones, films
+  on weekend evenings on the TV, kid-friendly before evening on shared
+  accounts that watch family titles.
+- **Rows Netflix-style:** Continue Watching, Top 10 for you, Because you
+  watched X, More from <director/actor you love>, Trending in your taste,
+  Hidden gems for you, New this week in genres you like, Comfort rewatches,
+  Something different (exploration), Short on time, owner-designed
+  collections, franchise "finish it" rows, LLM themed rows (optional).
+- **Freshness.** Rows and items rotate. Every `/hubs` response is recorded as
+  impressions; titles shown repeatedly without a play are demoted, so Home
+  never goes stale.
+- **Feedback loop.** Plays, completions, abandons (stopped early), ratings and
+  impressions feed each user's taste model continuously.
+- **Collections that look made by hand.** Generated poster art for owner
+  collections; collections appear in the Collections tab and, when promoted,
+  as Home rows for the users they target.
+
+## What the owner gets (`/ether/`)
+
+1. **Home**: health at a glance (now playing, Usenet, indexers, cache,
+   catalogue), plus the most-watched and most-engaging rows.
+2. **Collection Studio** (better than Kometa): build a collection visually
+   from sources and rules, see the result live with posters as you edit,
+   start from templates, or describe it in plain English and let the
+   optional LLM draft the rules. Schedule refreshes, rotate members, choose
+   artwork, and target who sees it and where (Collections tab, Home row,
+   section row, specific users).
+3. **Home Designer**: pick a viewer and a device context and see their Plex
+   Home exactly as Plex will receive it, with each row's reason. Pin, hide or
+   reorder rows server-wide or per user; set rules ("Short on time" only on
+   weeknights).
+4. **Viewers**: each Plex user's taste profile (genres, people, decades,
+   moods), recent activity, and what the engine is learning; the owner can
+   correct it ("not into horror") and set limits.
+5. **Settings, setup wizard, logs, resolver traces**: the existing features,
+   rebuilt on AppKit.
+
+## API contract
+
+All endpoints are under `/ether/api/`, JSON, with the existing auth and CSRF
+rules (`X-Ether-Request: 1` on mutations). Existing endpoints keep working.
+Times are RFC 3339. Rating keys are decimal strings. Images are URLs the
+browser can load directly (`/ether/api/image?...` proxies TMDB artwork).
+
+### Shared shapes
+
+```ts
+type TitleCard = {
+  key: string; type: "movie" | "show" | "season" | "episode";
+  title: string; year?: number; summary?: string;
+  poster?: string; backdrop?: string;          // browser-loadable URLs
+  rating?: number; contentRating?: string; runtimeMinutes?: number;
+  genres?: string[]; showTitle?: string; season?: number; episode?: number;
+};
+
+type Rule = {                                  // one condition
+  field: "genre" | "keyword" | "person" | "studio" | "network" | "country" |
+         "language" | "year" | "decade" | "rating" | "votes" | "popularity" |
+         "runtime" | "contentRating" | "released" | "watchProvider" |
+         "collection" | "watched" | "inProgress" | "addedAt";
+  op: "is" | "isNot" | "in" | "notIn" | "gte" | "lte" | "between" | "within";
+  value: unknown;                              // typed by field
+  label?: string;                              // display text for ids (person name…)
+};
+
+type Source =                                  // where candidates come from
+  | { kind: "catalog" }                        // the whole browsable catalogue
+  | { kind: "tmdbList"; list: "trending_day" | "trending_week" | "popular" | "top_rated" | "now_playing" | "upcoming" | "airing_today" | "on_the_air"; mediaType: "movie" | "show" }
+  | { kind: "tmdbCollection"; id: number; label?: string }
+  | { kind: "tmdbDiscover"; params: Record<string, string> }
+  | { kind: "tmdbKeyword" | "tmdbCompany" | "tmdbNetwork" | "tmdbPerson"; id: number; label?: string }
+  | { kind: "watchProvider"; id: number; region: string; label?: string }
+  | { kind: "traktList"; url: string }
+  | { kind: "letterboxdList"; url: string }
+  | { kind: "mdblist"; url: string }
+  | { kind: "titles"; keys: string[] };         // hand-picked
+
+type CollectionSpec = {
+  id?: string;                                 // server-assigned
+  name: string; description?: string;
+  mediaType: "movie" | "show" | "mixed";
+  sources: Source[];                           // union of candidates
+  match: "all" | "any"; rules: Rule[];         // then filtered by rules
+  exclude: Rule[];
+  sort: "popularity" | "rating" | "released" | "title" | "added" | "random" | "personal" | "source";
+  sortDesc: boolean; limit: number;            // 0 = no limit
+  refresh: "live" | "hourly" | "daily" | "weekly";
+  rotate?: { size: number; every: "daily" | "weekly" } | null;   // show a rotating subset
+  artwork: { mode: "auto" | "collage" | "backdrop" | "tmdb" | "custom"; url?: string; accent?: string };
+  targets: {
+    collectionsTab: boolean;                   // Plex Collections tab of the matching sections
+    homeRow: boolean; sectionRow: boolean;
+    users: number[] | "all";                   // local user ids
+    schedule?: { days?: number[]; fromHour?: number; toHour?: number; devices?: ("tv" | "mobile" | "web" | "desktop")[] } | null;
+  };
+  enabled: boolean;
+  templateId?: string;
+  updatedAt?: string; lastBuiltAt?: string; itemCount?: number;
+};
+```
+
+### Collection Studio
+
+| Method | Path | Body / query | Response |
+| --- | --- | --- | --- |
+| GET | `collections` | | `{ collections: CollectionSpec[] }` (owner collections, plus built-ins marked `builtIn: true`) |
+| POST | `collections` | `CollectionSpec` | `CollectionSpec` |
+| GET | `collections/{id}` | | `CollectionSpec` |
+| PUT | `collections/{id}` | `CollectionSpec` | `CollectionSpec` |
+| DELETE | `collections/{id}` | | `204` |
+| POST | `collections/preview` | `CollectionSpec` (unsaved) | `{ total: number, items: TitleCard[] /* first 60 */, warnings: string[], tookMs: number }` |
+| POST | `collections/{id}/rebuild` | | `{ itemCount, lastBuiltAt }` |
+| GET | `collections/templates` | | `{ templates: { id, name, description, category, spec: CollectionSpec }[] }` (≥40 curated templates) |
+| POST | `collections/generate` | `{ prompt: string, mediaType?: string }` | `{ spec: CollectionSpec, explanation: string }` (501 when the LLM is off) |
+| GET | `collections/{id}/artwork` | `?w=` | image (generated poster) |
+
+### Catalogue helpers (for the builder)
+
+| Method | Path | Query | Response |
+| --- | --- | --- | --- |
+| GET | `catalog/search` | `q, type?, limit?` | `{ items: TitleCard[] }` |
+| GET | `catalog/facets` | `type, facet=genre\|decade\|contentRating\|studio\|country\|language` | `{ values: { key, title, count }[] }` |
+| GET | `catalog/lookup` | `kind=person\|keyword\|company\|network\|collection\|watchProvider, q, region?` | `{ results: { id, name, subtitle?, image? }[] }` |
+| GET | `catalog/title/{key}` | | `TitleCard & { cast, directors, keywords, collection }` |
+| GET | `image` | `path=/tmdb/path.jpg, w=` | proxied image |
+
+### Viewers and personalization
+
+```ts
+type Viewer = { id: number; plexId: number; username: string; title: string; thumb?: string;
+  isOwner: boolean; lastActive?: string; plays30d: number; hoursWatched30d: number };
+
+type TasteProfile = {
+  userId: number; updatedAt: string; confidence: number;   // 0..1, grows with history
+  genres: { name: string; weight: number }[];               // weight -1..1
+  people: { id: number; name: string; role: string; weight: number; image?: string }[];
+  keywords: { name: string; weight: number }[];
+  decades: { decade: number; weight: number }[];
+  languages: { code: string; weight: number }[];
+  habits: { weeknightMinutes: number; weekendMinutes: number; preferredDevice: string;
+            bingeScore: number; rewatchScore: number; peakHours: number[] };
+  overrides: { kind: "genre" | "person" | "keyword"; value: string; weight: number }[];
+};
+
+type HomeRow = {
+  hubId: string; title: string; kind: string;      // e.g. "because-you-watched", "collection:<id>"
+  reason: string;                                  // human explanation
+  score: number;                                   // predicted engagement used for ordering
+  pinned?: boolean; hidden?: boolean; source: "engine" | "owner" | "plex";
+  items: TitleCard[];                              // what Plex receives, in order
+  itemReasons?: Record<string, string>;            // key -> why this title
+};
+```
+
+| Method | Path | Body / query | Response |
+| --- | --- | --- | --- |
+| GET | `viewers` | | `{ viewers: Viewer[] }` |
+| GET | `viewers/{id}` | | `Viewer & { recent: { title: TitleCard, at, completed, progress }[] }` |
+| GET | `viewers/{id}/taste` | | `TasteProfile` |
+| PUT | `viewers/{id}/taste/overrides` | `{ overrides: TasteProfile["overrides"] }` | `TasteProfile` |
+| GET | `viewers/{id}/home` | `device=tv\|mobile\|web\|desktop, at=<RFC3339>, section?` | `{ rows: HomeRow[], generatedAt, context: { device, daypart, weekend } }` — exactly what `/hubs` would return to that user in that context |
+| POST | `viewers/{id}/refresh` | | `204` (rebuild their rows now) |
+
+### Home Designer (layout policy)
+
+```ts
+type LayoutRule = {
+  id?: string; scope: "all" | { userIds: number[] };
+  section?: "home" | "movies" | "shows";
+  rows: { hubId: string; action: "pin" | "hide" | "boost" | "bury"; position?: number;
+          when?: { days?: number[]; fromHour?: number; toHour?: number; devices?: string[] } }[];
+  maxRows?: number;
+};
+```
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| GET | `layout` | | `{ rules: LayoutRule[], availableRows: { hubId, title, kind, description }[] }` |
+| PUT | `layout` | `{ rules: LayoutRule[] }` | same as GET |
+
+### Insights (dashboard)
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `insights/rows` | `{ rows: { hubId, title, impressions7d, plays7d, playRate }[] }` |
+| GET | `insights/activity` | `{ days: { date, plays, hours, uniqueViewers }[] }` (30 days) |
+
+## Ownership
+
+| Area | Owner | Packages |
+| --- | --- | --- |
+| Personalization engine, viewers, layout, insights APIs | Engine work package | `internal/recommend`, `internal/personalize` (new), `internal/admin/viewers_api.go`, `internal/admin/layout_api.go`, `internal/admin/insights_api.go`, hub context + impressions hook in `internal/plex/handlers_hubs.go` |
+| Collection engine, studio, catalogue helper APIs, artwork | Collections work package | `internal/collections`, `internal/artwork` (new), `internal/admin/collections_api.go`, `internal/admin/catalog_api.go`, collection artwork route in `internal/plex` |
+| Owner web app | UI work package | `web/` (all), `internal/admin/dist` (built output) |
+| Wiring | Orchestrator | `internal/app`, `cmd/ether` |
+
+Additions to `internal/core` and `internal/config` stay additive. Each backend
+work package adds its own fields to `admin.Deps` in a clearly separated block.
