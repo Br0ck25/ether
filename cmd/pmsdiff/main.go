@@ -41,6 +41,7 @@ func run(args []string) error {
 	values := f.Bool("values", false, "include informational value differences")
 	timeout := f.Duration("timeout", 90*time.Second, "per-request timeout")
 	concurrency := f.Int("concurrency", 2, "maximum concurrent requests")
+	only := f.String("only", "", "only requests whose path contains this substring (record keeps the saved discovery IDs)")
 	if e := f.Parse(args[1:]); e != nil {
 		return e
 	}
@@ -54,12 +55,12 @@ func run(args []string) error {
 		if *server == "" {
 			return fmt.Errorf("record requires --server")
 		}
-		report, err = record(*server, *token, *out, *client, *timeout, *concurrency)
+		report, err = record(*server, *token, *out, *client, *only, *timeout, *concurrency)
 	case "compare":
 		if *target == "" || *ref == "" {
 			return fmt.Errorf("compare requires --reference and --target")
 		}
-		report, err = compare(*ref, *target, *token, *client, *timeout, *concurrency)
+		report, err = compare(*ref, *target, *token, *client, *only, *timeout, *concurrency)
 	case "live":
 		if *refServer == "" || *target == "" {
 			return fmt.Errorf("live requires --reference-server and --target")
@@ -69,10 +70,10 @@ func run(args []string) error {
 			return e
 		}
 		defer os.RemoveAll(tmp)
-		report, err = record(*refServer, *token, tmp, *client, *timeout, *concurrency)
+		report, err = record(*refServer, *token, tmp, *client, *only, *timeout, *concurrency)
 		if err == nil {
 			var targetReport pmsconform.Report
-			targetReport, err = compare(tmp, *target, *token, *client, *timeout, *concurrency)
+			targetReport, err = compare(tmp, *target, *token, *client, *only, *timeout, *concurrency)
 			report = mergeReports(report, targetReport)
 		}
 	default:
@@ -93,19 +94,40 @@ func profiles(sel string) []string {
 	}
 	return strings.Split(sel, ",")
 }
-func record(base, token, out, sel string, timeout time.Duration, concurrency int) (pmsconform.Report, error) {
+
+// corpus is the probe corpus, optionally narrowed to paths containing only.
+func corpus(only string) []pmsconform.Request {
+	all := pmsconform.Corpus()
+	if only == "" {
+		return all
+	}
+	var out []pmsconform.Request
+	for _, r := range all {
+		if strings.Contains(r.Path, only) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func record(base, token, out, sel, only string, timeout time.Duration, concurrency int) (pmsconform.Report, error) {
 	client := &http.Client{Timeout: timeout}
 	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	defer cancel()
 	report := pmsconform.Report{}
 	var mu sync.Mutex
 	for _, profile := range profiles(sel) {
-		ids := pmsconform.Discover(ctx, client, base, token, profile, nil)
-		for _, w := range ids.Warnings {
-			report.Discovery = append(report.Discovery, profile+": "+w)
-		}
-		if e := saveDiscovery(out, profile, ids); e != nil {
-			return report, e
+		// A partial recording reuses the saved IDs so the new fixtures
+		// describe the same items as the rest of the set.
+		ids, e := loadDiscovery(out, profile)
+		if only == "" || e != nil {
+			ids = pmsconform.Discover(ctx, client, base, token, profile, nil)
+			for _, w := range ids.Warnings {
+				report.Discovery = append(report.Discovery, profile+": "+w)
+			}
+			if e := saveDiscovery(out, profile, ids); e != nil {
+				return report, e
+			}
 		}
 		type job struct {
 			req  pmsconform.Request
@@ -142,7 +164,7 @@ func record(base, token, out, sel string, timeout time.Duration, concurrency int
 				}
 			}()
 		}
-		for _, req := range pmsconform.Corpus() {
+		for _, req := range corpus(only) {
 			for _, jm := range []bool{false, true} {
 				jobs <- job{req, jm}
 			}
@@ -150,17 +172,17 @@ func record(base, token, out, sel string, timeout time.Duration, concurrency int
 		close(jobs)
 		wg.Wait()
 	}
-	if e := writeManifest(out, report); e != nil {
+	if e := writeManifest(out, report, only); e != nil {
 		return report, e
 	}
 	return report, nil
 }
-func compare(dir, base, token, sel string, timeout time.Duration, concurrency int) (pmsconform.Report, error) {
+func compare(dir, base, token, sel, only string, timeout time.Duration, concurrency int) (pmsconform.Report, error) {
 	client := &http.Client{Timeout: timeout}
 	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	defer cancel()
 	out := pmsconform.Report{}
-	for _, req := range pmsconform.Corpus() {
+	for _, req := range corpus(only) {
 		out.Endpoints = append(out.Endpoints, req.Path)
 	}
 	for _, profile := range profiles(sel) {
@@ -211,7 +233,7 @@ func compare(dir, base, token, sel string, timeout time.Duration, concurrency in
 			}()
 		}
 		go func() {
-			for _, req := range pmsconform.Corpus() {
+			for _, req := range corpus(only) {
 				for _, jm := range []bool{false, true} {
 					jobs <- job{req, jm}
 				}
@@ -267,11 +289,26 @@ func emit(w io.Writer, r pmsconform.Report, format string, summary, values bool)
 	}
 	pmsconform.WriteText(w, r, values)
 }
-func writeManifest(dir string, r pmsconform.Report) error {
+func writeManifest(dir string, r pmsconform.Report, only string) error {
 	if e := os.MkdirAll(dir, 0755); e != nil {
 		return e
 	}
 	trimmed, discovery := []string{}, []string{}
+	if only != "" {
+		// Keep what the previous recording noted about the other requests.
+		var old struct {
+			Trimmed   []string `json:"trimmedResponses"`
+			Discovery []string `json:"discoveryWarnings"`
+		}
+		if b, e := os.ReadFile(filepath.Join(dir, "manifest.json")); e == nil && json.Unmarshal(b, &old) == nil {
+			for _, line := range old.Trimmed {
+				if !strings.Contains(line, only) {
+					trimmed = append(trimmed, line)
+				}
+			}
+			discovery = append(discovery, old.Discovery...)
+		}
+	}
 	for _, line := range r.Discovery {
 		if strings.Contains(line, "trimmed to first 50") {
 			trimmed = append(trimmed, line)

@@ -41,31 +41,30 @@
         "year": 1999,
         "Media": [
           {
-            "aspectRatio": "1.78",
+            "hasVoiceActivity": "0",
+            "id": "1000000000000550",
+            "videoProfile": "high",
             "audioChannels": 6,
             "audioCodec": "eac3",
             "bitrate": 7600,
             "container": "mpegts",
             "duration": 8340000,
-            "hasVoiceActivity": "0",
             "height": 1080,
-            "id": "1000000000000550",
             "protocol": "hls",
             "videoCodec": "h264",
             "videoFrameRate": "24p",
-            "videoProfile": "high",
             "videoResolution": "1080p",
             "width": 1920,
             "selected": true,
             "Part": [
               {
+                "id": "1000000000000550",
+                "videoProfile": "high",
                 "bitrate": 7600,
                 "container": "mpegts",
                 "duration": 8340000,
                 "height": 1080,
-                "id": "1000000000000550",
                 "protocol": "hls",
-                "videoProfile": "high",
                 "width": 1920,
                 "decision": "transcode",
                 "selected": true,
@@ -101,9 +100,9 @@
                     "languageCode": "eng",
                     "languageTag": "en",
                     "samplingRate": 48000,
+                    "selected": true,
                     "streamType": 2,
                     "decision": "copy",
-                    "selected": true,
                     "location": "segments-av"
                   }
                 ]
@@ -142,7 +141,7 @@
           {
             "image": "themoviedb://image.rating",
             "type": "audience",
-            "value": 8.4
+            "value": "8.4"
           }
         ],
         "Director": [

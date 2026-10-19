@@ -30,13 +30,26 @@ func (m Metadata) AttrOrder() (bool, []string, []string) { return m.alpha, nil, 
 func (m *Media) SetAlphabetical() { m.alpha = true }
 
 // AttrOrder implements AttrSorter.
-func (m Media) AttrOrder() (bool, []string, []string) { return m.alpha, nil, decisionTrailing }
+func (m Media) AttrOrder() (bool, []string, []string) { return m.alpha, m.lead, decisionTrailing }
+
+// Transcoded media in PMS decisions list the attributes kept from the
+// source first (alphabetically), then the transcode's own (alphabetically).
+var (
+	transcodeMediaLead = []string{"audioProfile", "hasVoiceActivity", "id", "videoProfile"}
+	transcodePartLead  = []string{"audioProfile", "deepAnalysisVersion", "id", "indexes", "requiredBandwidths", "videoProfile"}
+)
+
+// SetTranscodeOrder switches to the ordering of a transcoded Media.
+func (m *Media) SetTranscodeOrder() { m.alpha, m.lead = true, transcodeMediaLead }
 
 // SetAlphabetical switches the element to PMS's decision-response ordering.
 func (p *Part) SetAlphabetical() { p.alpha = true }
 
+// SetTranscodeOrder switches to the ordering of a transcoded Part.
+func (p *Part) SetTranscodeOrder() { p.alpha, p.lead = true, transcodePartLead }
+
 // AttrOrder implements AttrSorter.
-func (p Part) AttrOrder() (bool, []string, []string) { return p.alpha, nil, decisionTrailing }
+func (p Part) AttrOrder() (bool, []string, []string) { return p.alpha, p.lead, decisionTrailing }
 
 // SetAlphabetical switches the element to PMS's decision-response ordering.
 func (r *RatingTag) SetAlphabetical() { r.alpha = true }
@@ -60,7 +73,11 @@ func (t Tag) AttrOrder() (bool, []string, []string) { return t.alpha, nil, nil }
 func (s *Stream) SetAlphabetical() { s.alpha = true }
 
 // AttrOrder implements AttrSorter.
-func (s Stream) AttrOrder() (bool, []string, []string) { return s.alpha, nil, decisionTrailing }
+func (s Stream) AttrOrder() (bool, []string, []string) { return s.alpha, nil, streamTrailing }
+
+// Decision streams sort "selected" with the rest; only decision and
+// location trail.
+var streamTrailing = []string{"decision", "location"}
 
 // sortAttrs applies AttrSorter ordering: leading names first (in the given
 // order), then the rest alphabetically, then trailing names (in order).

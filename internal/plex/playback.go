@@ -380,14 +380,24 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 	}
 
 	if dec.Kind == core.DecisionDirectPlay {
+		// Like PMS, list the video and the selected audio and subtitle
+		// streams only.
 		part.Decision = "directplay"
-		for i := range streams {
-			streams[i].Location = "direct"
+		var kept []model.Stream
+		for _, st := range streams {
+			if st.StreamType != 1 && (st.Selected == nil || !*st.Selected) {
+				continue
+			}
+			st.Location = "direct"
+			kept = append(kept, st)
 		}
-		part.Stream = streams
+		part.Stream = kept
 		return m
 	}
 	// Remux or transcode into HLS (mpegts).
+	m.SetTranscodeOrder()
+	part.SetTranscodeOrder()
+	m.AspectRatio = 0
 	m.Protocol = p.protocol
 	m.Container = "mpegts"
 	part.Container = "mpegts"
@@ -429,6 +439,8 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		case 1:
 			st.Decision = "copy"
 			if !dec.VideoCopy {
+				// A transcoded stream is new: PMS drops the source's
+				// profile and chroma details and reports 8-bit output.
 				st.Decision = "transcode"
 				if dec.VideoCodec != "" {
 					st.Codec = plexCodec(dec.VideoCodec)
@@ -436,6 +448,17 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 				if dec.MaxHeight > 0 && st.Height > dec.MaxHeight {
 					st.Width = st.Width * dec.MaxHeight / max(st.Height, 1)
 					st.Height = dec.MaxHeight
+				}
+				if dec.BitrateKbps > 0 {
+					st.Bitrate = dec.BitrateKbps
+				}
+				st.Profile, st.ChromaSubsampling, st.ScanType = "", "", ""
+				st.DOVIPresent, st.DOVIProfile = nil, 0
+				if st.Codec == "h264" || dec.ToneMap {
+					st.BitDepth = 8
+				}
+				if dec.ToneMap {
+					st.ColorTrc, st.ColorPrimaries, st.ColorSpace = "bt709", "", ""
 				}
 			}
 			st.Location = "segments-av"
@@ -449,6 +472,8 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 				if dec.AudioCodec != "" {
 					st.Codec = plexCodec(dec.AudioCodec)
 				}
+				// Source-only details go, as in PMS's transcoded audio.
+				st.Profile, st.AudioChannelLayout, st.SamplingRate, st.Title = "", "", 0, ""
 			}
 			st.Location = "segments-av"
 		case 3:

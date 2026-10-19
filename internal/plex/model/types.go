@@ -374,49 +374,51 @@ type UltraBlurColors struct {
 // Media is one version of an item. Ether always exposes exactly one.
 type Media struct {
 	alpha                 bool
-	ID                    int64   `plex:"id"`
-	Duration              int64   `plex:"duration,omitempty"`
-	Bitrate               int     `plex:"bitrate,omitempty"`
-	Width                 int     `plex:"width,omitempty"`
-	Height                int     `plex:"height,omitempty"`
-	AspectRatio           float64 `plex:"aspectRatio,omitempty"`
-	AudioChannels         int     `plex:"audioChannels,omitempty"`
-	AudioCodec            string  `plex:"audioCodec,omitempty"`
-	VideoCodec            string  `plex:"videoCodec,omitempty"`
-	VideoResolution       string  `plex:"videoResolution,omitempty"`
-	Container             string  `plex:"container,omitempty"`
-	VideoFrameRate        string  `plex:"videoFrameRate,omitempty"`
-	OptimizedForStreaming *int    `plex:"optimizedForStreaming"` // an int in PMS JSON, unlike Part's bool
-	AudioProfile          string  `plex:"audioProfile,omitempty"`
-	Has64bitOffsets       *bool   `plex:"has64bitOffsets"`
-	VideoProfile          string  `plex:"videoProfile,omitempty"`
-	Protocol              string  `plex:"protocol,omitempty"`
-	Selected              *bool   `plex:"selected"`
-	HasVoiceActivity      *bool   `plex:"hasVoiceActivity"`
+	lead                  []string // decision: attributes before the alphabetical rest
+	ID                    int64    `plex:"id"`
+	Duration              int64    `plex:"duration,omitempty"`
+	Bitrate               int      `plex:"bitrate,omitempty"`
+	Width                 int      `plex:"width,omitempty"`
+	Height                int      `plex:"height,omitempty"`
+	AspectRatio           float64  `plex:"aspectRatio,omitempty"`
+	AudioChannels         int      `plex:"audioChannels,omitempty"`
+	AudioCodec            string   `plex:"audioCodec,omitempty"`
+	VideoCodec            string   `plex:"videoCodec,omitempty"`
+	VideoResolution       string   `plex:"videoResolution,omitempty"`
+	Container             string   `plex:"container,omitempty"`
+	VideoFrameRate        string   `plex:"videoFrameRate,omitempty"`
+	OptimizedForStreaming *int     `plex:"optimizedForStreaming"` // an int in PMS JSON, unlike Part's bool
+	AudioProfile          string   `plex:"audioProfile,omitempty"`
+	Has64bitOffsets       *bool    `plex:"has64bitOffsets"`
+	VideoProfile          string   `plex:"videoProfile,omitempty"`
+	Protocol              string   `plex:"protocol,omitempty"`
+	Selected              *bool    `plex:"selected"`
+	HasVoiceActivity      *bool    `plex:"hasVoiceActivity"`
 
 	Part []Part `plex:"Part"`
 }
 
 type Part struct {
 	alpha                 bool
-	ID                    int64  `plex:"id"`
-	Key                   string `plex:"key,omitempty"`
-	Duration              int64  `plex:"duration,omitempty"`
-	File                  string `plex:"file,omitempty"`
-	Size                  int64  `plex:"size,omitempty"`
-	AudioProfile          string `plex:"audioProfile,omitempty"`
-	Container             string `plex:"container,omitempty"`
-	Has64bitOffsets       *bool  `plex:"has64bitOffsets"`
-	OptimizedForStreaming *bool  `plex:"optimizedForStreaming"`
-	VideoProfile          string `plex:"videoProfile,omitempty"`
-	Bitrate               int    `plex:"bitrate,omitempty"`
-	Width                 int    `plex:"width,omitempty"`
-	Height                int    `plex:"height,omitempty"`
-	Decision              string `plex:"decision,omitempty"`
-	Protocol              string `plex:"protocol,omitempty"`
-	Selected              *bool  `plex:"selected"`
-	Exists                *bool  `plex:"exists"`
-	Accessible            *bool  `plex:"accessible"`
+	lead                  []string // decision: attributes before the alphabetical rest
+	ID                    int64    `plex:"id"`
+	Key                   string   `plex:"key,omitempty"`
+	Duration              int64    `plex:"duration,omitempty"`
+	File                  string   `plex:"file,omitempty"`
+	Size                  int64    `plex:"size,omitempty"`
+	AudioProfile          string   `plex:"audioProfile,omitempty"`
+	Container             string   `plex:"container,omitempty"`
+	Has64bitOffsets       *bool    `plex:"has64bitOffsets"`
+	OptimizedForStreaming *bool    `plex:"optimizedForStreaming"`
+	VideoProfile          string   `plex:"videoProfile,omitempty"`
+	Bitrate               int      `plex:"bitrate,omitempty"`
+	Width                 int      `plex:"width,omitempty"`
+	Height                int      `plex:"height,omitempty"`
+	Decision              string   `plex:"decision,omitempty"`
+	Protocol              string   `plex:"protocol,omitempty"`
+	Selected              *bool    `plex:"selected"`
+	Exists                *bool    `plex:"exists"`
+	Accessible            *bool    `plex:"accessible"`
 
 	Stream []Stream `plex:"Stream"`
 }

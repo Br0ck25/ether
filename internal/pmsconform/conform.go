@@ -22,22 +22,25 @@ type Client struct {
 	Headers http.Header
 }
 
-// Clients returns representative Plex Web, iOS and Apple TV request profiles.
+// Clients returns representative Plex Web, iOS and Apple TV request
+// profiles, with the X-Plex-Platform values the real apps send (PMS picks
+// its client profile from them and answers 400 to a decision request from
+// an unknown platform such as "iPhone").
 func Clients() map[string]Client {
 	return map[string]Client{
-		"web":     {Name: "Plex Web", Headers: headers("Plex Web", "Chrome", "Windows", "Plex Web", "1.0")},
-		"ios":     {Name: "Plex for iOS", Headers: headers("Plex for iOS", "iPhone", "iOS", "iPhone", "8.0")},
-		"appletv": {Name: "Plex for Apple TV", Headers: headers("Plex for Apple TV", "Apple TV", "tvOS", "Apple TV", "8.0")},
+		"web":     {Name: "Plex Web", Headers: headers("Plex Web", "Chrome", "129.0", "Windows", "Chrome", "4.160.0")},
+		"ios":     {Name: "Plex for iOS", Headers: headers("Plex for iOS", "iOS", "18.0", "iPhone", "iPhone", "8.40")},
+		"appletv": {Name: "Plex for Apple TV", Headers: headers("Plex for Apple TV", "tvOS", "18.0", "Apple TV", "Apple TV", "8.40")},
 	}
 }
-func headers(product, platform, osName, device, version string) http.Header {
+func headers(product, platform, platformVersion, device, deviceName, version string) http.Header {
 	h := http.Header{}
 	h.Set("X-Plex-Product", product)
 	h.Set("X-Plex-Version", version)
 	h.Set("X-Plex-Platform", platform)
-	h.Set("X-Plex-Platform-Version", osName)
+	h.Set("X-Plex-Platform-Version", platformVersion)
 	h.Set("X-Plex-Device", device)
-	h.Set("X-Plex-Device-Name", device)
+	h.Set("X-Plex-Device-Name", deviceName)
 	h.Set("X-Plex-Client-Identifier", "pmsdiff-client")
 	h.Set("X-Plex-Provides", "player,controller")
 	h.Set("X-Plex-Token", "{{token}}")
@@ -52,7 +55,12 @@ type Request struct {
 
 // Corpus returns probes used when a Plex application connects and browses a server.
 func Corpus() []Request {
-	paths := []string{"/", "/identity", "/library/sections", "/library/sections/{{section}}/all?X-Plex-Container-Start=0&X-Plex-Container-Size=50", "/library/sections/{{movieSection}}/prefs", "/library/sections/{{showSection}}/prefs", "/library/metadata/{{movieKey}}?includeExtras=1&includeRelated=1&includeOnDeck=1&includeChapters=1&includeGuids=1", "/library/metadata/{{showKey}}/children", "/library/metadata/{{seasonKey}}/children", "/library/metadata/{{episodeKey}}", "/hubs", "/hubs/promoted", "/hubs/sections/{{section}}", "/hubs/search?query=", "/library/onDeck", "/hubs/continueWatching", "/media/providers", "/library/collections/{{collectionKey}}", "/playlists/{{playlistKey}}", "/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=1&directStream=1&videoQuality=8&X-Plex-Client-Profile-Extra=", "/status/sessions", "/myplex/account", "/:/prefs"}
+	paths := []string{"/", "/identity", "/library/sections", "/library/sections/{{section}}/all?X-Plex-Container-Start=0&X-Plex-Container-Size=50", "/library/sections/{{movieSection}}/prefs", "/library/sections/{{showSection}}/prefs", "/library/metadata/{{movieKey}}?includeExtras=1&includeRelated=1&includeOnDeck=1&includeChapters=1&includeGuids=1", "/library/metadata/{{showKey}}/children", "/library/metadata/{{seasonKey}}/children", "/library/metadata/{{episodeKey}}", "/hubs", "/hubs/promoted", "/hubs/sections/{{section}}", "/hubs/search?query=", "/library/onDeck", "/hubs/continueWatching", "/media/providers", "/library/collections/{{collectionKey}}", "/playlists/{{playlistKey}}", "/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=1&directStream=1&videoQuality=8&X-Plex-Client-Profile-Extra=", "/status/sessions", "/myplex/account", "/:/prefs",
+		// Current apps run a client-side media decision engine (hasMDE=1):
+		// with direct play allowed PMS only reports mdeDecisionCode; Plex
+		// Web asks with directPlay=0 for a stream.
+		"/video/:/transcode/universal/decision?hasMDE=1&path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=1&directStream=1&videoQuality=8",
+		"/video/:/transcode/universal/decision?hasMDE=1&path=%2Flibrary%2Fmetadata%2F{{movieKey}}&mediaIndex=0&partIndex=0&protocol=hls&fastSeek=1&directPlay=0&directStream=1&subtitleSize=100&audioBoost=100&location=lan"}
 	clients := Clients()
 	out := make([]Request, 0, len(paths))
 	for _, p := range paths {

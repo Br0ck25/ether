@@ -36,6 +36,15 @@ func (m Media) StringAttrs() []string {
 	return []string{"id", "hasVoiceActivity", "aspectRatio"}
 }
 
+// StringAttrs implements StringAttrer: decision responses quote rating
+// values ("value": "6.8").
+func (r RatingTag) StringAttrs() []string {
+	if !r.alpha {
+		return nil
+	}
+	return []string{"value"}
+}
+
 // StringAttrs implements StringAttrer: decision responses quote tag ids.
 func (t Tag) StringAttrs() []string {
 	if !t.alpha {
