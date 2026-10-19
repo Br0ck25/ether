@@ -27,6 +27,7 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 	m["subtitle-sync"] = a.subtitles.SyncHandler()
 	m["metadata"] = a.episodeorder.Router()
 	m["updates"] = a.updatesHandler()
+	m["cluster"] = a.clusterHandler()
 	a.discoveryHandlers(m)
 	adoptionHandlers(a, m)
 	return m

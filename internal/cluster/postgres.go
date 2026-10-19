@@ -1,0 +1,773 @@
+package cluster
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"log/slog"
+	"slices"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+// DefaultLockKey is the first half of the leader advisory lock
+// ("EthC"); the second half is hashtext(current_schema()), so nodes sharing
+// a schema contend for one lock while unrelated schemas (test runs) never
+// collide.
+const DefaultLockKey int32 = 0x45746843
+
+// DefaultChannel is the LISTEN/NOTIFY channel for the public schema; other
+// schemas get a channel derived from their name (NOTIFY is database-wide).
+const DefaultChannel = "ether_cluster"
+
+// Options configure the PostgreSQL runtime. Zero durations take the
+// defaults in parentheses.
+type Options struct {
+	// DB is the node's pool on the shared database (store "ether-pgx").
+	DB    *sql.DB
+	Local Local
+	// ConnConfig is used for the dedicated leader-lock and LISTEN
+	// connections; nil copies the configuration of a pool connection, so
+	// they reach the same server, database and search_path.
+	ConnConfig *pgx.ConnConfig
+	Logger     *slog.Logger
+	Now        func() time.Time
+
+	HeartbeatInterval time.Duration // heartbeat upsert (5s)
+	LiveAfter         time.Duration // a node is live if seen within this (20s)
+	PruneAfter        time.Duration // rows dead this long are deleted (24h)
+	ElectionInterval  time.Duration // lock attempt / leader probe (2s)
+	ProbeTimeout      time.Duration // bound on each probe query (3s)
+	// StepDownHold keeps a node that just lost leadership out of the
+	// election for a while so a healthy node takes over (5s).
+	StepDownHold time.Duration
+	// IdleSessionTimeout is set as idle_session_timeout on the lock
+	// connection: if this node freezes or is partitioned from the database,
+	// the server ends the session and releases the lock after this long
+	// rather than waiting for TCP keepalives (15s; must exceed
+	// ElectionInterval).
+	IdleSessionTimeout time.Duration
+	ListenPing         time.Duration // ping an idle LISTEN connection (15s)
+	MinBackoff         time.Duration // bus reconnect backoff (500ms)
+	MaxBackoff         time.Duration // (30s)
+	AddrTimeout        time.Duration // bound on Local.Addrs (30s)
+
+	LockKey int32  // DefaultLockKey
+	Channel string // derived from the schema when empty
+}
+
+// Postgres is the clustered runtime.
+//
+// Heartbeats: every node upserts its cluster_nodes row every
+// HeartbeatInterval with last_seen = its own clock in Unix milliseconds; a
+// node is live while now-last_seen <= LiveAfter on the reader's clock.
+// Timestamps are bound Go values (portable SQL, no server now()), so the
+// scheme tolerates clock skew up to LiveAfter-HeartbeatInterval (15s by
+// default); Start warns when this node's clock is more than a quarter of
+// LiveAfter away from the database server's. Nodes should run NTP.
+//
+// Leadership: a dedicated connection holds pg_try_advisory_lock; the holder
+// probes it with SELECT 1 every ElectionInterval and steps down the moment
+// a probe fails (subscribers and RunAsLeader contexts are cancelled
+// immediately). Each acquisition increments cluster_leader.epoch: a leader
+// that was frozen past IdleSessionTimeout may believe it leads for up to
+// one ElectionInterval after waking, so singleton writes that must never
+// overlap should be fenced on Epoch.
+//
+// Bus: a dedicated connection LISTENs on one channel; Publish delivers to
+// local subscribers immediately and sends pg_notify through the pool. The
+// sender's own echo is ignored. After the LISTEN connection is
+// re-established TopicResync is delivered locally, because notifications
+// sent while it was down are lost.
+type Postgres struct {
+	o     Options
+	db    *sql.DB
+	local Local
+	log   *slog.Logger
+	inc   string // incarnation: distinguishes this process's own echoes
+	bus   *localBus
+	lead  *leadership
+
+	runMu   sync.Mutex
+	started bool
+	closed  bool
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	connCfg *pgx.ConnConfig
+	channel atomic.Pointer[string]
+
+	beatWake chan struct{}
+	busReady chan struct{}
+	busOnce  sync.Once
+
+	mu         sync.Mutex
+	self       Node
+	addrs      []string
+	beatAddrs  []string // addrs in the last successful heartbeat
+	joined     bool
+	lastPrune  time.Time
+	holdUntil  time.Time
+	busUp      bool
+	lastSkew   time.Duration
+	lastBeatOK time.Time
+}
+
+var _ Cluster = (*Postgres)(nil)
+
+// NewPostgres validates options; call Start to join the cluster.
+func NewPostgres(o Options) (*Postgres, error) {
+	if o.DB == nil {
+		return nil, errors.New("cluster: postgres runtime needs DB")
+	}
+	if o.Local.Identity.NodeID == "" {
+		return nil, errors.New("cluster: postgres runtime needs a node ID")
+	}
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	def := func(d *time.Duration, v time.Duration) {
+		if *d <= 0 {
+			*d = v
+		}
+	}
+	def(&o.HeartbeatInterval, 5*time.Second)
+	def(&o.LiveAfter, 20*time.Second)
+	def(&o.PruneAfter, 24*time.Hour)
+	def(&o.ElectionInterval, 2*time.Second)
+	def(&o.ProbeTimeout, 3*time.Second)
+	def(&o.StepDownHold, 5*time.Second)
+	def(&o.IdleSessionTimeout, 15*time.Second)
+	def(&o.ListenPing, 15*time.Second)
+	def(&o.MinBackoff, 500*time.Millisecond)
+	def(&o.MaxBackoff, 30*time.Second)
+	def(&o.AddrTimeout, 30*time.Second)
+	if o.IdleSessionTimeout <= o.ElectionInterval {
+		o.IdleSessionTimeout = 3 * o.ElectionInterval
+	}
+	if o.LockKey == 0 {
+		o.LockKey = DefaultLockKey
+	}
+	log := o.Logger.With("component", "cluster", "node", shortID(o.Local.Identity.NodeID))
+	p := &Postgres{
+		o: o, db: o.DB, local: o.Local, log: log, inc: newID()[:12],
+		bus: newLocalBus(log), lead: newLeadership(),
+		beatWake: make(chan struct{}, 1), busReady: make(chan struct{}),
+	}
+	p.self = Node{
+		ID: o.Local.Identity.NodeID, Name: o.Local.Identity.Name, Version: o.Local.Version,
+		StartedAt: o.Now(), Live: true,
+	}
+	return p, nil
+}
+
+func (p *Postgres) Mode() string { return ModePostgres }
+
+// Self is this node as of its last heartbeat.
+func (p *Postgres) Self() Node {
+	p.mu.Lock()
+	n := p.self
+	n.Addrs = slices.Clone(n.Addrs)
+	p.mu.Unlock()
+	n.Leader = p.IsLeader()
+	return n
+}
+
+func (p *Postgres) IsLeader() bool { return p.lead.isLeader() }
+func (p *Postgres) Epoch() int64   { return p.lead.currentEpoch() }
+
+func (p *Postgres) OnLeaderChange(fn func(bool)) func() { return p.lead.subscribe(fn) }
+
+func (p *Postgres) RunAsLeader(ctx context.Context, name string, fn func(context.Context)) {
+	runAsLeader(ctx, p.log, name, p.lead, fn)
+}
+
+func (p *Postgres) Subscribe(topic string, fn func([]byte)) func() { return p.bus.subscribe(topic, fn) }
+
+// Channel is the NOTIFY channel (empty before Start).
+func (p *Postgres) Channel() string {
+	if c := p.channel.Load(); c != nil {
+		return *c
+	}
+	return ""
+}
+
+// BusConnected reports whether the LISTEN connection is up.
+func (p *Postgres) BusConnected() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.busUp
+}
+
+// Health is the runtime's own state for diagnostics.
+type Health struct {
+	Channel       string    `json:"channel"`
+	BusConnected  bool      `json:"busConnected"`
+	LastHeartbeat time.Time `json:"lastHeartbeat,omitempty"`
+	// ClockSkew is this node's clock minus the database server's, measured
+	// at Start.
+	ClockSkew time.Duration `json:"clockSkewNs"`
+}
+
+// Health reports bus, heartbeat and clock state.
+func (p *Postgres) Health() Health {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return Health{Channel: p.Channel(), BusConnected: p.busUp, LastHeartbeat: p.lastBeatOK, ClockSkew: p.lastSkew}
+}
+
+// Publish delivers to local subscribers, then notifies the other nodes.
+// Before Start the event is only delivered locally.
+func (p *Postgres) Publish(ctx context.Context, topic string, payload []byte) error {
+	msg, err := encodeEnvelope(topic, p.local.Identity.NodeID, p.inc, payload)
+	if err != nil {
+		return err
+	}
+	p.bus.deliver(topic, payload)
+	ch := p.Channel()
+	if ch == "" {
+		return nil
+	}
+	if _, err := p.db.ExecContext(ctx, `SELECT pg_notify(?, ?)`, ch, msg); err != nil {
+		return fmt.Errorf("cluster: publish %s: %w", topic, err)
+	}
+	return nil
+}
+
+// Start joins the cluster: first heartbeat, then the heartbeat, address,
+// election and bus goroutines. It waits briefly for the bus to listen so
+// events published right after Start are received.
+func (p *Postgres) Start(ctx context.Context) error {
+	p.runMu.Lock()
+	defer p.runMu.Unlock()
+	if p.started {
+		return errors.New("cluster: already started")
+	}
+	if p.closed {
+		return errors.New("cluster: closed")
+	}
+	cfg := p.o.ConnConfig
+	if cfg == nil {
+		var err error
+		if cfg, err = connConfigOf(ctx, p.db); err != nil {
+			return err
+		}
+	}
+	p.connCfg = cfg
+	ch := p.o.Channel
+	if ch == "" {
+		var schema string
+		if err := p.db.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+			return fmt.Errorf("cluster: read schema: %w", err)
+		}
+		ch = channelFor(schema)
+	}
+	p.channel.Store(&ch)
+	p.checkClock(ctx)
+
+	rctx, cancel := context.WithCancel(context.Background())
+	p.cancel = cancel
+	p.started = true
+	if err := p.beat(ctx); err != nil {
+		p.log.Warn("cluster: first heartbeat failed; retrying", "err", err)
+	}
+	p.wg.Add(4)
+	go p.addrLoop(rctx)
+	go p.heartbeatLoop(rctx)
+	go p.electionLoop(rctx)
+	go p.listenLoop(rctx)
+	select {
+	case <-p.busReady:
+	case <-time.After(5 * time.Second):
+		p.log.Warn("cluster: event bus not listening yet; continuing")
+	case <-ctx.Done():
+	}
+	p.log.Info("cluster: joined", "name", p.local.Identity.Name, "channel", ch)
+	return nil
+}
+
+// Close leaves the cluster.
+func (p *Postgres) Close() error {
+	p.runMu.Lock()
+	if p.closed {
+		p.runMu.Unlock()
+		return nil
+	}
+	p.closed = true
+	started := p.started
+	p.runMu.Unlock()
+	if !started {
+		return nil
+	}
+	p.halt()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := p.db.ExecContext(ctx, `DELETE FROM cluster_nodes WHERE id=? AND incarnation=?`, p.local.Identity.NodeID, p.inc)
+	if err == nil {
+		_ = p.Publish(ctx, TopicMembers, []byte(p.local.Identity.NodeID))
+	}
+	p.log.Info("cluster: left")
+	return err
+}
+
+// halt stops every goroutine (releasing leadership) without removing the
+// heartbeat row — a crash, as far as other nodes can tell.
+func (p *Postgres) halt() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.wg.Wait()
+	p.lead.set(false, 0)
+}
+
+// ---- membership --------------------------------------------------------------
+
+func (p *Postgres) wakeBeat() {
+	select {
+	case p.beatWake <- struct{}{}:
+	default:
+	}
+}
+
+func (p *Postgres) addrLoop(ctx context.Context) {
+	defer p.wg.Done()
+	if p.local.Addrs == nil {
+		return
+	}
+	t := time.NewTimer(0)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		actx, cancel := context.WithTimeout(ctx, p.o.AddrTimeout)
+		addrs := p.local.Addrs(actx)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		p.mu.Lock()
+		changed := !slices.Equal(addrs, p.addrs)
+		p.addrs = slices.Clone(addrs)
+		p.mu.Unlock()
+		if changed {
+			p.wakeBeat()
+		}
+		t.Reset(p.o.HeartbeatInterval)
+	}
+}
+
+func (p *Postgres) heartbeatLoop(ctx context.Context) {
+	defer p.wg.Done()
+	t := time.NewTicker(p.o.HeartbeatInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		case <-p.beatWake:
+		}
+		bctx, cancel := context.WithTimeout(ctx, p.o.HeartbeatInterval)
+		if err := p.beat(bctx); err != nil && ctx.Err() == nil {
+			p.log.Warn("cluster: heartbeat failed", "err", err)
+		}
+		cancel()
+	}
+}
+
+// beat upserts this node's row, announces membership changes and prunes
+// long-dead rows.
+func (p *Postgres) beat(ctx context.Context) error {
+	now := p.o.Now()
+	p.mu.Lock()
+	addrs := slices.Clone(p.addrs)
+	started := p.self.StartedAt
+	p.mu.Unlock()
+	if addrs == nil {
+		addrs = []string{}
+	}
+	caps, load := p.local.caps(), p.local.load()
+	addrsJSON, _ := json.Marshal(addrs)
+	capsJSON, _ := json.Marshal(caps)
+	id := p.local.Identity.NodeID
+	_, err := p.db.ExecContext(ctx, `INSERT INTO cluster_nodes(id,name,version,addrs,caps,active_sessions,started_at,last_seen,incarnation)
+VALUES(?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name, version=excluded.version, addrs=excluded.addrs, caps=excluded.caps,
+active_sessions=excluded.active_sessions, started_at=excluded.started_at, last_seen=excluded.last_seen, incarnation=excluded.incarnation`,
+		id, p.local.Identity.Name, p.local.Version, string(addrsJSON), string(capsJSON), load,
+		started.UnixMilli(), now.UnixMilli(), p.inc)
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.self.Addrs, p.self.Caps, p.self.Load, p.self.LastSeen = addrs, caps, load, now
+	announce := !p.joined || !slices.Equal(addrs, p.beatAddrs)
+	p.joined, p.beatAddrs, p.lastBeatOK = true, addrs, now
+	prune := now.Sub(p.lastPrune) > time.Hour
+	if prune {
+		p.lastPrune = now
+	}
+	p.mu.Unlock()
+	if announce {
+		if err := p.Publish(ctx, TopicMembers, []byte(id)); err != nil {
+			p.log.Debug("cluster: announce membership", "err", err)
+		}
+	}
+	if prune {
+		cut := now.Add(-p.o.PruneAfter).UnixMilli()
+		if res, err := p.db.ExecContext(ctx, `DELETE FROM cluster_nodes WHERE last_seen < ?`, cut); err != nil {
+			p.log.Debug("cluster: prune dead nodes", "err", err)
+		} else if n, _ := res.RowsAffected(); n > 0 {
+			p.log.Info("cluster: pruned dead nodes", "rows", n)
+		}
+	}
+	return nil
+}
+
+// Nodes lists live members.
+func (p *Postgres) Nodes(ctx context.Context) ([]Node, error) {
+	all, err := p.AllNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := all[:0]
+	for _, n := range all {
+		if n.Live {
+			live = append(live, n)
+		}
+	}
+	return live, nil
+}
+
+// AllNodes lists every recorded member with its liveness.
+func (p *Postgres) AllNodes(ctx context.Context) ([]Node, error) {
+	var leaderID string
+	if err := p.db.QueryRowContext(ctx, `SELECT node_id FROM cluster_leader WHERE id=1`).Scan(&leaderID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	rows, err := p.db.QueryContext(ctx, `SELECT id,name,version,addrs,caps,active_sessions,started_at,last_seen FROM cluster_nodes ORDER BY name, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := p.o.Now()
+	selfLeads := p.IsLeader()
+	var out []Node
+	for rows.Next() {
+		var (
+			n                 Node
+			addrs, caps       string
+			startedMS, seenMS int64
+		)
+		if err := rows.Scan(&n.ID, &n.Name, &n.Version, &addrs, &caps, &n.Load, &startedMS, &seenMS); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(addrs), &n.Addrs)
+		_ = json.Unmarshal([]byte(caps), &n.Caps)
+		n.StartedAt, n.LastSeen = time.UnixMilli(startedMS), time.UnixMilli(seenMS)
+		n.Live = now.Sub(n.LastSeen) <= p.o.LiveAfter
+		if n.ID == p.local.Identity.NodeID {
+			n.Leader = selfLeads
+		} else {
+			n.Leader = !selfLeads && n.Live && n.ID == leaderID
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// checkClock warns when this node's clock is far from the server's.
+func (p *Postgres) checkClock(ctx context.Context) {
+	var dbMS int64
+	before := p.o.Now()
+	if err := p.db.QueryRowContext(ctx, `SELECT CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 AS BIGINT)`).Scan(&dbMS); err != nil {
+		return
+	}
+	after := p.o.Now()
+	local := before.Add(after.Sub(before) / 2)
+	skew := local.Sub(time.UnixMilli(dbMS))
+	p.mu.Lock()
+	p.lastSkew = skew
+	p.mu.Unlock()
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > p.o.LiveAfter/4 {
+		p.log.Warn("cluster: this node's clock differs from the database server's; heartbeat liveness assumes synchronised clocks (enable NTP)",
+			"skew", skew.Round(time.Millisecond))
+	}
+}
+
+// ---- leadership --------------------------------------------------------------
+
+func (p *Postgres) electionLoop(ctx context.Context) {
+	defer p.wg.Done()
+	var conn *pgx.Conn
+	defer func() {
+		if conn != nil {
+			conn.Close(context.Background()) // ends the session: releases the lock
+		}
+		p.lead.set(false, 0)
+	}()
+	t := time.NewTimer(0)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		conn = p.electionStep(ctx, conn)
+		t.Reset(p.o.ElectionInterval)
+	}
+}
+
+func (p *Postgres) stepDown(conn *pgx.Conn, reason string, err error) {
+	if conn != nil {
+		cctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		conn.Close(cctx)
+		cancel()
+	}
+	if p.lead.isLeader() {
+		p.log.Warn("cluster: leadership lost", "reason", reason, "err", err)
+		p.mu.Lock()
+		p.holdUntil = p.o.Now().Add(p.o.StepDownHold)
+		p.mu.Unlock()
+	}
+	p.lead.set(false, 0)
+}
+
+// electionStep probes the held lock or tries to take it; it returns the
+// lock connection to keep (nil after a failure).
+func (p *Postgres) electionStep(ctx context.Context, conn *pgx.Conn) *pgx.Conn {
+	leading := p.lead.isLeader()
+	if !leading {
+		p.mu.Lock()
+		hold := p.o.Now().Before(p.holdUntil)
+		p.mu.Unlock()
+		if hold {
+			return conn
+		}
+	}
+	if conn == nil {
+		c, err := p.connect(ctx, "leader", map[string]string{
+			"idle_session_timeout": strconv.FormatInt(p.o.IdleSessionTimeout.Milliseconds(), 10),
+		})
+		if err != nil {
+			if ctx.Err() == nil {
+				p.log.Debug("cluster: leader connection failed", "err", err)
+			}
+			return nil
+		}
+		conn = c
+	}
+	qctx, cancel := context.WithTimeout(ctx, p.o.ProbeTimeout)
+	defer cancel()
+	if leading {
+		if _, err := conn.Exec(qctx, `SELECT 1`); err != nil {
+			if ctx.Err() != nil {
+				return conn // shutting down; the deferred close releases the lock
+			}
+			p.stepDown(conn, "database session lost", err)
+			return nil
+		}
+		return conn
+	}
+	var got bool
+	if err := conn.QueryRow(qctx, `SELECT pg_try_advisory_lock($1, hashtext(current_schema()))`, p.o.LockKey).Scan(&got); err != nil {
+		p.stepDown(conn, "lock attempt failed", err)
+		return nil
+	}
+	if !got {
+		return conn
+	}
+	var epoch int64
+	err := conn.QueryRow(qctx, `INSERT INTO cluster_leader(id, epoch, node_id, acquired_at) VALUES (1, 1, $1, $2)
+ON CONFLICT (id) DO UPDATE SET epoch = cluster_leader.epoch + 1, node_id = excluded.node_id, acquired_at = excluded.acquired_at
+RETURNING epoch`, p.local.Identity.NodeID, p.o.Now().UnixMilli()).Scan(&epoch)
+	if err != nil {
+		// Without a recorded epoch, give the lock back for another node.
+		p.log.Warn("cluster: record leader epoch", "err", err)
+		p.stepDown(conn, "epoch update failed", err)
+		return nil
+	}
+	p.log.Info("cluster: acquired leadership", "epoch", epoch)
+	p.lead.set(true, epoch)
+	return conn
+}
+
+// ---- event bus ---------------------------------------------------------------
+
+func (p *Postgres) setBusUp(up bool) {
+	p.mu.Lock()
+	p.busUp = up
+	p.mu.Unlock()
+}
+
+func (p *Postgres) listenLoop(ctx context.Context) {
+	defer p.wg.Done()
+	defer p.setBusUp(false)
+	backoff := p.o.MinBackoff
+	first := true
+	sleep := func() bool {
+		t := time.NewTimer(backoff)
+		defer t.Stop()
+		backoff = min(backoff*2, p.o.MaxBackoff)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-t.C:
+			return true
+		}
+	}
+	for ctx.Err() == nil {
+		conn, err := p.connect(ctx, "bus", nil)
+		if err == nil {
+			if _, err = conn.Exec(ctx, `LISTEN `+pgx.Identifier{p.Channel()}.Sanitize()); err != nil {
+				conn.Close(context.Background())
+			}
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			p.log.Debug("cluster: event bus connect failed", "err", err, "retry", backoff)
+			if !sleep() {
+				return
+			}
+			continue
+		}
+		p.setBusUp(true)
+		p.busOnce.Do(func() { close(p.busReady) })
+		if !first {
+			p.log.Info("cluster: event bus reconnected; resynchronising")
+			p.bus.deliver(TopicResync, nil)
+		}
+		first = false
+		backoff = p.o.MinBackoff
+		err = p.receive(ctx, conn)
+		conn.Close(context.Background())
+		p.setBusUp(false)
+		if ctx.Err() != nil {
+			return
+		}
+		p.log.Warn("cluster: event bus connection lost", "err", err)
+		if !sleep() {
+			return
+		}
+	}
+}
+
+// receive dispatches notifications until the connection fails.
+func (p *Postgres) receive(ctx context.Context, conn *pgx.Conn) error {
+	for {
+		wctx, cancel := context.WithTimeout(ctx, p.o.ListenPing)
+		n, err := conn.WaitForNotification(wctx)
+		timedOut := wctx.Err() != nil
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !timedOut || conn.IsClosed() {
+				return err
+			}
+			// Idle: make sure the connection is still alive.
+			pctx, cancel := context.WithTimeout(ctx, p.o.ProbeTimeout)
+			err = conn.Ping(pctx)
+			cancel()
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if n != nil {
+			p.dispatch(n.Payload)
+		}
+	}
+}
+
+func (p *Postgres) dispatch(raw string) {
+	env, payload, err := decodeEnvelope(raw)
+	if err != nil {
+		p.log.Debug("cluster: ignoring malformed event", "err", err)
+		return
+	}
+	if env.Inc == p.inc {
+		return // our own Publish, already delivered locally
+	}
+	if env.Topic == TopicResync {
+		return // local-only
+	}
+	p.bus.deliver(env.Topic, payload)
+}
+
+// ---- connections -------------------------------------------------------------
+
+// connect opens a dedicated connection with server-side keepalives so a
+// half-open session is noticed by the server too.
+func (p *Postgres) connect(ctx context.Context, role string, params map[string]string) (*pgx.Conn, error) {
+	cfg := p.connCfg.Copy()
+	// A config copied from a live connection carries that connection's
+	// notification buffer hook; pgx installs a fresh one when nil.
+	cfg.OnNotification = nil
+	rp := map[string]string{}
+	for k, v := range cfg.RuntimeParams {
+		rp[k] = v
+	}
+	rp["application_name"] = "ether-" + role + "/" + shortID(p.local.Identity.NodeID)
+	rp["tcp_keepalives_idle"] = "10"
+	rp["tcp_keepalives_interval"] = "5"
+	rp["tcp_keepalives_count"] = "3"
+	for k, v := range params {
+		rp[k] = v
+	}
+	cfg.RuntimeParams = rp
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return pgx.ConnectConfig(cctx, cfg)
+}
+
+// connConfigOf copies the configuration of one of db's connections.
+func connConfigOf(ctx context.Context, db *sql.DB) (*pgx.ConnConfig, error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cluster: database connection: %w", err)
+	}
+	defer conn.Close()
+	var cfg *pgx.ConnConfig
+	err = conn.Raw(func(dc any) error {
+		pc, ok := dc.(interface{ PgxConn() *pgx.Conn })
+		if !ok {
+			return errors.New("cluster: the database is not PostgreSQL")
+		}
+		cfg = pc.PgxConn().Config()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// channelFor is the NOTIFY channel for a schema.
+func channelFor(schema string) string {
+	if schema == "" || schema == "public" {
+		return DefaultChannel
+	}
+	h := fnv.New32a()
+	h.Write([]byte(schema))
+	return fmt.Sprintf("%s_%08x", DefaultChannel, h.Sum32())
+}

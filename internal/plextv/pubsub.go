@@ -156,6 +156,9 @@ func (p *Presence) set(fn func(*PresenceStatus)) {
 
 // Run holds the stream open until ctx ends.
 func (p *Presence) Run(ctx context.Context) {
+	// Run may be restarted (a clustered node runs presence only while it
+	// leads), so a stopped stream must not keep reporting connected.
+	defer p.set(func(s *PresenceStatus) { s.Connected = false })
 	backoff := p.o.MinBackoff
 	var hosts []string
 	failures := 0

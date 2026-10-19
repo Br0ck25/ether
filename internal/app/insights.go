@@ -7,8 +7,8 @@ import (
 )
 
 func (a *App) buildInsights() {
-	a.notifications = notify.New(a.db, notify.Options{Providers: a.fetcher.Stats, CacheUsage: a.cache.Usage, Logger: a.log.With("component", "notifications")})
-	a.stats = stats.New(a.db, stats.Options{Playback: a.playback, SessionExists: func(id string) bool { _, ok := (ownerPlayback{Playback: a.playback, app: a}).Session(id); return ok }, Providers: a.fetcher.Stats, Indexers: a.indexers.Remaining, Logger: a.log.With("component", "stats"), StopSession: a.stopOwnerSession, Newsletter: func(ctx context.Context, html string) error {
+	a.notifications = notify.New(a.db, notify.Options{Providers: a.fetcher.Stats, CacheUsage: a.cache.Usage, NodeID: a.clusterNodeID(), Logger: a.log.With("component", "notifications")})
+	a.stats = stats.New(a.db, stats.Options{NodeID: a.clusterNodeID(), Playback: a.playback, SessionExists: func(id string) bool { _, ok := (ownerPlayback{Playback: a.playback, app: a}).Session(id); return ok }, Providers: a.fetcher.Stats, Indexers: a.indexers.Remaining, Logger: a.log.With("component", "stats"), StopSession: a.stopOwnerSession, Newsletter: func(ctx context.Context, html string) error {
 		return a.notifications.Emit(ctx, notify.Event{Kind: "newsletter.weekly", Title: "Your week on Ether", Message: "Weekly viewing summary", HTML: html})
 	}})
 	a.closers = append(a.closers, a.playback.Subscribe(a.stats.ObservePlayback), a.playback.Subscribe(a.notifications.ObservePlayback), a.state.Subscribe(a.stats.ObserveState), a.indexers.Subscribe(a.stats.ObserveIndexer), a.indexers.Subscribe(a.notifications.ObserveIndexer))
