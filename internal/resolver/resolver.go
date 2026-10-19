@@ -482,6 +482,7 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 	var cands []candidate
 	clientRejected := false
 	for _, rel := range results {
+		rel = withTarget(rel, sreq)
 		ct := CandidateTrace{ReleaseID: rel.ID, Name: rel.Name, Indexer: rel.Indexer}
 		preferred := req.Prefer != "" && rel.ID == req.Prefer
 		if reason := s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred); reason != "" {
@@ -520,7 +521,7 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 			}
 			continue
 		}
-		compatibility, note := compatibilityScore(rel, req.Client, t)
+		compatibility, note := compatibilityScore(sizedForEpisode(rel), req.Client, t)
 		ct.CompatibilityReason = note
 		rel.Score = s.score(rel, profile, t) + float64(formatScore) + compatibility
 		ct.Score = rel.Score
@@ -590,9 +591,15 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	}
 	if isEpisode {
 		if rel.Info.FullSeason {
-			return "season pack (skipped in v1)"
-		}
-		if !releaseparse.EpisodeMatches(rel.Info, sreq.Season, sreq.Episode) {
+			// Usenet season packs are skipped in v1; a torrent pack streams
+			// the wanted episode's file through debrid (Release.Target).
+			if rel.Protocol != core.ProtocolTorrent {
+				return "season pack (skipped in v1)"
+			}
+			if !packCoversSeason(rel.Info, sreq.Season) {
+				return "season/episode mismatch"
+			}
+		} else if !releaseparse.EpisodeMatches(rel.Info, sreq.Season, sreq.Episode) {
 			return "season/episode mismatch"
 		}
 	} else {
@@ -629,18 +636,57 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	// Size sanity against runtime. The per-profile size range is policy
 	// (a 4K remux exceeds a 1080p profile's ceiling), so an explicit pick
 	// bypasses it; the absolute implausibility floor below still applies.
-	if !preferred && rel.Size > 0 && t.Runtime > 0 {
-		mbPerMin := float64(rel.Size) / (1 << 20) / t.Runtime.Minutes()
+	// A season pack's size is the whole season's, so it is not checked.
+	size := sizedForEpisode(rel).Size
+	if !preferred && size > 0 && t.Runtime > 0 {
+		mbPerMin := float64(size) / (1 << 20) / t.Runtime.Minutes()
 		if profile.MinSizeMBPerMin > 0 && mbPerMin < profile.MinSizeMBPerMin {
 			return "size too small for runtime"
 		}
 		if profile.MaxSizeMBPerMin > 0 && mbPerMin > profile.MaxSizeMBPerMin {
 			return "size too large for runtime"
 		}
-	} else if rel.Size > 0 && rel.Size < 5<<20 {
+	} else if size > 0 && size < 5<<20 {
 		return "implausibly small"
 	}
 	return ""
+}
+
+// withTarget marks a torrent candidate for an episode request with the
+// wanted episode, so debrid streams that file of a multi-file torrent. A
+// season pack gets a per-episode release ID: health, bad marks, pins and
+// cached bytes then apply to the episode file, not the whole pack.
+func withTarget(rel core.Release, sreq core.SearchRequest) core.Release {
+	if sreq.Type != core.TypeEpisode || rel.Protocol != core.ProtocolTorrent || sreq.Episode <= 0 {
+		return rel
+	}
+	target := core.ReleaseTarget{Season: sreq.Season, Episode: sreq.Episode}
+	rel.Target = &target
+	if rel.Info.FullSeason {
+		rel.ID = core.TargetReleaseID(rel.ID, target)
+	}
+	return rel
+}
+
+// sizedForEpisode hides a season pack's total size from per-runtime size
+// checks and bitrate estimates.
+func sizedForEpisode(rel core.Release) core.Release {
+	if rel.Info.FullSeason && rel.Protocol == core.ProtocolTorrent {
+		rel.Size = 0
+	}
+	return rel
+}
+
+func packCoversSeason(info core.ReleaseInfo, season int) bool {
+	if len(info.Seasons) == 0 {
+		return true // "Complete series": the file chooser verifies the episode
+	}
+	for _, s := range info.Seasons {
+		if s == season {
+			return true
+		}
+	}
+	return false
 }
 
 func indexScore[T comparable](list []T, v T, per float64) float64 {
