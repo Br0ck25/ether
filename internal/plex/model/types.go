@@ -267,18 +267,21 @@ type Metadata struct {
 	// UltraBlurList is UltraBlurColors as decision responses send it: an
 	// array in JSON. Set one or the other, never both.
 	UltraBlurList []UltraBlurColors `plex:"UltraBlurColors"`
-	Genre         []Tag             `plex:"Genre"`
-	Country       []Tag             `plex:"Country"`
-	Guid          []GUID            `plex:"Guid"`
-	Rating_       []RatingTag       `plex:"Rating"`
-	Collection    []Tag             `plex:"Collection"`
-	Director      []Tag             `plex:"Director"`
-	Writer        []Tag             `plex:"Writer"`
-	Role          []Tag             `plex:"Role"`
-	Producer      []Tag             `plex:"Producer"`
-	Label         []Tag             `plex:"Label"`
-	Similar       []Tag             `plex:"Similar"`
-	Studio_       []Tag             `plex:"Studio"`
+	// GuidLead is Guid as list items (related hubs) carry it: before the
+	// tags, where detail pages put it after Country.
+	GuidLead   []GUID      `plex:"Guid"`
+	Genre      []Tag       `plex:"Genre"`
+	Country    []Tag       `plex:"Country"`
+	Guid       []GUID      `plex:"Guid"`
+	Rating_    []RatingTag `plex:"Rating"`
+	Collection []Tag       `plex:"Collection"`
+	Director   []Tag       `plex:"Director"`
+	Writer     []Tag       `plex:"Writer"`
+	Role       []Tag       `plex:"Role"`
+	Producer   []Tag       `plex:"Producer"`
+	Label      []Tag       `plex:"Label"`
+	Similar    []Tag       `plex:"Similar"`
+	Studio_    []Tag       `plex:"Studio"`
 
 	User             *SessionUser   `plex:"User,object"`
 	Player           *Player        `plex:"Player,object"`

@@ -55,10 +55,10 @@ func hubItemsKey(h core.Hub, hc hubCtx) string {
 func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
 	h := hs.Hub
 	items := s.filterAllowed(pr.User, h.Items)
-	// Related hubs (detail pages, postplay) omit the items' library section
-	// and the hub's promoted flag, like PMS.
+	// Related hubs (detail pages, postplay) carry Guid children and omit the
+	// items' library section and the hub's promoted flag, like PMS.
 	related := hc.related != 0
-	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, detailEpisodes: !hs.plain})
+	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, state: hs.state, inSection: related, guids: related, detailEpisodes: !hs.plain})
 	if hs.included {
 		stampIncluded(md)
 	}

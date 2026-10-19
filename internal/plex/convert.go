@@ -23,6 +23,8 @@ type renderOpts struct {
 	inSection bool
 	// detailEpisodes renders episodes in full (hub rows, like PMS).
 	detailEpisodes bool
+	// guids adds the external Guid children (related hubs, like PMS).
+	guids bool
 	// state holds the user's watch status for the rendered keys.
 	state map[core.RatingKey]core.WatchStatus
 }
@@ -344,6 +346,10 @@ func (s *Server) metadata(ctx context.Context, pr *Request, t *core.Title, o ren
 	}
 	if detail {
 		m.Guid = externalGuids(t)
+	} else if o.guids {
+		m.GuidLead = externalGuids(t)
+	}
+	if detail {
 		if t.Rating > 0 {
 			m.Rating_ = []model.RatingTag{{Image: "themoviedb://image.rating", Value: math.Round(t.Rating*10) / 10, Type: "audience"}}
 		}

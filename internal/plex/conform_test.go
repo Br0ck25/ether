@@ -158,7 +158,7 @@ func TestDecisionConformsToPMS(t *testing.T) {
 // detailPMSOnlyRE adds what a PMS detail page has beyond the decision's
 // data gaps: chapters, extras (trailers), the scanner's stream details and
 // PMS's stream titles, audio profiles and BIF indexes.
-var detailPMSOnlyRE = regexp.MustCompile(`(@|/)(Chapter|Extras/Video|Extras/Metadata|canAutoSync|hasScalingMatrix|scanType|audioProfile|loudnessAnalysisVersion|skipCount|viewCount|lastViewedAt|viewOffset|hasThumbnail|has64bitOffsets|optimizedForStreaming|Guid|librarySectionKey|librarySectionID|librarySectionTitle)$`)
+var detailPMSOnlyRE = regexp.MustCompile(`(@|/)(Chapter|Extras/Video|Extras/Metadata|canAutoSync|hasScalingMatrix|scanType|audioProfile|loudnessAnalysisVersion|skipCount|viewCount|lastViewedAt|viewOffset|hasThumbnail|has64bitOffsets|optimizedForStreaming|librarySectionKey|librarySectionID|librarySectionTitle)$`)
 
 // TestDetailConformsToPMS renders the detail page PMS recorded for the
 // same title (with a related hub) and requires PMS's structure and types.

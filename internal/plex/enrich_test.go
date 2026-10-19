@@ -35,6 +35,11 @@ func TestPlaylistsHomeHub(t *testing.T) {
 	if strings.Contains(f.get(t, "/hubs?contentDirectoryID=1").Body.String(), "home.playlists") {
 		t.Error("section-filtered home hubs must not include playlists")
 	}
+	// The playlist's duration appears once its items' runtimes are known.
+	body = f.getWarm(t, "/playlists/"+pl.Key.String()).Body.String()
+	if !strings.Contains(body, `duration="8340000"`) {
+		t.Errorf("playlist duration missing: %s", body)
+	}
 }
 
 func TestSlugify(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -226,7 +227,32 @@ func (s *Server) playlistMetadata(ctx context.Context, pl *core.Playlist) model.
 	if pl.Smart {
 		m.Icon = "playlist://image.smart"
 	}
+	m.Duration = s.playlistDuration(pl.Items)
 	return m
+}
+
+// playlistDuration is the total runtime PMS reports on a playlist, from
+// the title-detail cache without blocking: it is omitted (0) until every
+// item's runtime is known, and unknown items are fetched in the background.
+func (s *Server) playlistDuration(items []core.RatingKey) int64 {
+	const maxItems = 200
+	if s.titles == nil || len(items) == 0 || len(items) > maxItems {
+		return 0
+	}
+	var total time.Duration
+	known := true
+	for _, k := range items {
+		t := s.titles.get(k)
+		if t == nil || t.Runtime <= 0 {
+			known = false // keep going so every missing item gets fetched
+			continue
+		}
+		total += t.Runtime
+	}
+	if !known {
+		return 0
+	}
+	return ms(total)
 }
 
 func (s *Server) handlePlaylists(w http.ResponseWriter, r *http.Request) {
