@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/admin"
@@ -103,6 +104,9 @@ type App struct {
 	// heartbeat and the outboxes that hold progress, resume and play
 	// records through an outage report to it. Nil on a standalone server.
 	dbAvail *store.Availability
+	// draining is set while this node drains before installing an update
+	// (heartbeated; see rolling.go).
+	draining atomic.Bool
 
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
@@ -208,12 +212,24 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	// of the published connections because it is not heartbeating. The
 	// hang watchdog only starts in Run. Errors retrying cannot fix (bad
 	// password, missing database, invalid URL) still fail at once.
+	var gate store.MigrationGate
+	if dbCfg.IsPostgres() && cfg.Database.DeferMigrations {
+		id, err := cluster.LoadIdentity(opts.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("cluster: %w", err)
+		}
+		gate = olderNodesGate(id.NodeID, clusterLiveAfter, time.Now)
+	}
 	if a.db, dialect, err = store.OpenWithRetry(ctx, store.Options{
 		DataDir: opts.DataDir, Driver: dbCfg.Driver, URL: dbCfg.URL,
-		Logger: a.log.With("component", "store"),
+		Logger: a.log.With("component", "store"), MigrationGate: gate,
 	}, store.RetryOptions{
 		MinBackoff: a.opts.DBRetryMin, MaxBackoff: a.opts.DBRetryMax,
 		OnRetry: func(attempt int, wait time.Duration, err error) {
+			if errors.Is(err, store.ErrMigrationDeferred) {
+				a.log.Warn("database: waiting before migrating the shared schema", "attempt", attempt, "retry", wait, "reason", err)
+				return
+			}
 			a.log.Error("database: PostgreSQL is unreachable; waiting for it before starting",
 				"url", dbCfg.Redacted().URL, "attempt", attempt, "retry", wait, "err", err)
 		},
@@ -222,6 +238,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	}
 	if dialect == store.Postgres {
 		a.log.Info("database: using PostgreSQL", "url", dbCfg.Redacted().URL)
+		a.warnNewerSchema(ctx)
 	}
 	a.closers = append(a.closers, func() { a.db.Close() })
 	if err := a.buildCluster(dialect); err != nil {
@@ -650,6 +667,9 @@ func (a *App) Run(ctx context.Context) error {
 	case runErr = <-watchdogErr:
 	case runErr = <-a.clusterFatal: // nil channel (never ready) when standalone
 	}
+	// Hand leadership over first: another node takes over singleton work
+	// and plex.tv publication while this one finishes shutting down.
+	a.stepDownForShutdown()
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	_ = srv.Shutdown(shutdown)

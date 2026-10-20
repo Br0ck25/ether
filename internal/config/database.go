@@ -26,6 +26,12 @@ type Database struct {
 	// URL is the PostgreSQL connection URL, e.g.
 	// postgres://ether:secret@db.lan:5432/ether?sslmode=require
 	URL string `json:"url,omitempty"`
+	// DeferMigrations makes this node wait, at startup, instead of applying
+	// new schema migrations to the shared database while another live node
+	// runs a version of Ether that does not know them. Off by default:
+	// migrations are additive, so older nodes keep working on a newer
+	// schema and a rolling update never stalls on it.
+	DeferMigrations bool `json:"deferMigrations,omitempty"`
 }
 
 // Effective applies the ETHER_DATABASE_URL override (read through getenv)
@@ -33,7 +39,7 @@ type Database struct {
 func (d Database) Effective(getenv func(string) string) Database {
 	if getenv != nil {
 		if v := strings.TrimSpace(getenv(DatabaseURLEnv)); v != "" && isPostgresURL(v) {
-			d = Database{Driver: DatabasePostgres, URL: v}
+			d.Driver, d.URL = DatabasePostgres, v
 		}
 	}
 	switch strings.ToLower(strings.TrimSpace(d.Driver)) {

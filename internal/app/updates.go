@@ -71,7 +71,15 @@ func (a *App) initUpdates() {
 		Supervised:  !service.Interactive(),
 	})
 	log := a.log.With("component", "updater")
+	// A clustered node that installs its own updates takes its turn in a
+	// rolling update (rolling.go); notify-only nodes just report.
+	var coord updater.Coordinator
+	if a.clustered() && selfApply {
+		coord = a.newClusterUpdates()
+	}
 	a.updates.mgr = updater.NewManager(updater.ManagerOptions{
+		Coordinator: coord,
+		NodeName:    a.cluster.Self().Name,
 		NewClient: func(u config.Updates) (updater.Checker, error) {
 			return updater.NewClient(updater.Options{
 				FeedURL:        u.FeedURL,

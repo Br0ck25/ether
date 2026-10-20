@@ -25,6 +25,8 @@ const (
 	memberGrace = 60 * time.Second
 	// healthSampleInterval matches notify.Service.Run's health sampling.
 	healthSampleInterval = 30 * time.Second
+	// clusterLiveAfter matches cluster.Options.LiveAfter's default.
+	clusterLiveAfter = 20 * time.Second
 )
 
 // buildCluster loads this node's identity and selects the runtime for the
@@ -35,7 +37,8 @@ func (a *App) buildCluster(dialect store.Dialect) error {
 	if err != nil {
 		return err
 	}
-	local := cluster.Local{Identity: id, Version: a.opts.Version, Addrs: a.nodeAddrs, Caps: a.nodeCaps, Load: a.nodeLoad}
+	local := cluster.Local{Identity: id, Version: a.opts.Version, Addrs: a.nodeAddrs, Caps: a.nodeCaps, Load: a.nodeLoad,
+		Draining: a.nodeDraining, Migrations: store.KnownMigrations()}
 	log := a.log.With("component", "cluster")
 	a.peers = &peerSet{}
 	a.egress = &egressIP{}
@@ -266,6 +269,9 @@ func (a *App) clusterHandler() http.Handler {
 			}
 		}
 		if w := egressWarning(st.Nodes); w != "" {
+			st.Warnings = append(st.Warnings, w)
+		}
+		if w := versionWarning(st.Nodes); w != "" {
 			st.Warnings = append(st.Warnings, w)
 		}
 		if pg, ok := a.cluster.(*cluster.Postgres); ok {

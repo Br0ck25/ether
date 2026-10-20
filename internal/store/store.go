@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -98,6 +99,66 @@ type Options struct {
 	URL string
 	// Logger receives open-time warnings; nil uses slog.Default().
 	Logger *slog.Logger
+	// MigrationGate, when set, decides on PostgreSQL whether this node may
+	// apply its pending migrations now (see MigrationGate).
+	MigrationGate MigrationGate
+}
+
+// Querier is the read side of *sql.DB and *sql.Tx.
+type Querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// MigrationGate is consulted while the cluster-wide migration lock is held
+// and before any of pending ("component/version", in apply order) is
+// applied. Returning an error wrapping ErrMigrationDeferred makes
+// OpenWithRetry wait and try again; any other error fails the open. q
+// reads inside the migration transaction.
+type MigrationGate func(ctx context.Context, q Querier, pending []string) error
+
+// ErrMigrationDeferred means this node must not migrate the shared schema
+// yet (another live node runs a binary that does not know the pending
+// migrations and the owner asked to wait for it).
+var ErrMigrationDeferred = errors.New("store: schema migration deferred")
+
+// KnownMigrations is the highest migration version this binary registers
+// for each component.
+func KnownMigrations() map[string]int {
+	out := map[string]int{}
+	for _, m := range registered() {
+		if m.version > out[m.component] {
+			out[m.component] = m.version
+		}
+	}
+	return out
+}
+
+// UnknownApplied lists migrations ("component/version") recorded in db that
+// this binary does not register: the database was migrated by a newer
+// version of Ether.
+func UnknownApplied(ctx context.Context, db *sql.DB) ([]string, error) {
+	known := map[string]bool{}
+	for _, m := range registered() {
+		known[m.component+"/"+strconv.Itoa(m.version)] = true
+	}
+	rows, err := db.QueryContext(ctx, `SELECT component, version FROM schema_migrations ORDER BY component, version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		var v int
+		if err := rows.Scan(&c, &v); err != nil {
+			return nil, err
+		}
+		if k := c + "/" + strconv.Itoa(v); !known[k] {
+			out = append(out, k)
+		}
+	}
+	return out, rows.Err()
 }
 
 // Dialect is the backend these options select.
@@ -120,7 +181,7 @@ func OpenWith(ctx context.Context, o Options) (*sql.DB, Dialect, error) {
 		if o.URL == "" {
 			return nil, d, errors.New("store: postgres requires a database URL")
 		}
-		db, err := openPostgres(ctx, o.URL, log)
+		db, err := openPostgres(ctx, o.URL, log, o.MigrationGate)
 		return db, d, err
 	default:
 		if o.DataDir == "" {
@@ -193,7 +254,7 @@ const createMigrationsTable = `CREATE TABLE IF NOT EXISTS schema_migrations (
 // Migrate applies every registered migration db has not yet recorded.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	if DialectOf(db) == Postgres {
-		return migratePostgres(ctx, db)
+		return migratePostgres(ctx, db, nil)
 	}
 	if _, err := db.ExecContext(ctx, createMigrationsTable); err != nil {
 		return err
@@ -272,7 +333,8 @@ func OpenWithRetry(ctx context.Context, o Options, r RetryOptions) (*sql.DB, Dia
 	wait := r.MinBackoff
 	for attempt := 1; ; attempt++ {
 		db, d, err := OpenWith(ctx, o)
-		if err == nil || d != Postgres || IsPermanent(err) || !IsUnavailable(err) {
+		retry := IsUnavailable(err) || errors.Is(err, ErrMigrationDeferred)
+		if err == nil || d != Postgres || IsPermanent(err) || !retry {
 			return db, d, err
 		}
 		if ctx.Err() != nil {

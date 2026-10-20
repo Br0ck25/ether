@@ -66,7 +66,7 @@ func RedactURL(raw string) string {
 
 // openPostgres connects to an owner-supplied PostgreSQL database, checks
 // the server and migrates the schema under a cluster-wide lock.
-func openPostgres(ctx context.Context, rawURL string, log *slog.Logger) (*sql.DB, error) {
+func openPostgres(ctx context.Context, rawURL string, log *slog.Logger, gate MigrationGate) (*sql.DB, error) {
 	cfg, err := pgx.ParseConfig(rawURL)
 	if err != nil {
 		// pgx errors can echo the connection string; never surface it.
@@ -82,7 +82,7 @@ func openPostgres(ctx context.Context, rawURL string, log *slog.Logger) (*sql.DB
 	db.SetMaxOpenConns(16)
 	db.SetMaxIdleConns(8)
 	db.SetConnMaxIdleTime(5 * time.Minute)
-	if err := preparePostgres(ctx, db, log.With("database", RedactURL(rawURL))); err != nil {
+	if err := preparePostgres(ctx, db, log.With("database", RedactURL(rawURL)), gate); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func openPostgres(ctx context.Context, rawURL string, log *slog.Logger) (*sql.DB
 }
 
 // preparePostgres verifies the server and applies migrations.
-func preparePostgres(ctx context.Context, db *sql.DB, log *slog.Logger) error {
+func preparePostgres(ctx context.Context, db *sql.DB, log *slog.Logger, gate MigrationGate) error {
 	pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
@@ -99,7 +99,7 @@ func preparePostgres(ctx context.Context, db *sql.DB, log *slog.Logger) error {
 	if err := checkPostgresServer(ctx, db, log); err != nil {
 		return err
 	}
-	return Migrate(ctx, db)
+	return migratePostgres(ctx, db, gate)
 }
 
 // checkPostgresServer requires PostgreSQL 14+ and warns when the database
@@ -135,7 +135,8 @@ func byteOrderCollation(c string) bool {
 // migratePostgres applies all pending migrations in one transaction holding
 // a transaction-scoped advisory lock, so concurrently starting nodes
 // migrate exactly once and a failed migration leaves nothing half-applied.
-func migratePostgres(ctx context.Context, db *sql.DB) error {
+// gate, when set, is consulted under the lock before anything is applied.
+func migratePostgres(ctx context.Context, db *sql.DB, gate MigrationGate) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -164,6 +165,19 @@ func migratePostgres(ctx context.Context, db *sql.DB) error {
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	if gate != nil {
+		var pending []string
+		for _, m := range registered() {
+			if key := m.component + "/" + strconv.Itoa(m.version); !applied[key] {
+				pending = append(pending, key)
+			}
+		}
+		if len(pending) > 0 {
+			if err := gate(ctx, tx, pending); err != nil {
+				return err
+			}
+		}
 	}
 	for _, m := range registered() {
 		key := m.component + "/" + strconv.Itoa(m.version)
