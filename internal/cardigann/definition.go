@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -243,7 +244,13 @@ func Parse(data []byte) (*Definition, []string, error) {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, nil, fmt.Errorf("definition is not valid YAML: %w", err)
+		// YAML 1.2 (and the .NET parser the reference engines use) accepts
+		// "\/" in double-quoted strings; go-yaml does not. Retry with it
+		// rewritten to "/", which is what it means.
+		fixed, changed := unescapeSlashes(data)
+		if !changed || yaml.Unmarshal(fixed, &doc) != nil {
+			return nil, nil, fmt.Errorf("definition is not valid YAML: %w", err)
+		}
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, nil, errors.New("definition must be a YAML mapping")
@@ -617,7 +624,7 @@ func (p *parser) login(n *yaml.Node) *Login {
 		case "submitpath":
 			l.SubmitPath = scalar(v)
 		case "method":
-			l.Method = strings.ToLower(scalar(v))
+			l.Method = methodValue(scalar(v))
 		case "form":
 			l.Form = scalar(v)
 		case "inputs":
@@ -705,7 +712,7 @@ func (p *parser) searchPath(n *yaml.Node) SearchPath {
 		case "path":
 			sp.Path = scalar(v)
 		case "method":
-			sp.Method = strings.ToLower(scalar(v))
+			sp.Method = methodValue(scalar(v))
 		case "inputs":
 			sp.Inputs = kvs(v)
 		case "inheritinputs":
@@ -780,7 +787,7 @@ func (p *parser) download(n *yaml.Node) *Download {
 				}
 			}
 		case "method":
-			d.Method = strings.ToLower(scalar(v))
+			d.Method = methodValue(scalar(v))
 		case "before":
 			r := &Request{}
 			for _, f := range mapping(v) {
@@ -788,7 +795,7 @@ func (p *parser) download(n *yaml.Node) *Download {
 				case "path":
 					r.Path = scalar(f[1])
 				case "method":
-					r.Method = strings.ToLower(scalar(f[1]))
+					r.Method = methodValue(scalar(f[1]))
 				case "inputs":
 					r.Inputs = kvs(f[1])
 				case "pathselector":
@@ -871,7 +878,7 @@ func (d *Definition) validate() (errs, warnings []string) {
 		default:
 			errs = append(errs, fmt.Sprintf("search response type %q is not supported", sp.Response.Type))
 		}
-		if sp.Method != "" && sp.Method != "get" && sp.Method != "post" {
+		if sp.Method != "" && sp.Method != "get" && sp.Method != "post" && !strings.Contains(sp.Method, "{{") {
 			errs = append(errs, fmt.Sprintf("search method %q is not supported", sp.Method))
 		}
 	}
@@ -969,4 +976,43 @@ func (d *Definition) supportsFamily(family int) bool {
 		}
 	}
 	return false
+}
+
+// doubleQuoted matches one-line double-quoted YAML scalars.
+var doubleQuoted = regexp.MustCompile(`"(?:[^"\\\n]|\\.)*"`)
+
+// unescapeSlashes rewrites the escape "\/" to "/" inside double-quoted
+// scalars only (an even run of backslashes before "/" is left alone), so
+// plain and single-quoted text keeps its meaning.
+func unescapeSlashes(data []byte) ([]byte, bool) {
+	changed := false
+	out := doubleQuoted.ReplaceAllFunc(data, func(q []byte) []byte {
+		var b []byte
+		for i := 0; i < len(q); i++ {
+			if q[i] == '\\' && i+1 < len(q) {
+				if q[i+1] == '/' {
+					b = append(b, '/')
+					changed = true
+				} else {
+					b = append(b, q[i], q[i+1])
+				}
+				i++
+				continue
+			}
+			b = append(b, q[i])
+		}
+		return b
+	})
+	return out, changed
+}
+
+// methodValue normalises a method name to lower case; a templated method
+// ("{{ if .Keywords }}post{{ else }}get{{ end }}") is kept verbatim, since
+// lower-casing would break its field names, and is lower-cased once
+// rendered.
+func methodValue(s string) string {
+	if strings.Contains(s, "{{") {
+		return strings.TrimSpace(s)
+	}
+	return strings.ToLower(strings.TrimSpace(s))
 }

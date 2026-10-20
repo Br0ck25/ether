@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"text/template"
 	"time"
+	"unicode"
 
 	"github.com/dlclark/regexp2"
 )
@@ -166,7 +168,7 @@ func translate(tpl string) string {
 		if strings.HasSuffix(body, " -") {
 			rtrim, body = " -", body[:len(body)-1]
 		}
-		body = rawLiterals(body)
+		body = indexOddFields(rawLiterals(body))
 		trimmed := strings.TrimSpace(body)
 		word := trimmed
 		if i := strings.IndexAny(word, " \t\n("); i >= 0 {
@@ -299,7 +301,11 @@ func compileRegex(pattern string) (*regexp2.Regexp, error) {
 	if re, ok := regexCache[pattern]; ok {
 		return re, nil
 	}
-	re, err := regexp2.Compile(pattern, regexp2.None)
+	translated, err := translateNETBlocks(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("regular expression %q: %w", pattern, err)
+	}
+	re, err := regexp2.Compile(translated, regexp2.None)
 	if err != nil {
 		return nil, fmt.Errorf("regular expression %q: %w", pattern, err)
 	}
@@ -309,4 +315,65 @@ func compileRegex(pattern string) (*regexp2.Regexp, error) {
 	}
 	regexCache[pattern] = re
 	return re, nil
+}
+
+// oddField matches .Config/.Result/.Query fields; names that are not Go
+// identifiers (".Config.cat-id", ".Config.2facode") cannot be written as
+// template field access.
+var oddField = regexp.MustCompile(`\.(Config|Result|Query)\.([A-Za-z0-9_][A-Za-z0-9_-]*)`)
+
+// indexOddFields rewrites such fields to (index .Config "cat-id"), leaving
+// literals (raw `...` or quoted "...") untouched.
+func indexOddFields(action string) string {
+	var b strings.Builder
+	for len(action) > 0 {
+		i := strings.IndexAny(action, "`\"")
+		if i < 0 {
+			b.WriteString(rewriteOddFields(action))
+			break
+		}
+		b.WriteString(rewriteOddFields(action[:i]))
+		q := action[i]
+		j := strings.IndexByte(action[i+1:], q)
+		if q == '"' {
+			// Skip escaped quotes inside a quoted literal.
+			for k := i + 1; k < len(action); k++ {
+				if action[k] == '\\' {
+					k++
+					continue
+				}
+				if action[k] == '"' {
+					j = k - i - 1
+					break
+				}
+			}
+		}
+		if j < 0 {
+			b.WriteString(action[i:])
+			break
+		}
+		b.WriteString(action[i : i+j+2])
+		action = action[i+j+2:]
+	}
+	return b.String()
+}
+
+func rewriteOddFields(code string) string {
+	return oddField.ReplaceAllStringFunc(code, func(m string) string {
+		sub := oddField.FindStringSubmatch(m)
+		if isIdent(sub[2]) {
+			return m
+		}
+		return "(index ." + sub[1] + " " + strconv.Quote(sub[2]) + ")"
+	})
+}
+
+func isIdent(s string) bool {
+	for i, r := range s {
+		if r == '_' || unicode.IsLetter(r) || (i > 0 && unicode.IsDigit(r)) {
+			continue
+		}
+		return false
+	}
+	return s != ""
 }

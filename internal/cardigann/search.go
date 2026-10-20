@@ -345,9 +345,21 @@ func (r *Runner) searchPath(ctx context.Context, p SearchPath, v vars, reserve R
 	if err != nil {
 		return nil, err
 	}
+	// The method may be templated ("{{ if .Keywords }}post{{ else }}get{{ end }}").
+	m := p.Method
+	if strings.Contains(m, "{{") {
+		if m, err = render(m, v, nil); err != nil {
+			return nil, err
+		}
+		m = strings.ToLower(strings.TrimSpace(m))
+	}
 	method := http.MethodGet
-	if p.Method == "post" {
+	switch m {
+	case "", "get":
+	case "post":
 		method = http.MethodPost
+	default:
+		return nil, fmt.Errorf("%s: search method %q is not supported", r.def.Name, m)
 	}
 	req := request{method: method, url: target.String(), form: form, raw: raw, headers: r.headers(r.def.Search.Headers, v), follow: r.def.FollowRedirect || p.FollowRedirect}
 	if err := reserve(ctx, "hit"); err != nil {
