@@ -25,23 +25,33 @@ describe("Overview", () => {
       await screen.findByRole("img", { name: /Plays per day over the last 30 days/ }, WAIT),
     ).toBeInTheDocument();
     expect(screen.getByText("Plays · 30 days")).toBeInTheDocument();
-    expect(await screen.findByText("Best-performing rows")).toBeInTheDocument();
+    expect(await screen.findByText("Best rows")).toBeInTheDocument();
     // The header health indicator summarises everything.
     expect(screen.getByRole("button", { name: /Server health/ })).toBeInTheDocument();
   });
 
-  it("shows live server load: CPU, memory, network and GPU", async () => {
+  it("shows live server instruments: CPU, memory, network, GPU and Ether itself", async () => {
     const { fake } = renderApp("/");
-    const load = await screen.findByRole("region", { name: "Server load" }, WAIT);
-    expect(await within(load).findByText("CPU", {}, WAIT)).toBeInTheDocument();
-    expect(within(load).getByText(/of 24.0 GiB/)).toBeInTheDocument();
-    expect(within(load).getByText(/12 cores/)).toBeInTheDocument();
-    expect(within(load).getByText(/↓ .*Mbit\/s/)).toBeInTheDocument();
-    expect(within(load).getByText(/↑ .*Mbit\/s up/)).toBeInTheDocument();
-    expect(within(load).getByText("GPU · RTX 4080")).toBeInTheDocument();
-    expect(within(load).getByText("enc 18% · dec 11%")).toBeInTheDocument();
-    expect(within(load).getByText(/Ether uses \d+% CPU and 412\.0 MiB/)).toBeInTheDocument();
-    expect(within(load).getByRole("img", { name: "CPU use, last 5 minutes" })).toBeInTheDocument();
+    const server = (await screen.findByRole("heading", { name: "Server" }, WAIT)).closest(
+      "section",
+    )!;
+    const cpu = await within(server).findByRole("group", { name: "CPU" }, WAIT);
+    expect(within(cpu).getByText(/12 cores/)).toBeInTheDocument();
+    expect(
+      within(cpu).getByRole("img", { name: /CPU use over the last 5 minutes/ }),
+    ).toBeInTheDocument();
+    expect(
+      within(within(server).getByRole("group", { name: "Memory" })).getByText(/of 24.0 GiB/),
+    ).toBeInTheDocument();
+    const net = within(server).getByRole("group", { name: "Network" });
+    expect(within(net).getByLabelText("Download")).toBeInTheDocument();
+    expect(within(net).getByLabelText("Upload")).toBeInTheDocument();
+    expect(within(net).getAllByText(/Mbit\/s/).length).toBeGreaterThanOrEqual(2);
+    const gpu = within(server).getByRole("group", { name: "GPU · RTX 4080" });
+    expect(within(gpu).getByText("Encode")).toBeInTheDocument();
+    expect(within(gpu).getByText("18%")).toBeInTheDocument();
+    expect(within(server).getByText(/\d+% CPU · 412\.0 MiB/)).toBeInTheDocument();
+    expect(within(server).getByText("videotoolbox")).toBeInTheDocument();
     expect(calls(fake, "GET", "/system/load").length).toBeGreaterThan(0);
   });
 
@@ -56,8 +66,8 @@ describe("Overview", () => {
         return new Response(JSON.stringify(body), { status: 200 });
       };
     });
-    const load = await screen.findByRole("region", { name: "Server load" }, WAIT);
-    expect(await within(load).findByText("Not reported here", {}, WAIT)).toBeInTheDocument();
+    const gpu = await screen.findByRole("group", { name: "GPU" }, WAIT);
+    expect(within(gpu).getByText("Not reported by this hardware")).toBeInTheDocument();
   });
 
   it("lists problems first, each linking to the screen that fixes it", async () => {
