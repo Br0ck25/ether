@@ -86,8 +86,8 @@ func TestMatroskaHLSArgsAndPlaylist(t *testing.T) {
 	d := core.Decision{Kind: core.DecisionRemux, Container: ContainerMatroska, VideoCopy: true, AudioCopy: true, AudioStream: 1}
 	s := baseSpec(mustParse(t, "mkv_hevc_hdr10.json"), d)
 	args := buildArgs(s)
-	mustContain(t, args, "-f ssegment", "-segment_format matroska", "-individual_header_trailer 0", "-segment_header_filename", "-reset_timestamps 0", "-segment_start_number 50", "-segment_list_type m3u8", "-segment_format_options output_ts_offset=10", "%05d.mkv")
-	mustNotContain(t, args, "-hls_segment_type", "-tag:v hvc1", "-hls_fmp4_init_filename")
+	mustContain(t, args, "-f ssegment", "-segment_format matroska", "-individual_header_trailer 0", "-segment_header_filename", "-reset_timestamps 0", "-segment_start_number 50", "-segment_list_type m3u8", "-segment_format_options output_ts_offset=210.000", "%05d.mkv")
+	mustNotContain(t, args, "-copyts", "-start_at_zero", "-hls_segment_type", "-tag:v hvc1", "-hls_fmp4_init_filename")
 	b := string(mediaPlaylist(20*time.Second, 4*time.Second, ContainerMatroska, func(n int) string { return SegmentName(n, ContainerMatroska) }))
 	if !strings.Contains(b, `#EXT-X-MAP:URI="header"`) || !strings.Contains(b, "00000.mkv") || !strings.Contains(b, "#EXT-X-VERSION:7") {
 		t.Fatal(b)
