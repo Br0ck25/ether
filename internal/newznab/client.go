@@ -274,6 +274,10 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 
 func cacheKey(c *Client, req core.SearchRequest) string {
 	h := sha1.New()
+	// Cached releases include parsed audio-language facts. Earlier names
+	// with regional tags were persisted as unknown language; refresh them
+	// instead of applying corrected ranking only after their TTL expires.
+	fmt.Fprint(h, "regional-language-v1|")
 	if c.Config().IsBuiltin() && (req.Type == core.TypeEpisode || req.Type == core.TypeShow || req.Season > 0) {
 		// Built-in TV keywords no longer require the series premiere year.
 		// Do not reuse persisted empty answers from that narrower search.
