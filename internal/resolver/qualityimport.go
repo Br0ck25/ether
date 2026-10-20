@@ -103,6 +103,10 @@ func ImportQualityProfile(data []byte) (QualityImport, error) {
 }
 func parseImportedQuality(name string) (string, core.Source, int, error) {
 	sourceName, resolution, _ := strings.Cut(name, "-")
+	// Sonarr names remuxes "Bluray-1080p Remux" (Radarr: "Remux-1080p").
+	if r, ok := strings.CutSuffix(strings.ToLower(resolution), " remux"); ok {
+		sourceName, resolution = "remux", r
+	}
 	var source core.Source
 	switch strings.ToLower(sourceName) {
 	case "webdl":
@@ -131,5 +135,9 @@ func parseImportedQuality(name string) (string, core.Source, int, error) {
 	return fmt.Sprintf("%s-%d", source, height), source, height, nil
 }
 func releaseQuality(info core.ReleaseInfo) string {
-	return fmt.Sprintf("%s-%d", info.Source, info.Height)
+	height := info.Height
+	if height == 0 && info.Source == core.SourceDVD {
+		height = 480 // a DVD rip names no resolution; Starr's DVD quality is 480
+	}
+	return fmt.Sprintf("%s-%d", info.Source, height)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,10 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/dlclark/regexp2"
 )
+
+// errFormatTimeout reports a custom format regex that exceeded its time
+// budget on one release name.
+var errFormatTimeout = errors.New("regex timed out")
 
 type FormatMatch struct {
 	ID    string `json:"id"`
@@ -84,7 +89,7 @@ func NewFormatScorer(defs []core.CustomFormat, scores map[string]int) (*FormatSc
 					if json.Unmarshal(spec.Fields["value"], &value) != nil {
 						return nil, fmt.Errorf("custom format %q: numeric native specification value required", d.Name)
 					}
-					if (spec.Implementation == "LanguageSpecification" && (value <= 0 || value > 18)) || (spec.Implementation == "SourceSpecification" && (value < 0 || value > 9)) || (spec.Implementation == "QualityModifierSpecification" && (value < 0 || value > 1)) {
+					if (spec.Implementation == "LanguageSpecification" && (value <= 0 || value > 18)) || (spec.Implementation == "SourceSpecification" && (value < 0 || value > 9)) || (spec.Implementation == "QualityModifierSpecification" && (value < 0 || value > 5)) {
 						return nil, fmt.Errorf("custom format %q: unsupported native enum value %d", d.Name, value)
 					}
 				}
@@ -96,6 +101,23 @@ func NewFormatScorer(defs []core.CustomFormat, scores map[string]int) (*FormatSc
 		s.formats = append(s.formats, f)
 	}
 	return s, nil
+}
+
+// assumedLanguage names a title's original language (ISO 639-1) the way
+// release language tags are named; English when unknown.
+func assumedLanguage(t *core.Title) string {
+	if t == nil || t.Language == "" {
+		return "english"
+	}
+	code := strings.ToLower(t.Language)
+	if name, ok := map[string]string{"en": "english", "fr": "french", "es": "spanish", "de": "german", "it": "italian",
+		"da": "danish", "nl": "dutch", "ja": "japanese", "is": "icelandic", "zh": "chinese", "ru": "russian", "pl": "polish",
+		"vi": "vietnamese", "sv": "swedish", "no": "norwegian", "nb": "norwegian", "nn": "norwegian", "fi": "finnish",
+		"tr": "turkish", "pt": "portuguese", "ko": "korean", "hi": "hindi", "te": "telugu", "ta": "tamil", "ar": "arabic",
+		"cs": "czech", "hu": "hungarian", "el": "greek", "th": "thai", "id": "indonesian"}[code]; ok {
+		return name
+	}
+	return code
 }
 
 func fieldNumber(s core.FormatSpecification, k string) float64 {
@@ -117,12 +139,17 @@ func specMatch(s compiledSpec, r core.Release) (bool, error) {
 	case "SourceSpecification":
 		// Radarr's source enum: Unknown=0, CAM=1, TS=2, TC=3, WORKPRINT=4, DVD=5,
 		// TV=6, WEB-DL=7, WEBRip=8, BluRay=9.
-		source := map[core.Source]int{core.SourceCam: 1, core.SourceDVD: 5, core.SourceHDTV: 6, core.SourceWEBDL: 7, core.SourceWEBRip: 8, core.SourceBluRay: 9, core.SourceRemux: 9}[r.Info.Source]
+		source := map[core.Source]int{core.SourceCam: 1, core.SourceScreener: 5, core.SourceDVD: 5, core.SourceHDTV: 6, core.SourceWEBDL: 7, core.SourceWEBRip: 8, core.SourceBluRay: 9, core.SourceRemux: 9}[r.Info.Source]
 		return source == int(value), nil
 	case "QualityModifierSpecification":
+		// Radarr's modifier enum: NONE=0, REGIONAL=1, SCREENER=2, RAWHD=3,
+		// BRDISK=4, REMUX=5 (TRaSH's remux formats use 5).
 		modifier := 0
-		if r.Info.Source == core.SourceRemux {
-			modifier = 1
+		switch r.Info.Source {
+		case core.SourceRemux:
+			modifier = 5
+		case core.SourceScreener:
+			modifier = 2
 		}
 		return modifier == int(value), nil
 	case "SizeSpecification":
@@ -175,7 +202,7 @@ func (s *FormatScorer) ScoreWithScores(r core.Release, overrides map[string]int)
 			}
 			match, err := specMatch(spec, r)
 			if err != nil {
-				return 0, nil, fmt.Errorf("custom format %q: regex timed out", f.def.Name)
+				return 0, nil, fmt.Errorf("custom format %q: %w", f.def.Name, errFormatTimeout)
 			}
 			if spec.def.Negate {
 				match = !match

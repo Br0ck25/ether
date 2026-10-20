@@ -351,17 +351,17 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		base, err := url.Parse(strings.TrimRight(c.Config().URL, "/") + "/")
 		if err != nil {
-			return r, err
+			return r, redactURLError(err)
 		}
 		ref, err := url.Parse(rawURL)
 		if err != nil {
-			return r, err
+			return r, redactURLError(err)
 		}
 		rawURL = base.ResolveReference(ref).String()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return r, err
+		return r, redactURLError(err)
 	}
 	req.Header.Set("User-Agent", "Ether/1.0")
 	// Torznab download links commonly redirect to a magnet URI, which
