@@ -595,7 +595,9 @@ func (s *Service) Invalidate(token string) {
 // touch records activity; written to the database by FlushSeen.
 func (s *Service) touch(id int64, at time.Time) {
 	s.seenMu.Lock()
-	s.seen[id] = at
+	if at.After(s.seen[id]) {
+		s.seen[id] = at
+	}
 	s.seenMu.Unlock()
 }
 
@@ -609,10 +611,20 @@ func (s *Service) FlushSeen(ctx context.Context) error {
 	s.seenMu.Unlock()
 	for id, at := range pending {
 		if _, err := s.db.ExecContext(ctx, `UPDATE auth_users SET last_seen_at=? WHERE id=? AND last_seen_at<?`, at.Unix(), id, at.Unix()); err != nil {
+			// Keep this and the remaining observations for the next flush.
+			// Authentication may have added newer values in the meantime.
+			s.seenMu.Lock()
+			for userID, observed := range pending {
+				if observed.After(s.seen[userID]) {
+					s.seen[userID] = observed
+				}
+			}
+			s.seenMu.Unlock()
 			return err
 		}
+		delete(pending, id)
 		s.mu.Lock()
-		if r := s.users[id]; r != nil {
+		if r := s.users[id]; r != nil && at.After(r.LastSeen) {
 			r.LastSeen = at
 		}
 		s.mu.Unlock()
