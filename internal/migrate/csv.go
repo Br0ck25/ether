@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"errors"
@@ -28,7 +29,16 @@ func (s *Service) PreviewCSV(ctx context.Context, viewer int64, format, kind str
 	if kind != "history" && kind != "ratings" && kind != "watchlist" {
 		return p, errors.New("kind must be history, ratings or watchlist")
 	}
-	rd := csv.NewReader(io.LimitReader(r, 16<<20))
+	// Read one byte beyond the limit so an oversized file cannot masquerade
+	// as EOF and leave the owner with a silently truncated import plan.
+	input, e := io.ReadAll(io.LimitReader(r, (16<<20)+1))
+	if e != nil {
+		return p, e
+	}
+	if len(input) > 16<<20 {
+		return p, errors.New("CSV size limit exceeded")
+	}
+	rd := csv.NewReader(bytes.NewReader(input))
 	header, e := rd.Read()
 	if e != nil {
 		return p, e
