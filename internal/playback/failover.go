@@ -250,6 +250,13 @@ func (m *Manager) startIndexFill(g *generation) {
 		}
 		g.setIndex(points)
 		s := g.sess
+		// Seeking uses the index at once; persisting it for later resumes
+		// can take seconds (or wait out a database outage).
+		s.mu.Lock()
+		if s.virtualGen == g {
+			s.virtual.Points = points
+		}
+		s.mu.Unlock()
 		if m.resume != nil {
 			ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 			if err := m.resume.saveIndex(ctx, s.ident.userID, s.ident.key, g.releaseID(), keyframesOf(points)); err != nil {
@@ -263,11 +270,6 @@ func (m *Manager) startIndexFill(g *generation) {
 			}
 			cancel()
 		}
-		s.mu.Lock()
-		if s.virtualGen == g {
-			s.virtual.Points = points
-		}
-		s.mu.Unlock()
 	}()
 }
 

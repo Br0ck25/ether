@@ -63,8 +63,8 @@ func TestReconcileBoundsPinsToBudgetShare(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	ctx := context.Background()
 	now := h.clock.Now()
-	h.cache.budget = 1000 // default 50% share -> 500 bytes of pins
-	h.cache.bytes = map[string]int64{"newest": 300, "middle": 300, "oldest": 150}
+	// default 50% share -> 500 bytes of pins
+	h.cache.setSizes(1000, map[string]int64{"newest": 300, "middle": 300, "oldest": 150})
 	h.saveResume(owner.ID, movieKey, "newest", 0, now.Add(-time.Hour))
 	h.saveResume(owner.ID, movie2, "middle", 0, now.Add(-2*time.Hour))
 	h.saveResume(owner.ID, movie3, "oldest", 0, now.Add(-3*time.Hour))
