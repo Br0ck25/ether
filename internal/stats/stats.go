@@ -115,6 +115,7 @@ func (s *Service) ObservePlayback(ev playback.Event) {
 		s.opts.Logger.Warn("record playback stats", "err", err)
 	}
 }
+
 // Record upserts a play. On a clustered node a record the database cannot
 // take is held and written when it is back.
 func (s *Service) Record(ctx context.Context, p *core.PlaySession, ended bool, problem string) error {
