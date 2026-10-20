@@ -369,6 +369,7 @@ type remoteFile struct {
 	pl        Payload
 	gen       int
 	linkFails int
+	failedGen int // gen+1 of the last link counted in linkFails (0 none)
 
 	bmu     sync.Mutex
 	flights map[int64]*blockFlight
@@ -783,7 +784,7 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 				return nil, tm, err
 			}
 			f.mu.Lock()
-			f.linkFails = 0
+			f.linkFails, f.failedGen = 0, 0
 			f.mu.Unlock()
 			return resp.Body, tm, nil
 		case resp.StatusCode == http.StatusOK && start == 0:
@@ -795,10 +796,23 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
 			resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusOK:
 			drain(resp)
+			// Each link counts once however many concurrent reads see it
+			// fail, and a read that started on a link another read has
+			// since replaced just retries with the new one: a slow refresh
+			// (e.g. over a remote database) must not exhaust the budget on
+			// one revoked link.
 			f.mu.Lock()
-			f.linkFails++
+			stale := f.gen != gen
+			if !stale && f.failedGen != gen+1 {
+				f.failedGen = gen + 1
+				f.linkFails++
+			}
 			fails := f.linkFails
 			f.mu.Unlock()
+			if stale {
+				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+				continue
+			}
 			if fails > maxLinkFailures {
 				return nil, tm, fmt.Errorf("debrid: link for %s keeps failing (HTTP %d): %w", f.name(), resp.StatusCode, core.ErrArticleMissing)
 			}
