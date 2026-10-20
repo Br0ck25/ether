@@ -54,6 +54,7 @@ func isStingerName(s string) bool {
 func StingersFromChapters(info core.MediaInfo) []Stinger {
 	var out []Stinger
 	for i, c := range info.Chapters {
+		c.End = chapterEnd(c, info.Duration)
 		if c.Start < 0 || c.End <= c.Start || c.End > info.Duration {
 			continue
 		}

@@ -58,8 +58,9 @@ func TestWriteServesIgnoresDuplicatePositionsAndTouchesForward(t *testing.T) {
 			{key: k, hubID: "home.top10", kind: KindTop10, rowPos: 1, itemPos: 0},
 			{key: k, hubID: "home.top10", kind: KindTop10, rowPos: 1, itemPos: 0},
 		}}
-	ids := map[int64]int64{}
+	ids := newServeIDs()
 	ops := []serveOp{
+		{touch: 7, at: testNow.Add(2 * time.Minute)}, // queued just ahead of its serve
 		{rec: rec},
 		{touch: 7, at: testNow.Add(5 * time.Minute)},
 		{touch: 7, at: testNow.Add(time.Minute)}, // late, out of order
@@ -68,14 +69,14 @@ func TestWriteServesIgnoresDuplicatePositionsAndTouchesForward(t *testing.T) {
 	if err := writeServes(ctx, h.db, ops, ids); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := ids[7]; !ok {
+	if _, ok := ids.m[7]; !ok {
 		t.Fatal("serve handle not mapped after commit")
 	}
 	if n := h.count(`SELECT COUNT(*) FROM personalize_serve_items`); n != 1 {
 		t.Fatalf("serve items = %d, want 1", n)
 	}
-	if n := h.count(`SELECT repeats FROM personalize_serves`); n != 3 {
-		t.Fatalf("repeats = %d, want 3", n)
+	if n := h.count(`SELECT repeats FROM personalize_serves`); n != 4 {
+		t.Fatalf("repeats = %d, want 4", n)
 	}
 	var last int64
 	if err := h.db.QueryRow(`SELECT last_at FROM personalize_serves`).Scan(&last); err != nil {
@@ -83,5 +84,33 @@ func TestWriteServesIgnoresDuplicatePositionsAndTouchesForward(t *testing.T) {
 	}
 	if want := ms(testNow.Add(5 * time.Minute)); last != want {
 		t.Fatalf("last_at = %d, want %d", last, want)
+	}
+}
+
+// A full handle map forgets the least recently used handles, never a serve
+// that is still being repeated: its touches keep extending last_at, which
+// decides whether a later play is attributed to it.
+func TestServeIDsEvictLeastRecentlyUsed(t *testing.T) {
+	ids := newServeIDs()
+	// Handle 1: a screen left on Home, re-served throughout.
+	ids.record(map[int64]int64{1: 101}, nil)
+	for h := int64(2); h <= maxServeIDs+10; h++ {
+		var touched []int64
+		if h%100 == 0 {
+			touched = []int64{1}
+		}
+		ids.record(map[int64]int64{h: 100 + h}, touched)
+	}
+	if len(ids.m) > maxServeIDs {
+		t.Fatalf("handles = %d, want at most %d", len(ids.m), maxServeIDs)
+	}
+	if e, ok := ids.m[1]; !ok || e.db != 101 {
+		t.Fatalf("live serve's handle was evicted: %+v %v", e, ok)
+	}
+	if _, ok := ids.m[maxServeIDs+10]; !ok {
+		t.Fatal("newest handle was evicted")
+	}
+	if _, ok := ids.m[2]; ok {
+		t.Fatal("stale handle kept")
 	}
 }
