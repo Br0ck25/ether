@@ -613,11 +613,11 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Leave the cluster last, after background work has stopped.
 	defer a.cluster.Close()
-	if err := a.cluster.Start(ctx); err != nil {
-		if errors.Is(err, cluster.ErrDuplicateNode) {
-			return err
+	if err := a.startCluster(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return a.runResult()
 		}
-		a.log.Warn("cluster", "err", err)
+		return err
 	}
 	var background backgroundGroup
 	defer background.Wait()
@@ -626,9 +626,11 @@ func (a *App) Run(ctx context.Context) error {
 	// Singleton work runs only on the cluster leader (always, standalone).
 	// trakt.Start stays on every node: it delivers this node's own
 	// scrobbles, and its import queue is claimed per row.
-	go a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run)
-	go a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run)
-	go a.trakt.Start(ctx)
+	// Tracked like every other background loop, so Run returns (and the
+	// caller closes the database) only after they have stopped.
+	background.start(func() { a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run) })
+	background.start(func() { a.trakt.Start(ctx) })
 	background.start(func() { a.load.Run(ctx) })
 	if a.clustered() {
 		background.start(func() { a.runRegistrarAsLeader(ctx) })

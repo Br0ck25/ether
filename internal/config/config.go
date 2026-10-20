@@ -4,8 +4,10 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -417,7 +419,7 @@ func Open(dataDir string) (*Store, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(plain, &s.cfg); err != nil {
+		if s.cfg, err = decodeOverDefaults(s.cfg, plain); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", s.path, err)
 		}
 		if !strings.Contains(string(b), sealedPrefix) {
@@ -433,6 +435,73 @@ func Open(dataDir string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// Read loads dataDir's settings without creating or rewriting anything:
+// no directory, no credential key and no re-sealed config.json, unlike
+// Open. It is for other processes (the tray) that only look at the
+// server's settings and must not race its writes. Sealed credentials need
+// the existing credential key.
+func Read(dataDir string) (Config, error) {
+	path := filepath.Join(dataDir, "config.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, err
+	}
+	plain := b
+	if strings.Contains(string(b), sealedPrefix) {
+		key, err := ReadCredentialKey(dataDir)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: credential key: %w", err)
+		}
+		if plain, err = transformCredentials(b, key, false); err != nil {
+			return Config{}, err
+		}
+	}
+	cfg, err := decodeOverDefaults(Defaults(dataDir), plain)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// decodeOverDefaults decodes the config document b over defaults. The
+// merge happens on the JSON documents (objects recursively, see mergeDoc)
+// and the result is decoded into a fresh Config: json.Unmarshal
+// straight into defaults would decode a file's array elements into the
+// default slice's existing elements, so a saved element would inherit every
+// default field the file omits (omitempty zero values) — a saved quality
+// rule {"platform":"iOS"} would come back still matching the default rule's
+// "Apple TV" product.
+func decodeOverDefaults(defaults Config, b []byte) (Config, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var file map[string]any
+	if err := dec.Decode(&file); err != nil {
+		return Config{}, err
+	}
+	// Like json.Unmarshal, reject anything after the document.
+	if _, err := dec.Token(); err != io.EOF {
+		return Config{}, fmt.Errorf("invalid data after the top-level value")
+	}
+	doc := toDoc(defaults)
+	mergeDoc(doc, file)
+	return fromDoc(doc)
+}
+
+// mergeDoc overlays src onto dst recursively: objects merge key by key at
+// every depth (a key the file lacks keeps its default, however deeply
+// nested), while arrays and scalars replace dst's value whole.
+func mergeDoc(dst, src map[string]any) {
+	for k, v := range src {
+		if obj, ok := v.(map[string]any); ok {
+			if target, ok := dst[k].(map[string]any); ok {
+				mergeDoc(target, obj)
+				continue
+			}
+		}
+		dst[k] = v
+	}
 }
 
 func (s *Store) Path() string { return s.path }

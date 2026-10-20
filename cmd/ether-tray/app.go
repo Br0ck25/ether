@@ -69,8 +69,7 @@ func newApp(log *slog.Logger) *app {
 	}
 	dataDir := config.DefaultDataDir()
 	cfg := config.Updates{Channel: "stable"}
-	if store, err := openServerConfig(dataDir); err == nil {
-		c := store.Get()
+	if c, err := openServerConfig(dataDir); err == nil {
 		cfg = c.Updates
 		if c.Server.Port != 0 && os.Getenv("ETHER_URL") == "" {
 			base = fmt.Sprintf("http://127.0.0.1:%d", c.Server.Port)
@@ -112,17 +111,14 @@ func newApp(log *slog.Logger) *app {
 	return a
 }
 
-// openServerConfig opens the server's config only when config.json is
-// already readable. config.Open creates the directory, config.json and the
-// credential key when they are missing, which the tray must never do: it
-// would leave user-owned files in the service's data directory.
-func openServerConfig(dataDir string) (*config.Store, error) {
-	f, err := os.Open(filepath.Join(dataDir, "config.json"))
-	if err != nil {
-		return nil, err
-	}
-	f.Close()
-	return config.Open(dataDir)
+// openServerConfig reads the server's config without writing anything.
+// config.Open creates the directory, config.json and the credential key
+// when they are missing, and rewrites an unsealed config.json, which the
+// tray must never do: it would leave user-owned files in the service's
+// data directory, and a rewrite racing the server's own save would put
+// stale settings back.
+func openServerConfig(dataDir string) (config.Config, error) {
+	return config.Read(dataDir)
 }
 
 // serverExecutable locates the ether server binary relative to the tray:

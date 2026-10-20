@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -68,6 +69,42 @@ func (a *App) buildCluster(dialect store.Dialect) error {
 	// database is still open.
 	a.closers = append(a.closers, func() { _ = pg.Close() })
 	return nil
+}
+
+// clusterStartRetryMin / Max bound the backoff while joining the cluster
+// fails at startup.
+var (
+	clusterStartRetryMin = time.Second
+	clusterStartRetryMax = 30 * time.Second
+)
+
+// startCluster joins the cluster, retrying failures other than a
+// duplicate node identity (the database became unreachable between
+// opening it and joining). A node that gave up after one failed attempt
+// would serve without heartbeats, leadership or the event bus until it was
+// restarted, so singleton work would never run on it; like the database
+// wait in New, nothing listens meanwhile. It returns ctx.Err() if ctx ends
+// first.
+func (a *App) startCluster(ctx context.Context) error {
+	wait := clusterStartRetryMin
+	for attempt := 1; ; attempt++ {
+		err := a.cluster.Start(ctx)
+		if err == nil || errors.Is(err, cluster.ErrDuplicateNode) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		a.log.Warn("cluster: could not join; retrying", "attempt", attempt, "retry", wait, "err", err)
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+		wait = min(wait*2, clusterStartRetryMax)
+	}
 }
 
 // clustered reports whether this node shares a PostgreSQL database with

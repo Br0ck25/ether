@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -157,5 +159,52 @@ func TestClusterWiringPostgres(t *testing.T) {
 	if st.Mode != cluster.ModePostgres || st.Leader != a.clusterNodeID() || st.Epoch < 1 || len(st.Nodes) != 1 ||
 		!st.Nodes[0].Live || st.Health == nil || !st.Health.BusConnected {
 		t.Fatalf("status %+v", st)
+	}
+}
+
+// flakyStart is a clustered runtime whose Start fails a few times first.
+type flakyStart struct {
+	*cluster.Solo
+	fails  int
+	starts int
+	err    error
+}
+
+func (f *flakyStart) Start(context.Context) error {
+	f.starts++
+	if f.starts <= f.fails {
+		return f.err
+	}
+	return nil
+}
+
+func TestStartClusterRetriesTransientFailures(t *testing.T) {
+	defer func(lo, hi time.Duration) { clusterStartRetryMin, clusterStartRetryMax = lo, hi }(clusterStartRetryMin, clusterStartRetryMax)
+	clusterStartRetryMin, clusterStartRetryMax = time.Millisecond, 2*time.Millisecond
+	solo := cluster.NewSolo(cluster.Local{Identity: cluster.Identity{NodeID: "self"}}, nil)
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// A database blip while joining must not leave the node outside the
+	// cluster (no heartbeat, never leader) for the rest of the process.
+	f := &flakyStart{Solo: solo, fails: 2, err: errors.New("cluster: database connection: connection refused")}
+	a := &App{cluster: f, log: quiet}
+	if err := a.startCluster(context.Background()); err != nil || f.starts != 3 {
+		t.Fatalf("err %v after %d starts", err, f.starts)
+	}
+
+	// A duplicate node identity is final.
+	dup := &flakyStart{Solo: solo, fails: 5, err: fmt.Errorf("%w (node ID x)", cluster.ErrDuplicateNode)}
+	a = &App{cluster: dup, log: quiet}
+	if err := a.startCluster(context.Background()); !errors.Is(err, cluster.ErrDuplicateNode) || dup.starts != 1 {
+		t.Fatalf("duplicate: err %v after %d starts", err, dup.starts)
+	}
+
+	// Shutdown while waiting ends the retries.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	down := &flakyStart{Solo: solo, fails: 1 << 30, err: errors.New("unreachable")}
+	a = &App{cluster: down, log: quiet}
+	if err := a.startCluster(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled: err %v", err)
 	}
 }

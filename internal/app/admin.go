@@ -222,14 +222,19 @@ func (p *plexSignIn) StartPIN(ctx context.Context, forwardURL string) (id, code,
 }
 
 func (p *plexSignIn) PINToken(ctx context.Context, id string) (string, error) {
+	// AuthToken is written under mu by a concurrent poll; read it there too.
 	p.mu.Lock()
 	pin := p.pins[id]
+	var token string
+	if pin != nil {
+		token = pin.AuthToken
+	}
 	p.mu.Unlock()
 	if pin == nil || (!pin.ExpiresAt.IsZero() && time.Now().After(pin.ExpiresAt)) {
 		return "", errors.New("unknown sign-in request")
 	}
-	if pin.AuthToken != "" {
-		return pin.AuthToken, nil
+	if token != "" {
+		return token, nil
 	}
 	got, err := p.app.registrar.SignInClient().CheckPIN(ctx, pin.ID, pin.Code)
 	if err != nil {

@@ -15,3 +15,28 @@ func TestOpenServerConfigNeverCreates(t *testing.T) {
 		t.Fatalf("tray created the server data dir: %v", err)
 	}
 }
+
+// Reading an existing, unsealed config must not rewrite it or mint a
+// credential key in the server's data directory.
+func TestOpenServerConfigNeverWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	doc := []byte(`{"server":{"port":32500},"updates":{"channel":"beta"}}`)
+	if err := os.WriteFile(path, doc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := openServerConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.Port != 32500 || c.Updates.Channel != "beta" {
+		t.Fatalf("read %+v %+v", c.Server, c.Updates)
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(doc) {
+		t.Fatalf("config.json rewritten:\n%s", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("tray created files in the data dir: %v", entries)
+	}
+}
