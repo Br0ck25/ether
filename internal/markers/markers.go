@@ -80,10 +80,26 @@ func valid(m Marker, d time.Duration) bool {
 	return (m.Type == "intro" || m.Type == "credits" || m.Type == "recap") && m.StartMS >= 0 && m.EndMS > m.StartMS && m.EndMS <= d.Milliseconds()
 }
 
+// chapterSlack is how far a chapter may end past the media duration and
+// still be read as ending at it: container durations and the last
+// chapter's end are probed separately and routinely disagree by a few
+// milliseconds.
+const chapterSlack = 2 * time.Second
+
+// chapterEnd is a chapter's end, snapped to the duration when it overruns
+// it by no more than chapterSlack.
+func chapterEnd(c core.Chapter, d time.Duration) time.Duration {
+	if d > 0 && c.End > d && c.End-d <= chapterSlack {
+		return d
+	}
+	return c.End
+}
+
 // FromChapters uses explicit chapter labels only; generic Chapter 01 is not evidence.
 func FromChapters(info core.MediaInfo) []Marker {
 	var out []Marker
 	for _, c := range info.Chapters {
+		c.End = chapterEnd(c, info.Duration)
 		label := strings.ToLower(strings.TrimSpace(c.Title))
 		kind := ""
 		switch label {
@@ -301,6 +317,14 @@ func (s *Service) shiftToPlayed(ctx context.Context, key core.RatingKey, remote 
 	clamp := func(in []Marker) []Marker {
 		out := in[:0]
 		for _, m := range in {
+			// A marker that runs to the reference tail (an open-ended
+			// credits range) runs to ours: unshifted, it would end past a
+			// shorter played release and be dropped, or stop short of a
+			// longer one's end and lose final.
+			if ref > 0 && m.EndMS >= ref.Milliseconds()-500 && m.StartMS < played.Milliseconds() {
+				m.EndMS = played.Milliseconds()
+				m.Final = m.Type == "credits"
+			}
 			if valid(m, played) {
 				out = append(out, m)
 			}

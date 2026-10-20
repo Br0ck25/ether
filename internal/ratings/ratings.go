@@ -215,21 +215,26 @@ func (s *Service) Refresh(ctx context.Context, t *core.Title) ([]Badge, error) {
 		return nil, errors.New("rating provider unavailable")
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("rating provider: HTTP %d", resp.StatusCode)
-	}
-	data, e := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if e != nil {
-		return nil, errors.New("rating response unreadable")
-	}
 	var badges []Badge
-	if cfg.Provider == "omdb" {
-		badges, e = parseOMDb(data)
-	} else {
-		badges, e = parseMDBList(data)
-	}
-	if e != nil {
-		return nil, e
+	switch {
+	case resp.StatusCode == http.StatusNotFound && cfg.Provider == "mdblist":
+		// MDBList does not know the title: a definite answer, cached like
+		// one so the owner's quota is not spent asking again every retry.
+	case resp.StatusCode != 200:
+		return nil, fmt.Errorf("rating provider: HTTP %d", resp.StatusCode)
+	default:
+		data, e := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if e != nil {
+			return nil, errors.New("rating response unreadable")
+		}
+		if cfg.Provider == "omdb" {
+			badges, e = parseOMDb(data)
+		} else {
+			badges, e = parseMDBList(data)
+		}
+		if e != nil {
+			return nil, e
+		}
 	}
 	if badges == nil {
 		badges = []Badge{}
@@ -244,6 +249,7 @@ func (s *Service) Refresh(ctx context.Context, t *core.Title) ([]Badge, error) {
 func parseOMDb(data []byte) ([]Badge, error) {
 	var response struct {
 		Response string
+		Error    string
 		Ratings  []struct {
 			Source string
 			Value  string
@@ -253,6 +259,11 @@ func parseOMDb(data []byte) ([]Badge, error) {
 		return nil, errors.New("invalid OMDb response")
 	}
 	if response.Response == "False" {
+		// A title OMDb does not have is a definite answer (no ratings),
+		// cached like one; key, quota and server errors are retried.
+		if msg := strings.ToLower(response.Error); strings.Contains(msg, "not found") || strings.Contains(msg, "incorrect imdb id") {
+			return []Badge{}, nil
+		}
 		return nil, errors.New("OMDb lookup failed")
 	}
 	var out []Badge

@@ -129,16 +129,31 @@ type serveWriter struct {
 	// ids maps the engine-local serve handles (serveRec.id, which repeats
 	// touch) onto the ids the database assigned. Nodes of a cluster share
 	// one database, so serve ids are never chosen locally. Owned by run.
-	ids map[int64]int64
+	ids *serveIDs
 }
 
-// maxServeIDs bounds the handle map; a repeat of a forgotten serve is
-// simply not counted.
+// maxServeIDs bounds the handle map. The least recently used handles are
+// forgotten first; a repeat of a forgotten serve is simply not counted.
 const maxServeIDs = 8192
+
+// serveIDs maps local serve handles onto database serve ids.
+type serveIDs struct {
+	m map[int64]serveHandle
+	// top is the newest handle seen: handles are allocated in increasing
+	// order, so it is the clock used to judge recency.
+	top int64
+}
+
+type serveHandle struct {
+	db   int64 // database serve id
+	used int64 // top when the handle was last created or touched
+}
+
+func newServeIDs() *serveIDs { return &serveIDs{m: map[int64]serveHandle{}} }
 
 func newServeWriter(db *sql.DB, log *slog.Logger, buffer int, every time.Duration, stop <-chan struct{}) *serveWriter {
 	return &serveWriter{db: db, log: log, ch: make(chan serveOp, buffer), flushReq: make(chan chan struct{}), every: every, stop: stop,
-		ids: map[int64]int64{}}
+		ids: newServeIDs()}
 }
 
 func (w *serveWriter) enqueue(op serveOp) bool {
@@ -218,8 +233,13 @@ func (w *serveWriter) run(ctx context.Context) {
 
 // writeServes writes a batch in one transaction. New serves get their id
 // from the database (ids maps each local handle onto it, for later
-// touches); ids is only updated once the batch commits.
-func writeServes(ctx context.Context, db *sql.DB, ops []serveOp, ids map[int64]int64) error {
+// touches); ids is only updated once the batch commits. New serves are
+// written before touches, so a repeat queued just ahead of its own serve
+// (two requests racing in logServe) still finds it.
+func writeServes(ctx context.Context, db *sql.DB, ops []serveOp, ids *serveIDs) error {
+	if ids == nil {
+		ids = newServeIDs()
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -247,16 +267,6 @@ func writeServes(ctx context.Context, db *sql.DB, ops []serveOp, ids map[int64]i
 	fresh := map[int64]int64{}
 	for _, op := range ops {
 		if op.rec == nil {
-			id, ok := fresh[op.touch]
-			if !ok {
-				id, ok = ids[op.touch]
-			}
-			if !ok {
-				continue
-			}
-			if _, err := touchStmt.ExecContext(ctx, ms(op.at), ms(op.at), id); err != nil {
-				return err
-			}
 			continue
 		}
 		r := op.rec
@@ -274,18 +284,61 @@ func writeServes(ctx context.Context, db *sql.DB, ops []serveOp, ids map[int64]i
 			}
 		}
 	}
+	var touched []int64
+	for _, op := range ops {
+		if op.rec != nil {
+			continue
+		}
+		id, ok := fresh[op.touch]
+		if !ok {
+			var h serveHandle
+			h, ok = ids.m[op.touch]
+			id = h.db
+		}
+		if !ok {
+			continue
+		}
+		if _, err := touchStmt.ExecContext(ctx, ms(op.at), ms(op.at), id); err != nil {
+			return err
+		}
+		touched = append(touched, op.touch)
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if ids != nil {
-		if len(ids)+len(fresh) > maxServeIDs {
-			clear(ids)
-		}
-		for k, v := range fresh {
-			ids[k] = v
+	ids.record(fresh, touched)
+	return nil
+}
+
+// record remembers a committed batch's new handles and marks the touched
+// ones as recently used, then evicts the least recently used half when
+// the map is full. A long-lived serve (a screen left on Home, re-served
+// every few minutes) keeps being touched and so is never evicted.
+func (s *serveIDs) record(fresh map[int64]int64, touched []int64) {
+	for h := range fresh {
+		s.top = max(s.top, h)
+	}
+	for h, id := range fresh {
+		s.m[h] = serveHandle{db: id, used: h}
+	}
+	for _, h := range touched {
+		if e, ok := s.m[h]; ok {
+			e.used = s.top
+			s.m[h] = e
 		}
 	}
-	return nil
+	if len(s.m) <= maxServeIDs {
+		return
+	}
+	cut := s.top - maxServeIDs/2
+	for h, e := range s.m {
+		if e.used <= cut {
+			delete(s.m, h)
+		}
+	}
+	if len(s.m) > maxServeIDs {
+		clear(s.m)
+	}
 }
 
 // encodeFeatures packs a feature snapshot as little-endian float32s.
