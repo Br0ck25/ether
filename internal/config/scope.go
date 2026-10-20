@@ -60,6 +60,8 @@ var mixedSections = map[string]map[string]Scope{
 		"machineIdentifier":  Shared, // one server identity for the cluster
 		"defaultStreamLimit": Shared,
 		"maxStreams":         Shared,
+		// This node's part of account-wide budgets in a cluster.
+		"clusterWeight": Local,
 	},
 	"plex": {
 		"disableCleanHome":           Shared,

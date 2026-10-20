@@ -166,8 +166,11 @@ type Fetcher struct {
 	pools  []*pool   // every enabled provider, in config order
 	tiers  [][]*pool // try order
 	closed bool
-	gen    atomic.Uint64
-	rr     atomic.Uint64
+	// share maps a provider's configured connections to this node's part
+	// of them (clustered); nil uses every configured connection.
+	share func(configured int) int
+	gen   atomic.Uint64
+	rr    atomic.Uint64
 
 	misses *missCache
 }
@@ -215,6 +218,7 @@ func (f *Fetcher) Update(providers []config.UsenetProvider) {
 		if p == nil {
 			key := cmp.Or(cfg.ID, cfg.Host) + "#" + strconv.FormatUint(f.gen.Add(1), 10)
 			p = newPool(key, cfg, &f.o, f.log)
+			p.setShare(shareFor(f.share, p.size))
 		}
 		reused[p] = true
 		next = append(next, p)
@@ -372,7 +376,7 @@ func (f *Fetcher) StatMany(ctx context.Context, messageIDs []string) (map[string
 		if len(unresolved) == 0 {
 			break
 		}
-		workers := min(4, p.size, len(unresolved))
+		workers := min(4, p.target(), len(unresolved))
 		if workers < 1 {
 			workers = 1
 		}
@@ -572,18 +576,47 @@ func (f *Fetcher) Stats() []ProviderStats {
 	return out
 }
 
-// MaxConnections is the sum of all enabled providers' connection limits
-// (used to derive a server-wide stream cap).
+// MaxConnections is the sum of all enabled primary providers' connection
+// limits on this node: the configured counts, or this node's shares of
+// them when SetConnectionShare divides them among cluster nodes.
 func (f *Fetcher) MaxConnections() int {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	n := 0
 	for _, p := range f.pools {
 		if !p.cfg.Backfill {
-			n += p.size
+			n += p.target()
 		}
 	}
 	return n
+}
+
+// SetConnectionShare divides provider connection limits among cluster
+// nodes: share receives a provider's configured connection count (the
+// account-wide limit) and returns this node's part of it, clamped to
+// 1..configured. Nil restores the configured counts (a standalone server).
+// Pools resize in place and gracefully (see pool.setShare); providers
+// added later by Update get their share as they are created. Call it again
+// whenever membership changes.
+func (f *Fetcher) SetConnectionShare(share func(configured int) int) {
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return
+	}
+	f.share = share
+	pools := slices.Clone(f.pools)
+	f.mu.Unlock()
+	for _, p := range pools {
+		p.setShare(shareFor(share, p.size))
+	}
+}
+
+func shareFor(share func(int) int, configured int) int {
+	if share == nil {
+		return 0
+	}
+	return min(max(share(configured), 1), configured)
 }
 
 // Close closes every pool. Further requests fail with ErrNoProviders.

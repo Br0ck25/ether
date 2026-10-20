@@ -88,10 +88,11 @@ func (a *App) nodeAddrs(ctx context.Context) []string {
 }
 
 func (a *App) nodeCaps() cluster.Caps {
-	if a.transcoder == nil {
-		return cluster.Caps{}
+	caps := cluster.Caps{Weight: a.cfg.Get().Server.ClusterWeight}
+	if a.transcoder != nil {
+		caps.Transcode, caps.HWAccel = true, a.transcoder.HWAccel().Name
 	}
-	return cluster.Caps{Transcode: true, HWAccel: a.transcoder.HWAccel().Name}
+	return caps
 }
 
 func (a *App) nodeLoad() int {

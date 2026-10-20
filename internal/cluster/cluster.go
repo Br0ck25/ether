@@ -60,6 +60,9 @@ type Caps struct {
 	// HWAccel names the hardware transcoder ("videotoolbox", "nvenc", …);
 	// empty or "none" for software only.
 	HWAccel string `json:"hwAccel,omitempty"`
+	// Weight is the node's share weight for account-wide budgets such as
+	// Usenet connections (config server.clusterWeight; 0 means 1).
+	Weight int `json:"weight,omitempty"`
 }
 
 // Node is one cluster member.

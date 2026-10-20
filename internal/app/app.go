@@ -537,6 +537,7 @@ func (a *App) Run(ctx context.Context) error {
 	})
 	background.start(func() { a.runUpdates(ctx, cancel) })
 	background.start(func() { a.runClusterSync(ctx) })
+	background.start(func() { a.runBudgets(ctx) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)
