@@ -552,6 +552,7 @@ export default function LiveTV() {
         draft={draft}
         onChange={setDraft}
         isNew={selection.kind === "new"}
+        dirty={dirty}
         guide={(id && guide.get(id)) || []}
         coverage={id ? coverage?.get(id) : undefined}
         sources={sources}

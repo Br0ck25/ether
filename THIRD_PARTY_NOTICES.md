@@ -96,6 +96,7 @@ binary. The bundle includes these packages (exact versions are pinned in
 | `react`, `react-dom`, `react-router`, `react-router-dom` | UI runtime and routing | MIT |
 | `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` | Accessible drag-to-reorder | MIT |
 | `lucide-react` | Icons | ISC |
+| `hls.js` | Owner Live TV preview player (loaded on demand) | Apache-2.0 |
 | `framer-motion` (+ `motion-dom`, `motion-utils`) | AppKit interaction motion | MIT |
 | `clsx`, `tailwind-merge` | Class composition (via AppKit) | MIT |
 | `class-variance-authority` | Component variants (via AppKit) | Apache-2.0 |

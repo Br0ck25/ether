@@ -5,6 +5,21 @@ import LiveTV from "../pages/livetv/LiveTV";
 import { calls as fakeCalls } from "./harness";
 import { renderAppWith } from "./routes";
 
+const hlsLoads = vi.hoisted(() => [] as string[]);
+vi.mock("hls.js", () => {
+  class FakeHls {
+    static Events = { ERROR: "hlsError", LEVEL_SWITCHED: "hlsLevelSwitched" };
+    static isSupported = () => true;
+    on() {}
+    attachMedia() {}
+    loadSource(u: string) {
+      hlsLoads.push(u);
+    }
+    destroy() {}
+  }
+  return { default: FakeHls };
+});
+
 const WAIT = { timeout: 4000 };
 
 function renderLiveTV(path = "/livetv") {
@@ -288,6 +303,25 @@ describe("Live TV studio", () => {
       { url: "https://iptv.example/news.m3u8", enabled: true, priority: 0 },
       { url: "https://backup.example/news.m3u8", enabled: true, priority: 1 },
     ]);
+  });
+});
+
+describe("Live TV preview player", () => {
+  it("tunes the saved channel in a mini player and stops the session on close", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const calls = backend([iptv("c1")], (url, init) => {
+      if (url.endsWith("/livetv/channels/c1/play") && init?.method === "POST")
+        return { id: "s1", playlist: "sessions/s1/index.m3u8", activeSourceName: "Samsung" };
+      return undefined;
+    });
+    renderLiveTV("/livetv?channel=c1");
+    fireEvent.click(await screen.findByRole("button", { name: "Watch" }, WAIT));
+    const player = await screen.findByRole("dialog", { name: "Watching News 24" });
+    await waitFor(() => expect(hlsLoads).toContain("/ether/api/livetv/sessions/s1/index.m3u8"));
+    expect(await within(player).findByText("via Samsung")).toBeInTheDocument();
+    fireEvent.click(within(player).getByRole("button", { name: "Stop watching" }));
+    await waitFor(() => expect(sent(calls, "DELETE", /\/livetv\/sessions\/s1$/)).toHaveLength(1));
+    expect(screen.queryByRole("dialog", { name: "Watching News 24" })).toBeNull();
   });
 });
 

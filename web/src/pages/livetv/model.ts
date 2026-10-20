@@ -52,6 +52,14 @@ export type SourceStatus = {
   retryAfter?: string;
   lastError?: string;
 };
+export type PreviewSession = {
+  id: string;
+  /** Relative to the livetv API, e.g. "sessions/{id}/index.m3u8". */
+  playlist: string;
+  activeSourceId?: string;
+  activeSourceName?: string;
+  programme?: Programme;
+};
 export type Source = {
   id: string;
   name: string;
@@ -132,6 +140,10 @@ export const tv = {
     );
     return Array.isArray(r) ? r : (r?.sources ?? []);
   },
+  play: (id: string) =>
+    apiFetch<PreviewSession>(`/livetv/channels/${enc(id)}/play`, { method: "POST", body: "{}" }),
+  stopPreview: (session: string) =>
+    apiFetch(`/livetv/sessions/${enc(session)}`, { method: "DELETE" }),
   deleteChannel: (id: string) => apiFetch(`/livetv/channels/${enc(id)}`, { method: "DELETE" }),
   preview: (c: Channel, signal?: AbortSignal) =>
     apiFetch<Programme[]>("/livetv/preview", { ...json("POST", c), signal }),

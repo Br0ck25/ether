@@ -71,6 +71,7 @@ func (s *Service) Handler() http.Handler {
 		ownerResult(w, v, e)
 	})
 	s.guideRoutes(r)
+	s.previewRoutes(r, owner)
 	r.Get("/guide.xml", func(w http.ResponseWriter, r *http.Request) { s.ServeXMLTV(w, r, owner) })
 	r.Get("/policies/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, e := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)

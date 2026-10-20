@@ -322,6 +322,20 @@ export function createLiveTVMock(titles: FakeTitle[]) {
         },
       };
     }
+    if (method === "POST" && seg[1] === "channels" && seg[3] === "play")
+      return {
+        body: {
+          id: "mock-session",
+          playlist: "sessions/mock-session/index.m3u8",
+          activeSourceName: "Primary stream",
+          programme: schedule(
+            channels.find((c) => c.id === seg[2]) ?? channels[0]!,
+            now,
+            now + 1,
+          )[0],
+        },
+      };
+    if (method === "DELETE" && seg[1] === "sessions") return { body: { ok: true } };
     if (route === "POST /preview") {
       const c = body as Channel;
       return { body: schedule({ ...c, id: c.id || "draft" }, now, now + 6 * 3600e3) };

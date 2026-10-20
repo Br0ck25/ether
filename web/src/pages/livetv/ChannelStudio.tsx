@@ -12,9 +12,11 @@ import {
   Clapperboard,
   Film,
   Layers,
+  Play,
   Plus,
   Radio,
   Sparkles,
+  Square,
   Star,
   Tags,
   Trash2,
@@ -32,6 +34,7 @@ import { plural, relativeTime } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/hooks";
 import { ChannelLogo } from "./ChannelLogo";
 import { MapGuideButton } from "./GuideData";
+import { LivePreview } from "./LivePreview";
 import { ProgrammePicker } from "./ProgrammePicker";
 import { Timeline } from "./Timeline";
 import {
@@ -127,6 +130,7 @@ export function ChannelStudio({
   draft,
   onChange,
   isNew,
+  dirty,
   guide,
   coverage,
   sources,
@@ -139,6 +143,8 @@ export function ChannelStudio({
   draft: StudioDraft;
   onChange: (d: StudioDraft) => void;
   isNew: boolean;
+  /** Unsaved edits: the player still tunes the saved channel. */
+  dirty?: boolean;
   guide: Programme[];
   coverage?: Coverage;
   sources: Source[];
@@ -152,6 +158,8 @@ export function ChannelStudio({
   const set = (patch: Partial<Channel>) => onChange({ ...draft, channel: { ...c, ...patch } });
   const virtual = c.kind === "virtual";
   const [tab, setTab] = useState(virtual ? "programming" : "stream");
+  const [watching, setWatching] = useState(false);
+  useEffect(() => setWatching(false), [c.id]);
   useEffect(() => {
     setTab(virtual ? "programming" : "stream");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -213,6 +221,7 @@ export function ChannelStudio({
 
   return (
     <div className="pb-10">
+      {watching && c.id ? <LivePreview channel={c} onClose={() => setWatching(false)} /> : null}
       {/* hero */}
       <section
         className="relative overflow-hidden border-b border-border"
@@ -292,6 +301,34 @@ export function ChannelStudio({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-3">
+            {!isNew ? (
+              <button
+                type="button"
+                onClick={() => setWatching((w) => !w)}
+                aria-pressed={watching}
+                title={dirty ? "Plays the saved channel" : undefined}
+                className={cn(
+                  "group inline-flex h-9 items-center gap-2 rounded-full pl-1 pr-3.5 text-sm font-semibold shadow-sm transition-all",
+                  watching
+                    ? "bg-danger text-white"
+                    : "bg-fg text-bg hover:scale-[1.03] hover:shadow-md",
+                )}
+              >
+                <span
+                  className={cn(
+                    "grid size-7 place-items-center rounded-full",
+                    watching ? "bg-white/20" : "bg-bg/15",
+                  )}
+                >
+                  {watching ? (
+                    <Square size={11} className="fill-current" />
+                  ) : (
+                    <Play size={13} className="ml-0.5 fill-current" />
+                  )}
+                </span>
+                {watching ? "Stop" : "Watch"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => set({ favorite: !c.favorite })}
