@@ -154,6 +154,12 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 		return
 	}
 	_, hasHLS := m.deps.HLSLookup(s.id)
+	if retry, ok := g.src.(interface{ RetryDirectPlay() bool }); ok && retry.RetryDirectPlay() && !hasHLS && decision == core.DecisionDirectPlay {
+		// Byte-range players do not renegotiate when delivery slows. Keep
+		// their representation intact; bitrate adaptation belongs to an
+		// actual HLS/DASH session, where SwapInput can restart the muxer.
+		return
+	}
 	// Safe swap paths only: an HLS/DASH session restarts ffmpeg at the
 	// mapped time; a direct-play session goes through the #5 logic
 	// (exact-size splice, TS splice, or a switch to remux).

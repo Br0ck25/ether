@@ -37,3 +37,33 @@ func TestTemporaryDirectPlayFailureKeepsFileForNativeRangeRetry(t *testing.T) {
 		t.Fatalf("native range retry status=%d n=%d err=%v", resp.StatusCode, len(body), err)
 	}
 }
+
+func TestRetryableDirectPlayKeepsSourceDuringSlowDeliveryButHLSCanAdapt(t *testing.T) {
+	h := newHarness(t, []*fakeRelease{mkv("A", 80_000_000, 100*time.Second), mkv("B", 10_000_000, 100*time.Second)}, []string{"A", "B"}, func(h *harness, o *Options) { speedOpts(o) })
+	ps := h.prepare(owner, movieKey, "c1")
+	s := h.m.lookup(ps.ID)
+	g := s.current()
+	<-g.indexReady
+	g.src = retryDirectSource{g.src}
+	h.m.SetDecision(ps.ID, core.Decision{Kind: core.DecisionDirectPlay})
+	h.clock.Advance(2 * time.Second)
+	feedFetches(s, 10, 64<<10, 200*time.Millisecond, h.clock.Now())
+	h.m.checkSpeeds()
+	h.m.checkSpeeds()
+	s.speedMu.Lock()
+	checks := s.slowChecks
+	s.speedMu.Unlock()
+	if st, _ := h.m.Session(ps.ID); checks != 0 || st.Failovers != 0 || st.RequiresRemux || st.Resolution.Release.ID != "A" {
+		t.Fatalf("slow direct-play source replaced: checks=%d session=%+v", checks, st)
+	}
+	// The same source remains eligible for safe HLS down-failover.
+	h.m.SetDecision(ps.ID, core.Decision{Kind: core.DecisionRemux})
+	hls := h.tr.addHLS(ps.ID)
+	h.m.checkSpeeds()
+	h.m.checkSpeeds()
+	select {
+	case <-hls.swapC:
+	case <-time.After(3 * time.Second):
+		t.Fatal("HLS adaptation was disabled")
+	}
+}
