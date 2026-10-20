@@ -84,6 +84,14 @@ type Node struct {
 	// Live is true when the node heartbeated recently (always true from
 	// Nodes, may be false from AllNodes).
 	Live bool `json:"live"`
+	// Draining is true while the node prepares to restart for an update:
+	// it serves its existing sessions but admits no new ones, and its
+	// addresses are left out of the published connections.
+	Draining bool `json:"draining,omitempty"`
+	// Migrations are the schema migrations the node's binary knows
+	// (component -> highest version); nil when the node predates this
+	// report.
+	Migrations map[string]int `json:"migrations,omitempty"`
 }
 
 // Cluster is the runtime the rest of the app uses.
@@ -133,7 +141,16 @@ type Local struct {
 	Addrs    func(ctx context.Context) []string
 	Caps     func() Caps
 	Load     func() int
+	// Draining reports whether the node is draining for an update; a
+	// draining node also hands leadership to another live node.
+	Draining func() bool
+	// Migrations are the schema migrations this binary knows
+	// (store.KnownMigrations), heartbeated for the schema compatibility
+	// check.
+	Migrations map[string]int
 }
+
+func (l Local) draining() bool { return l.Draining != nil && l.Draining() }
 
 func (l Local) caps() Caps {
 	if l.Caps == nil {
@@ -150,12 +167,14 @@ func (l Local) load() int {
 }
 
 // PeerAddrs returns the connection URIs of every node except selfID that
-// heartbeated within grace of now, ordered by node name (then ID) and
-// de-duplicated. The registrar appends them to the leader's own URIs.
+// heartbeated within grace of now and is not draining, ordered by node
+// name (then ID) and de-duplicated. The registrar appends them to the leader's own URIs.
 func PeerAddrs(nodes []Node, selfID string, now time.Time, grace time.Duration) []string {
 	peers := make([]Node, 0, len(nodes))
 	for _, n := range nodes {
-		if n.ID == selfID || now.Sub(n.LastSeen) > grace {
+		// A draining node is about to restart: clients should reach the
+		// server through the other nodes.
+		if n.ID == selfID || n.Draining || now.Sub(n.LastSeen) > grace {
 			continue
 		}
 		peers = append(peers, n)
