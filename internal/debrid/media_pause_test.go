@@ -68,3 +68,28 @@ func TestCDNRateLimitFailsFastAndSharesRetryAfterAcrossFiles(t *testing.T) {
 		t.Fatal("one CDN paused another")
 	}
 }
+
+func TestSharedCDNPauseDoesNotInterruptAnEstablishedHealthyFile(t *testing.T) {
+	r := newEngineRig(t, 1<<20, -1)
+	f, err := r.eng.acquireFile(t.Context(), "established", r.pl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.eng.releaseFile(f)
+	body, _, err := f.rangeGet(t.Context(), 0, 100, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.Close()
+	p, _ := f.payload()
+	_ = r.eng.pauseMedia(p.Provider, p.URL, http.StatusTooManyRequests, time.Minute)
+	body, _, err = f.rangeGet(t.Context(), 101, 200, false)
+	if err != nil {
+		t.Fatalf("another file's rate limit stopped a healthy viewer: %v", err)
+	}
+	body.Close()
+	_ = f.pauseMedia(p.Provider, p.URL, http.StatusTooManyRequests, time.Minute)
+	if err := f.checkMediaPause(p.Provider, p.URL); !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("established file ignored its own rate limit: %v", err)
+	}
+}

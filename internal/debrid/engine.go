@@ -419,6 +419,9 @@ type remoteFile struct {
 	linkFails        int       // link generations that failed in a row
 	failedGen        int       // last generation counted in linkFails (-1 = none)
 	transportRetryAt time.Time // bound link regeneration during a CDN outage
+	mediaHealthyKey  string    // a shared cooldown must not interrupt another healthy file
+	mediaPauseKey    string
+	mediaPause       mediaPause
 
 	bmu     sync.Mutex
 	flights map[int64]*blockFlight
@@ -864,7 +867,7 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 			return nil, timing{}, err
 		}
 		payload, _ := f.payload()
-		if err := f.e.checkMediaPause(payload.Provider, u); err != nil {
+		if err := f.checkMediaPause(payload.Provider, u); err != nil {
 			return nil, timing{}, err
 		}
 		if attempt > 0 {
@@ -905,10 +908,14 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 			}
 			f.mu.Lock()
 			f.linkFails = 0
+			f.mediaHealthyKey = mediaPauseKey(payload.Provider, u)
 			f.mu.Unlock()
 			return resp.Body, tm, nil
 		case resp.StatusCode == http.StatusOK && start == 0 && resp.ContentLength == f.size:
 			// A server that ignores Range but serves exactly this file.
+			f.mu.Lock()
+			f.mediaHealthyKey = mediaPauseKey(payload.Provider, u)
+			f.mu.Unlock()
 			return readCloser{Reader: io.LimitReader(resp.Body, end+1), Closer: resp.Body}, tm, nil
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
 			resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusOK:
@@ -943,7 +950,7 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 				// retrying each block four times before Retry-After expires.
 				// Share its pause across this account's files, return promptly
 				// to source selection, and preserve transient classification.
-				return nil, tm, f.e.pauseMedia(payload.Provider, u, resp.StatusCode, ra)
+				return nil, tm, f.pauseMedia(payload.Provider, u, resp.StatusCode, ra)
 			}
 		default:
 			drain(resp)

@@ -82,3 +82,31 @@ func (e *Engine) pauseMedia(provider, raw string, status int, after time.Duratio
 	}
 	return mediaPausedError(p, now)
 }
+
+// Shared pauses gate discovery of new files; they do not break a healthy
+// viewer's established source because another file hit a CDN limit.
+// A file that receives its own rate limit always honors its own pause.
+func (f *remoteFile) checkMediaPause(provider, raw string) error {
+	key, now := mediaPauseKey(provider, raw), f.e.now()
+	f.mu.Lock()
+	p, own, healthy := f.mediaPause, f.mediaPauseKey == key, f.mediaHealthyKey == key
+	f.mu.Unlock()
+	if own && now.Before(p.until) {
+		return mediaPausedError(p, now)
+	}
+	if healthy {
+		return nil
+	}
+	return f.e.checkMediaPause(provider, raw)
+}
+
+func (f *remoteFile) pauseMedia(provider, raw string, status int, after time.Duration) error {
+	if after <= 0 {
+		after = 2 * time.Second
+	}
+	f.mu.Lock()
+	f.mediaPauseKey = mediaPauseKey(provider, raw)
+	f.mediaPause = mediaPause{until: f.e.now().Add(after), status: status}
+	f.mu.Unlock()
+	return f.e.pauseMedia(provider, raw, status, after)
+}
