@@ -316,6 +316,9 @@ func arrangeLayout(rows []core.HomeRow, d core.HomeLayout, user int64, hc core.H
 		p    *core.RowPolicy
 		rank float64
 	}
+	// Rows no owner policy covers get the engine's defaults: the top picks
+	// open the page, Continue Watching follows, catalogue feeds sit lower.
+	lead, defaults := leadDefaults(rows, g, v, maxRows)
 	var pool []candidate
 	hidden := []core.HomeRow{}
 	counts := map[string]int{}
@@ -371,7 +374,17 @@ func arrangeLayout(rows []core.HomeRow, d core.HomeLayout, user int64, hc core.H
 				row.Placement = fmt.Sprintf("%s anchor at slot %d", layer, p.Slot)
 			}
 		}
-		pool = append(pool, candidate{row, p, 0})
+		cp := p
+		if cp == nil {
+			if cp = defaults[row.HubID]; cp != nil {
+				if row.HubID == lead {
+					row.Placement = "Top picks open the page"
+				} else {
+					row.Placement = "Placed below the top picks"
+				}
+			}
+		}
+		pool = append(pool, candidate{row, cp, 0})
 	}
 	// Explanation-only hidden rows are absent from Plex's candidate list.
 	// Compute ranking from the eligible pool so their presence in a preview
@@ -519,6 +532,22 @@ func (e *Engine) FinalizeHome(ctx context.Context, user *core.User, hc core.HubC
 			rows[i].Kind = kind
 		}
 	}
+	// Recently Added is the catalogue's newest additions, not picks: keep
+	// only titles this viewer could plausibly want (toppicks.go).
+	var taste *Taste
+	if m := e.modelFor(ctx, user, false); m != nil {
+		taste = m.taste
+	}
+	kept := rows[:0]
+	for _, r := range rows {
+		if r.Kind == KindRecentlyAdded {
+			if r = curateFeed(r, taste); r.Hidden {
+				continue
+			}
+		}
+		kept = append(kept, r)
+	}
+	rows = kept
 	out := []core.Hub{}
 	for _, r := range arrangeLayout(rows, e.layoutForContext(ctx), user.ID, hc, section, def) {
 		if !r.Hidden {

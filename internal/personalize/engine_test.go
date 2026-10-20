@@ -199,12 +199,18 @@ func TestPreviewMatchesHubs(t *testing.T) {
 			}
 		}
 	}
-	// Section preview includes the front end's own rows first.
+	// A section opens with the top picks, then the front end's Continue
+	// Watching; Recently Added sits below the personal rows.
 	sec := hubContext(testNow, core.DeviceTV)
 	sec.SectionID = 2
 	p, _ := h.e.PreviewHome(ctx, &u, sec, "shows", 12)
-	if len(p.Rows) < 3 || p.Rows[0].HubID != "tv.inprogress.2" || p.Rows[1].HubID != "tv.recentlyadded.2" || p.Rows[0].Source != core.RowSourcePlex {
+	if len(p.Rows) < 3 || (p.Rows[0].Kind != KindTop10 && p.Rows[0].Kind != KindTop10Today) || p.Rows[1].HubID != "tv.inprogress.2" || p.Rows[1].Source != core.RowSourcePlex {
 		t.Fatalf("section preview head = %v", kindsOf(p.Rows))
+	}
+	for i, r := range p.Rows {
+		if r.HubID == "tv.recentlyadded.2" && !r.Hidden && i < recentlyAddedMinSlot-1 {
+			t.Fatalf("recently added at row %d: %v", i+1, kindsOf(p.Rows))
+		}
 	}
 	hubs, _ := h.e.SectionHubsFor(ctx, &u, core.TypeShow, sec, 12)
 	if len(hubs) != len(p.Rows)-2 {

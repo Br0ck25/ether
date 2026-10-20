@@ -189,6 +189,13 @@ func (a *assembly) run() []core.HomeRow {
 // way.
 func anchored(c *candRow) bool { return c.keepOrder && c.kind != KindContinue }
 
+// draftsFirst reports rows that take their titles before the round-robin:
+// anchored rows, and the top picks that open the page (toppicks.go), so the
+// page's best titles are never traded away to rows below.
+func draftsFirst(c *candRow) bool {
+	return anchored(c) || c.kind == KindTop10 || c.kind == KindTop10Today
+}
+
 // fill picks each row's items with cross-row dedupe, so a title appears
 // once per screen:
 //
@@ -210,7 +217,7 @@ func anchored(c *candRow) bool { return c.keepOrder && c.kind != KindContinue }
 // the next row moves up. maxRows counts engine and owner rows.
 func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 	excluded := map[*rankedRow]bool{}
-	const attempts = 6
+	attempts := len(ordered)
 	for attempt := 0; ; attempt++ {
 		var sel []*rankedRow
 		counted := 0
@@ -244,7 +251,7 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 		for _, phase := range []bool{true, false} {
 			inPhase := func(r *rankedRow) bool { return head == nil || head[r] == phase }
 			for _, r := range sel {
-				if r.c.source == core.RowSourcePlex || !anchored(r.c) || !inPhase(r) {
+				if r.c.source == core.RowSourcePlex || !draftsFirst(r.c) || !inPhase(r) {
 					continue
 				}
 				for _, it := range r.items {
@@ -261,7 +268,7 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 			for progress := true; progress; {
 				progress = false
 				for _, r := range sel {
-					if r.c.source == core.RowSourcePlex || anchored(r.c) || !inPhase(r) || len(picked[r]) >= a.rowCap(r.c) {
+					if r.c.source == core.RowSourcePlex || draftsFirst(r.c) || !inPhase(r) || len(picked[r]) >= a.rowCap(r.c) {
 						continue
 					}
 					for cursor[r] < len(r.items) {
@@ -281,8 +288,8 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				break
 			}
 		}
-		thin := false
 		short := map[*rankedRow]bool{}
+		var drop *rankedRow
 		for _, r := range sel {
 			if r.c.source == core.RowSourcePlex {
 				continue
@@ -294,13 +301,14 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 			if n := len(picked[r]); n == 0 || n < min {
 				short[r] = true
 				if head == nil || head[r] {
-					// A surviving row too thin to show: drop it and redraft.
-					excluded[r] = true
-					thin = true
+					drop = r // the lowest-placed surviving row too thin to show
 				}
 			}
 		}
-		if thin && attempt < attempts {
+		// Drop one thin row at a time, lowest first, and redraft: its titles
+		// go back to the rows above, which may then be full enough to stay.
+		if drop != nil && attempt < attempts {
+			excluded[drop] = true
 			continue
 		}
 		out := make([]core.HomeRow, 0, len(sel))

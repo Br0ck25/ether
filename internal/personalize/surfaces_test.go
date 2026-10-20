@@ -112,6 +112,24 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 	}
 	// Row kinds: most of a Recommended page's rows are kinds the Home
 	// does not have.
+	// Every page opens with the viewer's top picks, which may repeat the
+	// Home's (toppicks.go); the rest of the page is what must differ.
+	for name, p := range map[string]*core.HomePreview{"home": home, "movies": movies, "shows": shows} {
+		if rows := visibleEngineRows(p.Rows); len(rows) == 0 || (rows[0].Kind != KindTop10 && rows[0].Kind != KindTop10Today) {
+			t.Errorf("%s does not open with top picks: %v", name, kindsOf(p.Rows))
+		}
+	}
+	notLead := func(rows []core.HomeRow) []core.HomeRow {
+		var out []core.HomeRow
+		for _, r := range rows {
+			if r.Kind != KindTop10 && r.Kind != KindTop10Today {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	lead := leadKeys(home.Rows) // what the engine holds back: the Home's first rows, top picks included
+	home.Rows, movies.Rows, shows.Rows = notLead(home.Rows), notLead(movies.Rows), notLead(shows.Rows)
 	hk := kindSet(home.Rows)
 	for name, p := range map[string]*core.HomePreview{"movies": movies, "shows": shows} {
 		rows := visibleEngineRows(p.Rows)
@@ -125,7 +143,6 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 			t.Errorf("%s shares %d of %d row kinds with Home", name, shared, len(rows))
 		}
 		// Titles: nothing the Home leads with, little overlap overall.
-		lead := leadKeys(home.Rows)
 		for _, r := range visibleEngineRows(p.Rows) {
 			if leadsWithHome(r, lead) {
 				t.Errorf("%s row %s leads with a Home lead title", name, r.HubID)
@@ -198,7 +215,13 @@ func TestDedupeHomeSwitch(t *testing.T) {
 	}
 	count := func(p *core.HomePreview) int {
 		n := 0
-		for k := range pageKeys(p.Rows, 12) {
+		var rows []core.HomeRow // the top picks may repeat the Home by design
+		for _, r := range p.Rows {
+			if r.Kind != KindTop10 && r.Kind != KindTop10Today {
+				rows = append(rows, r)
+			}
+		}
+		for k := range pageKeys(rows, 12) {
 			if lead[k] {
 				n++
 			}
@@ -209,7 +232,9 @@ func TestDedupeHomeSwitch(t *testing.T) {
 	if on.HomeDeduped == 0 || offP.HomeDeduped != 0 {
 		t.Fatalf("homeDeduped on=%d off=%d", on.HomeDeduped, offP.HomeDeduped)
 	}
-	if count(offP) <= count(on) || count(offP) < 5 {
+	// The top picks draft first on both, so they take many lead titles
+	// either way; dedupe must never add Home titles below them.
+	if count(offP) < count(on) || count(offP) < 5 {
 		t.Fatalf("switching dedupe off should bring Home lead titles back: on %d off %d", count(on), count(offP))
 	}
 	// A viewer page overrides the global switch.

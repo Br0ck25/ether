@@ -244,7 +244,7 @@ func (b *builder) genTop10() []*candRow {
 		if simBoost[it.t.Key] > 0 || it.fit >= 0.22 {
 			minWR = 6.0
 		}
-		if it.fit > 0 && weightedRating(&it.t) >= minWR {
+		if it.fit > 0 && weightedRating(&it.t) >= minWR && b.taste.headlineOK(&it.t) {
 			kept = append(kept, it)
 		}
 	}
@@ -955,7 +955,7 @@ func (b *builder) genNewReleases() []*candRow {
 	})
 	var recent []core.Title
 	for _, t := range src {
-		if !t.Released.IsZero() && !t.Released.After(b.now) && b.now.Sub(t.Released) <= recentDays*24*time.Hour {
+		if !t.Released.IsZero() && !t.Released.After(b.now) && b.now.Sub(t.Released) <= recentDays*24*time.Hour && b.taste.watchesLanguage(t.Language) {
 			recent = append(recent, t)
 		}
 	}
@@ -1062,7 +1062,7 @@ func (b *builder) genTop10Today() []*candRow {
 		// Vote-floored: a tenth of the floor and a decent weighted rating,
 		// so a week-old blockbuster qualifies and an obscure title with a
 		// burst of traffic does not.
-		if b.acclaimed(&t, 0.1, 6.0) {
+		if b.acclaimed(&t, 0.1, 6.0) && b.taste.watchesLanguage(t.Language) {
 			ok = append(ok, t)
 		}
 	}
