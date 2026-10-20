@@ -36,15 +36,43 @@ func (x *Indexer) Inner() core.Indexer { return x.inner }
 // Name implements core.Indexer.
 func (x *Indexer) Name() string { return x.inner.Name() }
 
-// Search implements core.Indexer.
+// Search implements core.Indexer. With a TorBox account, TorBox's own
+// torrent search runs alongside the configured indexers; its results carry
+// TorBox's cache answer, so they need no separate availability check.
 func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	type tbAnswer struct {
+		rels   []core.Release
+		cached map[string]bool
+		ok     bool
+		err    error
+	}
+	tbc := make(chan tbAnswer, 1)
+	go func() {
+		var a tbAnswer
+		a.rels, a.cached, a.ok, a.err = x.svc.searchTorBox(ctx, req)
+		tbc <- a
+	}()
 	results, err := x.inner.Search(ctx, req)
+	tb := <-tbc
+	if tb.err != nil {
+		x.svc.log.Warn("debrid: torbox search failed", "err", tb.err)
+	}
 	if err != nil {
-		return results, err
+		// Indexers failing (or none configured to answer) must not hide
+		// what TorBox found.
+		if len(tb.rels) == 0 {
+			return results, err
+		}
+		x.svc.log.Warn("debrid: indexer search failed; using torbox results", "err", err)
+		results = nil
 	}
 	enabled := x.svc.Enabled()
+	// cachedOnly drops torrents TorBox reports uncached: they would only be
+	// skipped at play.
+	cachedOnly := x.svc.Config().CachedOnly
 	var torrents []string
 	out := results[:0:0]
+	seen := map[string]bool{}
 	for _, r := range results {
 		if r.Protocol != core.ProtocolTorrent {
 			out = append(out, r)
@@ -54,11 +82,25 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 			continue
 		}
 		if r.InfoHash != "" {
-			torrents = append(torrents, r.InfoHash)
+			seen[r.InfoHash] = true
+			if _, answered := tb.cached[r.InfoHash]; !answered {
+				torrents = append(torrents, r.InfoHash)
+			}
+			if c, answered := tb.cached[r.InfoHash]; answered && !c && cachedOnly {
+				continue
+			}
 		}
 		out = append(out, r)
 	}
+	for _, r := range tb.rels {
+		if seen[r.InfoHash] || (cachedOnly && !tb.cached[r.InfoHash]) {
+			continue
+		}
+		seen[r.InfoHash] = true
+		out = append(out, r)
+	}
 	if len(torrents) == 0 {
+		sort.SliceStable(out, func(i, j int) bool { return x.cachedRank(out[i], tb.cached) < x.cachedRank(out[j], tb.cached) })
 		return out, nil
 	}
 	// One bulk availability call per provider that offers it: torrents
@@ -68,21 +110,31 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	cached, definitive := x.svc.CheckCached(cctx, torrents)
 	cancel()
+	queried := make(map[string]bool, len(torrents))
+	for _, h := range torrents {
+		queried[h] = true
+	}
 	kept := out[:0]
 	for _, r := range out {
-		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
+		if r.Protocol == core.ProtocolTorrent && queried[r.InfoHash] && definitive && !cached[r.InfoHash] {
 			continue
 		}
 		kept = append(kept, r)
 	}
-	rank := func(r core.Release) int {
-		if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
-			return 0
-		}
-		return 1
+	for h, c := range tb.cached {
+		cached[h] = cached[h] || c
 	}
-	sort.SliceStable(kept, func(i, j int) bool { return rank(kept[i]) < rank(kept[j]) })
+	sort.SliceStable(kept, func(i, j int) bool { return x.cachedRank(kept[i], cached) < x.cachedRank(kept[j], cached) })
 	return kept, nil
+}
+
+// cachedRank orders known-cached torrents ahead of everything else of
+// equal rank (the resolver re-ranks; this only breaks ties).
+func (x *Indexer) cachedRank(r core.Release, cached map[string]bool) int {
+	if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
+		return 0
+	}
+	return 1
 }
 
 // FetchNZB implements core.Indexer. For a torrent it returns the debrid

@@ -31,7 +31,7 @@ function errorOf(v: unknown): string {
   return isPlainObject(v) && typeof v.error === "string" ? v.error : "";
 }
 
-export function usenetHealth(v: unknown): HealthItem {
+export function usenetHealth(v: unknown, debrid?: unknown): HealthItem {
   const base = {
     id: "usenet" as const,
     label: "Usenet",
@@ -42,7 +42,9 @@ export function usenetHealth(v: unknown): HealthItem {
   if (!Array.isArray(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const providers = v.filter(isPlainObject);
   if (providers.length === 0)
-    return { ...base, level: "error", summary: "No providers configured", details: [] };
+    return debridOn(debrid)
+      ? { ...base, level: "off", summary: "Not used · streaming through debrid", details: [] }
+      : { ...base, level: "error", summary: "No providers configured", details: [] };
   const primary = providers.filter((p) => !p.backfill);
   const bad = providers.filter((p) => str(p.state) && str(p.state) !== "ok");
   const primaryBad = primary.filter((p) => str(p.state) && str(p.state) !== "ok");
@@ -71,7 +73,17 @@ export function usenetHealth(v: unknown): HealthItem {
   };
 }
 
-export function indexersHealth(v: unknown): HealthItem {
+/** A debrid account is enabled (from the "debrid" status section). */
+function debridOn(v: unknown): boolean {
+  return isPlainObject(v) && v.enabled === true;
+}
+
+/** TorBox's own torrent search is in use (from the "debrid" status section). */
+function torBoxSearchOn(v: unknown): boolean {
+  return isPlainObject(v) && isPlainObject(v.search) && v.search.enabled === true;
+}
+
+export function indexersHealth(v: unknown, debrid?: unknown): HealthItem {
   const base = {
     id: "indexers" as const,
     label: "Indexers",
@@ -82,7 +94,9 @@ export function indexersHealth(v: unknown): HealthItem {
   if (!Array.isArray(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const rows = v.filter(isPlainObject);
   if (rows.length === 0)
-    return { ...base, level: "error", summary: "No indexers configured", details: [] };
+    return torBoxSearchOn(debrid)
+      ? { ...base, level: "ok", summary: "Searching through TorBox", details: [] }
+      : { ...base, level: "error", summary: "No indexers configured", details: [] };
   let exhausted = 0;
   let remaining = 0;
   let limited = 0;
@@ -239,8 +253,8 @@ export function computeHealth(
 ): HealthItem[] {
   const s = sections ?? {};
   return [
-    usenetHealth(s.providers),
-    indexersHealth(s.indexers),
+    usenetHealth(s.providers, s.debrid),
+    indexersHealth(s.indexers, s.debrid),
     cacheHealth(s.cache),
     catalogHealth(s.catalog, now),
     remoteHealth(s.remote),
