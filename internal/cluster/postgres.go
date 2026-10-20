@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/faillog"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -115,6 +116,10 @@ type Postgres struct {
 	inc   string // incarnation: distinguishes this process's own echoes
 	bus   *localBus
 	lead  *leadership
+	// beatFail and busFail rate-limit outage warnings from the heartbeat
+	// and LISTEN loops (first failure, a summary a minute, the recovery).
+	beatFail *faillog.Tracker
+	busFail  *faillog.Tracker
 
 	runMu   sync.Mutex
 	started bool
@@ -187,6 +192,8 @@ func NewPostgres(o Options) (*Postgres, error) {
 		o: o, db: o.DB, local: o.Local, log: log, inc: newID()[:12],
 		bus: newLocalBus(log), lead: newLeadership(),
 		beatWake: make(chan struct{}, 1), busReady: make(chan struct{}),
+		beatFail: faillog.New(log, "cluster: heartbeat"),
+		busFail:  faillog.New(log, "cluster: event bus connection"),
 	}
 	p.self = Node{
 		ID: o.Local.Identity.NodeID, Name: o.Local.Identity.Name, Version: o.Local.Version,
@@ -409,10 +416,15 @@ func (p *Postgres) heartbeatLoop(ctx context.Context) {
 		case <-p.beatWake:
 		}
 		bctx, cancel := context.WithTimeout(ctx, p.o.HeartbeatInterval)
-		if err := p.beat(bctx); err != nil && ctx.Err() == nil {
-			p.log.Warn("cluster: heartbeat failed", "err", err)
-		}
+		err := p.beat(bctx)
 		cancel()
+		switch {
+		case ctx.Err() != nil:
+		case err != nil:
+			p.beatFail.Fail(err)
+		default:
+			p.beatFail.OK()
+		}
 	}
 }
 
@@ -774,7 +786,7 @@ func (p *Postgres) listenLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			p.log.Debug("cluster: event bus connect failed", "err", err, "retry", backoff)
+			p.busFail.Fail(err, "retry", backoff)
 			if !sleep() {
 				return
 			}
@@ -782,8 +794,9 @@ func (p *Postgres) listenLoop(ctx context.Context) {
 		}
 		p.setBusUp(true)
 		p.busOnce.Do(func() { close(p.busReady) })
+		p.busFail.OK()
 		if !first {
-			p.log.Info("cluster: event bus reconnected; resynchronising")
+			p.log.Debug("cluster: event bus reconnected; resynchronising caches")
 			p.bus.deliver(TopicResync, nil)
 		}
 		first = false
@@ -794,7 +807,7 @@ func (p *Postgres) listenLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		p.log.Warn("cluster: event bus connection lost", "err", err)
+		p.busFail.Fail(err)
 		if !sleep() {
 			return
 		}

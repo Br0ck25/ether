@@ -14,6 +14,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/faillog"
 	"github.com/braedonsaunders/ether/internal/plex/model"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -97,12 +98,19 @@ type clusterState struct {
 
 	warnMu   sync.Mutex
 	lastWarn time.Time
+
+	// syncFail and expireFail rate-limit the periodic loops' outage
+	// warnings (first failure, a summary a minute, the recovery).
+	syncFail   *faillog.Tracker
+	expireFail *faillog.Tracker
 }
 
 func newClusterState(s *Server, db *sql.DB, node clusterbus.Node) *clusterState {
 	return &clusterState{s: s, db: db, node: node, self: node.NodeID(), origin: clusterbus.NewOrigin(),
 		heartbeat: cmp.Or(s.d.SessionHeartbeat, sessionHeartbeat), ttl: sessionTTL,
-		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
+		syncFail:   faillog.New(s.log, "plex: cluster: heartbeat sessions"),
+		expireFail: faillog.New(s.log, "plex: cluster: expire play queues")}
 }
 
 func (c *clusterState) start() {
@@ -289,7 +297,9 @@ func (c *clusterState) loop() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		if err := c.syncSessions(ctx); err != nil {
-			c.warn("heartbeat sessions", err)
+			c.syncFail.Fail(err)
+		} else {
+			c.syncFail.OK()
 		}
 		cancel()
 	}

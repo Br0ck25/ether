@@ -14,6 +14,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/faillog"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -94,6 +95,9 @@ type registry struct {
 
 	warnMu   sync.Mutex
 	lastWarn time.Time
+
+	// syncFail rate-limits the heartbeat loop's outage warnings.
+	syncFail *faillog.Tracker
 }
 
 type unitRow struct {
@@ -105,7 +109,8 @@ type unitRow struct {
 
 func newRegistry(m *Manager, db *sql.DB, node clusterbus.Node) *registry {
 	return &registry{m: m, db: db, d: store.DialectOf(db), node: node, self: node.NodeID(), log: m.log,
-		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
+		syncFail: faillog.New(m.log, "playback: cluster session registry: heartbeat sessions")}
 }
 
 // start clears this node's leftovers from a previous run (never another
@@ -152,7 +157,9 @@ func (r *registry) loop() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		if err := r.sync(ctx); err != nil {
-			r.warn("heartbeat sessions", err)
+			r.syncFail.Fail(err)
+		} else {
+			r.syncFail.OK()
 		}
 		cancel()
 	}
