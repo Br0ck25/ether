@@ -143,7 +143,9 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		return
 	}
 	content := res.Header.Get("Content-Type")
-	manifest := strings.Contains(strings.ToLower(content), "mpegurl") || bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U"))
+	// Some providers label their binary AES keys as application/vnd.apple.mpegurl.
+	// The bytes identify a playlist; the MIME type alone cannot do so.
+	manifest := bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U"))
 	if manifest {
 		b := body
 		if len(b) > 4<<20 {
@@ -186,6 +188,9 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		if v := res.Header.Get(name); v != "" {
 			w.Header().Set(name, v)
 		}
+	}
+	if strings.Contains(strings.ToLower(content), "mpegurl") {
+		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	w.Header().Set("Cache-Control", "private, max-age=10")
 	w.WriteHeader(res.StatusCode)
