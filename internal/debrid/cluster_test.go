@@ -415,3 +415,52 @@ func newTestServer(t *testing.T, h http.Handler) string {
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
+
+// A node waiting for another node's add does not hold its provider slot.
+func TestClaimWaitFreesProviderSlot(t *testing.T) {
+	db := sharedDB(t)
+	hub := clusterbus.NewHub()
+	prov := newFakeProvider("realdebrid", newMediaServer(t, 1<<10), movieFiles(1<<10))
+	s := clusterNodeSvc(t, db, hub.Node("a"), prov, time.Now)
+	s.SetConcurrencyShare(func(int) int { return 1 })
+	e := s.active()[0]
+	if _, err := db.Exec(`INSERT INTO debrid_torrents (provider_id, info_hash, torrent_id, cached, checked_at, claimed_by, claimed_at) VALUES ('rd', ?, '', 0, 0, 'b/x', ?)`,
+		testHash, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := e.acquire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan string, 1)
+	go func() {
+		id, _, err := s.claimAdd(ctx, e, testHash)
+		e.release()
+		if err != nil {
+			t.Error(err)
+		}
+		got <- id
+	}()
+	time.Sleep(3 * claimPoll / 2)
+	actx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := e.acquire(actx); err != nil {
+		t.Fatalf("slot held while waiting: %v", err)
+	}
+	e.release()
+	if _, err := db.Exec(`UPDATE debrid_torrents SET torrent_id='T5', claimed_by='' WHERE info_hash=?`, testHash); err != nil {
+		t.Fatal(err)
+	}
+	if id := <-got; id != "T5" {
+		t.Fatalf("waiter got %q", id)
+	}
+	if n := e.sem.size(); n != 1 {
+		t.Fatalf("slots %d", n)
+	}
+	e.sem.mu.Lock()
+	used := e.sem.used
+	e.sem.mu.Unlock()
+	if used != 0 {
+		t.Fatalf("slots in use after release: %d", used)
+	}
+}

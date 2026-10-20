@@ -153,6 +153,19 @@ func (l *limiter) acquire(ctx context.Context) error {
 	}
 }
 
+// reacquire is acquire for a caller that must end up holding a slot (its
+// release is deferred): when ctx ends first the slot is taken anyway, over
+// the limit, and ctx's error returned.
+func (l *limiter) reacquire(ctx context.Context) error {
+	err := l.acquire(ctx)
+	if err != nil {
+		l.mu.Lock()
+		l.used++
+		l.mu.Unlock()
+	}
+	return err
+}
+
 func (l *limiter) release() {
 	l.mu.Lock()
 	l.used--
@@ -348,7 +361,8 @@ var errClaimBusy = errors.New("debrid: another node is still adding this torrent
 // errNotCachedElsewhere is another node's add finding the torrent uncached.
 var errNotCachedElsewhere = fmt.Errorf("torrent is not cached (checked by another node): %w", core.ErrNotCached)
 
-// claimAdd claims adding (provider, hash) to the account. It returns the
+// claimAdd claims adding (provider, hash) to the account; the caller holds
+// one of e's slots (released while waiting). It returns the
 // torrent id another node added meanwhile (use it; nothing to add), or ""
 // with release (call it when done) when this node won the claim. Without a
 // cluster it returns at once. A database error lets the add proceed
@@ -381,7 +395,14 @@ func (s *Service) claimAdd(ctx context.Context, e *entry, hash string) (string, 
 		if !s.now().Before(deadline) {
 			return "", noop, errClaimBusy
 		}
-		if err := sleep(ctx, claimPoll); err != nil {
+		// Wait without holding one of this node's provider slots: with a
+		// small share, a waiting add must not stall every other call.
+		e.release()
+		err = sleep(ctx, claimPoll)
+		if aerr := e.sem.reacquire(ctx); err == nil {
+			err = aerr
+		}
+		if err != nil {
 			return "", noop, err
 		}
 	}
