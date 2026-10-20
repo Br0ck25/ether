@@ -135,7 +135,6 @@ type App struct {
 	migration         *migrate.Service
 	invites           *invites.Service
 	safety            *safety.Service
-	cleanHome         *cleanHomeStatus
 	plexServer        *plex.Server
 	handler           http.Handler
 	closers           []func()
@@ -426,7 +425,6 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 	a.personalize.SetExtraHomeRows(a.extraHomeRows)
 	a.buildInvites()
-	a.cleanHome = &cleanHomeStatus{app: a}
 	a.cfg.Subscribe(a.applyConfig)
 
 	a.buildExtras()
@@ -545,7 +543,7 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) housekeeping(ctx context.Context) {
 	pins := time.NewTicker(5 * time.Minute)
 	defer pins.Stop()
-	a.cleanHome.run(ctx)
+	lastCompat := time.Now()
 	a.refreshCompatibility(ctx)
 	_ = a.playback.ReconcilePins(ctx)
 	for {
@@ -554,8 +552,8 @@ func (a *App) housekeeping(ctx context.Context) {
 			_ = a.users.FlushSeen(context.Background())
 			return
 		case <-pins.C:
-			if a.cleanHome.due() {
-				a.cleanHome.run(ctx)
+			if time.Since(lastCompat) > 6*time.Hour {
+				lastCompat = time.Now()
 				a.refreshCompatibility(ctx)
 			}
 			_ = a.playback.ReconcilePins(ctx)

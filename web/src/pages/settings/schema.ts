@@ -163,8 +163,6 @@ export const PLEX: FieldGroup[] = [
         help: "Leave empty to use the tracked public PMS version.",
       },
       { key: "latestCompatibilityVersion", label: "Latest public PMS version", kind: "readonly" },
-      // Edited at Home screens › Clean Home.
-      { key: "disableCleanHome", label: "Clean Home", kind: "hidden" },
     ],
   },
 ];

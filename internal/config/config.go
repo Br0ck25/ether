@@ -54,8 +54,6 @@ type Server struct {
 }
 
 type Plex struct {
-	// DisableCleanHome opts out of automatic account source cleanup.
-	DisableCleanHome           bool   `json:"disableCleanHome"`
 	CompatibilityVersion       string `json:"compatibilityVersion,omitempty"`
 	LatestCompatibilityVersion string `json:"latestCompatibilityVersion,omitempty"`
 	DisableVersionTracking     bool   `json:"disableVersionTracking"`

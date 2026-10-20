@@ -22,7 +22,6 @@ import { OverrideList } from "./OverrideList";
 import { PageSettings } from "./PageSettings";
 import { RowPool } from "./RowPool";
 import { AnchoredSlots } from "./AnchoredSlots";
-import { CleanHome } from "../home-screens/CleanHome";
 
 function initialContext(): ViewContext {
   const now = new Date();
@@ -180,7 +179,6 @@ export default function Designer() {
                   { key: "layout", label: "Layout" },
                   { key: "rows", label: "Rows" },
                   { key: "overrides", label: "Overrides" },
-                  { key: "cleanup", label: "Clean Home" },
                 ]}
               />
             </div>
@@ -198,7 +196,6 @@ export default function Designer() {
                 onFocusRow={setFocusRow}
               />
             )}
-            {tools === "cleanup" && <CleanHome />}
             {tools === "overrides" && (
               <OverrideList
                 {...editing}
