@@ -134,9 +134,10 @@ type Client struct {
 	lastPost time.Time
 	minPost  time.Duration
 
-	cmu   sync.Mutex
-	cache map[string]*cacheEntry
-	ttl   time.Duration
+	cmu             sync.Mutex
+	cache           map[string]*cacheEntry
+	cacheGeneration uint64 // invalidations fence off older in-flight pulls
+	ttl             time.Duration
 
 	scMu     sync.Mutex
 	lastScro map[scrobbleKey]scrobbleState
@@ -591,6 +592,7 @@ func cacheKey(kind string, userID int64, limit int) string {
 func (c *Client) invalidateUser(userID int64) {
 	suffix := fmt.Sprintf(":%d:", userID)
 	c.cmu.Lock()
+	c.cacheGeneration++
 	for k := range c.cache {
 		if strings.Contains(k, suffix) {
 			delete(c.cache, k)
@@ -608,6 +610,7 @@ func cachedCall[T any](c *Client, ctx context.Context, key string, fetch func(co
 // cachedCallTTL is cachedCall with its own freshness window.
 func cachedCallTTL[T any](c *Client, ctx context.Context, key string, ttl time.Duration, fetch func(context.Context) (T, error)) (T, error) {
 	c.cmu.Lock()
+	generation := c.cacheGeneration
 	e, ok := c.cache[key]
 	if ok && c.now().Sub(e.at) < ttl {
 		c.cmu.Unlock()
@@ -622,8 +625,11 @@ func cachedCallTTL[T any](c *Client, ctx context.Context, key string, ttl time.D
 				v, err := fetch(bg)
 				c.cmu.Lock()
 				defer c.cmu.Unlock()
+				e.refreshing = false
+				if generation != c.cacheGeneration || c.cache[key] != e {
+					return
+				}
 				if err != nil {
-					e.refreshing = false
 					c.log.Debug("trakt background refresh failed", "key", key, "err", err)
 					return
 				}
@@ -640,7 +646,9 @@ func cachedCallTTL[T any](c *Client, ctx context.Context, key string, ttl time.D
 		return v, err
 	}
 	c.cmu.Lock()
-	c.cache[key] = &cacheEntry{val: v, at: c.now()}
+	if generation == c.cacheGeneration {
+		c.cache[key] = &cacheEntry{val: v, at: c.now()}
+	}
 	c.cmu.Unlock()
 	return v, nil
 }
