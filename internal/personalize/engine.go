@@ -110,6 +110,7 @@ type Options struct {
 	HalfLife         time.Duration // taste decay half-life (default 120 days)
 	ImpressionBuffer int           // queued impressions before dropping (default 4096)
 	FlushEvery       time.Duration // impression write interval (default 2s)
+	Ranker           RankerOptions // learned ranker (ranker.go)
 }
 
 func (o *Options) defaults() {
@@ -220,6 +221,8 @@ type Engine struct {
 	actAt  time.Time
 	actRes *activityResult
 
+	rk *rankerState // learned ranker (ranker.go); nil when disabled
+
 	queue  chan int64
 	events chan state.Event
 	evSync chan chan struct{}
@@ -270,6 +273,7 @@ func New(opts Options) (*Engine, error) {
 		return nil, err
 	}
 	e.ctx, e.cancel = context.WithCancel(context.Background())
+	e.startRanker() // learned ranker: load model, serve-log writer, training loop (ranker.go)
 	e.wg.Add(1)
 	go func() { defer e.wg.Done(); e.rec.run(e.ctx) }()
 	e.wg.Add(1)
@@ -446,8 +450,10 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 	// Every row is assembled (the preview explains the ones the page cuts),
 	// but only the rows that survive the page length claim titles (fill).
 	a.maxRows = 100
+	a.rk = e.newRankPass(u, hc, section, draft) // learned ranker (ranker.go)
 	p.Rows = a.run()
 	p.HomeDeduped = a.homeDeduped
+	a.rk.publishRows(p.Rows) // feature snapshots for the serve log (ranker.go)
 	for _, r := range p.Rows {
 		e.registerHub(r.HubID, r.Kind)
 	}

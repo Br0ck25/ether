@@ -44,6 +44,7 @@ type assembly struct {
 	// would have shown (homeDeduped).
 	held        map[*candRow][]core.RatingKey
 	homeDeduped int
+	rk          *rankPass // learned ranker (ranker.go); nil = hand-tuned only
 }
 
 // rankedRow is a candidate row during assembly.
@@ -500,6 +501,8 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 	// Daily rotation: a small, stable-per-day nudge so near-ties reorder.
 	adj += 0.06 * (unit(a.user.ID, a.day, t.Key) - 0.5)
 	adj += a.tuneItem(it) // owner's page dials (tuning.go)
+	// Learned ranker: bounded model blend + exploration (ranker.go).
+	adj += a.rankerItem(c, it, adj)
 	return adj
 }
 
@@ -539,6 +542,8 @@ func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float
 			mult *= 0.72
 		}
 	}
+	// Learned ranker: bounded row multiplier (ranker.go).
+	mult *= a.rankerRow(c, items)
 	scale := c.scale
 	if scale <= 0 {
 		scale = 1
