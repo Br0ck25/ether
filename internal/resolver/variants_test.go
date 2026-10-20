@@ -20,12 +20,12 @@ func primeSearchCache(t *testing.T, svc *Service, caps core.ClientCaps) {
 
 func variantReleases() []core.Release {
 	return []core.Release{
-		rel("uhd", "The.Matrix.1999.2160p.UHD.BluRay.REMUX.DV.HEVC.TrueHD.7.1-GRP", 50000),
-		rel("uhd2", "The.Matrix.1999.2160p.WEB-DL.DV.HDR.H.265-GRP", 20000), // same tier as uhd
-		rel("hd", "The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000),
-		rel("hdhevc", "The.Matrix.1999.1080p.BluRay.x265.DTS-HD.MA.5.1-GRP", 12000),
-		rel("dc", "The.Matrix.1999.Directors.Cut.1080p.BluRay.x264-GRP", 9000),
-		rel("sd720", "The.Matrix.1999.720p.BluRay.x264-GRP", 4000),
+		rel("uhd", "The.Signal.1999.2160p.UHD.BluRay.REMUX.DV.HEVC.TrueHD.7.1-GRP", 50000),
+		rel("uhd2", "The.Signal.1999.2160p.WEB-DL.DV.HDR.H.265-GRP", 20000), // same tier as uhd
+		rel("hd", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000),
+		rel("hdhevc", "The.Signal.1999.1080p.BluRay.x265.DTS-HD.MA.5.1-GRP", 12000),
+		rel("dc", "The.Signal.1999.Directors.Cut.1080p.BluRay.x264-GRP", 9000),
+		rel("sd720", "The.Signal.1999.720p.BluRay.x264-GRP", 4000),
 	}
 }
 
@@ -152,15 +152,15 @@ func TestVariantsCapabilityGating(t *testing.T) {
 
 func TestVariantsEpisode(t *testing.T) {
 	idx := &fakeIndexer{releases: []core.Release{
-		rel("ep4k", "Breaking.Bad.S01E01.2160p.WEB-DL.DV.HEVC-GRP", 8000),
-		rel("ephd", "Breaking.Bad.S01E01.1080p.WEB-DL.DDP5.1.H.264-GRP", 3000),
-		rel("ep720", "Breaking.Bad.S01E01.720p.HDTV.x264-GRP", 1500),
+		rel("ep4k", "Boundary.Bay.S01E01.2160p.WEB-DL.DV.HEVC-GRP", 8000),
+		rel("ephd", "Boundary.Bay.S01E01.1080p.WEB-DL.DDP5.1.H.264-GRP", 3000),
+		rel("ep720", "Boundary.Bay.S01E01.720p.HDTV.x264-GRP", 1500),
 	}}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	ctx := context.Background()
 	title := &core.Title{
 		Key: core.EpisodeKey(1396, 1, 1), Type: core.TypeEpisode,
-		ShowTitle: "Breaking Bad", Season: 1, Episode: 1, Runtime: 49 * time.Minute,
+		ShowTitle: "Boundary Bay", Season: 1, Episode: 1, Runtime: 49 * time.Minute,
 		ShowIDs: core.IDs{TVDB: 81189},
 	}
 	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: appleTVCaps()}); err != nil {
@@ -244,10 +244,10 @@ func TestResolvePreferFallsBackWhenUnhealthyOrMissing(t *testing.T) {
 
 func TestResolvePreferAlternatesPreferSameEdition(t *testing.T) {
 	idx := &fakeIndexer{releases: []core.Release{
-		rel("uhd", "The.Matrix.1999.2160p.UHD.BluRay.REMUX.DV.HEVC.TrueHD.7.1-GRP", 50000),
-		rel("dc720", "The.Matrix.1999.Directors.Cut.720p.BluRay.x264-GRP", 5000),
-		rel("dc", "The.Matrix.1999.Directors.Cut.1080p.BluRay.x264-GRP", 9000),
-		rel("hd", "The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000),
+		rel("uhd", "The.Signal.1999.2160p.UHD.BluRay.REMUX.DV.HEVC.TrueHD.7.1-GRP", 50000),
+		rel("dc720", "The.Signal.1999.Directors.Cut.720p.BluRay.x264-GRP", 5000),
+		rel("dc", "The.Signal.1999.Directors.Cut.1080p.BluRay.x264-GRP", 9000),
+		rel("hd", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000),
 	}}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps(), Prefer: "dc"})

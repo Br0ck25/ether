@@ -298,12 +298,12 @@ func TestHubItemsEnrichedFromDetail(t *testing.T) {
 
 	rec := f.get(t, "/hubs")
 	body := rec.Body.String()
-	if strings.Contains(body, "Brad Pitt") || strings.Contains(body, `studio="`) {
+	if strings.Contains(body, "Theo Varga") || strings.Contains(body, `studio="`) {
 		t.Fatalf("first render must not block on detail: %s", body)
 	}
 	f.srv.waitBackground()
 	body = f.get(t, "/hubs").Body.String()
-	for _, want := range []string{`studio="Fox 2000 Pictures"`, `contentRating="R"`, `tagline="Mischief. Mayhem. Soap."`, `<Director tag="David Fincher" />`, `<Role tag="Brad Pitt" />`} {
+	for _, want := range []string{`studio="Northlight Pictures"`, `contentRating="R"`, `tagline="Quiet waters run deep."`, `<Director tag="Mara Ellison" />`, `<Role tag="Theo Varga" />`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("enriched hub lacks %s:\n%s", want, body)
 		}
@@ -363,7 +363,7 @@ func TestEpisodeImagesUseShowArtwork(t *testing.T) {
 		`<Image alt="Pilot" type="snapshot" url="/library/metadata/4000013960010001/thumb/`,
 		`<Image alt="Pilot" type="background" url="/library/metadata/2000000000001396/art/`,
 		`<Image alt="Pilot" type="clearLogo" url="/library/metadata/2000000000001396/clearLogo/`,
-		`grandparentSlug="breaking-bad"`, `contentRating="TV-MA"`,
+		`grandparentSlug="boundary-bay"`, `contentRating="TV-MA"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("season children lack %s:\n%s", want, body)
@@ -375,7 +375,7 @@ func TestEpisodeImagesUseShowArtwork(t *testing.T) {
 		}
 	}
 	seasons := f.getWarm(t, "/library/metadata/"+show.Key.String()+"/children").Body.String()
-	for _, want := range []string{`parentSlug="breaking-bad"`, `parentStudio="Sony Pictures Television"`, `parentYear="2008"`, `type="clearLogo"`} {
+	for _, want := range []string{`parentSlug="boundary-bay"`, `parentStudio="Sony Pictures Television"`, `parentYear="2008"`, `type="clearLogo"`} {
 		if !strings.Contains(seasons, want) {
 			t.Errorf("seasons lack %s:\n%s", want, seasons)
 		}

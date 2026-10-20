@@ -33,7 +33,7 @@ type viewerFieldErr struct{ field, msg string }
 func (e viewerFieldErr) Error() string              { return e.field + ": " + e.msg }
 func (e viewerFieldErr) InvalidFields() [][2]string { return [][2]string{{e.field, e.msg}} }
 
-var poster = core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Matrix", Year: 1999, PosterPath: "/m.jpg",
+var poster = core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Signal", Year: 1999, PosterPath: "/m.jpg",
 	BackdropPath: "/b.jpg", Runtime: 136 * time.Minute, Genres: []string{"Science Fiction"}, ContentRating: "R", Rating: 8.2}
 
 func (f *fakeEngine) ViewerStats(_ context.Context, ids []int64) (map[int64]core.ViewerStats, error) {
@@ -222,7 +222,7 @@ func TestViewerHomeEndpoint(t *testing.T) {
 	if eng.hc.Device != "mobile" || !eng.hc.Now.Equal(time.Date(2026, 10, 17, 20, 30, 0, 0, time.UTC)) || eng.section != "movies" || eng.limit != 20 {
 		t.Fatalf("engine got %+v section %q limit %d", eng.hc, eng.section, eng.limit)
 	}
-	if len(body.Rows) != 2 || body.Rows[0].HubID != "home.top10" || body.Rows[0].Items[0]["title"] != "The Matrix" ||
+	if len(body.Rows) != 2 || body.Rows[0].HubID != "home.top10" || body.Rows[0].Items[0]["title"] != "The Signal" ||
 		body.Rows[0].ItemReasons["1000000000000603"] == "" || !body.Rows[1].Hidden || body.Rows[1].Items == nil {
 		t.Fatalf("rows = %+v", body.Rows)
 	}

@@ -19,7 +19,7 @@ func sample() MediaContainer {
 				RatingKey: "1000000000000550",
 				Key:       "/library/metadata/1000000000000550",
 				Type:      "movie",
-				Title:     "Fight Club",
+				Title:     "Fjord Harbor",
 				Summary:   "line1\nline2",
 				Year:      1999,
 				Rating:    8.4,
@@ -41,7 +41,7 @@ func TestEncodeXML(t *testing.T) {
 	got := string(b)
 	want := `<?xml version="1.0" encoding="UTF-8"?>
 <MediaContainer size="2" allowSync="0" identifier="com.plexapp.plugins.library" livetv="0" machineIdentifier="abc" title1="Movies &amp; &#34;TV&#34; &lt;x&gt;" transcoderVideo="1">
-<Video ratingKey="1000000000000550" key="/library/metadata/1000000000000550" type="movie" title="Fight Club" summary="line1&#10;line2" index="0" rating="8.4" year="1999">
+<Video ratingKey="1000000000000550" key="/library/metadata/1000000000000550" type="movie" title="Fjord Harbor" summary="line1&#10;line2" index="0" rating="8.4" year="1999">
 <Media id="1" duration="8340000">
 <Part id="1" key="/library/parts/1/0/file.mkv" />
 </Media>

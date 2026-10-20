@@ -14,7 +14,7 @@ func TestMovieVideosParsingAndFallback(t *testing.T) {
 		gotPath = r.URL.Path
 		gotLangs = r.URL.Query().Get("include_video_language")
 		fmt.Fprint(w, `{"id":603,"results":[
-			{"id":"a1","iso_639_1":"en","iso_3166_1":"US","key":"vKQi3bBA1y8","name":"The Matrix Trailer","site":"YouTube","size":1080,"type":"Trailer","official":true,"published_at":"2013-02-18T19:50:53.000Z"},
+			{"id":"a1","iso_639_1":"en","iso_3166_1":"US","key":"vKQi3bBA1y8","name":"The Signal Trailer","site":"YouTube","size":1080,"type":"Trailer","official":true,"published_at":"2013-02-18T19:50:53.000Z"},
 			{"id":"a2","iso_639_1":"de","iso_3166_1":"DE","key":"123456789","name":"Clip","site":"Vimeo","size":720,"type":"Clip","official":false,"published_at":"2020-01-02T03:04:05Z"}
 		]}`)
 	}))

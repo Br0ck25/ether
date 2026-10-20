@@ -13,10 +13,10 @@
         "ratingKey": "1000000000000550",
         "key": "/library/metadata/1000000000000550",
         "guid": "com.plexapp.agents.themoviedb://550?lang=en",
-        "slug": "fight-club",
-        "studio": "Fox 2000 Pictures",
+        "slug": "fjord-harbor",
+        "studio": "Northlight Pictures",
         "type": "movie",
-        "title": "Fight Club",
+        "title": "Fjord Harbor",
         "librarySectionTitle": "Movies",
         "librarySectionID": 1,
         "librarySectionKey": "/library/sections/1",
@@ -24,7 +24,7 @@
         "summary": "An insomniac office worker...",
         "audienceRating": 8.4,
         "year": 1999,
-        "tagline": "Mischief. Mayhem. Soap.",
+        "tagline": "Quiet waters run deep.",
         "thumb": "/library/metadata/1000000000000550/thumb/1790812800",
         "art": "/library/metadata/1000000000000550/art/1790812800",
         "duration": 8340000,
@@ -53,7 +53,7 @@
                 "id": 1000000000000550,
                 "key": "/library/parts/1000000000000550/1790812800/file.mkv",
                 "duration": 8340000,
-                "file": "/ether/Fight Club (1999).mkv",
+                "file": "/ether/Fjord Harbor (1999).mkv",
                 "size": 8000000000,
                 "container": "mkv",
                 "videoProfile": "high",
@@ -140,12 +140,12 @@
         ],
         "Image": [
           {
-            "alt": "Fight Club",
+            "alt": "Fjord Harbor",
             "type": "coverPoster",
             "url": "/library/metadata/1000000000000550/thumb/1790812800"
           },
           {
-            "alt": "Fight Club",
+            "alt": "Fjord Harbor",
             "type": "background",
             "url": "/library/metadata/1000000000000550/art/1790812800"
           }
@@ -194,7 +194,7 @@
           {
             "id": 7467,
             "filter": "director=7467",
-            "tag": "David Fincher",
+            "tag": "Mara Ellison",
             "tagKey": "tmdb-person-7467"
           }
         ],
@@ -202,7 +202,7 @@
           {
             "id": 7468,
             "filter": "writer=7468",
-            "tag": "Chuck Palahniuk",
+            "tag": "Sasha Petrov",
             "tagKey": "tmdb-person-7468"
           }
         ],
@@ -210,15 +210,15 @@
           {
             "id": 287,
             "filter": "actor=287",
-            "tag": "Brad Pitt",
+            "tag": "Theo Varga",
             "tagKey": "tmdb-person-287",
-            "role": "Tyler Durden",
+            "role": "Alex Mercer",
             "thumb": "https://image.tmdb.org/t/p/w185/brad.jpg"
           },
           {
             "id": 819,
             "filter": "actor=819",
-            "tag": "Edward Norton",
+            "tag": "Lucas Brandt",
             "tagKey": "tmdb-person-819",
             "role": "The Narrator"
           }

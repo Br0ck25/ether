@@ -24,7 +24,7 @@ func TestRestrictedViewerCannotRetrieveHiddenTitles(t *testing.T) {
 	}
 	for _, path := range []string{"/hubs", "/hubs/search?query=Fight", "/library/sections/1/all", "/hubs/sections/1"} {
 		r := f.request(t, http.MethodGet, path, map[string]string{"X-Plex-Token": "kid"})
-		if r.Code != 200 || strings.Contains(r.Body.String(), `title="Fight Club"`) {
+		if r.Code != 200 || strings.Contains(r.Body.String(), `title="Fjord Harbor"`) {
 			t.Errorf("%s leaked title %s", path, r.Body.String())
 		}
 	}

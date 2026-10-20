@@ -169,7 +169,7 @@ func TestMoreLikeThisNeverOutwaitsCaller(t *testing.T) {
 	srv := slowServer(t, `{"titles":[{"title":"Arrival","year":2016}]}`, release, &calls)
 	cat := fakeCatalog{byTitle: map[string][]core.Title{"arrival": {{Key: core.MovieKey(9), Type: core.TypeMovie, Title: "Arrival", Year: 2016}}}}
 	svc := New(ServiceOptions{Client: NewClient(ClientOptions{Config: config.LLM{Enabled: true, BaseURL: srv.URL, Model: "m"}}), Catalog: cat})
-	seed := &core.Title{Key: core.MovieKey(1), Type: core.TypeMovie, Title: "Interstellar", Year: 2014}
+	seed := &core.Title{Key: core.MovieKey(1), Type: core.TypeMovie, Title: "Starlight", Year: 2014}
 
 	// Concurrent callers with short deadlines: one model call, nobody waits long.
 	var wg sync.WaitGroup

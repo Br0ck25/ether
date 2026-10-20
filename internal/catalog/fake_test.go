@@ -18,7 +18,7 @@ import (
 )
 
 // fakeTMDB serves realistic TMDB JSON fixtures for a small catalogue:
-// Fight Club (550, R, Drama, 1999, collection 10 member "Saga"),
+// Fjord Harbor (550, R, Drama, 1999, collection 10 member "Saga"),
 // a family movie (551, PG), and show 100 with Specials + 2 seasons.
 func fakeTMDB(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -36,7 +36,7 @@ func fakeTMDB(t *testing.T) *httptest.Server {
 		case p == "/genre/tv/list":
 			json(w, `{"genres":[{"id":18,"name":"Drama"},{"id":10765,"name":"Sci-Fi & Fantasy"}]}`)
 		case p == "/movie/550":
-			json(w, `{"id":550,"title":"Fight Club","original_title":"Fight Club","overview":"An insomniac and a soap maker.","poster_path":"/fc.jpg","backdrop_path":"/fcb.jpg","release_date":"1999-10-15","runtime":139,"status":"Released","tagline":"Mischief. Mayhem. Soap.","vote_average":8.4,"vote_count":26000,"popularity":61.0,"original_language":"en","imdb_id":"tt0137523","belongs_to_collection":{"id":10,"name":"Saga Collection","poster_path":"/saga.jpg"},"genres":[{"id":18,"name":"Drama"}],"production_companies":[{"id":1,"name":"Fox 2000"}],"production_countries":[{"iso_3166_1":"US","name":"United States of America"}],"credits":{"cast":[{"id":287,"name":"Brad Pitt","character":"Tyler Durden","profile_path":"/bp.jpg"}],"crew":[{"id":7467,"name":"David Fincher","job":"Director"},{"id":7468,"name":"Jim Uhls","job":"Screenplay"}]},"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"R","type":3}]}]},"external_ids":{"imdb_id":"tt0137523","tvdb_id":0},"images":{"logos":[{"file_path":"/logo.png","iso_639_1":"en"}]},"keywords":{"keywords":[{"id":825,"name":"support group"},{"id":851,"name":"dual identity"}]}}`)
+			json(w, `{"id":550,"title":"Fjord Harbor","original_title":"Fjord Harbor","overview":"An insomniac and a soap maker.","poster_path":"/fc.jpg","backdrop_path":"/fcb.jpg","release_date":"1999-10-15","runtime":139,"status":"Released","tagline":"Quiet waters run deep.","vote_average":8.4,"vote_count":26000,"popularity":61.0,"original_language":"en","imdb_id":"tt0137523","belongs_to_collection":{"id":10,"name":"Saga Collection","poster_path":"/saga.jpg"},"genres":[{"id":18,"name":"Drama"}],"production_companies":[{"id":1,"name":"Northlight"}],"production_countries":[{"iso_3166_1":"US","name":"United States of America"}],"credits":{"cast":[{"id":287,"name":"Theo Varga","character":"Alex Mercer","profile_path":"/bp.jpg"}],"crew":[{"id":7467,"name":"Mara Ellison","job":"Director"},{"id":7468,"name":"Jim Uhls","job":"Screenplay"}]},"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"R","type":3}]}]},"external_ids":{"imdb_id":"tt0137523","tvdb_id":0},"images":{"logos":[{"file_path":"/logo.png","iso_639_1":"en"}]},"keywords":{"keywords":[{"id":825,"name":"support group"},{"id":851,"name":"dual identity"}]}}`)
 		case p == "/movie/551":
 			json(w, `{"id":551,"title":"Family Fun","overview":"Fun for all.","poster_path":"/ff.jpg","release_date":"2020-05-01","runtime":95,"status":"Released","vote_average":7.2,"vote_count":500,"popularity":20.0,"original_language":"en","imdb_id":"tt9999999","genres":[{"id":10751,"name":"Family"}],"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"PG","type":3}]}]},"credits":{"cast":[],"crew":[]}}`)
 		case p == "/movie/552":
@@ -55,7 +55,7 @@ func fakeTMDB(t *testing.T) *httptest.Server {
 			// Filter by year slice when asked; vote_count.gte honoured loosely.
 			year := q.Get("primary_release_year")
 			results := []string{
-				`{"id":550,"title":"Fight Club","release_date":"1999-10-15","genre_ids":[18],"popularity":61.0,"vote_average":8.4,"vote_count":26000,"original_language":"en","poster_path":"/fc.jpg"}`,
+				`{"id":550,"title":"Fjord Harbor","release_date":"1999-10-15","genre_ids":[18],"popularity":61.0,"vote_average":8.4,"vote_count":26000,"original_language":"en","poster_path":"/fc.jpg"}`,
 				`{"id":551,"title":"Family Fun","release_date":"2020-05-01","genre_ids":[10751],"popularity":20.0,"vote_average":7.2,"vote_count":500,"original_language":"en"}`,
 				`{"id":553,"title":"Obscure Nothing","release_date":"2020-06-01","genre_ids":[18],"popularity":0.4,"vote_average":5.0,"vote_count":3,"original_language":"en"}`,
 				`{"id":554,"title":"Old Classic","release_date":"1975-01-01","genre_ids":[18],"popularity":1.0,"vote_average":9.0,"vote_count":8000,"original_language":"en"}`,
@@ -71,15 +71,15 @@ func fakeTMDB(t *testing.T) *httptest.Server {
 		case p == "/discover/tv":
 			json(w, `{"page":1,"results":[{"id":100,"name":"Space Show","first_air_date":"2020-01-10","genre_ids":[10765],"popularity":80.0,"vote_average":8.8,"vote_count":5000,"original_language":"en"}],"total_pages":1,"total_results":1}`)
 		case p == "/search/multi":
-			json(w, `{"page":1,"results":[{"id":559,"media_type":"movie","title":"Hidden Gem","release_date":"2010-01-01","genre_ids":[18],"popularity":0.9,"vote_average":7.9,"vote_count":12,"original_language":"en"},{"id":287,"media_type":"person","name":"Brad Pitt"}],"total_pages":1,"total_results":2}`)
+			json(w, `{"page":1,"results":[{"id":559,"media_type":"movie","title":"Hidden Gem","release_date":"2010-01-01","genre_ids":[18],"popularity":0.9,"vote_average":7.9,"vote_count":12,"original_language":"en"},{"id":287,"media_type":"person","name":"Theo Varga"}],"total_pages":1,"total_results":2}`)
 		case p == "/search/movie":
 			json(w, `{"page":1,"results":[{"id":559,"title":"Hidden Gem","release_date":"2010-01-01","popularity":0.9,"vote_count":12}],"total_pages":1,"total_results":1}`)
 		case p == "/search/tv":
 			json(w, `{"page":1,"results":[],"total_pages":1,"total_results":0}`)
 		case p == "/collection/10":
-			json(w, `{"id":10,"name":"Saga Collection","overview":"The saga.","poster_path":"/saga.jpg","parts":[{"id":552,"title":"Saga Two","release_date":"2001-01-01","genre_ids":[18],"popularity":15.0,"vote_count":900},{"id":550,"title":"Fight Club","release_date":"1999-10-15","genre_ids":[18],"popularity":61.0,"vote_count":26000}]}`)
+			json(w, `{"id":10,"name":"Saga Collection","overview":"The saga.","poster_path":"/saga.jpg","parts":[{"id":552,"title":"Saga Two","release_date":"2001-01-01","genre_ids":[18],"popularity":15.0,"vote_count":900},{"id":550,"title":"Fjord Harbor","release_date":"1999-10-15","genre_ids":[18],"popularity":61.0,"vote_count":26000}]}`)
 		case strings.HasPrefix(p, "/find/tt0137523"):
-			json(w, `{"movie_results":[{"id":550,"title":"Fight Club","release_date":"1999-10-15","popularity":61.0,"vote_count":26000}]}`)
+			json(w, `{"movie_results":[{"id":550,"title":"Fjord Harbor","release_date":"1999-10-15","popularity":61.0,"vote_count":26000}]}`)
 		case strings.HasPrefix(p, "/find/777"):
 			json(w, `{"tv_results":[{"id":100,"name":"Space Show","first_air_date":"2020-01-10","popularity":80.0,"vote_count":5000}]}`)
 		case strings.HasPrefix(p, "/find/"):
@@ -91,11 +91,11 @@ func fakeTMDB(t *testing.T) *httptest.Server {
 		case p == "/tv/100/recommendations", p == "/tv/100/similar":
 			json(w, `{"page":1,"results":[{"id":101,"name":"Other Show","first_air_date":"2022-01-01","popularity":30.0,"vote_count":200}],"total_pages":1,"total_results":1}`)
 		case strings.HasPrefix(p, "/trending/movie/"):
-			json(w, `{"page":1,"results":[{"id":550,"title":"Fight Club","release_date":"1999-10-15","genre_ids":[18],"popularity":61.0,"vote_count":26000}],"total_pages":1,"total_results":1}`)
+			json(w, `{"page":1,"results":[{"id":550,"title":"Fjord Harbor","release_date":"1999-10-15","genre_ids":[18],"popularity":61.0,"vote_count":26000}],"total_pages":1,"total_results":1}`)
 		case strings.HasPrefix(p, "/trending/tv/"):
 			json(w, `{"page":1,"results":[{"id":100,"name":"Space Show","first_air_date":"2020-01-10","popularity":80.0,"vote_count":5000}],"total_pages":1,"total_results":1}`)
 		case strings.HasPrefix(p, "/trending/all/"):
-			json(w, `{"page":1,"results":[{"id":550,"media_type":"movie","title":"Fight Club","release_date":"1999-10-15","popularity":61.0,"vote_count":26000},{"id":100,"media_type":"tv","name":"Space Show","first_air_date":"2020-01-10","popularity":80.0,"vote_count":5000}],"total_pages":1,"total_results":2}`)
+			json(w, `{"page":1,"results":[{"id":550,"media_type":"movie","title":"Fjord Harbor","release_date":"1999-10-15","popularity":61.0,"vote_count":26000},{"id":100,"media_type":"tv","name":"Space Show","first_air_date":"2020-01-10","popularity":80.0,"vote_count":5000}],"total_pages":1,"total_results":2}`)
 		case strings.HasPrefix(p, "/movie/"):
 			json(w, `{"page":1,"results":[{"id":551,"title":"Family Fun","release_date":"2020-05-01","popularity":20.0,"vote_count":500}],"total_pages":1,"total_results":1}`)
 		case strings.HasPrefix(p, "/tv/"):

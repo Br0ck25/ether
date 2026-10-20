@@ -30,12 +30,12 @@
         "librarySectionTitle": "Movies",
         "originallyAvailableAt": "1999-10-15",
         "ratingKey": "1000000000000550",
-        "slug": "fight-club",
-        "studio": "Fox 2000 Pictures",
+        "slug": "fjord-harbor",
+        "studio": "Northlight Pictures",
         "summary": "An insomniac office worker...",
-        "tagline": "Mischief. Mayhem. Soap.",
+        "tagline": "Quiet waters run deep.",
         "thumb": "/library/metadata/1000000000000550/thumb/1790812800",
-        "title": "Fight Club",
+        "title": "Fjord Harbor",
         "type": "movie",
         "updatedAt": 1790812800,
         "year": 1999,
@@ -77,7 +77,7 @@
           {
             "filter": "director=7467",
             "id": "7467",
-            "tag": "David Fincher",
+            "tag": "Mara Ellison",
             "tagKey": "tmdb-person-7467"
           }
         ],
@@ -85,7 +85,7 @@
           {
             "filter": "writer=7468",
             "id": "7468",
-            "tag": "Chuck Palahniuk",
+            "tag": "Sasha Petrov",
             "tagKey": "tmdb-person-7468"
           }
         ],
@@ -93,8 +93,8 @@
           {
             "filter": "actor=287",
             "id": "287",
-            "role": "Tyler Durden",
-            "tag": "Brad Pitt",
+            "role": "Alex Mercer",
+            "tag": "Theo Varga",
             "tagKey": "tmdb-person-287",
             "thumb": "https://image.tmdb.org/t/p/w185/brad.jpg"
           },
@@ -102,7 +102,7 @@
             "filter": "actor=819",
             "id": "819",
             "role": "The Narrator",
-            "tag": "Edward Norton",
+            "tag": "Lucas Brandt",
             "tagKey": "tmdb-person-819"
           }
         ]

@@ -84,7 +84,7 @@ func TestServiceThrottleFallsBackAndKeepsCachedSearches(t *testing.T) {
 	f := newFakeIndexer(t, "")
 	cfg := testConfig(f.server.URL)
 	m := NewManager(nil, []config.Indexer{cfg}, Options{})
-	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix", Year: 1999}
+	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Signal", Year: 1999}
 	if _, err := m.Search(ctx, req); err != nil {
 		t.Fatal(err)
 	}
