@@ -1,0 +1,40 @@
+---
+# Synthetic definition for tests: an RSS (XML) feed.
+id: fakerss
+name: Fake RSS
+links:
+  - https://fakerss.invalid/
+caps:
+  categorymappings:
+    - {id: 5, cat: TV/HD}
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+search:
+  paths:
+    - path: rss
+      response:
+        type: xml
+  inputs:
+    q: "{{ .Keywords }}"
+  rows:
+    selector: item
+  fields:
+    title:
+      selector: title
+    download:
+      selector: enclosure
+      attribute: url
+    size:
+      selector: enclosure
+      attribute: length
+    date:
+      selector: pubDate
+    seeders:
+      selector: torznab\:attr[name="seeders"]
+      attribute: value
+    infohash:
+      selector: torznab\:attr[name="infohash"]
+      attribute: value
+    category:
+      text: 5

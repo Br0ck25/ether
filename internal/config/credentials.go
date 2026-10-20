@@ -80,6 +80,13 @@ func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 		switch x := v.(type) {
 		case map[string]any:
 			for k, value := range x {
+				if inner, ok := value.(map[string]any); ok && k == "secretSettings" {
+					// Every value of a secret-settings map is a credential.
+					if err := sealAll(inner, aead, seal); err != nil {
+						return err
+					}
+					continue
+				}
 				if text, ok := value.(string); ok && text != "" && secretField(k) {
 					if seal {
 						nonce := make([]byte, aead.NonceSize())
@@ -117,6 +124,38 @@ func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 	}
 	return json.MarshalIndent(root, "", "  ")
 }
+
+// sealAll seals or opens every non-empty string value of m.
+func sealAll(m map[string]any, aead cipher.AEAD, seal bool) error {
+	for k, value := range m {
+		text, ok := value.(string)
+		if !ok || text == "" {
+			continue
+		}
+		if seal {
+			nonce := make([]byte, aead.NonceSize())
+			if _, err := rand.Read(nonce); err != nil {
+				return err
+			}
+			m[k] = sealedPrefix + base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte(text), []byte(k)))
+			continue
+		}
+		if !strings.HasPrefix(text, sealedPrefix) {
+			continue
+		}
+		payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(text, sealedPrefix))
+		if err != nil || len(payload) < aead.NonceSize() {
+			return errors.New("invalid sealed credential")
+		}
+		plain, err := aead.Open(nil, payload[:aead.NonceSize()], payload[aead.NonceSize():], []byte(k))
+		if err != nil {
+			return fmt.Errorf("decrypt credential %s: key mismatch or damaged configuration", k)
+		}
+		m[k] = string(plain)
+	}
+	return nil
+}
+
 func clone(c Config) Config {
 	b, _ := json.Marshal(c)
 	var out Config

@@ -86,3 +86,39 @@ func TestPlainConfigMigrationAndWrongKey(t *testing.T) {
 		t.Fatal("wrong key accepted")
 	}
 }
+
+func TestIndexerSecretSettingsSealed(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Update(func(c *Config) error {
+		c.Indexers = []Indexer{{ID: "site", Kind: IndexerKindCardigann, Definition: "fake",
+			Settings:       map[string]string{"sort": "seeders-visible"},
+			SecretSettings: map[string]string{"passkey": "test-passkey-value", "cookie": "test-cookie-value"}}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"test-passkey-value", "test-cookie-value"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("plaintext secret setting %q persisted", secret)
+		}
+	}
+	if !strings.Contains(string(raw), "seeders-visible") {
+		t.Fatal("ordinary setting should stay readable")
+	}
+	s, err = Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.Get().Indexers[0]
+	if got.SecretSettings["passkey"] != "test-passkey-value" || got.SecretSettings["cookie"] != "test-cookie-value" || !got.IsBuiltin() {
+		t.Fatalf("round trip failed: %+v", got)
+	}
+}
