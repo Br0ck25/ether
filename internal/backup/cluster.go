@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // Backups on a clustered server.
@@ -26,6 +28,21 @@ import (
 // record reconciles the rows for the bundles in dir (this node's own
 // directory, or the shared one) with the files present.
 func (s *Service) record(ctx context.Context, node Node, dir string, shared bool) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	lockKey := "backup:node:" + node.ID
+	if shared {
+		lockKey = "backup:shared:" + filepath.Clean(dir)
+	}
+	// Every node must agree which shared bundles are already recorded.
+	// Take the filesystem snapshot after the lock too, so a waiter cannot
+	// delete newer records based on a directory listing from before its wait.
+	if err := store.LockKey(ctx, store.DialectOf(s.db), tx, lockKey); err != nil {
+		return err
+	}
 	snaps, err := listDir(dir)
 	if err != nil {
 		return err
@@ -38,7 +55,7 @@ func (s *Service) record(ctx context.Context, node Node, dir string, shared bool
 	if shared {
 		q, args = `SELECT node_id, name FROM backup_files WHERE shared=1 AND dir=?`, []any{dir}
 	}
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return err
 	}
@@ -62,7 +79,7 @@ func (s *Service) record(ctx context.Context, node Node, dir string, shared bool
 		return err
 	}
 	for _, k := range stale {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM backup_files WHERE node_id=? AND name=?`, k.node, k.name); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM backup_files WHERE node_id=? AND name=?`, k.node, k.name); err != nil {
 			return err
 		}
 	}
@@ -74,13 +91,13 @@ func (s *Service) record(ctx context.Context, node Node, dir string, shared bool
 		if known[name] {
 			continue
 		}
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO backup_files(node_id,name,node_name,dir,shared,size,created) VALUES(?,?,?,?,?,?,?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO backup_files(node_id,name,node_name,dir,shared,size,created) VALUES(?,?,?,?,?,?,?)
 ON CONFLICT(node_id,name) DO UPDATE SET node_name=excluded.node_name, dir=excluded.dir, shared=excluded.shared, size=excluded.size, created=excluded.created`,
 			node.ID, name, node.Name, dir, flag, sn.Size, sn.Created.UnixMilli()); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // Snapshots lists backups for the owner: this node's bundles on a
