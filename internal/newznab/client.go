@@ -355,7 +355,15 @@ func (c *Client) doSearch(ctx context.Context, params url.Values) ([]core.Releas
 	if err != nil {
 		return nil, err
 	}
-	return parseFeed(body, c.Name())
+	results, err := parseFeed(body, c.Name())
+	if err == nil && c.Config().IsTorrent() {
+		// A Torznab indexer's results are torrents even when an item
+		// carries only a .torrent download link.
+		for i := range results {
+			results[i].Protocol = core.ProtocolTorrent
+		}
+	}
+	return results, err
 }
 
 // Search implements core.Indexer.
@@ -421,6 +429,9 @@ func (c *Client) nzbDiskPath(releaseID string) string {
 
 // FetchNZB implements core.Indexer.
 func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
+	if r.Protocol == core.ProtocolTorrent {
+		return nil, fmt.Errorf("newznab: %q is a torrent release; it streams through a debrid provider", r.Name)
+	}
 	if path := c.nzbDiskPath(r.ID); path != "" {
 		if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
 			return b, nil

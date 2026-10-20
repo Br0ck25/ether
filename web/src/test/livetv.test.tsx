@@ -1,6 +1,21 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import LiveTV from "../pages/livetv/LiveTV";
+import { calls as fakeCalls } from "./harness";
+import { renderAppWith } from "./routes";
+
+const WAIT = { timeout: 4000 };
+
+function renderLiveTV(path = "/livetv") {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <Routes>
+        <Route path="/livetv/:tab?" element={<LiveTV />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 function backend(channels: unknown[] = []) {
   const calls: { url: string; init?: RequestInit }[] = [];
@@ -54,7 +69,7 @@ describe("Live TV owner programming", () => {
         group: i === 24 ? "Weather" : "General",
       })),
     );
-    render(<LiveTV />);
+    renderLiveTV();
     const search = await screen.findByRole("searchbox", { name: "Search channels" });
     expect(screen.queryByText("★ Station 25")).not.toBeInTheDocument();
     fireEvent.change(search, { target: { value: "Weather" } });
@@ -67,7 +82,7 @@ describe("Live TV owner programming", () => {
   });
   it("builds a channel from a catalogue search and named viewer without raw keys", async () => {
     const calls = backend();
-    render(<LiveTV />);
+    renderLiveTV();
     await screen.findByRole("button", { name: "Create channel" });
     fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Movie night" } });
@@ -89,7 +104,7 @@ describe("Live TV owner programming", () => {
   });
   it("selects a collection by name and submits its published identity", async () => {
     const calls = backend();
-    render(<LiveTV />);
+    renderLiveTV();
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/collections"))).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "Create channel" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Family TV" } });
@@ -109,7 +124,7 @@ describe("Live TV owner programming", () => {
   });
   it("explains an empty time block and lets its programming be selected visually", async () => {
     const calls = backend();
-    render(<LiveTV />);
+    renderLiveTV();
     fireEvent.click(screen.getByRole("button", { name: "80s action template" }));
     fireEvent.click(screen.getByRole("tab", { name: "Schedule" }));
     fireEvent.click(screen.getByRole("button", { name: "Add time block" }));
@@ -132,24 +147,56 @@ describe("Live TV owner programming", () => {
       blocks: [{ start: 0, end: 60, items: [{ key: 1000000000000007 }] }],
     });
   });
-  it("opens viewer policy using the selected account rather than a typed ID", async () => {
-    const calls = backend();
-    render(<LiveTV />);
-    fireEvent.click(screen.getByRole("tab", { name: "Viewer access" }));
-    await screen.findByRole("option", { name: "Sam" });
-    fireEvent.change(screen.getByLabelText("Viewer"), { target: { value: "12" } });
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Live TV access" }));
-    fireEvent.click(await screen.findByLabelText("Disable Live TV for this viewer"));
-    fireEvent.click(screen.getByRole("button", { name: "Save viewer access" }));
+  it("puts each tab on its own URL and leaves viewer access to the profile", async () => {
+    backend();
+    renderLiveTV("/livetv/guide");
+    expect(await screen.findByRole("button", { name: "Refresh guide" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Viewer access" })).toBeNull();
+    expect(screen.queryByLabelText("Viewer")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "IPTV sources" }));
+    expect(await screen.findByRole("button", { name: "Import IPTV source" })).toBeInTheDocument();
+  });
+});
+
+describe("Live TV access on the viewer profile", () => {
+  it("edits one viewer's Live TV policy in place on their Access tab", async () => {
+    let policy = {
+      userId: 2,
+      disabled: false,
+      channels: [] as string[],
+      favorites: [],
+      maxRating: "",
+    };
+    const { fake } = renderAppWith("/viewers/2/access", (method, path, body) => {
+      if (path === "/livetv/channels")
+        return [
+          { id: "c1", number: "1", name: "Movie night", kind: "virtual", enabled: true },
+          { id: "c2", number: "2", name: "Cartoons", kind: "virtual", enabled: true },
+        ];
+      if (path === "/livetv/policies/2") {
+        if (method === "PUT") policy = body as typeof policy;
+        return policy;
+      }
+      return undefined;
+    });
+    fireEvent.click(await screen.findByLabelText("Disable Live TV for this viewer", {}, WAIT));
+    fireEvent.click(await screen.findByRole("button", { name: "Save changes" }));
     await waitFor(() =>
       expect(
-        calls.some(
-          (c) =>
-            c.url.endsWith("/livetv/policies/12") &&
-            c.init?.method === "PUT" &&
-            JSON.parse(String(c.init.body)).disabled,
+        fakeCalls(fake, "PUT", "/livetv/policies/2").some(
+          (c) => (c.body as { disabled: boolean }).disabled,
         ),
       ).toBe(true),
+    );
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull());
+    fireEvent.click(screen.getByLabelText("Disable Live TV for this viewer"));
+    fireEvent.click(screen.getByLabelText("Allow Cartoons"));
+    fireEvent.click(await screen.findByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(fakeCalls(fake, "PUT", "/livetv/policies/2").at(-1)?.body).toMatchObject({
+        disabled: false,
+        channels: ["c2"],
+      }),
     );
   });
 });

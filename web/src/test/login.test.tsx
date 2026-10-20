@@ -98,7 +98,7 @@ describe("sign-in", () => {
     });
     vi.stubGlobal("fetch", vi.fn(fake.fetch));
     renderApp();
-    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign in with Plex" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Sign out/ })).toBeNull();
   });

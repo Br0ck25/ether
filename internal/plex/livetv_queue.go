@@ -4,25 +4,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/plex/model"
 )
-
-// Modern native Plex players parse a channel tune through their play-queue
-// loader. Analysis-only metadata has no playable item key/type, so that loader
-// rejects it before making a media decision. Keep the queue bound to the actual
-// live session and its viewer, independently of catalogue rating keys.
-func (s *Server) writeModernLiveTune(w http.ResponseWriter, r *http.Request, info livetv.SessionInfo) {
-	w.Header().Del("X-Plex-Activity")
-	pr := FromContext(r.Context())
-	q := s.queues.create(pr.User.ID, pr.ClientID, []core.RatingKey{0}, s.now())
-	snap, _ := s.queues.with(q.id, pr.User.ID, s.now(), func(q *playQueue) {
-		q.liveSession = info.ID
-		q.sourceURI = "server://" + s.identity().MachineIdentifier + "/com.plexapp.plugins.library/livetv/sessions/" + info.ID
-	})
-	s.write(w, r, s.livePlayQueue(snap, info))
-}
 
 func (s *Server) livePlayQueue(pq playQueue, info livetv.SessionInfo) *model.MediaContainer {
 	md := s.liveSessionMetadata(info)
@@ -33,7 +17,6 @@ func (s *Server) livePlayQueue(pq playQueue, info livetv.SessionInfo) *model.Med
 			model.A("playQueueID", pq.id),
 			model.A("playQueueSelectedItemID", pq.items[0].id),
 			model.A("playQueueSelectedItemOffset", 0),
-			model.A("playQueueSelectedMetadataItemID", md.RatingKey),
 			model.A("playQueueShuffled", false),
 			model.A("playQueueSourceURI", pq.sourceURI),
 			model.A("playQueueTotalCount", 1),

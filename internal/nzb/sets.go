@@ -1,7 +1,9 @@
 package nzb
 
 import (
+	"path"
 	"sort"
+	"strings"
 )
 
 // Set is the ordered volumes of one archive (RAR, 7z or plain split).
@@ -107,4 +109,29 @@ func buildSet(k setKey, files []*File) *Set {
 		s.Volumes = append(s.Volumes, f)
 	}
 	return s
+}
+
+// IsPar2Volume reports whether name is a PAR2 recovery volume
+// ("x.vol03+04.par2") rather than an index file ("x.par2").
+func IsPar2Volume(name string) bool {
+	m := rePar2.FindStringSubmatch(strings.ToLower(path.Base(strings.ReplaceAll(name, `\`, "/"))))
+	return m != nil && m[2] != ""
+}
+
+// Par2Index returns the PAR2 index file among files: the smallest file
+// classified as PAR2 that is not a recovery volume (preferring one that is
+// not a sample's), or nil. The index holds only metadata packets (file
+// names, sizes, hashes), typically a few KB.
+func Par2Index(files []*File) *File {
+	var best *File
+	for _, f := range files {
+		if f.Info.Kind != KindPar2 || IsPar2Volume(f.Name) || len(f.Segments) == 0 {
+			continue
+		}
+		if best == nil || (best.Info.Sample && !f.Info.Sample) ||
+			(best.Info.Sample == f.Info.Sample && f.Bytes() < best.Bytes()) {
+			best = f
+		}
+	}
+	return best
 }

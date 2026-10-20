@@ -11,7 +11,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 )
 
-func TestProwlarrDiscoversOnlyUsenetAndUsesBudgetedProxy(t *testing.T) {
+func TestProwlarrDiscoversUsenetAndTorrentAndUsesBudgetedProxy(t *testing.T) {
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -34,8 +34,11 @@ func TestProwlarrDiscoversOnlyUsenetAndUsesBudgetedProxy(t *testing.T) {
 	defer srv.Close()
 	cfg := config.Prowlarr{URL: srv.URL + "/base", APIKey: "test-key", DailyLimit: 1, DailyGrabs: 2, Priority: 5}
 	items, err := DiscoverProwlarr(context.Background(), cfg, Options{})
-	if err != nil || len(items) != 1 {
+	if err != nil || len(items) != 2 {
 		t.Fatalf("discover %+v %v", items, err)
+	}
+	if items[0].IsTorrent() || !items[1].IsTorrent() || !strings.Contains(items[1].Name, "Torrent") {
+		t.Fatalf("protocols %+v", items)
 	}
 	item := items[0]
 	if item.DailyLimit != 1 || item.DailyGrabs != 2 || item.Priority != 7 || !strings.HasPrefix(item.ID, "prowlarr-") {

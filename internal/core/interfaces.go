@@ -225,6 +225,10 @@ type ResolveRequest struct {
 	User   *User
 	// Exclude releases already tried (failover).
 	Exclude []string
+	// Prefer is a release ID to try first (the viewer picked a version in
+	// Plex's "Play Version" picker). It is health-checked like any other
+	// candidate; when it is unavailable, normal ranking applies (additive).
+	Prefer string
 }
 
 type Resolver interface {
@@ -361,6 +365,11 @@ type MediaInfo struct {
 	BitrateKbps int           `json:"bitrateKbps"`
 	Streams     []StreamInfo  `json:"streams"`
 	Estimated   bool          `json:"estimated"` // derived from release name, not probed
+
+	// Keyframes is the container's keyframe/cue index, sorted, when it was
+	// read on open or probe; empty when unknown. Not serialized: it can hold
+	// thousands of points (additive).
+	Keyframes []KeyframePoint `json:"-"`
 }
 
 func (m MediaInfo) Video() *StreamInfo {

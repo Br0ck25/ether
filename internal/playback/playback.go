@@ -48,6 +48,10 @@ type Deps struct {
 	// Resolution.Alternates directly; without it failover asks the resolver
 	// again with the tried releases excluded.
 	FetchNZB func(ctx context.Context, r core.Release) ([]byte, error)
+	// Aligner, when set, maps failover timestamps between releases by
+	// dialogue timing; it gets a short timeout and any miss falls back to
+	// duration-based AlignTime.
+	Aligner core.TimelineAligner
 	// DB holds the playback_resume table; nil disables resume records.
 	DB     *sql.DB
 	Logger *slog.Logger
@@ -88,6 +92,20 @@ type Options struct {
 	// ResumeRetention drops resume records of titles no longer in progress
 	// after this long (default 30 days).
 	ResumeRetention time.Duration
+	// IndexTimeout bounds the background container keyframe-index read
+	// after a generation is published (default 60s). Play never waits on it.
+	IndexTimeout time.Duration
+	// SpeedCheckInterval is how often source fetch speed is compared with
+	// media bitrate (default 2s). SpeedGrace after a start, seek or
+	// failover is ignored (default 20s). A session whose fetch rate stays
+	// below SpeedThreshold (default 0.8) of its media bitrate for
+	// SpeedSlowChecks consecutive checks (default 3) down-fails over, at
+	// most MaxDownFailovers times (default 2; negative disables).
+	SpeedCheckInterval time.Duration
+	SpeedGrace         time.Duration
+	SpeedThreshold     float64
+	SpeedSlowChecks    int
+	MaxDownFailovers   int
 	// LoopbackAddr is the source server's listen address (default 127.0.0.1:0).
 	LoopbackAddr string
 	// Now is the clock (tests).
@@ -108,6 +126,18 @@ func (o *Options) defaults() {
 	def(&o.FailoverTimeout, 90*time.Second)
 	def(&o.PinInterval, 5*time.Minute)
 	def(&o.ResumeRetention, 30*24*time.Hour)
+	def(&o.IndexTimeout, 60*time.Second)
+	def(&o.SpeedCheckInterval, 2*time.Second)
+	def(&o.SpeedGrace, 20*time.Second)
+	if o.SpeedThreshold <= 0 {
+		o.SpeedThreshold = 0.8
+	}
+	if o.SpeedSlowChecks <= 0 {
+		o.SpeedSlowChecks = 3
+	}
+	if o.MaxDownFailovers == 0 {
+		o.MaxDownFailovers = 2
+	}
 	if o.ConnectionsPerStream <= 0 {
 		o.ConnectionsPerStream = 8
 	}
@@ -149,7 +179,7 @@ type Manager struct {
 	sessions       map[string]*session
 	byIdent        map[identity]*session
 	tokens         map[string]*generation
-	flights        map[identity]*flight
+	flights        map[flightKey]*flight
 	pending        map[int64]int
 	pendingN       int
 	reservations   map[identity]struct{}
@@ -157,7 +187,7 @@ type Manager struct {
 	externalGroups map[string]externalGroup
 	lastCaps       map[int64]core.ClientCaps
 	warm           map[identity]*warmEntry
-	warmRequests   map[int64][]time.Time
+	warmRequests   map[warmBudgetKey][]time.Time
 
 	pinMu        sync.Mutex
 	livePins     map[string]int
@@ -174,7 +204,34 @@ type Manager struct {
 	wg     sync.WaitGroup
 }
 
-var _ core.Playback = (*Manager)(nil)
+var (
+	_ core.Playback        = (*Manager)(nil)
+	_ core.Prewarmer       = (*Manager)(nil)
+	_ core.VariantPlayback = (*Manager)(nil)
+	_ core.RemuxRequirer   = (*Manager)(nil)
+)
+
+// flightKey separates a plain Prepare from a PrepareVariant for a picked
+// release: they must not share one resolution.
+type flightKey struct {
+	id     identity
+	prefer string
+}
+
+type warmBudgetKey struct {
+	userID int64
+	reason string
+}
+
+// hasFlightLocked reports whether any Prepare for id is in flight.
+func (m *Manager) hasFlightLocked(id identity) bool {
+	for k := range m.flights {
+		if k.id == id {
+			return true
+		}
+	}
+	return false
+}
 
 // flight is one in-progress Prepare shared by concurrent callers.
 type flight struct {
@@ -223,10 +280,10 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 		sessions: map[string]*session{},
 		byIdent:  map[identity]*session{},
 		tokens:   map[string]*generation{},
-		flights:  map[identity]*flight{},
+		flights:  map[flightKey]*flight{},
 		pending:  map[int64]int{},
 		lastCaps: map[int64]core.ClientCaps{},
-		warm:     map[identity]*warmEntry{}, warmRequests: map[int64][]time.Time{},
+		warm:     map[identity]*warmEntry{}, warmRequests: map[warmBudgetKey][]time.Time{},
 		livePins:     map[string]int{},
 		progressPins: map[string]bool{},
 		pinKick:      make(chan struct{}, 1),
@@ -260,7 +317,7 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 	}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 
-	m.wg.Add(3)
+	m.wg.Add(4)
 	go func() {
 		defer m.wg.Done()
 		if err := m.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -269,6 +326,7 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 	}()
 	go func() { defer m.wg.Done(); m.janitor() }()
 	go func() { defer m.wg.Done(); m.pinLoop() }()
+	go func() { defer m.wg.Done(); m.speedLoop() }()
 	m.log.Info("loopback source server listening", "addr", ln.Addr().String())
 	return m, nil
 }
@@ -412,28 +470,45 @@ func userLabel(u *core.User) string {
 // stream limits, or returns the existing session for the same user, client
 // and title. Concurrent calls for the same session share one resolution.
 func (m *Manager) Prepare(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps) (*core.PlaySession, error) {
+	return m.prepareEntry(ctx, user, key, caps, "")
+}
+
+// prepareEntry is Prepare plus an optional picked release (prefer != "").
+// An existing session on a different release is replaced, never reused.
+func (m *Manager) prepareEntry(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps, prefer string) (*core.PlaySession, error) {
 	if user == nil {
 		return nil, core.ErrUnauthorized
 	}
 	id := identity{userID: user.ID, clientID: caps.ClientID, key: key}
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return nil, errors.New("playback: shutting down")
+	for {
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return nil, errors.New("playback: shutting down")
+		}
+		m.lastCaps[user.ID] = caps
+		if s := m.byIdent[id]; s != nil {
+			if prefer == "" || s.current().releaseID() == prefer {
+				m.mu.Unlock()
+				s.touch(m.now())
+				return s.snapshot(m.now()), nil
+			}
+			old := s.id
+			m.mu.Unlock()
+			m.log.Debug("variant picked a different release; replacing session", "old", old, "prefer", prefer)
+			m.Stop(old)
+			continue
+		}
+		break
 	}
-	m.lastCaps[user.ID] = caps
-	if s := m.byIdent[id]; s != nil {
-		m.mu.Unlock()
-		s.touch(m.now())
-		return s.snapshot(m.now()), nil
-	}
-	f := m.flights[id]
+	fk := flightKey{id: id, prefer: prefer}
+	f := m.flights[fk]
 	if f == nil {
 		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.opts.PrepareTimeout)
 		f = &flight{done: make(chan struct{}), cancel: cancel}
-		m.flights[id] = f
+		m.flights[fk] = f
 		u := *user
-		go m.runFlight(wctx, f, id, &u, caps)
+		go m.runFlight(wctx, f, fk, &u, caps)
 	}
 	f.waiters++
 	m.mu.Unlock()
@@ -454,14 +529,14 @@ func (m *Manager) Prepare(ctx context.Context, user *core.User, key core.RatingK
 	}
 }
 
-func (m *Manager) runFlight(ctx context.Context, f *flight, id identity, user *core.User, caps core.ClientCaps) {
+func (m *Manager) runFlight(ctx context.Context, f *flight, fk flightKey, user *core.User, caps core.ClientCaps) {
 	defer close(f.done)
 	defer f.cancel()
-	s, err := m.prepare(ctx, id, user, caps)
+	s, err := m.prepare(ctx, fk.id, user, caps, fk.prefer)
 	m.mu.Lock()
-	delete(m.flights, id)
-	if err != nil && m.byIdent[id] == nil {
-		delete(m.channelGroups, id)
+	delete(m.flights, fk)
+	if err != nil && m.byIdent[fk.id] == nil {
+		delete(m.channelGroups, fk.id)
 	}
 	m.mu.Unlock()
 	f.sess, f.err = s, err
@@ -470,7 +545,7 @@ func (m *Manager) runFlight(ctx context.Context, f *flight, id identity, user *c
 	}
 }
 
-func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, caps core.ClientCaps) (*session, error) {
+func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, caps core.ClientCaps, prefer string) (*session, error) {
 	log := m.log.With("user", userLabel(user), "client", caps.ClientID, "key", id.key)
 	if err := m.reserve(user, id); err != nil {
 		log.Info("stream limit", "err", err)
@@ -494,6 +569,8 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	}
 	profile := m.deps.SelectProfile(caps, user)
 	s := newSession(randomID(16), id, user, caps, title, profile.Name, m.now())
+	s.prefer = prefer
+	s.resetSpeed(m.now(), m.opts.SpeedGrace)
 	m.mu.Lock()
 	s.playbackGroup = m.channelGroups[id]
 	m.mu.Unlock()
@@ -510,6 +587,14 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		m.mu.Unlock()
 		m.dropGeneration(g)
 		return nil, errors.New("playback: shutting down")
+	}
+	// Distinct picked-release flights can race to register the same
+	// user/client/title. Keep the first completed session and discard the
+	// losing source instead of overwriting byIdent and leaking a live stream.
+	if existing := m.byIdent[id]; existing != nil {
+		m.mu.Unlock()
+		m.dropGeneration(g)
+		return existing, nil
 	}
 	var replaced []string
 	for _, o := range m.sessions {
@@ -532,8 +617,9 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	}
 	m.pinLive(g.releaseID())
 	m.saveResume(ctx, s, g)
+	ginfo := g.infoSnapshot()
 	log.Info("playback session started", "session", s.id, "release", g.res.Release.Name,
-		"container", g.info.Container, "size", g.tmap.Size, "duration", g.info.Duration, "estimated", g.info.Estimated)
+		"container", ginfo.Container, "size", g.src.Size(), "duration", ginfo.Duration, "estimated", ginfo.Estimated)
 	m.emitEvent("start", s, nil)
 	return s, nil
 }
@@ -636,15 +722,31 @@ func (m *Manager) urlFor(g *generation) string {
 }
 
 // SetDecision records the transcode decision the front end made for a
-// session, shown in Sessions().
+// session, shown in Sessions(). A remux/transcode decision satisfies a
+// pending RequiresRemux.
 func (m *Manager) SetDecision(id string, d core.Decision) {
 	if s := m.lookup(id); s != nil {
 		s.mu.Lock()
 		s.decision, s.explicit = d.Kind, true
 		s.decisionReason = d.Reason
+		if d.Kind == core.DecisionRemux || d.Kind == core.DecisionTranscode {
+			s.requiresRemux = false
+		}
 		s.mu.Unlock()
 		m.emitEvent("update", s, nil)
 	}
+}
+
+// RequiresRemux reports whether the session must be (re)started as a
+// zero-encode remux instead of direct play (see core.RemuxRequirer).
+func (m *Manager) RequiresRemux(sessionID string) bool {
+	s := m.lookup(sessionID)
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.requiresRemux
 }
 
 // Timeline feeds a client's timeline state into session liveness: playing,

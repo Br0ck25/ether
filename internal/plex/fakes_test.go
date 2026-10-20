@@ -453,8 +453,10 @@ func (p *fakePlayback) Touch(id string) {
 // Transcoder
 
 type fakeHLS struct {
-	id  string
-	req core.HLSRequest
+	id       string
+	req      core.HLSRequest
+	rungs    []core.HLSRung
+	rungReqs []string
 }
 
 func (h *fakeHLS) ID() string { return h.id }
@@ -465,6 +467,17 @@ func (h *fakeHLS) ServePlaylist(w http.ResponseWriter, r *http.Request) {
 func (h *fakeHLS) ServeSegment(w http.ResponseWriter, r *http.Request, n int) {
 	w.Header().Set("Content-Type", "video/mp2t")
 	fmt.Fprintf(w, "segment-%d", n)
+}
+func (h *fakeHLS) Rungs() []core.HLSRung { return h.rungs }
+func (h *fakeHLS) ServeRungPlaylist(w http.ResponseWriter, r *http.Request, rung string) {
+	h.rungReqs = append(h.rungReqs, rung+"/index")
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	fmt.Fprintf(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\n00000.ts\n# rung %s\n", rung)
+}
+func (h *fakeHLS) ServeRungSegment(w http.ResponseWriter, r *http.Request, rung string, n int) {
+	h.rungReqs = append(h.rungReqs, fmt.Sprintf("%s/%d", rung, n))
+	w.Header().Set("Content-Type", "video/mp2t")
+	fmt.Fprintf(w, "segment-%s-%d", rung, n)
 }
 func (h *fakeHLS) SwapInput(context.Context, string, core.MediaInfo, time.Duration) error { return nil }
 func (h *fakeHLS) LastAccess() time.Time                                                  { return fixedNow }
@@ -477,6 +490,7 @@ type fakeTranscoder struct {
 	stopped  []string
 	lastOpts core.DecideOptions
 	lastCaps core.ClientCaps
+	rungs    []core.HLSRung
 }
 
 func newFakeTranscoder(d core.Decision) *fakeTranscoder {
@@ -500,7 +514,7 @@ func (t *fakeTranscoder) Decide(info core.MediaInfo, caps core.ClientCaps, opts 
 func (t *fakeTranscoder) StartHLS(_ context.Context, req core.HLSRequest) (core.HLSSession, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	h := &fakeHLS{id: req.SessionID, req: req}
+	h := &fakeHLS{id: req.SessionID, req: req, rungs: t.rungs}
 	t.sessions[req.SessionID] = h
 	return h, nil
 }

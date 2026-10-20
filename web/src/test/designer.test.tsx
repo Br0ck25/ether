@@ -37,9 +37,9 @@ async function setStatus(title: string, value: "Always" | "Eligible" | "Off") {
   await closeEditor();
 }
 
-describe("Home Designer", () => {
+describe("Home screens", () => {
   it("previews the typical viewer's Global Home with each row's provenance", async () => {
-    const { fake } = renderApp("/designer");
+    const { fake } = renderApp("/home-screens");
     const cw = await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     expect(within(cw).getByText(/Global anchor/)).toBeInTheDocument();
     expect(within(cw).getByText(/global anchor at slot 1/)).toBeInTheDocument();
@@ -61,7 +61,7 @@ describe("Home Designer", () => {
   });
 
   it("edits Global: the server previews the draft and reports the impact across viewers", async () => {
-    const { fake } = renderApp("/designer");
+    const { fake } = renderApp("/home-screens");
     await screen.findByRole("region", { name: /Top 10 on Living Room Ether Today/ }, WAIT);
     await setStatus("Top 10 Today", "Off");
 
@@ -121,7 +121,7 @@ describe("Home Designer", () => {
   });
 
   it("overrides a Global setting for one viewer and resets it to global", async () => {
-    const { fake } = renderApp("/designer");
+    const { fake } = renderApp("/home-screens");
     await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     fireEvent.click(screen.getByRole("radio", { name: /Sam Rivera/ }));
     await screen.findByRole("region", { name: /Hidden Gems for You/ }, WAIT);
@@ -184,7 +184,7 @@ describe("Home Designer", () => {
   });
 
   it("anchors a row from the preview and limits the page length", async () => {
-    const { fake } = renderApp("/designer");
+    const { fake } = renderApp("/home-screens");
     const row = await screen.findByRole("region", { name: /Slot \d+: New Releases/ }, WAIT);
     const slot = row.getAttribute("aria-label")!.match(/^Slot (\d+)/)![1];
     fireEvent.click(
@@ -202,15 +202,16 @@ describe("Home Designer", () => {
       status: "always",
       slot: Number(slot),
     });
-    fireEvent.click(screen.getByRole("button", { name: "Edit anchored slots" }));
+    // Page structure and length are edited in place on the Layout tab, not in a drawer.
+    expect(
+      screen.queryByRole("button", { name: /Edit anchored slots|Edit page length/ }),
+    ).toBeNull();
     expect(
       within(screen.getByRole("region", { name: "Anchored slots" })).getAllByRole("button", {
         name: /Move anchored row/,
       }),
     ).toHaveLength(2);
-
-    await closeEditor();
-    fireEvent.click(screen.getByRole("button", { name: "Edit page length" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
     fireEvent.change(screen.getByLabelText("Home rows"), { target: { value: "3" } });
     const cut = await screen.findByRole("region", { name: "Not on this page" }, WAIT);
     await waitFor(
@@ -220,8 +221,26 @@ describe("Home Designer", () => {
     expect(lastPreview(fake).layout?.global[0]?.maxRows).toBe(3);
   });
 
+  it("adds a custom row pattern from a drawer", async () => {
+    renderApp("/home-screens");
+    expect(await screen.findByRole("heading", { name: "Home screens" }, WAIT)).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
+    fireEvent.click(screen.getByRole("tab", { name: "Rows" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add custom pattern" }));
+    const drawer = await screen.findByRole("dialog", { name: "Custom row pattern" });
+    fireEvent.change(within(drawer).getByLabelText("Custom row pattern"), {
+      target: { value: "because.*" },
+    });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Add" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Custom row pattern" })).toBeNull(),
+    );
+    expect(await screen.findByRole("listitem", { name: "Row because.*" })).toBeInTheDocument();
+    expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
+  });
+
   it("discards unsaved edits", async () => {
-    const { fake } = renderApp("/designer");
+    const { fake } = renderApp("/home-screens");
     await screen.findByRole("region", { name: /Top 10 on Living Room Ether Today/ }, WAIT);
     await setStatus("New Releases", "Off");
     expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();
@@ -231,7 +250,7 @@ describe("Home Designer", () => {
   });
 
   it("shows a viewer's saved Home read-only on their profile", async () => {
-    const { fake } = renderApp("/viewers/2?tab=home");
+    const { fake } = renderApp("/viewers/2/home");
     const cw = await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     expect(within(cw).getByText("Global anchor")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Turn off/ })).toBeNull();

@@ -2,6 +2,7 @@ package usenet
 
 import (
 	"context"
+	"errors"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/usenet/nntptest"
@@ -62,7 +63,10 @@ func TestIdleDeadlineRenewsWithProgress(t *testing.T) {
 	}()
 	data, err := io.ReadAll(c)
 	<-done
-	if err != nil || len(data) != 6 {
+	// net.Pipe reports io.ErrClosedPipe when its peer closes, unlike a TCP
+	// socket's EOF. That is a normal end after all six progress bytes; the
+	// regression this test guards against is an idle timeout before them.
+	if (err != nil && !errors.Is(err, io.ErrClosedPipe)) || len(data) != 6 {
 		t.Fatalf("healthy progress timed out: %d %v", len(data), err)
 	}
 }

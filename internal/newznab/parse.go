@@ -48,6 +48,9 @@ type rawItem struct {
 	password                   bool
 	category                   int
 	usenetDate                 string
+	// Torznab
+	infoHash, magnet, encType string
+	seeders, peers            int
 }
 
 func (r rawItem) toRelease(indexer string) core.Release {
@@ -64,6 +67,22 @@ func (r rawItem) toRelease(indexer string) core.Release {
 	rel.ID = releaseID(indexer, r.guid, nzbURL+name)
 	if name != "" {
 		rel.Info = releaseparse.Parse(name)
+	}
+	rel.Seeders, rel.Peers = r.seeders, r.peers
+	magnet := r.magnet
+	if magnet == "" && strings.HasPrefix(strings.ToLower(r.link), "magnet:") {
+		magnet = r.link
+	}
+	if strings.HasPrefix(strings.ToLower(rel.NZBURL), "magnet:") {
+		rel.NZBURL = "" // a magnet is not a downloadable document
+	}
+	rel.MagnetURL = magnet
+	rel.InfoHash = NormalizeInfoHash(r.infoHash)
+	if rel.InfoHash == "" && magnet != "" {
+		rel.InfoHash = InfoHashFromMagnet(magnet)
+	}
+	if rel.InfoHash != "" || magnet != "" || strings.Contains(strings.ToLower(r.encType), "bittorrent") {
+		rel.Protocol = core.ProtocolTorrent
 	}
 	return rel
 }
@@ -120,6 +139,9 @@ func parseXMLFeed(body []byte, indexer string) ([]core.Release, error) {
 							if n, err := strconv.ParseInt(a.Value, 10, 64); err == nil && cur.size == 0 {
 								cur.size = n
 							}
+						}
+						if a.Name.Local == "type" {
+							cur.encType = a.Value
 						}
 					}
 				}
@@ -201,6 +223,19 @@ func applyAttr(r *rawItem, name, val string) {
 		if r.guid == "" {
 			r.guid = val
 		}
+	// Torznab attributes.
+	case "infohash":
+		r.infoHash = val
+	case "magneturl":
+		r.magnet = val
+	case "seeders":
+		if n, err := strconv.Atoi(val); err == nil {
+			r.seeders = n
+		}
+	case "peers":
+		if n, err := strconv.Atoi(val); err == nil {
+			r.peers = n
+		}
 	}
 }
 
@@ -242,6 +277,7 @@ func parseJSONFeed(body []byte, indexer string) ([]core.Release, error) {
 		if enc, ok := it["enclosure"].(map[string]any); ok {
 			attrs, _ := enc["@attributes"].(map[string]any)
 			if attrs != nil {
+				r.encType = asString(attrs["type"])
 				if u := asString(attrs["url"]); u != "" && r.link == "" {
 					r.link = u
 				}

@@ -5,6 +5,8 @@
 package usenet
 
 import (
+	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -54,7 +56,11 @@ type Options struct {
 	CommandTimeout time.Duration
 	// IdleReadTimeout bounds stalled command/body reads; default 5 seconds.
 	IdleReadTimeout time.Duration
-	// MinIdle keeps this many primary connections warm after use; negative disables.
+	// MinIdle keeps this many primary (non-backfill) connections per
+	// provider warm at all times: established in the background, held
+	// past IdleTimeout and DATE-pinged so Play never pays a cold dial.
+	// 0 = DefaultMinIdle; negative disables. A provider's own
+	// config.UsenetProvider.MinIdle overrides it.
 	MinIdle int
 	// IdleTimeout closes excess connections unused for this long.
 	IdleTimeout time.Duration
@@ -168,13 +174,18 @@ type Fetcher struct {
 	closed bool
 	gen    atomic.Uint64
 	rr     atomic.Uint64
+	// minIdle is the fetcher-wide warm floor (already defaulted);
+	// UpdateConfig changes it live.
+	minIdle atomic.Int32
 
 	misses *missCache
 }
 
 var _ core.ArticleFetcher = (*Fetcher)(nil)
 
-// New builds a fetcher for providers. Connections are dialled lazily.
+// New builds a fetcher for providers. Connections are dialled lazily,
+// except each primary provider's MinIdle warm floor, which the pool
+// janitors establish (and keep) in the background.
 func New(providers []config.UsenetProvider, opts Options) *Fetcher {
 	opts.withDefaults()
 	f := &Fetcher{
@@ -182,8 +193,31 @@ func New(providers []config.UsenetProvider, opts Options) *Fetcher {
 		log:    opts.Logger,
 		misses: newMissCache(opts.MissTTL, opts.MissCacheSize),
 	}
+	f.minIdle.Store(int32(opts.MinIdle))
 	f.Update(providers)
 	return f
+}
+
+// UpdateConfig applies an edited Usenet config: the provider list (see
+// Update) and the MinIdle warm floor, live and without a restart.
+// MinIdle 0 takes the default; negative disables the floor.
+func (f *Fetcher) UpdateConfig(u config.Usenet) {
+	n := u.MinIdle
+	if n == 0 {
+		n = DefaultMinIdle
+	}
+	f.minIdle.Store(int32(n))
+	f.Update(u.Providers)
+	// Reused pools pick up the new floor here; newly created ones read
+	// f.minIdle in Update. Either way, nudge the janitor so a raised
+	// floor is established now rather than at the next sweep.
+	f.mu.RLock()
+	pools := append([]*pool(nil), f.pools...)
+	f.mu.RUnlock()
+	for _, p := range pools {
+		p.setGlobalMinIdle(n)
+		p.maintainFloor()
+	}
 }
 
 // Update swaps in a new provider list. Providers whose settings are
@@ -214,7 +248,7 @@ func (f *Fetcher) Update(providers []config.UsenetProvider) {
 		}
 		if p == nil {
 			key := cmp.Or(cfg.ID, cfg.Host) + "#" + strconv.FormatUint(f.gen.Add(1), 10)
-			p = newPool(key, cfg, &f.o, f.log)
+			p = newPool(key, cfg, &f.o, f.log, int(f.minIdle.Load()))
 		}
 		reused[p] = true
 		next = append(next, p)
@@ -343,99 +377,191 @@ func (f *Fetcher) Stat(ctx context.Context, messageID string) (bool, error) {
 	return false, err
 }
 
+// StatStream checks a set of articles with pipelined STAT, reporting each
+// article to fn as soon as its fate is decided: present=true the moment any
+// provider answers 223, and present=false once every provider that could
+// answer said 430 (primary tiers first, then backfill). Results flow per
+// pipelined chunk as they arrive instead of waiting for the slowest batch,
+// so a caller that only needs the first confirmed miss (a health check)
+// can stop early: fn returning false cancels all outstanding work and
+// StatStream returns nil.
+//
+// An article is never reported missing on the strength of provider errors:
+// if some provider failed to answer for it, it stays undecided and
+// StatStream returns the first such error after reporting everything that
+// was decided. fn is called from one goroutine at a time, with ids exactly
+// as the caller passed them.
+func (f *Fetcher) StatStream(ctx context.Context, messageIDs []string, fn func(id string, present bool) bool) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	if fn == nil {
+		return errors.New("usenet: StatStream without a result function")
+	}
+	type pending struct {
+		caller    string
+		missed    bool // at least one provider answered 430
+		uncertain bool // at least one provider failed to answer
+	}
+	pend := make(map[string]*pending, len(messageIDs))
+	var order []string // normalized ids, first-seen order
+	for _, id := range messageIDs {
+		normalized, err := normalizeMessageID(id)
+		if err != nil {
+			return err
+		}
+		if _, ok := pend[normalized]; !ok {
+			pend[normalized] = &pending{caller: id}
+			order = append(order, normalized)
+		}
+	}
+	pools := f.order()
+	if len(pools) == 0 {
+		return ErrNoProviders
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var firstErr error
+	for poolIdx, p := range pools {
+		lastPool := poolIdx == len(pools)-1
+		if len(pend) == 0 {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var ids []string
+		for _, id := range order {
+			if _, ok := pend[id]; ok {
+				ids = append(ids, id)
+			}
+		}
+		workers := max(1, min(4, p.size, len(ids)))
+		chunks := make([][]string, workers)
+		for i, id := range ids {
+			chunks[i%workers] = append(chunks[i%workers], id)
+		}
+		type answer struct {
+			chunk  []string
+			values map[string]bool
+			err    error
+		}
+		answers := make(chan answer, len(chunks))
+		launched := 0
+		for _, chunk := range chunks {
+			if len(chunk) == 0 {
+				continue
+			}
+			launched++
+			go func(chunk []string) {
+				values, err := p.statMany(ctx, chunk)
+				answers <- answer{chunk: chunk, values: values, err: err}
+			}(chunk)
+		}
+		stopped := false
+		received := 0
+		for ; received < launched && !stopped; received++ {
+			a := <-answers
+			if a.err != nil {
+				if firstErr == nil {
+					firstErr = a.err
+				}
+				// A provider error means a negative from another provider
+				// cannot prove global absence for these articles.
+				for _, id := range a.chunk {
+					if st, ok := pend[id]; ok {
+						st.uncertain = true
+					}
+				}
+				continue
+			}
+			for id, ok := range a.values {
+				st, still := pend[id]
+				if !still {
+					continue
+				}
+				if !ok {
+					st.missed = true
+					f.misses.add(id, p.key)
+					// On the last provider a 430 is final (unless an
+					// earlier provider could not answer): report it now
+					// rather than waiting for the slowest chunk.
+					if lastPool && !st.uncertain {
+						delete(pend, id)
+						if !fn(st.caller, false) {
+							stopped = true
+							break
+						}
+					}
+					continue
+				}
+				delete(pend, id)
+				if !fn(st.caller, true) {
+					stopped = true
+					break
+				}
+			}
+		}
+		if stopped {
+			cancel()
+			// Workers send into a buffered channel and observe the
+			// cancelled context; drain so none outlive the return.
+			for ; received < launched; received++ {
+				<-answers
+			}
+			return nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	undecided := false
+	for _, id := range order {
+		st, still := pend[id]
+		if !still {
+			continue
+		}
+		if st.missed && !st.uncertain {
+			if !fn(st.caller, false) {
+				return nil
+			}
+		} else {
+			undecided = true
+		}
+	}
+	if undecided {
+		if firstErr != nil {
+			return firstErr
+		}
+		return ErrNoProviders
+	}
+	return nil
+}
+
 // StatMany checks a set of articles while pipelining commands over several
 // connections to the first available provider. Missing articles are retried
 // through the normal provider chain, preserving block-account backfill.
+// Results are keyed by the message-ids exactly as given.
 func (f *Fetcher) StatMany(ctx context.Context, messageIDs []string) (map[string]bool, error) {
 	result := make(map[string]bool, len(messageIDs))
 	if len(messageIDs) == 0 {
 		return result, nil
 	}
-	ids := make([]string, 0, len(messageIDs))
+	seen := make(map[string]bool, len(messageIDs))
+	err := f.StatStream(ctx, messageIDs, func(id string, present bool) bool {
+		if normalized, nerr := normalizeMessageID(id); nerr == nil {
+			seen[normalized] = present
+		}
+		return true
+	})
 	for _, id := range messageIDs {
-		normalized, err := normalizeMessageID(id)
-		if err != nil {
-			return nil, err
+		normalized, nerr := normalizeMessageID(id)
+		if nerr != nil {
+			return nil, nerr
 		}
-		ids = append(ids, normalized)
+		result[id] = seen[normalized]
 	}
-	pools := f.order()
-	if len(pools) == 0 {
-		return nil, ErrNoProviders
-	}
-	unresolved := append([]string(nil), ids...)
-	var firstErr error
-	for _, p := range pools {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if len(unresolved) == 0 {
-			break
-		}
-		workers := min(4, p.size, len(unresolved))
-		if workers < 1 {
-			workers = 1
-		}
-		chunks := make([][]string, workers)
-		for i, id := range unresolved {
-			chunks[i%workers] = append(chunks[i%workers], id)
-		}
-		type answer struct {
-			values map[string]bool
-			err    error
-		}
-		answers := make([]answer, len(chunks))
-		var wg sync.WaitGroup
-		for i, chunk := range chunks {
-			if len(chunk) == 0 {
-				continue
-			}
-			wg.Add(1)
-			go func(i int, chunk []string) {
-				defer wg.Done()
-				answers[i].values, answers[i].err = p.statMany(ctx, chunk)
-			}(i, chunk)
-		}
-		wg.Wait()
-		for _, a := range answers {
-			if a.err != nil {
-				if firstErr == nil {
-					firstErr = a.err
-				}
-				continue
-			}
-			for id, ok := range a.values {
-				if ok {
-					result[id] = true
-				} else {
-					f.misses.add(id, p.key)
-				}
-			}
-		}
-		next := unresolved[:0]
-		for _, id := range unresolved {
-			if !result[id] {
-				next = append(next, id)
-			}
-		}
-		unresolved = next
-		// A provider error means a negative from another provider cannot prove
-		// global absence. Preserve uncertainty after all provider attempts.
-	}
-	if len(unresolved) > 0 && firstErr != nil {
-		return byCallerID(messageIDs, ids, result), firstErr
-	}
-	return byCallerID(messageIDs, ids, result), nil
-}
-
-// byCallerID re-keys results from normalized "<id>" form to the message-ids
-// exactly as the caller passed them (NZBs carry them without brackets).
-func byCallerID(callerIDs, normalized []string, result map[string]bool) map[string]bool {
-	out := make(map[string]bool, len(callerIDs))
-	for i, id := range callerIDs {
-		out[id] = result[normalized[i]]
-	}
-	return out
+	return result, err
 }
 
 // Warm dials, negotiates TLS, and authenticates idle connections before a
@@ -603,9 +729,31 @@ func (f *Fetcher) Close() error {
 	return nil
 }
 
-// CheckBody verifies actual BODY availability without downloading a full article.
-// A partial response retires its connection so unread bytes cannot poison reuse.
+// checkBodyDrainMax is the largest announced part size whose remainder
+// CheckBodyPart drains to keep the connection reusable. Bigger articles
+// are abandoned by closing the connection instead: draining ~1 MiB would
+// delay the health verdict on the Play critical path, while the redial
+// happens off that path (the warm-floor janitor replaces the connection
+// in the background). BenchmarkCheckBody measures both strategies.
+var checkBodyDrainMax int64 = 128 << 10
+
+// CheckBody verifies actual BODY availability without downloading a full
+// article. See CheckBodyPart.
 func (f *Fetcher) CheckBody(ctx context.Context, messageID string, groups []string, prio core.Priority) error {
+	return f.CheckBodyPart(ctx, messageID, groups, prio, core.ArticlePart{})
+}
+
+// CheckBodyPart verifies that BODY really serves the expected yEnc part:
+// providers often answer 223 to STAT while BODY returns a 451/430 DMCA
+// takedown. It reads only the =ybegin/=ypart header lines (bounded, so a
+// malicious unterminated line cannot consume memory), checks them against
+// want where want is known (zero fields are unchecked), and then either
+// drains a small remainder so the connection stays reusable or closes the
+// connection so unread bytes cannot poison reuse. It returns an error
+// wrapping core.ErrArticleMissing when every provider answered 430/451,
+// and ErrCorrupt when a provider served something that is not the
+// expected yEnc part.
+func (f *Fetcher) CheckBodyPart(ctx context.Context, messageID string, groups []string, prio core.Priority, want core.ArticlePart) error {
 	id, err := normalizeMessageID(messageID)
 	if err != nil {
 		return err
@@ -625,18 +773,7 @@ func (f *Fetcher) CheckBody(ctx context.Context, messageID string, groups []stri
 		}
 		reader, err := c.Body(ctx, id)
 		if err == nil {
-			// A single buffered byte proves the BODY is readable. Bypass the
-			// line reader so a malicious unterminated line cannot consume an article.
-			n, e := io.CopyN(io.Discard, c.r, 1)
-			if e != nil && !errors.Is(e, io.EOF) {
-				err = e
-			} else if n == 0 {
-				err = ErrCorrupt
-			}
-			if !reader.done {
-				_ = c.Close()
-				reader.finish(nil)
-			}
+			err = probeBodyHeader(c, reader, p.o.MaxArticleSize, want)
 		}
 		p.put(c, prio)
 		if err != nil {
@@ -652,4 +789,148 @@ func (f *Fetcher) CheckBody(ctx context.Context, messageID string, groups []stri
 		p.brk.success()
 		return nil
 	})
+}
+
+// probeBodyHeader validates the yEnc header at the start of an open BODY
+// response and leaves the connection either drained (reusable) or closed.
+func probeBodyHeader(c *Conn, reader *BodyReader, maxPart int64, want core.ArticlePart) error {
+	hdr, err := readYencHeader(c)
+	if err != nil {
+		// Not the expected article (or the wire failed): never reuse a
+		// connection whose body position is unknown.
+		_ = c.Close()
+		reader.finish(nil)
+		return err
+	}
+	if err := validateYencHeader(hdr, maxPart, want); err != nil {
+		_ = c.Close()
+		reader.finish(nil)
+		return err
+	}
+	if hdr.PartSize() <= checkBodyDrainMax {
+		// Small remainder: drain it (bounded by a generous estimate of
+		// the encoded size) so this connection serves the next request.
+		if derr := drainBodyBounded(c, reader, 2*hdr.PartSize()+(64<<10)); derr != nil {
+			return derr
+		}
+		return nil
+	}
+	_ = c.Close()
+	reader.finish(nil)
+	return nil
+}
+
+// readBoundedLine reads one CRLF line straight from the connection buffer,
+// dot-unstuffed, reporting the "." terminator. A line longer than the
+// buffer is an error rather than an unbounded allocation.
+func readBoundedLine(c *Conn) (line []byte, terminator bool, err error) {
+	raw, err := c.r.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return nil, false, fmt.Errorf("%w: overlong line in BODY probe", ErrCorrupt)
+	}
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
+		return nil, false, err
+	}
+	line = bytes.TrimRight(raw, "\r\n")
+	if len(line) == 1 && line[0] == '.' {
+		return nil, true, nil
+	}
+	if len(line) > 0 && line[0] == '.' {
+		line = line[1:]
+	}
+	return line, false, nil
+}
+
+// readYencHeader scans to the =ybegin line (skipping a bounded preamble)
+// and parses the following =ypart line of multipart posts.
+func readYencHeader(c *Conn) (yenc.Header, error) {
+	var hdr yenc.Header
+	for i := 0; i < 32; i++ {
+		line, term, err := readBoundedLine(c)
+		if err != nil {
+			return hdr, err
+		}
+		if term {
+			return hdr, fmt.Errorf("%w: empty article body", ErrCorrupt)
+		}
+		if !bytes.HasPrefix(line, []byte("=ybegin ")) {
+			continue
+		}
+		hdr, err = yenc.ParseBegin(line)
+		if err != nil {
+			return hdr, fmt.Errorf("%w: %w", ErrCorrupt, err)
+		}
+		if hdr.Part <= 0 {
+			return hdr, nil
+		}
+		line, term, err = readBoundedLine(c)
+		if err != nil {
+			return hdr, err
+		}
+		if term || !bytes.HasPrefix(line, []byte("=ypart ")) {
+			return hdr, fmt.Errorf("%w: multipart article without =ypart", ErrCorrupt)
+		}
+		if err := yenc.ParsePart(line, &hdr); err != nil {
+			return hdr, fmt.Errorf("%w: %w", ErrCorrupt, err)
+		}
+		return hdr, nil
+	}
+	return hdr, fmt.Errorf("%w: no =ybegin header", ErrCorrupt)
+}
+
+func validateYencHeader(hdr yenc.Header, maxPart int64, want core.ArticlePart) error {
+	if hdr.PartSize() < 0 || (maxPart > 0 && hdr.PartSize() > maxPart) {
+		return fmt.Errorf("%w: part size %d out of range", ErrCorrupt, hdr.PartSize())
+	}
+	part := hdr.Part
+	if part == 0 {
+		part = 1 // single-part post
+	}
+	switch {
+	case want.Part > 0 && part != want.Part:
+		return fmt.Errorf("%w: yEnc part %d, want %d", ErrCorrupt, part, want.Part)
+	case want.Total > 0 && hdr.Total > 0 && hdr.Total != want.Total:
+		return fmt.Errorf("%w: yEnc total %d, want %d", ErrCorrupt, hdr.Total, want.Total)
+	case want.FileSize > 0 && hdr.Size != want.FileSize:
+		return fmt.Errorf("%w: yEnc file size %d, want %d", ErrCorrupt, hdr.Size, want.FileSize)
+	case want.Begin > 0 && hdr.Begin != want.Begin:
+		return fmt.Errorf("%w: yEnc begin %d, want %d", ErrCorrupt, hdr.Begin, want.Begin)
+	case want.End > 0 && hdr.End != want.End:
+		return fmt.Errorf("%w: yEnc end %d, want %d", ErrCorrupt, hdr.End, want.End)
+	}
+	return nil
+}
+
+// drainBodyBounded reads a BODY remainder to its terminator, line by line,
+// giving up (by closing the connection, without failing the probe) when
+// the remainder is far larger than announced or a line overruns the
+// buffer. A transport error mid-body fails the probe: the article is not
+// fully there.
+func drainBodyBounded(c *Conn, reader *BodyReader, maxBytes int64) error {
+	var n int64
+	for {
+		raw, err := c.r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			_ = c.Close()
+			reader.finish(nil)
+			return nil
+		}
+		if err != nil {
+			reader.finish(err)
+			return reader.ioErr
+		}
+		n += int64(len(raw))
+		if n > maxBytes {
+			_ = c.Close()
+			reader.finish(nil)
+			return nil
+		}
+		if line := bytes.TrimRight(raw, "\r\n"); len(line) == 1 && line[0] == '.' {
+			reader.finish(nil)
+			return reader.ioErr
+		}
+	}
 }

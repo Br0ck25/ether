@@ -1,0 +1,175 @@
+import { Badge, Button, EmptyState, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
+import { BellRing, Pencil, Plus, Send, Smartphone, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { Section } from "../../components/layout";
+import { apiFetch, errorMessage } from "../../lib/api";
+import { ChannelDrawer } from "./ChannelDrawer";
+import {
+  blankChannel,
+  channelName,
+  eventLabel,
+  transportLabel,
+  type Channel,
+  type NotificationsData,
+} from "./types";
+
+/** Where alerts go: one row per channel, each edited in a drawer. */
+export function Channels({
+  data,
+  onChanged,
+}: {
+  data: NotificationsData;
+  onChanged: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState<{ channel: Channel; isNew: boolean } | null>(null);
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<unknown>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const edit = (c: Channel, isNew = false) => {
+    setEditing({ channel: c, isNew });
+    setSaveError(null);
+    setOpen(true);
+  };
+
+  const save = async (channel: Channel) => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await apiFetch(`/notifications/${channel.id}`, {
+        method: "PUT",
+        body: JSON.stringify(channel),
+      });
+      toast.success("Channel saved");
+      setOpen(false);
+      await onChanged();
+    } catch (e) {
+      setSaveError(e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const run = async (id: string, fn: () => Promise<void>) => {
+    setBusy(id);
+    try {
+      await fn();
+      await onChanged();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const test = (c: Channel) =>
+    run(c.id, async () => {
+      await apiFetch(`/notifications/${c.id}/test`, { method: "POST", body: "{}" });
+      toast.success("Test queued", { description: "Its result appears in Delivery history." });
+    });
+
+  const remove = async (c: Channel) => {
+    const ok = await confirmDialog({
+      title: "Delete channel?",
+      message: `${channelName(c)} stops receiving alerts. Its delivery history is kept.`,
+      confirmLabel: "Delete",
+      tone: "danger",
+    });
+    if (ok)
+      await run(c.id, async () => {
+        await apiFetch(`/notifications/${c.id}`, { method: "DELETE" });
+        toast.success("Channel deleted");
+      });
+  };
+
+  return (
+    <>
+      <Section
+        title="Channels"
+        description="Send alerts about playback, sources and the server to the apps you already use."
+        actions={
+          <Button size="sm" onClick={() => edit(blankChannel(), true)}>
+            <Plus size={14} /> New channel
+          </Button>
+        }
+        bodyClassName={data.channels.length ? "divide-y divide-border" : undefined}
+      >
+        {data.channels.length ? (
+          data.channels.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-medium text-fg">{channelName(c)}</p>
+                  <Badge variant="secondary">{transportLabel(c.kind)}</Badge>
+                  <Badge variant={c.enabled ? "success" : "outline"}>
+                    {c.enabled ? "On" : "Off"}
+                  </Badge>
+                </div>
+                <p className="text-xs text-fg-muted">
+                  {c.events.length ? c.events.map(eventLabel).join(", ") : "No events selected"}
+                  {c.digestMinutes ? ` · digest every ${c.digestMinutes} min` : ""}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy === c.id || !c.enabled}
+                  onClick={() => void test(c)}
+                >
+                  <Send size={14} /> Send test
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => edit(c)}>
+                  <Pencil size={14} /> Edit
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy === c.id}
+                  onClick={() => void remove(c)}
+                  aria-label={`Delete ${channelName(c)}`}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+            </div>
+          ))
+        ) : (
+          <EmptyState
+            icon={<BellRing />}
+            title="No channels yet"
+            description="Add a webhook, Discord, Slack, Telegram, email, ntfy or Gotify channel to get alerts."
+          />
+        )}
+      </Section>
+
+      <Section
+        title="Alerts on your phone"
+        description="Install this dashboard as an app for quick access to Activity."
+      >
+        <div className="flex items-start gap-3 text-sm text-fg-muted">
+          <Smartphone size={18} className="mt-0.5 shrink-0 text-fg-subtle" />
+          <p>
+            Open the dashboard over HTTPS and use your browser's Install app or Add to Home Screen
+            action. Activity shows live streams with stop controls. Background alerts arrive through
+            the channels above; browser push notifications aren't available in this version.
+          </p>
+        </div>
+      </Section>
+
+      {editing ? (
+        <ChannelDrawer
+          open={open}
+          channel={editing.channel}
+          isNew={editing.isNew}
+          events={data.events}
+          saving={saving}
+          error={saveError}
+          onClose={() => setOpen(false)}
+          onSave={(c) => void save(c)}
+        />
+      ) : null}
+    </>
+  );
+}

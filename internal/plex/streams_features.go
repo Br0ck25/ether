@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -110,11 +111,22 @@ func (s *Server) addProbedStreamFeatures(ctx context.Context, key core.RatingKey
 			s.log.Debug("marker provider unavailable", "error", err)
 		}
 	}
+	// PMS lists markers in timeline order and puts final="1" only on the
+	// last credits marker (a stinger scene splits credits into several).
+	sort.SliceStable(ranges, func(i, j int) bool { return ranges[i].StartMS < ranges[j].StartMS })
+	lastCredits := -1
+	for i, v := range ranges {
+		if v.Type == "credits" {
+			lastCredits = i
+		}
+	}
+	id := int64(0)
 	for i, v := range ranges {
 		if v.Type != "intro" && v.Type != "credits" {
 			continue
 		}
-		m.Marker = append(m.Marker, model.Marker{ID: int64(i + 1), Type: v.Type, StartTimeOffset: v.StartMS, EndTimeOffset: v.EndMS, Final: model.Ptr(v.Final)})
+		id++
+		m.Marker = append(m.Marker, model.Marker{ID: id, Type: v.Type, StartTimeOffset: v.StartMS, EndTimeOffset: v.EndMS, Final: model.Ptr(v.Final && i == lastCredits)})
 	}
 }
 

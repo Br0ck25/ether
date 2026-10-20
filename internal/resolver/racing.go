@@ -20,6 +20,7 @@ type validation struct {
 	nzb                           []byte
 	err                           error
 	healthy, healthChecked        bool
+	healthCached                  bool // answered by the verified cache, not a check
 	fetchDuration, healthDuration time.Duration
 }
 
@@ -59,9 +60,17 @@ func (s *Service) optimisticCheck(r core.Release, nzb []byte) {
 
 func (s *Service) resolution(key core.RatingKey, cands []candidate, winner int, nzb []byte, tr *Trace) *core.Resolution {
 	res := &core.Resolution{Title: key, Release: cands[winner].rel, NZB: nzb, ResolvedAt: s.now()}
-	for i, c := range cands {
-		if i != winner && !tr.Candidates[c.trace].Rejected && len(res.Alternates) < s.maxCandidates() {
-			res.Alternates = append(res.Alternates, c.rel)
+	// Failover stays on the same cut first: alternates of the winner's
+	// edition come before other cuts (ranked order within each group).
+	edition := cands[winner].rel.Info.Edition
+	for _, same := range []bool{true, false} {
+		for i, c := range cands {
+			if i == winner || tr.Candidates[c.trace].Rejected || len(res.Alternates) >= s.maxCandidates() {
+				continue
+			}
+			if (c.rel.Info.Edition == edition) == same {
+				res.Alternates = append(res.Alternates, c.rel)
+			}
 		}
 	}
 	return res
@@ -98,7 +107,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 					if s.health != nil {
 						v.healthChecked = true
 						phase = time.Now()
-						v.healthy, v.err = s.checkHealth(workCtx, cands[i].rel.ID, v.nzb)
+						v.healthy, v.healthCached, v.err = s.checkHealthCached(workCtx, cands[i].rel.ID, v.nzb)
 						v.healthDuration = time.Since(phase)
 					}
 				}
@@ -126,6 +135,9 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				return -1, nil, ctx.Err()
 			}
 			if ct.Healthy {
+				if v.healthChecked && !v.healthCached {
+					s.noteStartup(cands[v.index].rel, v.fetchDuration+v.healthDuration)
+				}
 				s.recordReputation(ctx, cands[v.index].rel.Indexer, true)
 				winner = v.index
 				nzb = v.nzb

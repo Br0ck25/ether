@@ -1,4 +1,3 @@
-import { Drawer } from "./components/Drawer";
 import {
   AppShell,
   Button,
@@ -14,14 +13,25 @@ import {
   type SidebarNavGroup,
 } from "@braedonsaunders/appkit-ui";
 import {
-  Activity,
+  Activity as ActivityIcon,
+  ArchiveRestore,
+  ArrowDownToLine,
+  Globe,
+  LifeBuoy,
+  Plug,
+  Server,
+  Bell,
   Gauge,
   LayoutTemplate,
   Layers,
+  ListFilter,
   LogOut,
+  MonitorPlay,
+  Network,
   ScrollText,
-  Settings as SettingsIcon,
   Sparkles,
+  Tags,
+  Tv,
   Users,
 } from "lucide-react";
 import {
@@ -44,7 +54,10 @@ import {
 } from "react-router-dom";
 import { AppProvider, useApp } from "./app-context";
 import { Brand, BrandSplash, EtherMark } from "./components/brand";
+import { CommandSearch } from "./components/CommandSearch";
+import { Drawer } from "./components/Drawer";
 import { ErrorPanel } from "./components/feedback";
+import { SaveBarHost } from "./components/SaveBar";
 import { LEVEL_LABEL, LevelBadge, StatusDot } from "./components/status";
 import { api, getToken, setToken } from "./lib/api";
 import type { Bootstrap } from "./lib/types";
@@ -57,18 +70,23 @@ const CollectionEditor = lazy(() => import("./pages/collections/Editor"));
 const Designer = lazy(() => import("./pages/designer/Designer"));
 const ViewersList = lazy(() => import("./pages/viewers/ViewersList"));
 const ViewerProfile = lazy(() => import("./pages/viewers/ViewerProfile"));
-const Settings = lazy(() => import("./pages/settings/Settings"));
+const settingsPage = <K extends keyof typeof import("./pages/settings/pages")>(name: K) =>
+  lazy(() => import("./pages/settings/pages").then((m) => ({ default: m[name] })));
+const GeneralPage = settingsPage("GeneralPage");
+const RemoteAccessPage = settingsPage("RemoteAccessPage");
+const ServicesPage = settingsPage("ServicesPage");
+const BackupsPage = settingsPage("BackupsPage");
+const UpdatesPage = settingsPage("UpdatesPage");
+const TroubleshootingPage = settingsPage("TroubleshootingPage");
 const Setup = lazy(() => import("./pages/Setup"));
 const Logs = lazy(() => import("./pages/Logs"));
-const Adoption = lazy(() => import("./pages/Adoption"));
-const StreamPreferences = lazy(() => import("./pages/StreamPreferences"));
-const PlaybackPolicy = lazy(() => import("./pages/PlaybackPolicy"));
-const Insights = lazy(() => import("./pages/Insights"));
+const Activity = lazy(() => import("./pages/activity/Activity"));
+const Notifications = lazy(() => import("./pages/notifications/Notifications"));
 const LiveTV = lazy(() => import("./pages/livetv/LiveTV"));
-const Discovery = lazy(() => import("./pages/Discovery"));
-const Metadata = lazy(() => import("./pages/Metadata"));
-const Safety = lazy(() => import("./pages/Safety"));
-const Traces = lazy(() => import("./pages/Traces"));
+const Metadata = lazy(() => import("./pages/metadata/Metadata"));
+const Sources = lazy(() => import("./pages/sources/Sources"));
+const Releases = lazy(() => import("./pages/releases/Releases"));
+const Playback = lazy(() => import("./pages/playback/Playback"));
 
 /** react-router links for every AppKit navigation primitive. */
 const RouterAnchor = forwardRef<
@@ -85,56 +103,65 @@ const linkRender: LinkRender = ({ href, children, className, title, ariaCurrent,
   </Link>
 );
 
+/**
+ * Grouped by the owner's questions: what's happening and who watches; what
+ * viewers see in Plex; how titles reach the screen; how the server runs.
+ */
 function navigation(setupComplete: boolean): SidebarNavGroup[] {
-  const items: SidebarNavGroup["items"] = [
-    { href: "/", label: "Home", icon: <Gauge size={18} />, exact: true, mobile: true },
-    { href: "/collections", label: "Collections", icon: <Layers size={18} />, mobile: true },
-    { href: "/designer", label: "Home Designer", icon: <LayoutTemplate size={18} />, mobile: true },
-    { href: "/viewers", label: "Viewers", icon: <Users size={18} />, mobile: true },
-    { href: "/discovery", label: "Discovery & artwork", icon: <Sparkles size={18} /> },
-    { href: "/livetv", label: "Live TV & IPTV", icon: <Activity size={18} /> },
-    { href: "/insights", label: "Activity & notifications", icon: <Gauge size={18} /> },
-    { href: "/adoption", label: "Libraries & backups", icon: <Layers size={18} /> },
-    { href: "/playback", label: "Playback & releases", icon: <Activity size={18} /> },
-    { href: "/metadata", label: "Episode ordering", icon: <Layers size={18} /> },
-    { href: "/streams", label: "Audio & subtitles", icon: <Activity size={18} /> },
-    { href: "/safety", label: "Safety & sharing", icon: <Users size={18} /> },
-    { href: "/settings", label: "Settings", icon: <SettingsIcon size={18} /> },
-    { href: "/logs", label: "Logs", icon: <ScrollText size={18} /> },
-    { href: "/traces", label: "Resolver traces", icon: <Activity size={18} /> },
-  ];
-  if (!setupComplete)
-    items.unshift({
-      href: "/setup",
-      label: "Finish setup",
-      icon: <Sparkles size={18} />,
-      mobile: true,
-    });
+  const icon = 18;
   return [
     {
-      label: "Library",
-      items: items.filter((item) =>
-        [
-          "/setup",
-          "/",
-          "/collections",
-          "/designer",
-          "/viewers",
-          "/discovery",
-          "/livetv",
-          "/metadata",
-        ].includes(item.href),
-      ),
+      label: "",
+      items: [
+        ...(setupComplete
+          ? []
+          : [
+              {
+                href: "/setup",
+                label: "Finish setup",
+                icon: <Sparkles size={icon} />,
+                mobile: true,
+              },
+            ]),
+        { href: "/", label: "Overview", icon: <Gauge size={icon} />, exact: true, mobile: true },
+        { href: "/activity", label: "Activity", icon: <ActivityIcon size={icon} />, mobile: true },
+        { href: "/viewers", label: "Viewers", icon: <Users size={icon} />, mobile: true },
+      ],
     },
     {
-      label: "Playback & access",
-      items: items.filter((item) => ["/playback", "/streams", "/safety"].includes(item.href)),
+      label: "In Plex",
+      items: [
+        { href: "/home-screens", label: "Home screens", icon: <LayoutTemplate size={icon} /> },
+        { href: "/collections", label: "Collections", icon: <Layers size={icon} />, mobile: true },
+        { href: "/livetv", label: "Live TV", icon: <Tv size={icon} /> },
+        { href: "/metadata", label: "Metadata", icon: <Tags size={icon} /> },
+      ],
+    },
+    {
+      label: "Streaming",
+      items: [
+        { href: "/sources", label: "Sources", icon: <Network size={icon} /> },
+        { href: "/releases", label: "Releases", icon: <ListFilter size={icon} /> },
+        { href: "/playback", label: "Playback", icon: <MonitorPlay size={icon} /> },
+      ],
     },
     {
       label: "Server",
-      items: items.filter((item) =>
-        ["/insights", "/adoption", "/settings", "/logs", "/traces"].includes(item.href),
-      ),
+      items: [
+        { href: "/server", label: "General", icon: <Server size={icon} /> },
+        { href: "/remote-access", label: "Plex & remote access", icon: <Globe size={icon} /> },
+        { href: "/services", label: "Connected services", icon: <Plug size={icon} /> },
+        { href: "/notifications", label: "Notifications", icon: <Bell size={icon} /> },
+      ],
+    },
+    {
+      label: "Maintenance",
+      items: [
+        { href: "/backups", label: "Backups & import", icon: <ArchiveRestore size={icon} /> },
+        { href: "/updates", label: "Updates", icon: <ArrowDownToLine size={icon} /> },
+        { href: "/troubleshooting", label: "Troubleshooting", icon: <LifeBuoy size={icon} /> },
+        { href: "/logs", label: "Logs", icon: <ScrollText size={icon} /> },
+      ],
     },
   ];
 }
@@ -175,7 +202,7 @@ function HealthIndicator() {
           {health.map((h) => (
             <li key={h.id}>
               <Link
-                to={`/settings/${h.settings}`}
+                to={h.href}
                 onClick={() => setOpen(false)}
                 className="flex items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surface-hover"
               >
@@ -201,9 +228,10 @@ function versionLabel(v: string): string {
   return /^\d/.test(v) ? `v${v}` : v;
 }
 
-/** A fresh editor per new-collection draft (each navigation carries its own draft id). */
+/** Collection Studio opens over the gallery: a collection is a record, so it gets a drawer. */
 function CollectionDrawer({ fresh = false }: { fresh?: boolean }) {
   const navigate = useNavigate();
+  const [search] = useSearchParams();
   return (
     <>
       <div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col">
@@ -212,20 +240,14 @@ function CollectionDrawer({ fresh = false }: { fresh?: boolean }) {
       <Drawer
         open
         onClose={() => navigate("/collections")}
-        title="Collection Studio"
+        title={fresh ? "New collection" : "Edit collection"}
         size="2xl"
-        initialFullscreen
         bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0"
       >
-        {fresh ? <NewCollection /> : <CollectionEditor />}
+        {fresh ? <CollectionEditor key={search.get("draft") ?? "new"} /> : <CollectionEditor />}
       </Drawer>
     </>
   );
-}
-
-function NewCollection() {
-  const [search] = useSearchParams();
-  return <CollectionEditor key={search.get("draft") ?? "new"} />;
 }
 
 function PageFallback() {
@@ -255,12 +277,7 @@ function Shell() {
           <Brand serverName={boot.serverName} />
         </Link>
       }
-      headerMiddle={
-        <span className="hidden truncate text-sm text-fg-muted lg:block">
-          {boot.serverName}
-          <span className="text-fg-subtle"> · {versionLabel(boot.version)}</span>
-        </span>
-      }
+      headerMiddle={<CommandSearch />}
       header={
         <>
           <HealthIndicator />
@@ -280,7 +297,10 @@ function Shell() {
         </>
       }
       sidebarFooter={
-        <p className="px-1 text-xs text-fg-subtle">Ether {versionLabel(boot.version)}</p>
+        <p className="truncate px-1 text-xs text-fg-subtle" title={boot.serverName}>
+          {boot.serverName ? `${boot.serverName} · ` : "Ether "}
+          {versionLabel(boot.version)}
+        </p>
       }
       sidebarCollapsedFooter={
         <div className="flex justify-center">
@@ -289,34 +309,41 @@ function Shell() {
       }
       mobileTabCount={4}
     >
-      <Suspense fallback={<PageFallback />}>
-        <Routes>
-          <Route
-            path="/"
-            element={boot.setupComplete ? <Home /> : <Navigate to="/setup" replace />}
-          />
-          <Route path="/setup" element={<Setup />} />
-          <Route path="/collections" element={<CollectionsGallery />} />
-          <Route path="/collections/new" element={<CollectionDrawer fresh />} />
-          <Route path="/collections/:id" element={<CollectionDrawer />} />
-          <Route path="/designer" element={<Designer />} />
-          <Route path="/viewers" element={<ViewersList />} />
-          <Route path="/viewers/:id" element={<ViewerProfile />} />
-          <Route path="/settings" element={<Navigate to="/settings/server" replace />} />
-          <Route path="/settings/:section" element={<Settings />} />
-          <Route path="/insights" element={<Insights />} />
-          <Route path="/livetv" element={<LiveTV />} />
-          <Route path="/discovery" element={<Discovery />} />
-          <Route path="/adoption" element={<Adoption />} />
-          <Route path="/playback" element={<PlaybackPolicy />} />
-          <Route path="/metadata" element={<Metadata />} />
-          <Route path="/streams" element={<StreamPreferences />} />
-          <Route path="/safety" element={<Safety />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/traces" element={<Traces />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
+      <SaveBarHost>
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route
+              path="/"
+              element={boot.setupComplete ? <Home /> : <Navigate to="/setup" replace />}
+            />
+            <Route path="/setup" element={<Setup />} />
+            <Route path="/activity/:tab?" element={<Activity />} />
+            <Route path="/viewers" element={<ViewersList />} />
+            <Route path="/viewers/people" element={<ViewersList tab="people" />} />
+            <Route path="/viewers/invitations" element={<ViewersList tab="invitations" />} />
+            <Route path="/viewers/defaults" element={<ViewersList tab="defaults" />} />
+            <Route path="/viewers/:id/:tab?" element={<ViewerProfile />} />
+            <Route path="/home-screens" element={<Designer />} />
+            <Route path="/collections" element={<CollectionsGallery />} />
+            <Route path="/collections/new" element={<CollectionDrawer fresh />} />
+            <Route path="/collections/:id" element={<CollectionDrawer />} />
+            <Route path="/livetv/:tab?" element={<LiveTV />} />
+            <Route path="/metadata/:tab?" element={<Metadata />} />
+            <Route path="/sources/:tab?" element={<Sources />} />
+            <Route path="/releases/:tab?" element={<Releases />} />
+            <Route path="/playback/:tab?" element={<Playback />} />
+            <Route path="/notifications/:tab?" element={<Notifications />} />
+            <Route path="/server" element={<GeneralPage />} />
+            <Route path="/remote-access" element={<RemoteAccessPage />} />
+            <Route path="/services" element={<ServicesPage />} />
+            <Route path="/backups" element={<BackupsPage />} />
+            <Route path="/updates" element={<UpdatesPage />} />
+            <Route path="/troubleshooting" element={<TroubleshootingPage />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+      </SaveBarHost>
     </AppShell>
   );
 }

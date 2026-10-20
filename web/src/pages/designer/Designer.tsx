@@ -1,7 +1,4 @@
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Badge,
   Button,
   EmptyState,
@@ -25,6 +22,7 @@ import { OverrideList } from "./OverrideList";
 import { PageSettings } from "./PageSettings";
 import { RowPool } from "./RowPool";
 import { AnchoredSlots } from "./AnchoredSlots";
+import { CleanHome } from "../home-screens/CleanHome";
 
 function initialContext(): ViewContext {
   const now = new Date();
@@ -32,7 +30,7 @@ function initialContext(): ViewContext {
 }
 
 /**
- * The Home Designer: a Global Home everyone starts from, personalization
+ * Home screens: a Global Home everyone starts from, personalization
  * within it, and per-viewer overrides on top. Controls on the left third,
  * the live Plex Home (rendered server-side from the draft) on the right.
  */
@@ -122,11 +120,11 @@ export default function Designer() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-border bg-surface px-3 py-3 sm:px-6">
         <PageHeader
-          title="Home Designer"
-          description="Shape the Global Home everyone starts from; personalization fills it per viewer, and per-viewer overrides sit on top."
+          title="Home screens"
+          description="Shape the Global Home everyone starts from. Personalization fills it for each viewer, and per-viewer overrides sit on top."
           actions={wide ? actions : undefined}
         />
         {!wide ? <div className="mt-3">{actions}</div> : null}
@@ -138,7 +136,7 @@ export default function Designer() {
         </div>
       ) : doc.error ? (
         <div className="p-6">
-          <ErrorPanel error={doc.error} feature="Home Designer" onRetry={() => void doc.reload()} />
+          <ErrorPanel error={doc.error} onRetry={() => void doc.reload()} />
         </div>
       ) : !viewers || !doc.data ? (
         <div className="grid flex-1 place-items-center">
@@ -158,18 +156,6 @@ export default function Designer() {
             className="app-scroll space-y-5 border-b border-border bg-bg-subtle p-3 sm:p-5 lg:col-span-1 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r"
             aria-label="Designer controls"
           >
-            {saved.notes?.length ? (
-              <Alert>
-                <AlertTitle>Converted from the previous Home Designer</AlertTitle>
-                <AlertDescription>
-                  <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs">
-                    {saved.notes.map((n) => (
-                      <li key={n}>{n}</li>
-                    ))}
-                  </ul>
-                </AlertDescription>
-              </Alert>
-            ) : null}
             <LayerSwitcher
               layer={layer}
               onChange={(l) => {
@@ -194,6 +180,7 @@ export default function Designer() {
                   { key: "layout", label: "Layout" },
                   { key: "rows", label: "Rows" },
                   { key: "overrides", label: "Overrides" },
+                  { key: "cleanup", label: "Clean Home" },
                 ]}
               />
             </div>
@@ -211,6 +198,7 @@ export default function Designer() {
                 onFocusRow={setFocusRow}
               />
             )}
+            {tools === "cleanup" && <CleanHome />}
             {tools === "overrides" && (
               <OverrideList
                 {...editing}

@@ -219,7 +219,7 @@ export function HomeCanvas({
       ) : null}
 
       {error ? (
-        <ErrorPanel error={error} feature="Home preview" />
+        <ErrorPanel error={error} />
       ) : !home ? (
         <div className="space-y-6" role="status" aria-label="Loading Home">
           {Array.from({ length: 3 }, (_, i) => (

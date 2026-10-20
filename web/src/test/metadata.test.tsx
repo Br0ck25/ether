@@ -1,63 +1,84 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import Metadata from "../pages/Metadata";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { calls } from "./harness";
+import { renderAppWith } from "./routes";
+
+const WAIT = { timeout: 4000 };
+const SHOW = "2000000000000010";
+
 describe("Metadata episode orders", () => {
   it("selects a show, persists the owner order, previews canonical identities and resets viewer overrides", async () => {
-    const calls: { url: string; init?: RequestInit }[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        calls.push({ url, init });
-        let value: unknown = {};
-        if (url.endsWith("/users")) value = { users: [{ id: 42, title: "Viewer" }] };
-        else if (url.includes("/catalog/search"))
-          value = { items: [{ key: "2000000000000010", title: "Fixture Show", type: "show" }] };
-        else if (url.endsWith("/groups"))
-          value = [{ id: "dvd", name: "DVD order", type: 3, episode_count: 2 }];
-        else if (url.endsWith("/preview"))
-          value = [
-            {
-              key: "4000000100010002",
-              title: "Second canonical episode",
-              canonicalSeason: 1,
-              canonicalEpisode: 2,
-              group: "Disc 1",
-              index: 1,
-            },
-          ];
-        else
-          value =
-            init?.method === "PUT"
-              ? JSON.parse(String(init.body))
-              : { groupId: "", specials: "last", inherited: url.endsWith("/42") };
-        return new Response(JSON.stringify(value), { status: 200 });
-      }),
-    );
-    render(<Metadata />);
-    fireEvent.change(screen.getByLabelText("Find a show"), { target: { value: "Fixture" } });
+    // Sam Rivera (viewer 2) follows the default until an override is saved.
+    const overrides = new Map<number, { groupId: string; specials: string }>();
+    const { fake } = renderAppWith("/metadata/episodes", (method, path, body) => {
+      if (path === "/catalog/search")
+        return { items: [{ key: SHOW, title: "Fixture Show", type: "show" }] };
+      if (!path.startsWith(`/metadata/shows/${SHOW}`)) return undefined;
+      if (path.endsWith("/groups"))
+        return [{ id: "dvd", name: "DVD order", type: 3, episode_count: 2 }];
+      if (path.endsWith("/preview"))
+        return [
+          {
+            key: "4000000100010002",
+            title: "Second canonical episode",
+            canonicalSeason: 1,
+            canonicalEpisode: 2,
+            group: "Disc 1",
+            index: 1,
+          },
+        ];
+      const id = Number(path.split("/").at(-1));
+      if (method === "PUT") {
+        overrides.set(id, body as { groupId: string; specials: string });
+        return body;
+      }
+      if (method === "DELETE") overrides.delete(id);
+      return overrides.get(id) ?? { groupId: "", specials: "last", inherited: id !== 0 };
+    });
+
+    fireEvent.change(await screen.findByLabelText("Find a show", {}, WAIT), {
+      target: { value: "Fixture" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Fixture Show" }));
-    fireEvent.change(await screen.findByLabelText("Episode order"), { target: { value: "dvd" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save episode order" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Fixture Show" }, WAIT));
+
+    const drawer = await screen.findByRole("dialog", { name: "Fixture Show" });
+    const defaults = within(drawer).getByRole("region", { name: "Default order" });
+    fireEvent.change(await within(defaults).findByLabelText("Episode order"), {
+      target: { value: "dvd" },
+    });
+    fireEvent.click(within(defaults).getByRole("button", { name: "Save episode order" }));
     expect(await screen.findByText("Second canonical episode")).toBeInTheDocument();
     await waitFor(() =>
       expect(
-        calls.some(
-          (call) =>
-            call.url.endsWith("/users/0") &&
-            call.init?.method === "PUT" &&
-            JSON.parse(String(call.init.body)).groupId === "dvd",
+        calls(fake, "PUT", `/metadata/shows/${SHOW}/users/0`).some(
+          (c) => (c.body as { groupId: string }).groupId === "dvd",
         ),
       ).toBe(true),
     );
-    fireEvent.change(screen.getByLabelText("Apply to"), { target: { value: "42" } });
-    expect(await screen.findByText(/currently follows the owner default/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Follow owner default" }));
+
+    // Viewers are listed with their override state, not picked from a dropdown.
+    const overridesList = within(drawer).getByRole("region", { name: "Viewer overrides" });
+    const sam = (await within(overridesList).findByText("Sam Rivera")).closest("li")!;
+    expect(await within(sam).findByText("Uses default")).toBeInTheDocument();
+    fireEvent.click(within(sam).getByRole("button", { name: "Edit order for Sam Rivera" }));
+    const viewer = await screen.findByRole("dialog", { name: "Fixture Show for Sam Rivera" });
+    expect(await within(viewer).findByText(/uses the default order/)).toBeInTheDocument();
+    expect(within(viewer).queryByRole("button", { name: "Use default" })).toBeNull();
+
+    fireEvent.change(within(viewer).getByLabelText("Episode order"), { target: { value: "dvd" } });
+    fireEvent.click(within(viewer).getByRole("button", { name: "Save episode order" }));
     await waitFor(() =>
-      expect(
-        calls.some((call) => call.url.endsWith("/users/42") && call.init?.method === "DELETE"),
-      ).toBe(true),
+      expect(calls(fake, "PUT", `/metadata/shows/${SHOW}/users/2`)).toHaveLength(1),
     );
+    await waitFor(() =>
+      expect(within(sam).getByText("Custom for this viewer")).toBeInTheDocument(),
+    );
+
+    fireEvent.click(await within(viewer).findByRole("button", { name: "Use default" }));
+    await waitFor(() =>
+      expect(calls(fake, "DELETE", `/metadata/shows/${SHOW}/users/2`)).toHaveLength(1),
+    );
+    await waitFor(() => expect(within(sam).getByText("Uses default")).toBeInTheDocument());
   });
 });

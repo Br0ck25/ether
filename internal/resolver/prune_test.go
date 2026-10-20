@@ -150,3 +150,52 @@ func TestSearchCacheIsBounded(t *testing.T) {
 		t.Fatalf("search cache holds %d entries, cap %d", n, maxSearchCache)
 	}
 }
+
+func TestOwnerBlocksNeverExpire(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	clock := &fakeClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+	svc := New(&fakeIndexer{}, fakeHealth{}, db, testCfg(), Options{Now: clock.now})
+	if _, err := svc.Block(ctx, BlockRequest{ReleaseID: "owner"}, "bad audio"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.MarkBad(ctx, "auto", "missing articles"); err != nil {
+		t.Fatal(err)
+	}
+	// An automatic mark on an owner block must not make it expire.
+	if err := svc.MarkBad(ctx, "owner", "missing articles"); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.add(2 * badRetention)
+	if !svc.isBad("owner") {
+		t.Fatal("owner block expired in memory")
+	}
+	if svc.isBad("auto") {
+		t.Fatal("automatic mark past retention still honoured")
+	}
+	if n, err := svc.Prune(ctx); err != nil || n != 1 {
+		t.Fatalf("prune removed %d rows (err %v), want 1 (the automatic mark)", n, err)
+	}
+	var reason string
+	var manual int
+	if err := db.QueryRowContext(ctx, `SELECT reason, manual FROM resolver_bad WHERE release_id='owner'`).Scan(&reason, &manual); err != nil {
+		t.Fatalf("owner block pruned: %v", err)
+	}
+	if reason != "bad audio" || manual != 1 {
+		t.Fatalf("owner block = %q manual=%d, want the owner's reason kept", reason, manual)
+	}
+
+	// A restart loads owner blocks however old they are.
+	svc2 := New(&fakeIndexer{}, fakeHealth{}, db, testCfg(), Options{Now: clock.now})
+	if !svc2.isBad("owner") {
+		t.Fatal("owner block not loaded at startup")
+	}
+	if r, ok := svc2.badReason("owner"); !ok || r != "bad audio" {
+		t.Fatalf("badReason = %q, %v", r, ok)
+	}
+}

@@ -163,6 +163,8 @@ export const PLEX: FieldGroup[] = [
         help: "Leave empty to use the tracked public PMS version.",
       },
       { key: "latestCompatibilityVersion", label: "Latest public PMS version", kind: "readonly" },
+      // Edited at Home screens › Clean Home.
+      { key: "disableCleanHome", label: "Clean Home", kind: "hidden" },
     ],
   },
 ];
@@ -213,6 +215,22 @@ export const CACHE: FieldGroup[] = [
         kind: "bool",
         help: "Keeps the resume point of unfinished titles cached.",
       },
+      {
+        key: "inProgressPinMaxAge",
+        label: "Stop keeping a title warm after",
+        kind: "duration",
+        placeholder: "720h",
+        help: "An unfinished title nobody has watched for this long loses its cache pin. Empty uses 30 days.",
+      },
+      {
+        key: "inProgressPinPercent",
+        label: "Share of the cache for in-progress titles",
+        kind: "number",
+        min: 0,
+        max: 100,
+        step: 5,
+        help: "Percent of the disk budget unfinished titles may keep pinned; the least recently watched lose their pin first. 0 uses 50.",
+      },
     ],
   },
 ];
@@ -249,6 +267,8 @@ export const CATALOG: FieldGroup[] = [
       { key: "minPopularity", label: "Minimum popularity", kind: "number", min: 0, step: 1 },
       { key: "minVotes", label: "Minimum votes", kind: "number", min: 0, step: 10 },
       { key: "includeAdult", label: "Include adult titles", kind: "bool" },
+      // Legacy: the server always enforces release dates.
+      { key: "showUnreleased", label: "Show unreleased titles", kind: "hidden" },
     ],
   },
 ];
@@ -405,7 +425,7 @@ export const LLM: FieldGroup[] = [
 
 export const UPDATES: FieldGroup[] = [
   {
-    title: "Updates",
+    title: "Release channel",
     fields: [
       {
         key: "channel",
@@ -449,12 +469,18 @@ export const UPDATES: FieldGroup[] = [
 
 export const SPIKE: FieldGroup[] = [
   {
-    title: "Local files",
+    title: "Test playback with a local file",
     description:
-      "Serve files from disk to verify a Plex client's playback. Meant for troubleshooting.",
+      "Serve a file from this computer to your Plex apps to tell whether a playback problem is the app or the stream. This is a diagnostic, not a library; turn it off when you're done.",
     fields: [
-      { key: "enabled", label: "Enabled", kind: "bool" },
-      { key: "localFiles", label: "Files", kind: "list", placeholder: "/path/to/movie.mkv" },
+      { key: "enabled", label: "Serve test files", kind: "bool" },
+      {
+        key: "localFiles",
+        label: "Test files",
+        kind: "list",
+        placeholder: "/path/to/movie.mkv",
+        help: "Full paths to video files on this computer.",
+      },
     ],
   },
 ];
@@ -488,6 +514,59 @@ export const MARKERS: FieldGroup[] = [
         label: "Detect markers from local media",
         kind: "bool",
         help: "Analyze complete local files in the background. Detection is bounded and does not download entire Usenet releases.",
+      },
+    ],
+  },
+];
+
+/** Debrid section settings, edited in place under the provider list (Sources › Debrid). */
+export const DEBRID: FieldGroup[] = [
+  {
+    title: "Torrent handling",
+    fields: [
+      {
+        key: "cachedOnly",
+        label: "Cached torrents only",
+        kind: "bool",
+        help: "Only use torrents your debrid service already holds. Nothing is downloaded and playback never waits.",
+      },
+      {
+        key: "removeUncached",
+        label: "Remove uncached torrents",
+        kind: "bool",
+        help: "Remove torrents Ether added that turned out not to be cached. Cached torrents stay on your account so the next play starts instantly and they are reused instead of re-added.",
+      },
+    ],
+  },
+  {
+    title: "Advanced",
+    description: "Leave at 0 for the built-in behaviour.",
+    fields: [
+      {
+        key: "chunkBytes",
+        label: "Largest range request",
+        kind: "bytes",
+        unit: "MiB",
+        help: "Requests start at 512 KiB for a fast first byte and grow up to this size. 0 = 8 MiB; at most 64 MiB.",
+      },
+      {
+        key: "readAheadChunks",
+        label: "Fixed read-ahead",
+        kind: "number",
+        min: -1,
+        max: 32,
+        step: 1,
+        unit: "chunks",
+        help: "0 adapts read-ahead to the measured download speed. Set up to 32 chunks to fix the window; -1 turns read-ahead off.",
+      },
+      {
+        key: "maxConnections",
+        label: "Connections per file",
+        kind: "number",
+        min: 0,
+        max: 16,
+        step: 1,
+        help: "Concurrent range requests per open file. 0 = 4; at most 16.",
       },
     ],
   },

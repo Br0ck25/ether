@@ -42,6 +42,7 @@ var sectionScopes = map[string]Scope{
 	"llm":           Shared,
 	"updates":       Shared,
 	"markers":       Shared,
+	"personalize":   Shared,
 	"setupComplete": Shared,
 	// Spike serves files from this node's disk.
 	"spike": Local,
@@ -102,6 +103,45 @@ var mixedSections = map[string]map[string]Scope{
 		"tempDir":              Local,
 		"maxTranscodes":        Local, // sized to this node's hardware
 		"remoteMaxBitrateKbps": Shared,
+		"fastStart":            Shared,
+		"fastStartSegments":    Shared,
+		"fastStartSegment":     Shared,
+		"fastStartMaxHeight":   Shared,
+		"abrLadder":            Shared,
+		"vbvReservoir":         Shared,
+		"vbvBufferSeconds":     Shared,
+		"spikeGovernor":        Shared,
+		"spikeMarginPercent":   Shared,
+	},
+	"downloads": {
+		"enabled":              Shared,
+		"allowFriends":         Shared,
+		"maxConcurrentPerUser": Shared,
+		"expiry":               Shared,
+		"maxHeight":            Shared,
+		// Remuxes run on and are stored by the node serving them.
+		"maxConcurrent":   Local,
+		"diskBudgetBytes": Local,
+	},
+	"extras": {
+		"enabled":       Shared,
+		"localTrailers": Shared,
+		"prewarmBytes":  Shared,
+		// The resolver tool is a binary on this node's disk.
+		"resolverCommand": Local,
+		"resolverArgs":    Local,
+		"resolverTimeout": Local,
+	},
+	"debrid": {
+		// The owner's accounts and acceptance policy are one decision for
+		// the cluster.
+		"providers":      Shared,
+		"cachedOnly":     Shared,
+		"removeUncached": Shared,
+		// Range-request tuning follows this node's network.
+		"chunkBytes":      Local,
+		"readAheadChunks": Local,
+		"maxConnections":  Local,
 	},
 }
 

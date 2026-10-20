@@ -27,6 +27,87 @@ export interface Indexer {
   enabled: boolean;
   movieCategories: number[] | null;
   tvCategories: number[] | null;
+  /** "usenet" (Newznab, the default when empty or absent) or "torrent" (Torznab). */
+  protocol?: IndexerProtocol | "";
+}
+
+export type IndexerProtocol = "usenet" | "torrent";
+
+export type DebridKind = "realdebrid" | "torbox" | "alldebrid" | "premiumize";
+
+/** One owner-supplied debrid account. `apiKey` is redacted to "••••" when set. */
+export interface DebridProvider {
+  id: string;
+  name: string;
+  kind: DebridKind;
+  apiKey: string;
+  /** Lower is tried first. */
+  priority: number;
+  enabled: boolean;
+}
+
+export interface DebridConfig {
+  providers: DebridProvider[] | null;
+  cachedOnly: boolean;
+  removeUncached: boolean;
+  /** Largest HTTP range request; requests start at 512 KiB and grow. 0 = 8 MiB; max 64 MiB. */
+  chunkBytes?: number;
+  /** Fixed read-ahead window in chunks; 0 = adaptive to throughput, negative disables; max 32. */
+  readAheadChunks?: number;
+  /** 0 = 4; max 16. */
+  maxConnections?: number;
+}
+
+/** GET /status/debrid. */
+export interface DebridStatus {
+  enabled: boolean;
+  cachedOnly: boolean;
+  providers: DebridProviderStatus[] | null;
+  /** Streaming engine counters; absent on older servers. */
+  engine?: DebridEngineStatus;
+}
+
+/** Moving averages (EWMA) of one provider's timings; all 0 until `samples` > 0. */
+export interface DebridLatency {
+  resolveMs?: number;
+  linkMs?: number;
+  connectMs?: number;
+  ttfbMs?: number;
+  throughputBps?: number;
+  samples?: number;
+}
+
+export interface DebridEngineStatus {
+  openFiles?: number;
+  blockBytes?: number;
+  memoryHits?: number;
+  diskHits?: number;
+  blocksFetched?: number;
+  bytesFetched?: number;
+  hedges?: number;
+  hedgeWins?: number;
+  linkRefreshes?: number;
+  errors?: number;
+}
+
+export interface DebridProviderStatus {
+  id: string;
+  name: string;
+  kind: string;
+  enabled: boolean;
+  priority: number;
+  state: "ok" | "backoff" | "auth_failed" | "disabled" | string;
+  lastError?: string;
+  backoffUntil?: string;
+  requests?: number;
+  failures?: number;
+  cached?: number;
+  notCached?: number;
+  linksRefreshed?: number;
+  /** Torrents reused from the account instead of re-added. */
+  reused?: number;
+  latency?: DebridLatency;
+  lastSuccess?: string;
 }
 
 export interface EtherConfig {
@@ -57,6 +138,8 @@ export interface EtherConfig {
   };
   usenet: { providers: UsenetProvider[] | null };
   indexers: Indexer[] | null;
+  /** Absent on servers without debrid support. */
+  debrid?: DebridConfig;
   cache: {
     dir: string;
     budgetBytes: number;
@@ -259,6 +342,13 @@ export interface CandidateTrace {
   healthy: boolean;
   fetchDuration: number;
   healthDuration: number;
+  size?: number;
+  /** The owner's pin for the title. */
+  pinned?: boolean;
+  customFormats?: { id: string; name: string; score: number }[] | null;
+  compatibilityReason?: string;
+  /** Why source routing moved this candidate. */
+  route?: string;
 }
 export interface ResolverTrace {
   titleKey: string;
@@ -269,4 +359,22 @@ export interface ResolverTrace {
   winner?: string;
   err?: string;
   searchDuration: number;
+  /** The resolution excluded releases already tried (mid-play failover). */
+  failover?: boolean;
+  /** Pinned release id and what became of it ("used", "unhealthy: …"). */
+  pinned?: string;
+  pinStatus?: string;
+  /** Candidates left out of a stored trace. */
+  omitted?: number;
+  /** The source-routing decision, e.g. "debrid first: popular title". */
+  routing?: string;
+}
+
+/** A source's measured startup (NZB or payload fetch plus a real health check). */
+export interface SourceStartup {
+  protocol: "usenet" | "torrent";
+  /** Exponentially weighted average, nanoseconds. */
+  average: number;
+  last: number;
+  samples: number;
 }

@@ -408,6 +408,18 @@ func TestWarmWindow(t *testing.T) {
 	}
 }
 
+func TestWarmWindowUsesVBRKeyframeMap(t *testing.T) {
+	// The second half of this VBR file carries 80% of its bytes. A CBR
+	// estimate maps 50s to byte 500; the container index maps it to 800.
+	tm := playback.TimeMap{Size: 1000, Duration: 100 * time.Second, Points: []playback.IndexPoint{
+		{Offset: 200, Time: 20 * time.Second}, {Offset: 800, Time: 50 * time.Second},
+	}}
+	start, length := WarmWindowFor(50*time.Second, tm, 100, 200)
+	if start != 700 || length != 300 {
+		t.Fatalf("indexed warm window = %d+%d, want 700+300", start, length)
+	}
+}
+
 func TestCloseIsIdempotent(t *testing.T) {
 	f := newFixture(t, Options{}, nil)
 	f.p.Close()

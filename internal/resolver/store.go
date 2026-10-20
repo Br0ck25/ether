@@ -43,20 +43,24 @@ func (s *Service) loadPersisted(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT release_id, created_at FROM resolver_bad WHERE created_at>=?`, s.now().Add(-badRetention).Unix())
+	// Owner blocks (manual) never expire; automatic marks are loaded only
+	// while inside badRetention of when they were last marked.
+	rows, err := s.db.QueryContext(ctx, `SELECT release_id, reason, updated_at, manual FROM resolver_bad WHERE manual=1 OR updated_at>=?`, s.now().Add(-badRetention).Unix())
 	if err == nil {
 		defer rows.Close()
 		s.mu.Lock()
 		for rows.Next() {
-			var id string
+			var id, reason string
 			var at int64
-			if rows.Scan(&id, &at) == nil {
-				s.bad[id] = time.Unix(at, 0)
+			var manual int
+			if rows.Scan(&id, &reason, &at, &manual) == nil {
+				s.bad[id] = badMark{reason: reason, at: time.Unix(at, 0), manual: manual == 1}
 			}
 		}
 		s.mu.Unlock()
 		rows.Close()
 	}
+	s.loadPins(ctx)
 	rrows, err := s.db.QueryContext(ctx, `SELECT indexer, successes, failures FROM resolver_reputation`)
 	if err == nil {
 		defer rrows.Close()
@@ -72,15 +76,34 @@ func (s *Service) loadPersisted(ctx context.Context) {
 	}
 }
 
-func (s *Service) persistBad(ctx context.Context, id, reason string) error {
+// persistBad upserts a blocklist row. An automatic mark never downgrades
+// an owner block: the owner's reason, source and manual flag survive it.
+func (s *Service) persistBad(ctx context.Context, e BlockEntry) error {
 	if s.db == nil {
 		return nil
 	}
+	now := s.now().Unix()
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO resolver_bad(release_id, reason, created_at) VALUES (?,?,?)
-		 ON CONFLICT(release_id) DO UPDATE SET reason=excluded.reason, created_at=excluded.created_at`,
-		id, reason, s.now().Unix())
+		`INSERT INTO resolver_bad(release_id, reason, created_at, name, indexer, rating_key, title_name, source, manual, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(release_id) DO UPDATE SET
+		   reason=CASE WHEN resolver_bad.manual=1 AND excluded.manual=0 THEN resolver_bad.reason ELSE excluded.reason END,
+		   name=CASE WHEN excluded.name<>'' THEN excluded.name ELSE resolver_bad.name END,
+		   indexer=CASE WHEN excluded.indexer<>'' THEN excluded.indexer ELSE resolver_bad.indexer END,
+		   rating_key=CASE WHEN excluded.rating_key<>0 THEN excluded.rating_key ELSE resolver_bad.rating_key END,
+		   title_name=CASE WHEN excluded.title_name<>'' THEN excluded.title_name ELSE resolver_bad.title_name END,
+		   source=CASE WHEN excluded.manual=1 THEN excluded.source ELSE resolver_bad.source END,
+		   manual=CASE WHEN excluded.manual=1 THEN 1 ELSE resolver_bad.manual END,
+		   updated_at=excluded.updated_at`,
+		e.ReleaseID, e.Reason, now, e.Name, e.Indexer, int64(e.TitleKey), e.TitleName, e.Source, boolInt(e.Manual), now)
 	return err
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (s *Service) recordReputation(ctx context.Context, indexer string, success bool) {

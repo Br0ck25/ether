@@ -97,6 +97,19 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 			if mc == nil {
 				mc = libraryContainer()
 			}
+		case core.KindExtra:
+			emd, ok := s.extraMetadataByKey(ctx, pr, k)
+			if !ok {
+				if len(keys) == 1 {
+					writeHTTPError(w, http.StatusNotFound)
+					return
+				}
+				continue
+			}
+			md = emd
+			if mc == nil {
+				mc = libraryContainer()
+			}
 		default:
 			t, err := s.metadataTitle(ctx, pr, k)
 			if err == nil && !s.titleVisible(pr.User, t) {
@@ -116,12 +129,16 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 					warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
 				}
 			}
+			if len(keys) == 1 {
+				// Live session intent (#32): a single-item detail open.
+				s.recordDetailIntent(ctx, pr, t)
+			}
 			if len(keys) == 1 && s.d.PlexGUID != nil && (t.Type == core.TypeMovie || t.Type == core.TypeShow) {
 				matchCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 				_, _ = s.d.PlexGUID.Resolve(matchCtx, t.Key)
 				cancel()
 			}
-			md = s.detail(ctx, pr, t, q.Get("includeChildren") == "1", q.Get("includeOnDeck") == "1", q.Get("includeRelated") == "1", q.Get("includeExtras") == "1")
+			md = s.detail(ctx, pr, t, q.Get("includeChildren") == "1", q.Get("includeOnDeck") == "1", q.Get("includeRelated") == "1", q.Get("includeExtras") == "1", q.Get("extraTypes"))
 			if mc == nil {
 				mc = s.itemContainer(t.Type)
 			}
@@ -136,12 +153,14 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 // detail renders a full item page.
-func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, children, onDeck, related, extras bool) model.Metadata {
+func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, children, onDeck, related, extras bool, extraTypes string) model.Metadata {
 	s.rememberTitle(t)
 	ts := []core.Title{*t}
 	items := s.renderTitles(ctx, pr, ts, renderOpts{detail: true, media: true})
 	s.applyLeafCounts(ctx, pr, items, ts)
 	md := items[0]
+	// Per-viewer decision header (#31); detail pages only, never lists.
+	s.decorateDetail(ctx, pr, t, &md)
 	if children && (t.Type == core.TypeShow || t.Type == core.TypeSeason) {
 		if kids, err := s.metadataChildren(ctx, pr, t.Key); err == nil {
 			rendered := s.renderTitles(ctx, pr, kids, renderOpts{media: true})
@@ -164,7 +183,15 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 		}
 	}
 	if extras {
-		md.Extras = &model.Extras{Size: 0}
+		list := s.extrasFor(ctx, pr, t, extraTypes)
+		ex := &model.Extras{Size: len(list)}
+		for _, e := range list {
+			ex.Metadata = append(ex.Metadata, s.extraMetadata(e, t, true))
+		}
+		md.Extras = ex
+		if len(list) > 0 {
+			md.PrimaryExtraKey = "/library/metadata/" + list[0].Key.String()
+		}
 	}
 	return md
 }
@@ -386,7 +413,7 @@ func (s *Server) renderSingle(w http.ResponseWriter, r *http.Request, k core.Rat
 		return
 	}
 	mc := s.itemContainer(t.Type)
-	mc.Metadata = []model.Metadata{s.detail(ctx, pr, t, false, false, false, false)}
+	mc.Metadata = []model.Metadata{s.detail(ctx, pr, t, false, false, false, false, "")}
 	mc.Size = 1
 	s.write(w, r, mc)
 }

@@ -1,4 +1,3 @@
-import { EditPanel } from "../../components/EditPanel";
 import {
   Avatar,
   Badge,
@@ -11,61 +10,42 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import { ArrowLeft, CheckCircle2, History, LayoutTemplate, RefreshCw } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Artwork } from "../../components/Artwork";
 import { Meter } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { titleSubtitle } from "../../components/Poster";
-import { UserLimitsForm } from "../../components/UserLimits";
 import { viewerName } from "../../components/pickers";
-import { api, errorMessage, isUnavailable } from "../../lib/api";
+import { api, errorMessage } from "../../lib/api";
 import type { Viewer, ViewerDetail } from "../../lib/contract";
 import { formatDateTime, formatNumber, relativeTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { EMPTY_LAYOUT } from "../../lib/layout";
 import { ContextBar, type ViewContext } from "../designer/ContextBar";
 import { HomeCanvas } from "../designer/HomeCanvas";
+import { ViewerWatchlist } from "./sections/ViewerWatchlist";
 import { TasteView } from "./TasteView";
+import { ViewerAccess } from "./ViewerAccess";
+import { ViewerPlayback } from "./ViewerPlayback";
 
-type Tab = "taste" | "activity" | "home" | "limits";
+const TABS = ["taste", "activity", "home", "access", "playback", "watchlist"] as const;
+type Tab = (typeof TABS)[number];
+function asTab(raw: string | undefined): Tab | undefined {
+  return raw && (TABS as readonly string[]).includes(raw) ? (raw as Tab) : undefined;
+}
 
 export default function ViewerProfile() {
-  const { id: raw } = useParams();
+  const { id: raw, tab: routeTab } = useParams();
   const id = Number(raw);
-  const [params, setParams] = useSearchParams();
-  const tab = (params.get("tab") as Tab) || "taste";
+  const tab: Tab = asTab(routeTab) ?? "taste";
   const navigate = useNavigate();
 
-  const viewer = useAsync<ViewerDetail | null>(async () => {
-    try {
-      return await api.viewer(id);
-    } catch (e) {
-      // Servers without the viewers API: fall back to the user record.
-      if (!isUnavailable(e)) throw e;
-      const u = (await api.users()).find((x) => x.id === id);
-      if (!u) throw e;
-      return {
-        id: u.id,
-        plexId: u.plexId,
-        username: u.username,
-        title: u.title,
-        thumb: u.thumb,
-        isOwner: u.isOwner,
-        plays30d: 0,
-        hoursWatched30d: 0,
-        recent: [],
-      };
-    }
-  }, [id]);
+  const viewer = useAsync<ViewerDetail | null>(() => api.viewer(id), [id]);
   const taste = useAsync(() => api.taste(id), [id]);
   const [refreshing, setRefreshing] = useState(false);
 
   const v = viewer.data;
-  const setTab = (t: string) => {
-    const p = new URLSearchParams(params);
-    p.set("tab", t);
-    setParams(p, { replace: true });
-  };
+  const setTab = (t: string) => navigate(`/viewers/${id}/${t}`);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -119,8 +99,8 @@ export default function ViewerProfile() {
               >
                 <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} /> Rebuild rows
               </Button>
-              <Button variant="outline" size="sm" onClick={() => navigate("/designer")}>
-                <LayoutTemplate size={14} /> Home Designer
+              <Button variant="outline" size="sm" onClick={() => navigate("/home-screens")}>
+                <LayoutTemplate size={14} /> Home screens
               </Button>
             </div>
           </div>
@@ -135,18 +115,16 @@ export default function ViewerProfile() {
             { key: "taste", label: "Taste" },
             { key: "activity", label: "Activity", count: v.recent?.length },
             { key: "home", label: "Their Home" },
-            { key: "limits", label: "Limits" },
+            { key: "access", label: "Access" },
+            { key: "playback", label: "Audio & subtitles" },
+            { key: "watchlist", label: "Watchlist" },
           ]}
         />
       }
     >
       {tab === "taste" ? (
         taste.error ? (
-          <ErrorPanel
-            error={taste.error}
-            feature="Taste profiles"
-            onRetry={() => void taste.reload()}
-          />
+          <ErrorPanel error={taste.error} onRetry={() => void taste.reload()} />
         ) : !taste.data ? (
           <LoadingRows rows={4} />
         ) : (
@@ -156,8 +134,12 @@ export default function ViewerProfile() {
         <Activity viewer={v} />
       ) : tab === "home" ? (
         <TheirHome viewer={v} />
+      ) : tab === "access" ? (
+        <ViewerAccess key={id} viewer={v} />
+      ) : tab === "playback" ? (
+        <ViewerPlayback key={id} viewer={v} />
       ) : (
-        <Limits id={id} />
+        <ViewerWatchlist viewerId={id} />
       )}
     </DetailPageLayout>
   );
@@ -239,8 +221,8 @@ function TheirHome({ viewer }: { viewer: Viewer }) {
         <div className="w-full max-w-md">
           <ContextBar ctx={ctx} onChange={setCtx} />
         </div>
-        <Link to="/designer" className="text-sm font-medium text-primary hover:underline">
-          Shape it in Home Designer →
+        <Link to="/home-screens" className="text-sm font-medium text-primary hover:underline">
+          Shape it in Home screens →
         </Link>
       </div>
       <div className="rounded-xl bg-bg p-2 sm:p-4">
@@ -260,38 +242,6 @@ function TheirHome({ viewer }: { viewer: Viewer }) {
           onEditRow={() => undefined}
         />
       </div>
-    </div>
-  );
-}
-
-function Limits({ id }: { id: number }) {
-  const users = useAsync(() => api.users(), []);
-  const config = useAsync(() => api.getConfig(), []);
-  if (users.error) return <ErrorPanel error={users.error} onRetry={() => void users.reload()} />;
-  if (!users.data) return <LoadingRows rows={3} />;
-  const u = users.data.find((x) => x.id === id);
-  if (!u)
-    return (
-      <EmptyState
-        title="No limits to set"
-        description="This viewer has no user record on the server yet."
-      />
-    );
-  return (
-    <div className="max-w-3xl">
-      <EditPanel
-        title="Viewer limits"
-        description="Control concurrent playback, content rating and language preferences."
-        action="Edit viewer limits"
-      >
-        <UserLimitsForm
-          user={u}
-          defaultStreamLimit={config.data?.server.defaultStreamLimit}
-          onSaved={(saved) =>
-            users.setData((list) => (list ?? []).map((x) => (x.id === saved.id ? saved : x)))
-          }
-        />
-      </EditPanel>
     </div>
   );
 }

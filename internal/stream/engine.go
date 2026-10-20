@@ -125,6 +125,18 @@ type Stats struct {
 	HotBytes      int64 // bytes currently in the hot buffer
 	OpenReleases  int   // release indexes held
 	ActiveSources int64
+
+	// PAR2 (see par2.go): index files parsed, unusable (fetched but not
+	// parseable) and skipped as oversize; obfuscated files named from PAR2;
+	// head probes of obfuscated files avoided thanks to it; first volumes
+	// verified against it and found not matching.
+	Par2Loaded      int64
+	Par2Failed      int64
+	Par2Skipped     int64
+	Par2Named       int64
+	Par2ProbesSaved int64
+	Par2Verified    int64
+	Par2Mismatches  int64
 }
 
 // hasCache is optionally implemented by a SegmentCache (segcache does) to
@@ -154,6 +166,8 @@ type Engine struct {
 	closed      bool
 
 	fetches, fetchedBytes, hotHits, cacheHits, missing, coalesced, active atomic.Int64
+
+	par2Loaded, par2Failed, par2Skipped, par2Named, par2Saved, par2Verified, par2Mismatches atomic.Int64
 }
 
 // HealthTrace describes the most recent release validation phases.
@@ -163,6 +177,17 @@ type HealthTrace struct {
 	Plan    time.Duration `json:"plan"`
 	STAT    time.Duration `json:"stat"`
 	Samples int           `json:"samples"`
+	// BODY probe results: the mid-file segments verified with a real
+	// BODY (yEnc header) read, since STAT 223 does not prove a BODY
+	// would not be taken down (451).
+	Body       time.Duration `json:"body"`
+	BodyProbes int           `json:"bodyProbes"`
+	BodyOK     int           `json:"bodyOk"`
+	// FailFast is set when the check bailed out on the first confirmed
+	// missing article instead of waiting for every sample; FailReason
+	// says which probe decided it.
+	FailFast   bool   `json:"failFast"`
+	FailReason string `json:"failReason,omitempty"`
 }
 
 // HealthTimings returns timing for the most recent Check call.
@@ -224,6 +249,14 @@ func (e *Engine) Stats() Stats {
 		HotBytes:      e.hot.usage(),
 		OpenReleases:  n,
 		ActiveSources: e.active.Load(),
+
+		Par2Loaded:      e.par2Loaded.Load(),
+		Par2Failed:      e.par2Failed.Load(),
+		Par2Skipped:     e.par2Skipped.Load(),
+		Par2Named:       e.par2Named.Load(),
+		Par2ProbesSaved: e.par2Saved.Load(),
+		Par2Verified:    e.par2Verified.Load(),
+		Par2Mismatches:  e.par2Mismatches.Load(),
 	}
 }
 
@@ -238,6 +271,12 @@ func (e *Engine) Open(ctx context.Context, releaseID string, nzbData []byte) (co
 	}
 	p, err := rel.ensurePlan(ctx, core.PriorityLive, releaseID)
 	if err != nil {
+		e.release(rel)
+		return nil, err
+	}
+	// A health check that found the content not matching its PAR2 index
+	// rejects the release here too (never waiting for PAR2 at Open).
+	if done, err := p.par2Verdict(); done && err != nil {
 		e.release(rel)
 		return nil, err
 	}

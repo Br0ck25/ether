@@ -13,7 +13,6 @@ import {
   cn,
 } from "@braedonsaunders/appkit-ui";
 import {
-  ArrowLeft,
   Copy,
   Eye,
   Globe2,
@@ -29,7 +28,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ActionMenu } from "../../components/ActionMenu";
 import { ErrorPanel, PosterSkeletons } from "../../components/feedback";
 import { Segmented } from "../../components/fields";
@@ -323,18 +322,8 @@ export default function CollectionEditor() {
 
   if (source.error) {
     return (
-      <div className="p-6">
-        <Link
-          to="/collections"
-          className="mb-4 inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"
-        >
-          <ArrowLeft size={14} /> Collections
-        </Link>
-        <ErrorPanel
-          error={source.error}
-          feature="Collection Studio"
-          onRetry={() => void source.reload()}
-        />
+      <div className="app-scroll min-h-0 flex-1 overflow-y-auto p-6">
+        <ErrorPanel error={source.error} onRetry={() => void source.reload()} />
       </div>
     );
   }
@@ -350,15 +339,9 @@ export default function CollectionEditor() {
   const targets = describeTargets(spec);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <section aria-label="Collection Studio" className="flex min-h-0 flex-1 flex-col">
       <header className="shrink-0 border-b border-border bg-surface px-3 py-3 sm:px-6">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <Link
-            to="/collections"
-            className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg"
-          >
-            <ArrowLeft size={14} /> Collections
-          </Link>
           <span className="flex flex-wrap gap-1.5">
             {readOnly ? (
               <Badge variant="secondary">Built-in</Badge>
@@ -660,11 +643,7 @@ export default function CollectionEditor() {
                 </Alert>
               ))}
               {previewError ? (
-                <ErrorPanel
-                  error={previewError}
-                  feature="Live preview"
-                  onRetry={() => setPreviewNonce((n) => n + 1)}
-                />
+                <ErrorPanel error={previewError} onRetry={() => setPreviewNonce((n) => n + 1)} />
               ) : !preview ? (
                 <PosterSkeletons count={18} />
               ) : preview.items.length === 0 ? (
@@ -705,6 +684,6 @@ export default function CollectionEditor() {
           onApply: (g) => navigate(newCollectionHref(), { state: { spec: g } }),
         }}
       />
-    </div>
+    </section>
   );
 }

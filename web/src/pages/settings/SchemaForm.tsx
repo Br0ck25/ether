@@ -49,7 +49,11 @@ export type FieldDef =
       placeholder?: string;
       numeric?: boolean;
     }
-  | { key: string; label: string; help?: ReactNode; kind: "bytes"; unit: "GiB" | "MiB" };
+  | { key: string; label: string; help?: ReactNode; kind: "bytes"; unit: "GiB" | "MiB" }
+  /** Nested values the UI has no form for, edited as JSON. */
+  | { key: string; label: string; help?: ReactNode; kind: "json" }
+  /** Known to this section but edited on another page; never rendered here. */
+  | { key: string; label: string; help?: ReactNode; kind: "hidden" };
 
 export interface FieldGroup {
   title?: string;
@@ -85,6 +89,10 @@ export function SchemaField({
     </>
   );
   switch (def.kind) {
+    case "hidden":
+      return null;
+    case "json":
+      return <JsonRow label={def.label} value={value} onChange={onChange} error={error} />;
     case "bool":
       return (
         <SettingsRow
@@ -319,6 +327,31 @@ export function SchemaGroups({
   );
 }
 
+/** A field definition guessed from a value, for options the UI has no schema for. */
+export function inferField(key: string, value: unknown): FieldDef {
+  const label = humanizeKey(key);
+  if (typeof value === "boolean") return { key, label, kind: "bool" };
+  if (typeof value === "number") return { key, label, kind: "number" };
+  if (typeof value === "string")
+    return {
+      key,
+      label,
+      kind:
+        value === REDACTED || /password|secret|token|apikey|key$/i.test(key) ? "secret" : "text",
+    };
+  if (
+    value === null ||
+    (Array.isArray(value) && value.every((x) => typeof x === "string" || typeof x === "number"))
+  )
+    return {
+      key,
+      label,
+      kind: "list",
+      numeric: Array.isArray(value) && typeof value[0] === "number",
+    };
+  return { key, label, kind: "json" };
+}
+
 /** Renders keys the UI has no schema for, so new server options are never unreachable. */
 export function GenericFields({
   value,
@@ -336,71 +369,17 @@ export function GenericFields({
   return (
     <>
       {keys.map((k) => {
-        const v = value[k];
-        const set = (nv: unknown) => onChange({ ...value, [k]: nv });
-        const label = humanizeKey(k);
         const path = `${prefix}.${k}`;
-        if (typeof v === "boolean")
-          return (
-            <SchemaField
-              key={k}
-              def={{ key: k, label, kind: "bool" }}
-              value={v}
-              onChange={set}
-              path={path}
-              error={errors[path]}
-            />
-          );
-        if (typeof v === "number")
-          return (
-            <SchemaField
-              key={k}
-              def={{ key: k, label, kind: "number" }}
-              value={v}
-              onChange={set}
-              path={path}
-              error={errors[path]}
-            />
-          );
-        if (typeof v === "string")
-          return (
-            <SchemaField
-              key={k}
-              def={{
-                key: k,
-                label,
-                kind:
-                  v === REDACTED || /password|secret|token|apikey|key$/i.test(k)
-                    ? "secret"
-                    : "text",
-              }}
-              value={v}
-              onChange={set}
-              path={path}
-              error={errors[path]}
-            />
-          );
-        if (
-          v === null ||
-          (Array.isArray(v) && v.every((x) => typeof x === "string" || typeof x === "number"))
-        ) {
-          return (
-            <SchemaField
-              key={k}
-              def={{
-                key: k,
-                label,
-                kind: "list",
-                numeric: Array.isArray(v) && typeof v[0] === "number",
-              }}
-              value={v}
-              onChange={set}
-              path={path}
-              error={errors[path]}
-            />
-          );
-        }
-        return <JsonRow key={k} label={label} value={v} onChange={set} error={errors[path]} />;
+        return (
+          <SchemaField
+            key={k}
+            def={inferField(k, value[k])}
+            value={value[k]}
+            onChange={(nv) => onChange({ ...value, [k]: nv })}
+            path={path}
+            error={errors[path]}
+          />
+        );
       })}
     </>
   );

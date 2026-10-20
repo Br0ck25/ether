@@ -9,8 +9,8 @@ export interface HealthItem {
   level: HealthLevel;
   summary: string;
   details: string[];
-  /** Settings section that fixes this, for "Open settings" links. */
-  settings: string;
+  /** Where the owner fixes this, for "Needs attention" and health links. */
+  href: string;
   /** 0..1 gauge when the item has a natural fill level. */
   fill?: number;
 }
@@ -32,7 +32,11 @@ function errorOf(v: unknown): string {
 }
 
 export function usenetHealth(v: unknown): HealthItem {
-  const base = { id: "usenet" as const, label: "Usenet", settings: "usenet" };
+  const base = {
+    id: "usenet" as const,
+    label: "Usenet",
+    href: "/sources/usenet",
+  };
   const err = errorOf(v);
   if (err) return { ...base, level: "error", summary: err, details: [] };
   if (!Array.isArray(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
@@ -68,7 +72,11 @@ export function usenetHealth(v: unknown): HealthItem {
 }
 
 export function indexersHealth(v: unknown): HealthItem {
-  const base = { id: "indexers" as const, label: "Indexers", settings: "indexers" };
+  const base = {
+    id: "indexers" as const,
+    label: "Indexers",
+    href: "/sources/indexers",
+  };
   const err = errorOf(v);
   if (err) return { ...base, level: "error", summary: err, details: [] };
   if (!Array.isArray(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
@@ -107,7 +115,7 @@ export function indexersHealth(v: unknown): HealthItem {
 }
 
 export function cacheHealth(v: unknown): HealthItem {
-  const base = { id: "cache" as const, label: "Cache", settings: "cache" };
+  const base = { id: "cache" as const, label: "Cache", href: "/playback/cache" };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const used = num(v.used ?? v.usedBytes);
   const budget = num(v.budget ?? v.budgetBytes);
@@ -123,7 +131,11 @@ export function cacheHealth(v: unknown): HealthItem {
 }
 
 export function catalogHealth(v: unknown, now = new Date()): HealthItem {
-  const base = { id: "catalog" as const, label: "Catalogue", settings: "catalog" };
+  const base = {
+    id: "catalog" as const,
+    label: "Catalogue",
+    href: "/metadata/catalogue",
+  };
   const err = errorOf(v);
   if (err) return { ...base, level: "error", summary: err, details: [] };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
@@ -157,7 +169,11 @@ export function catalogHealth(v: unknown, now = new Date()): HealthItem {
 }
 
 export function remoteHealth(v: unknown): HealthItem {
-  const base = { id: "remote" as const, label: "Remote access", settings: "plex" };
+  const base = {
+    id: "remote" as const,
+    label: "Remote access",
+    href: "/remote-access",
+  };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   if (v.claimed === false)
     return {
@@ -183,7 +199,11 @@ export function remoteHealth(v: unknown): HealthItem {
 }
 
 export function plexDirectHealth(v: unknown, now = new Date()): HealthItem {
-  const base = { id: "plexdirect" as const, label: "plex.direct", settings: "plex" };
+  const base = {
+    id: "plexdirect" as const,
+    label: "plex.direct",
+    href: "/remote-access",
+  };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const cert = isPlainObject(v.cert) ? v.cert : null;
   if (!cert || cert.present !== true) {

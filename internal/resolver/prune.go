@@ -46,7 +46,8 @@ func boundMap[K comparable, V any](m map[K]V, max int, expired func(V) bool) {
 
 // Prune drops expired entries from the in-memory caches and deletes
 // resolver rows that can no longer be served: expired availability, health
-// passes older than the health TTL and bad marks older than badRetention.
+// passes older than the health TTL and automatic bad marks not re-marked
+// within badRetention (owner blocks never expire).
 // Indexer reputation is a handful of counters and is kept. It is meant to be
 // called periodically (the app runs it daily).
 func (s *Service) Prune(ctx context.Context) (int64, error) {
@@ -67,8 +68,8 @@ func (s *Service) Prune(ctx context.Context) (int64, error) {
 			delete(s.verified, k)
 		}
 	}
-	for k, at := range s.bad {
-		if now.Sub(at) >= badRetention {
+	for k, m := range s.bad {
+		if !m.live(now) {
 			delete(s.bad, k)
 		}
 	}
@@ -87,7 +88,7 @@ func (s *Service) Prune(ctx context.Context) (int64, error) {
 	}{
 		{`DELETE FROM resolver_availability WHERE expires_at<?`, now.Unix()},
 		{`DELETE FROM resolver_verified WHERE checked_at<?`, verifiedCutoff},
-		{`DELETE FROM resolver_bad WHERE created_at<?`, now.Add(-badRetention).Unix()},
+		{`DELETE FROM resolver_bad WHERE manual=0 AND updated_at<?`, now.Add(-badRetention).Unix()},
 	} {
 		res, err := s.db.ExecContext(ctx, q.sql, q.arg)
 		if err != nil {
