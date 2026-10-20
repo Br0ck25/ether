@@ -453,10 +453,11 @@ func (p *fakePlayback) Touch(id string) {
 // Transcoder
 
 type fakeHLS struct {
-	id       string
-	req      core.HLSRequest
-	rungs    []core.HLSRung
-	rungReqs []string
+	id           string
+	req          core.HLSRequest
+	rungs        []core.HLSRung
+	rungReqs     []string
+	rungPlaylist string
 }
 
 func (h *fakeHLS) ID() string { return h.id }
@@ -472,6 +473,10 @@ func (h *fakeHLS) Rungs() []core.HLSRung { return h.rungs }
 func (h *fakeHLS) ServeRungPlaylist(w http.ResponseWriter, r *http.Request, rung string) {
 	h.rungReqs = append(h.rungReqs, rung+"/index")
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	if h.rungPlaylist != "" {
+		fmt.Fprint(w, h.rungPlaylist)
+		return
+	}
 	fmt.Fprintf(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\n00000.ts\n# rung %s\n", rung)
 }
 func (h *fakeHLS) ServeRungSegment(w http.ResponseWriter, r *http.Request, rung string, n int) {

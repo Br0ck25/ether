@@ -674,6 +674,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, sessionID string, hs core.HLSSession, info core.MediaInfo, dec core.Decision) {
+	entry, _ := s.transcodes.get(sessionID)
 	// A ladder-capable session advertises every rung; the client's native
 	// ABR (AVPlayer, hls.js) steps between them and the session starts a
 	// rung's encoder lazily on its first segment request. The primary
@@ -696,7 +697,8 @@ func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, ses
 				if rg.FrameRate > 0 {
 					line += fmt.Sprintf(",FRAME-RATE=%.3f", rg.FrameRate)
 				}
-				b.WriteString(line + "\nsession/" + sessionID + "/" + rg.ID + "/index.m3u8\n")
+				uri := streamGrantURL("session/"+sessionID+"/"+rg.ID+"/index.m3u8", entry.streamToken)
+				b.WriteString(line + "\n" + uri + "\n")
 			}
 			body := b.String()
 			h := w.Header()
@@ -729,7 +731,6 @@ func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, ses
 		}
 	}
 	line += transcode.HLSVariantAttributes(info, dec)
-	entry, _ := s.transcodes.get(sessionID)
 	body := "#EXTM3U\n" + line + "\n" + streamGrantURL("session/"+sessionID+"/base/index.m3u8", entry.streamToken) + "\n"
 	h := w.Header()
 	h.Set("Content-Type", "application/vnd.apple.mpegurl")
@@ -769,7 +770,9 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 					continue
 				}
 				if strings.HasSuffix(name, ".m3u8") {
-					ls.ServeRungPlaylist(w, r, rungID)
+					s.serveStreamManifest(w, r, id, func(w http.ResponseWriter, r *http.Request) {
+						ls.ServeRungPlaylist(w, r, rungID)
+					})
 					return
 				}
 				n, ok := segmentNumber(name)
