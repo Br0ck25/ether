@@ -22,6 +22,7 @@ type warmEntry struct {
 	caps       core.ClientCaps
 	done       chan struct{}
 	ready      sync.Once
+	foreground chan context.Context
 	expires    time.Time
 	runtime    time.Duration // title runtime, for size rules without a probe
 	res        *core.Resolution
@@ -152,7 +153,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 	}
 	m.warmRequests[bk] = append(recent, now)
 	profileObj := m.deps.SelectProfile(caps, user)
-	e := &warmEntry{profile: profileObj.Name, profileObj: profileObj, caps: caps, done: make(chan struct{}), expires: now.Add(preResolveTTL)}
+	e := &warmEntry{profile: profileObj.Name, profileObj: profileObj, caps: caps, done: make(chan struct{}), foreground: make(chan context.Context, 1), expires: now.Add(preResolveTTL)}
 	m.warm[id] = e
 	u := *user
 	m.wg.Add(1)
@@ -167,7 +168,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 			m.mu.Unlock()
 			e.ready.Do(func() { close(e.done) })
 		}()
-		ctx, cancel := context.WithTimeout(m.ctx, timeout)
+		ctx, cancel := warmPreparationContext(m.ctx, timeout, e.foreground)
 		defer cancel()
 		title, err := m.deps.Catalog.Get(ctx, key)
 		if err != nil || title == nil || title.Type == core.TypeShow || title.Type == core.TypeSeason {
@@ -326,6 +327,15 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 		return nil
 	}
 	m.mu.Unlock()
+	// Once Play is waiting, this is foreground preparation. Keep its
+	// existing resolve/open/probe work instead of cancelling it at the
+	// speculative deadline and repeating it on Play's critical path.
+	if e.foreground != nil {
+		select {
+		case e.foreground <- ctx:
+		default:
+		}
+	}
 	select {
 	case <-e.done:
 	case <-ctx.Done():
