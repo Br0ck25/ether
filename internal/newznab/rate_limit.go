@@ -61,8 +61,20 @@ func (c *Client) rateLimitUntil(ctx context.Context) (time.Time, error) {
 		if err != nil && err != sql.ErrNoRows {
 			return time.Time{}, err
 		}
-		if err == nil && time.Unix(at, 0).After(c.rate.until) {
-			c.rate.until = time.Unix(at, 0)
+		if err == nil {
+			stored := time.Unix(at, 0)
+			if limit := c.now().Add(maxRateLimitPause); stored.After(limit) {
+				// A pause stored before the cap (or by a node with a wrong
+				// clock): bound it here and in the shared row, which the
+				// upsert would otherwise keep at its larger value.
+				stored = limit
+				if _, uerr := c.db.ExecContext(ctx, `UPDATE newznab_rate_limit SET retry_at=? WHERE indexer_id=? AND retry_at>?`, stored.Unix(), c.indexerID(), stored.Unix()); uerr != nil {
+					c.log.Warn("could not bound stored indexer pause", "indexer", c.Name(), "err", uerr)
+				}
+			}
+			if stored.After(c.rate.until) {
+				c.rate.until = stored
+			}
 		}
 	}
 	c.rate.loaded = true
