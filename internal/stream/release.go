@@ -27,6 +27,11 @@ type release struct {
 
 	refs int // guarded by e.mu
 
+	// infoMu guards the nzb files' Name, Info and Obfuscated: identifying
+	// obfuscated files (plan build, under planMu) rewrites them while health
+	// checks and PAR2 lookups of the same release read them.
+	infoMu sync.RWMutex
+
 	planMu  sync.Mutex
 	plan    *plan
 	planErr error // permanent rejection, cached
@@ -132,6 +137,8 @@ func (b *builder) build(ctx context.Context) (*plan, error) {
 
 // candidates lists playable-looking files and archive sets, largest first.
 func (b *builder) candidates(files []*postedFile) []candidate {
+	b.rel.infoMu.RLock()
+	defer b.rel.infoMu.RUnlock()
 	var out []candidate
 	var vols []*nzb.File
 	byFile := map[*nzb.File]*postedFile{}
@@ -189,6 +196,13 @@ func (b *builder) planFor(ctx context.Context, c candidate) (*plan, error) {
 		return b.planSplit(ctx, c.files)
 	}
 	return nil, ErrNoPlayableFile
+}
+
+// setFileInfo applies a change to nzb file identification under infoMu.
+func (r *release) setFileInfo(fn func()) {
+	r.infoMu.Lock()
+	fn()
+	r.infoMu.Unlock()
 }
 
 // head fetches slot 0 of each file in parallel (learning their sizes).

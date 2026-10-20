@@ -249,3 +249,38 @@ func TestPostPlayDisabled(t *testing.T) {
 		t.Errorf("disabled but warmed %d / ranked %d", n, f.player.calls)
 	}
 }
+
+// A viewer who stops near the end and plays the title again (a resume
+// after a stop, or a rewatch the same evening) starts a new post-play
+// session: it is probed and its pick warmed again rather than suppressed
+// for hours by the previous session's finished jobs.
+func TestPostPlayNewSessionAfterStopWarmsAgain(t *testing.T) {
+	f := newPPFixture(t, true, nil, nil)
+	dur := 120 * time.Minute
+	for session := 1; session <= 2; session++ {
+		f.p.OnTimeline(user, movieKey, dur-11*time.Minute, dur, "playing") // probe
+		f.wait(t)
+		f.p.OnTimeline(user, movieKey, dur-2*time.Minute, dur, "playing") // fire
+		f.wait(t)
+		if n := len(f.warmer.got()); n != session {
+			t.Fatalf("session %d: prewarm calls = %d, want %d", session, n, session)
+		}
+		f.p.OnTimeline(user, movieKey, dur-time.Minute, dur, "stopped")
+	}
+}
+
+// Post-play sessions stay bounded even when none is old enough to prune.
+func TestPostPlaySessionsBounded(t *testing.T) {
+	f := newPPFixture(t, true, nil, nil)
+	dur := 120 * time.Minute
+	for i := 0; i < postplayMaxSessions+50; i++ {
+		f.p.OnTimeline(user, core.MovieKey(int64(10_000+i)), dur-11*time.Minute, dur, "playing")
+	}
+	f.wait(t)
+	f.p.ppMu.Lock()
+	n := len(f.p.ppSessions)
+	f.p.ppMu.Unlock()
+	if n > postplayMaxSessions {
+		t.Fatalf("%d post-play sessions tracked, cap %d", n, postplayMaxSessions)
+	}
+}

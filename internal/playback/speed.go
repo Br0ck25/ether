@@ -220,11 +220,16 @@ func (m *Manager) backgroundDownFailover(s *session, g *generation, at time.Dura
 		defer m.wg.Done()
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.FailoverTimeout)
 		defer cancel()
+		// Stopping the session ends the swap; retiring g does not.
+		if s.stopCtx != nil {
+			stop := context.AfterFunc(s.stopCtx, cancel)
+			defer stop()
+		}
 		if _, err := m.failoverWith(ctx, s, g, at, failoverOpts{
 			reason:  "source slower than playback",
 			markBad: false,
 			down:    true,
-		}); err != nil && !errors.Is(err, errRequireRemux) {
+		}); err != nil && ctx.Err() == nil && !errors.Is(err, errRequireRemux) {
 			m.log.Error("down-failover failed", "session", s.id, "err", err)
 		}
 	}()

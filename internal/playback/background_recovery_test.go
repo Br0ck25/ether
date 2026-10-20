@@ -112,3 +112,31 @@ func TestBackgroundRecoveryKeepsSwapContextAliveAfterRetiringOldInput(t *testing
 		t.Fatal("old source was not retired before swapping the encoder")
 	}
 }
+
+// A speed-triggered down-failover is background recovery too: stopping the
+// session must cancel its resolver/provider work at once instead of letting
+// it run out FailoverTimeout on a playback nobody watches.
+func TestStopCancelsDownFailoverProviderWork(t *testing.T) {
+	h := newHarness(t, []*fakeRelease{mkv("A", 100_000, time.Minute), mkv("B", 100_000, time.Minute)}, []string{"A", "B"})
+	ps := h.prepare(owner, movieKey, "cancel-down")
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	h.m.deps.FetchNZB = func(ctx context.Context, r core.Release) ([]byte, error) {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		return nil, ctx.Err()
+	}
+	s := h.m.lookup(ps.ID)
+	h.m.backgroundDownFailover(s, s.current(), 10*time.Second)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("down-failover did not start")
+	}
+	h.m.Stop(ps.ID)
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stopped playback kept down-failover provider work alive")
+	}
+}

@@ -48,7 +48,9 @@ type par2State struct {
 // par2IndexFile returns the release's PAR2 index file if it exists and is
 // small enough to read.
 func (r *release) par2IndexFile() *postedFile {
+	r.infoMu.RLock()
 	f := nzb.Par2Index(r.doc.Files)
+	r.infoMu.RUnlock()
 	if f == nil {
 		return nil
 	}
@@ -196,7 +198,7 @@ func (b *builder) nameFromPar2(pf *postedFile, f *par2.File) bool {
 	if pf.Name() != name {
 		b.e.par2Named.Add(1)
 	}
-	pf.file.Name, pf.file.Info, pf.file.Obfuscated = name, info, nzb.IsObfuscated(name)
+	b.rel.setFileInfo(func() { pf.file.Name, pf.file.Info, pf.file.Obfuscated = name, info, nzb.IsObfuscated(name) })
 	pf.setName(name)
 	return true
 }

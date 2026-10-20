@@ -353,7 +353,10 @@ func (e *Engine) trimReleasesLocked() {
 		if rel.refs <= 0 {
 			e.relLRU.Remove(el)
 			delete(e.releases, rel.digest)
-			go e.hot.dropRelease(rel.digest)
+			// Drop synchronously (hot.mu never waits on e.mu): a deferred
+			// drop could run after the same NZB was acquired again and
+			// evict the new release state's segments.
+			e.hot.dropRelease(rel.digest)
 		}
 		el = prev
 	}
