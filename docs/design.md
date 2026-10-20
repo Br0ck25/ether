@@ -172,12 +172,27 @@ produce a timestamp discontinuity.
 
 ## Sources, history and live television
 
-Torrent releases from Torznab indexers stream through owner-configured debrid
-services over HTTPS range requests; Ether never joins a swarm. Only torrents a
-service already holds are used, nothing is downloaded in full, and "not cached"
-skips a release without marking it bad. Torrents a service holds stay on the
-owner's account and are reused, and detail-page preparation obtains the link and
-reads the file's head and tail, so Play needs no provider request.
+Torrent releases from Torznab indexers and built-in torrent sites stream
+through owner-configured debrid services over HTTPS range requests; Ether never
+joins a swarm. Only torrents a service already holds are used, nothing is
+downloaded in full, and "not cached" skips a release without marking it bad.
+Torrents a service holds stay on the owner's account and are reused, and
+detail-page preparation obtains the link and reads the file's head and tail, so
+Play needs no provider request.
+
+Indexers are Newznab or Torznab APIs, or built-in sites. A built-in site runs
+from an owner-installed definition in the Cardigann YAML format (caps and
+category mappings, settings, sign-in, search requests over HTML, JSON or XML
+responses, row and field selectors, filters and download steps). Ether
+bundles no definitions or definitions source; the owner uploads definitions
+or names a source to install them from, and definitions are stored in the
+database. Built-in sites share the Newznab indexers' daily budgets, result
+cache, events, search order and download routing. Sign-in sessions are stored
+per indexer in the database, versioned, and established by one sign-in at a
+time, so a node reuses a session another node created. A site behind a
+browser challenge is reached through an owner-configured FlareSolverr, or
+reports that it needs one. Password-type settings are sealed and redacted
+like API keys.
 
 Source routing never trades quality for speed. Among candidates in the leading
 quality tier whose scores are within a margin of the leader, the source with the
