@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/tmdb"
@@ -40,6 +41,29 @@ type Service struct {
 	catalog core.Catalog
 	mu      sync.Mutex
 	cache   map[string]cachedLayout
+
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
+}
+
+// SetBus connects the cluster bus (nil disconnects): preference changes on
+// any node drop every node's cached episode layouts.
+func (s *Service) SetBus(bus clusterbus.Bus) {
+	iv := clusterbus.NewInvalidator(bus, "episodeorder", nil, func(context.Context, []string, bool) { s.invalidate() })
+	s.invalMu.Lock()
+	old := s.inval
+	s.inval = iv
+	s.invalMu.Unlock()
+	old.Close()
+}
+
+// changed drops cached layouts here and on the other nodes.
+func (s *Service) changed() {
+	s.invalidate()
+	s.invalMu.Lock()
+	iv := s.inval
+	s.invalMu.Unlock()
+	iv.Notify("")
 }
 
 func New(db *sql.DB, source Source, catalog core.Catalog) *Service {
@@ -81,12 +105,12 @@ func (s *Service) Save(ctx context.Context, user int64, show core.RatingKey, p P
 			return e
 		}
 	}
-	defer s.invalidate()
+	defer s.changed()
 	_, e := s.db.ExecContext(ctx, `INSERT INTO episodeorder_preferences(user_id,show_key,group_id,specials) VALUES(?,?,?,?) ON CONFLICT(user_id,show_key) DO UPDATE SET group_id=excluded.group_id,specials=excluded.specials`, user, int64(show), p.GroupID, p.Specials)
 	return e
 }
 func (s *Service) Reset(ctx context.Context, user int64, show core.RatingKey) error {
-	defer s.invalidate()
+	defer s.changed()
 	_, e := s.db.ExecContext(ctx, `DELETE FROM episodeorder_preferences WHERE user_id=? AND show_key=?`, user, int64(show))
 	return e
 }
