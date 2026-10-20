@@ -395,9 +395,14 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		if d.VideoCopy {
 			steadyMode = ModeCopy
 		}
+		// Pure copy output cannot force the short opening GOPs. Chaining a
+		// run at the nominal ramp boundary can seek back to an earlier source
+		// keyframe and replay it. TS ramps encode their opening GOPs; other
+		// copy containers keep one continuous run.
+		fastStart := adapt.FastStart && v != nil && (!d.VideoCopy || d.Container == ContainerMPEGTS)
 		plan = buildTimeline(span, segDur, timelineOptions{
 			steadyMode: steadyMode,
-			fastStart:  adapt.FastStart && v != nil,
+			fastStart:  fastStart,
 			rampSegs:   adapt.RampSegs,
 			rampDur:    adapt.RampDur,
 			keyframes:  req.Info.Keyframes,

@@ -3,14 +3,17 @@ package transcode
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -28,6 +31,54 @@ func TestHLSTargetIsSeparateFromDirectPlayContainers(t *testing.T) {
 		if d.Container != tc.want || !d.VideoCopy {
 			t.Fatalf("targets %v: %+v", tc.targets, d)
 		}
+	}
+}
+
+func TestIntegrationMatroskaCopyRampNeverReplaysEarlierKeyframes(t *testing.T) {
+	e := newRealEnv(t, WithoutHWDetection())
+	e.m.UpdateConfig(config.Transcode{FastStart: true, FastStartSegments: 2})
+	// Eight-second GOPs cannot satisfy a two-second copy ramp. The old
+	// nominal 4s restart sought backwards and replayed the opening frames.
+	e.gen(t, "long-gop.mkv", 24, "-c:v", "libx264", "-preset", "ultrafast", "-g", "192", "-keyint_min", "192", "-sc_threshold", "0", "-c:a", "aac")
+	info, err := e.m.Probe(t.Context(), e.url("long-gop.mkv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := core.Decision{Kind: core.DecisionRemux, Container: ContainerMatroska, VideoCopy: true, AudioCopy: true, AudioStream: 1}
+	hs, err := e.m.StartHLS(t.Context(), core.HLSRequest{SessionID: "long-gop", InputURL: e.url("long-gop.mkv"), Info: *info, Decision: d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := fetch(t, hs, InitSegment)
+	for n := 0; n < 3; n++ {
+		joined = append(joined, fetch(t, hs, n)...)
+	}
+	file := e.writeTemp(t, "long-gop-joined.mkv", joined)
+	out, err := exec.Command(e.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", file).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frames struct {
+		Frames []struct {
+			Time string `json:"best_effort_timestamp_time"`
+		} `json:"frames"`
+	}
+	if err := json.Unmarshal(out, &frames); err != nil {
+		t.Fatal(err)
+	}
+	if len(frames.Frames) < 500 {
+		t.Fatalf("only decoded %d frames across three GOPs", len(frames.Frames))
+	}
+	last := -1.0
+	for _, frame := range frames.Frames {
+		at, err := strconv.ParseFloat(frame.Time, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at < last {
+			t.Fatalf("copied media jumped backwards: %.3f -> %.3f", last, at)
+		}
+		last = at
 	}
 }
 
