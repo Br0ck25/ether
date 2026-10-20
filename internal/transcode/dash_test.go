@@ -672,3 +672,33 @@ func TestDASHAbandonedRequestDoesNotPullEncoderBack(t *testing.T) {
 		t.Fatalf("retried old segment: %d", r.Code)
 	}
 }
+
+func TestRunStartHintNamesTheSpanBeforeFFmpegReads(t *testing.T) {
+	fr := newFakeRunner()
+	type hint struct {
+		input    string
+		from, to time.Duration
+	}
+	hints := make(chan hint, 8)
+	m := newTestManager(t, fr, config.Transcode{}, WithRunStartHandler(func(input string, from, to time.Duration) {
+		hints <- hint{input, from, to}
+	}))
+	s := startDASHSession(t, m, dashRequest(t, "hint", time.Hour))
+	if r := media(t, s, 0, 300); r.Code != 200 {
+		t.Fatalf("seek: %d", r.Code)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case h := <-hints:
+			if h.from == 300*s.segDur {
+				if h.to != h.from+2*s.segDur || h.input == "" {
+					t.Fatalf("hint %+v", h)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("no hint for the seek run")
+		}
+	}
+}

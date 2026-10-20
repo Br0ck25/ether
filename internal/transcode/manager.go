@@ -47,6 +47,7 @@ type options struct {
 	manifestWait   time.Duration
 	onFailure      func(sessionID string, at time.Duration, err error)
 	onInputFailure func(sessionID, inputURL string, at time.Duration, err error)
+	onRunStart     func(inputURL string, from, to time.Duration)
 	// rungDwell is how long a run keeps producing its rung before a
 	// request on another rung may replace it (see Session.rungDwellLocked).
 	rungDwell time.Duration
@@ -134,6 +135,13 @@ func WithFailureHandler(f func(sessionID string, at time.Duration, err error)) O
 // encoder exits cannot fail over a healthy replacement that is already playing.
 func WithInputFailureHandler(f func(sessionID, inputURL string, at time.Duration, err error)) Option {
 	return func(o *options) { o.onInputFailure = f }
+}
+
+// WithRunStartHandler is told, before ffmpeg is spawned, which part of the
+// input a new run will read first, so the source can fetch it in parallel
+// while the encoder starts and locates it.
+func WithRunStartHandler(f func(inputURL string, from, to time.Duration)) Option {
+	return func(o *options) { o.onRunStart = f }
 }
 
 func withFinder(f finder) Option { return func(o *options) { o.finder = &f } }

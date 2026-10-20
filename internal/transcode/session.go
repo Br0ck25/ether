@@ -1182,6 +1182,10 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		planEnd:  rp.planEnd,
 		track:    s.wantTrack,
 	}
+	if hint := s.m.opts.onRunStart; hint != nil {
+		// The first segment needs its whole span, and a GOP either side.
+		go hint(spec.Input, spec.Start, spec.Start+2*s.segDur)
+	}
 	args := buildArgs(spec)
 	runLog := s.log.With("run", r.seq)
 	var pp progressParser

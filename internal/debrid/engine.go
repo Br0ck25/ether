@@ -27,6 +27,7 @@ import (
 const (
 	defaultBlockSize    = 512 << 10 // cache unit and first-request size
 	defaultMaxRunBytes  = 8 << 20   // config.Debrid.ChunkBytes default
+	freshRunBlocks      = 8         // first request at a new position: 4 MiB of 512 KiB blocks
 	defaultConnections  = 4         // config.Debrid.MaxConnections default
 	minReadAheadBytes   = 8 << 20
 	maxReadAheadBytes   = 96 << 20
@@ -1364,7 +1365,11 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 	end := min(off+int64(len(p)), f.size)
 	first, lastBlock := off/f.e.block, (end-1)/f.e.block
 	maxRun, _, _ := f.e.tuning()
-	runLen := int64(1) // a fresh position: smallest request for the fastest first byte
+	// Blocks are published as their bytes arrive, so a long run costs no
+	// first-byte latency. Debrid CDNs rate-limit requests, not bytes: one
+	// request that covers what the reader will want next beats a ramp of
+	// small ones (TorBox answers bursts with a five-minute 429).
+	runLen := min(maxRun, freshRunBlocks)
 	if live {
 		s.mu.Lock()
 		if s.closed {
@@ -1413,8 +1418,7 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 }
 
 // readAhead keeps a throughput-scaled window ahead of the reader in flight,
-// with runs growing 1, 2, 4... blocks so the first bytes arrive quickly and
-// later requests are large.
+// in runs that start at freshRunBlocks and double up to the chunk size.
 func (s *httpSource) readAhead(from int64) {
 	f := s.f
 	maxRun, _, fixed := f.e.tuning()
@@ -1436,7 +1440,7 @@ func (s *httpSource) readAhead(from int64) {
 		return
 	}
 	lastIdx := min(f.nblocks-1, from+window/f.e.block)
-	run := int64(1)
+	run := min(maxRun, freshRunBlocks)
 	for idx := from + 1; idx <= lastIdx; {
 		f.bmu.Lock()
 		present := f.presentLocked(idx)

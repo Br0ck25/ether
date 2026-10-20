@@ -90,6 +90,15 @@ type fakeSource struct {
 	rel    *fakeRelease
 	closed atomic.Bool
 	reads  atomic.Int64
+
+	spanMu sync.Mutex
+	spans  [][2]int64 // [offset, end) of every read
+}
+
+func (s *fakeSource) readSpans() [][2]int64 {
+	s.spanMu.Lock()
+	defer s.spanMu.Unlock()
+	return append([][2]int64(nil), s.spans...)
 }
 
 func (s *fakeSource) Size() int64       { return s.rel.Size }
@@ -99,6 +108,9 @@ func (s *fakeSource) Close() error      { s.closed.Store(true); return nil }
 
 func (s *fakeSource) ReadAt(p []byte, off int64) (int, error) {
 	s.reads.Add(1)
+	s.spanMu.Lock()
+	s.spans = append(s.spans, [2]int64{off, off + int64(len(p))})
+	s.spanMu.Unlock()
 	if s.rel.ReadDelay > 0 {
 		time.Sleep(s.rel.ReadDelay)
 	}

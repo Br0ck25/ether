@@ -148,6 +148,7 @@ func (g *generation) releaseID() string {
 
 // session is the internal, mutable form of a core.PlaySession.
 type session struct {
+	warm          warmState // the encoder input range being prefetched
 	playbackGroup string
 	id            string
 	ident         identity

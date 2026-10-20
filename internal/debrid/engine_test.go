@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -310,7 +312,7 @@ func TestEngineConcurrentReadersShareBlocks(t *testing.T) {
 }
 
 func TestEngineSeekStartsFreshRequest(t *testing.T) {
-	r := newEngineRig(t, 4<<20, -1)
+	r := newEngineRig(t, 32<<20, -1)
 	src, err := r.eng.Open(context.Background(), r.rel.ID, r.pl)
 	if err != nil {
 		t.Fatal(err)
@@ -320,21 +322,21 @@ func TestEngineSeekStartsFreshRequest(t *testing.T) {
 	if _, err := src.ReadAt(buf, 0); err != nil {
 		t.Fatal(err)
 	}
-	far := int64(3 << 20)
+	far := int64(24 << 20) // past the read-ahead window
 	if _, err := src.ReadAt(buf, far); err != nil || !bytes.Equal(buf, r.media.data[far:far+8192]) {
 		t.Fatalf("seek read %v", err)
 	}
-	// The seek target was requested directly: one block at the new
-	// position, not after draining read-ahead from the old one.
+	// The seek target was requested directly by one request starting at
+	// its block, not after draining read-ahead from the old position.
 	r.media.mu.Lock()
 	defer r.media.mu.Unlock()
 	found := false
 	for _, rg := range r.media.ranges {
-		if rg == "bytes=3145728-3211263" {
+		if strings.HasPrefix(rg, fmt.Sprintf("bytes=%d-", far)) {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("no single-block request at the seek target: %v", r.media.ranges)
+		t.Fatalf("no request at the seek target: %v", r.media.ranges)
 	}
 }

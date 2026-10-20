@@ -385,7 +385,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.load = sysload.New(sysload.Options{Logger: log.With("component", "sysload")})
 
 	// Transcoder. A missing ffmpeg is not fatal: direct play still works.
-	a.transcoder, err = transcode.New(cfg.Transcode, log, transcode.WithInputFailureHandler(func(id, input string, at time.Duration, failure error) {
+	a.transcoder, err = transcode.New(cfg.Transcode, log, transcode.WithRunStartHandler(func(input string, from, to time.Duration) {
+		if a.playback != nil {
+			a.playback.WarmInput(input, from, to)
+		}
+	}), transcode.WithInputFailureHandler(func(id, input string, at time.Duration, failure error) {
 		if a.plexServer == nil || ctx.Err() != nil {
 			return
 		}
