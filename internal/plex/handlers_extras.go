@@ -225,7 +225,7 @@ func (s *Server) extraMetadataByKey(ctx context.Context, pr *Request, key core.R
 		return model.Metadata{}, false
 	}
 	parent, err := s.metadataTitle(ctx, pr, e.ParentKey)
-	if err != nil || !s.titleVisible(pr.User, parent) {
+	if err != nil || !s.visibleTitle(ctx, pr.User, parent) {
 		return model.Metadata{}, false
 	}
 	return s.extraMetadata(e, parent, true), true
@@ -241,7 +241,7 @@ func (s *Server) handleExtras(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parent, err := s.metadataTitle(ctx, pr, k)
-	if err == nil && !s.titleVisible(pr.User, parent) {
+	if err == nil && !s.visibleTitle(ctx, pr.User, parent) {
 		err = core.ErrNotFound
 	}
 	if err != nil {
@@ -316,7 +316,7 @@ func (s *Server) handleExtraPlayback(w http.ResponseWriter, r *http.Request) boo
 		return true
 	}
 	parent, err := s.d.Catalog.Get(ctx, e.ParentKey)
-	if err != nil || !s.titleVisible(pr.User, parent) {
+	if err != nil || !s.visibleTitle(ctx, pr.User, parent) {
 		writeHTTPError(w, http.StatusNotFound)
 		return true
 	}
@@ -551,7 +551,7 @@ func (s *Server) handleExtraPart(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	parent, err := s.d.Catalog.Get(ctx, e.ParentKey)
-	if err != nil || !s.titleVisible(pr.User, parent) {
+	if err != nil || !s.visibleTitle(ctx, pr.User, parent) {
 		writeHTTPError(w, http.StatusNotFound)
 		return true
 	}

@@ -374,7 +374,7 @@ func (s *Server) handleOK(w http.ResponseWriter, r *http.Request) {
 func redactQuery(q string) string {
 	parts := strings.Split(q, "&")
 	for i, p := range parts {
-		if k, _, ok := strings.Cut(p, "="); ok && strings.EqualFold(k, "X-Plex-Token") {
+		if k, _, ok := strings.Cut(p, "="); ok && (strings.EqualFold(k, "X-Plex-Token") || strings.EqualFold(k, streamGrantParam)) {
 			parts[i] = k + "=REDACTED"
 		}
 	}

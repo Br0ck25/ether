@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRestrictedViewerCannotRetrieveHiddenTitles(t *testing.T) {
@@ -136,5 +137,147 @@ func TestRestrictedViewerQueuesAndPlaylistsHideTitles(t *testing.T) {
 	rec = f.get(t, "/playlists/"+pl.Key.String()+"/items", "X-Plex-Token", "kid")
 	if rec.Code != 200 || strings.Contains(rec.Body.String(), "Fjord Harbor") || !strings.Contains(rec.Body.String(), "Alien") {
 		t.Errorf("playlist items: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Up Next and a show's On Deck must not surface an episode of a show the
+// viewer's policy blocks, even when the episode lacks the show's keywords.
+func TestBlockedShowEpisodesStayOutOfUpNextAndOnDeck(t *testing.T) {
+	f := newFixture(func(d *Deps) { d.AccessPolicy = keywordPolicy{blocked: "blocked"} })
+	defer f.srv.Close()
+	show := breakingBad
+	show.Keywords = []string{"blocked"}
+	f.catalog.titles[show.Key] = show
+	rec := f.get(t, "/hubs/metadata/"+bbE1.Key.String()+"/postplay", "X-Plex-Token", friendToken)
+	if rec.Code != 404 || strings.Contains(rec.Body.String(), "Second Watch") || strings.Contains(rec.Body.String(), "tv.upnext") {
+		t.Errorf("postplay: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = f.get(t, "/library/metadata/"+show.Key.String()+"/onDeck", "X-Plex-Token", friendToken)
+	if rec.Code != 404 || strings.Contains(rec.Body.String(), "Pilot") {
+		t.Errorf("show onDeck: %d %s", rec.Code, rec.Body.String())
+	}
+	// The owner still gets both.
+	if rec := f.get(t, "/hubs/metadata/"+bbE1.Key.String()+"/postplay"); !strings.Contains(rec.Body.String(), "Second Watch") {
+		t.Errorf("owner postplay lost Up Next: %s", rec.Body.String())
+	}
+	if rec := f.get(t, "/library/metadata/"+show.Key.String()+"/onDeck"); rec.Code != 200 || !strings.Contains(rec.Body.String(), "Pilot") {
+		t.Errorf("owner onDeck: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+type historyState struct {
+	*fakeState
+	hist []core.HistoryEntry
+}
+
+func (h historyState) History(context.Context, int64, time.Time, int) ([]core.HistoryEntry, error) {
+	return h.hist, nil
+}
+
+// Watch history must not list titles the viewer may no longer see.
+func TestHistoryHidesRestrictedTitles(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Auth.(*fakeAuth).users["kid"] = core.User{ID: 30, Username: "kid", MaxContentRating: "PG"}
+	pg := alien
+	pg.ContentRating = "PG"
+	f.catalog.titles[pg.Key] = pg
+	f.srv.d.State = historyState{fakeState: f.state, hist: []core.HistoryEntry{
+		{UserID: 30, Key: fightClub.Key, ViewedAt: fixedNow}, {UserID: 30, Key: pg.Key, ViewedAt: fixedNow},
+	}}
+	rec := f.get(t, "/status/sessions/history/all", "X-Plex-Token", "kid")
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "Fjord Harbor") || !strings.Contains(rec.Body.String(), "Alien") {
+		t.Errorf("history: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A collection without its own poster falls back to an item's poster, but
+// never to one the viewer may not see.
+func TestCollectionPosterFallbackSkipsHiddenItems(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Auth.(*fakeAuth).users["kid"] = core.User{ID: 30, Username: "kid", MaxContentRating: "PG"}
+	pg := alien
+	pg.ContentRating = "PG"
+	f.catalog.titles[pg.Key] = pg
+	key := core.CollectionKey(77)
+	f.cols.cols[key] = core.Collection{Key: key, Title: "Mixed", Kind: "franchise", Type: core.TypeMovie, ChildCount: 2}
+	f.cols.items[key] = []core.Title{fightClub, pg}
+	rec := f.get(t, "/library/collections/"+key.String()+"/thumb/1", "X-Plex-Token", "kid")
+	if rec.Code != 200 {
+		t.Fatalf("collection thumb: %d", rec.Code)
+	}
+	if f.art.count("/t/p/w500/poster550.jpg") != 0 || f.art.count("/t/p/w500/alien.jpg") != 1 {
+		t.Fatalf("fallback poster fetched %v", f.art.hits)
+	}
+}
+
+// On Deck pairs rendered items with their titles: a hidden in-progress
+// title must not shift another item's section attributes.
+func TestOnDeckHiddenTitleKeepsSectionAttributes(t *testing.T) {
+	f := newFixture(func(d *Deps) { d.AccessPolicy = keywordPolicy{blocked: "blocked"} })
+	defer f.srv.Close()
+	movie := fightClub
+	movie.Keywords = []string{"blocked"}
+	f.catalog.titles[movie.Key] = movie
+	f.state.set(friendUser.ID, core.WatchStatus{Key: movie.Key, ViewOffset: time.Minute})
+	f.state.set(friendUser.ID, core.WatchStatus{Key: bbE1.Key, ViewOffset: time.Minute})
+	rec := f.get(t, "/library/onDeck", "X-Plex-Token", friendToken, "Accept", "application/json")
+	mc := decodeJSON(t, rec)
+	items, _ := mc["Metadata"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("onDeck items: %s", rec.Body.String())
+	}
+	tv, _ := f.srv.sectionFor(core.TypeEpisode)
+	if got := items[0].(map[string]any)["librarySectionUUID"]; got != tv.UUID {
+		t.Fatalf("episode librarySectionUUID = %v, want %s", got, tv.UUID)
+	}
+}
+
+// A viewer limited to some sections must not open a collection of another.
+func TestCollectionOfHiddenSectionIsNotFound(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Auth.(*fakeAuth).users["tvonly"] = core.User{ID: 31, Username: "tvonly", AllowedSections: []int{2}}
+	key := core.CollectionKey(8091).String()
+	for _, path := range []string{"/library/collections/" + key, "/library/collections/" + key + "/children", "/library/metadata/" + key, "/library/collections/" + key + "/thumb/1"} {
+		if rec := f.get(t, path, "X-Plex-Token", "tvonly"); rec.Code != 404 {
+			t.Errorf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := f.get(t, "/library/collections/"+key); rec.Code != 200 {
+		t.Errorf("owner collection: %d", rec.Code)
+	}
+}
+
+// Related, similar and post-play rows of a hidden title are not served: they
+// are built from that title's credits and collection.
+func TestRelatedRowsOfHiddenTitleAreNotFound(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Auth.(*fakeAuth).users["kid"] = core.User{ID: 30, Username: "kid", MaxContentRating: "PG"}
+	key := fightClub.Key.String()
+	for _, path := range []string{"/hubs/metadata/" + key, "/hubs/metadata/" + key + "/related", "/library/metadata/" + key + "/related", "/library/metadata/" + key + "/similar", "/hubs/metadata/" + key + "/postplay"} {
+		if rec := f.get(t, path, "X-Plex-Token", "kid"); rec.Code != 404 {
+			t.Errorf("%s: %d", path, rec.Code)
+		}
+		if rec := f.get(t, path); rec.Code != 200 {
+			t.Errorf("owner %s: %d", path, rec.Code)
+		}
+	}
+}
+
+// allLeaves pages over the episodes the viewer may see.
+func TestAllLeavesPagesVisibleEpisodes(t *testing.T) {
+	f := newFixture(func(d *Deps) { d.AccessPolicy = keywordPolicy{blocked: "blocked"} })
+	defer f.srv.Close()
+	ep := bbE1
+	ep.Keywords = []string{"blocked"}
+	f.catalog.titles[ep.Key] = ep
+	rec := f.get(t, "/library/metadata/"+breakingBad.Key.String()+"/allLeaves?X-Plex-Container-Start=0&X-Plex-Container-Size=1", "X-Plex-Token", friendToken, "Accept", "application/json")
+	mc := decodeJSON(t, rec)
+	items, _ := mc["Metadata"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["title"] != bbE2.Title || mc["totalSize"].(float64) != 1 {
+		t.Fatalf("allLeaves page: %s", rec.Body.String())
 	}
 }

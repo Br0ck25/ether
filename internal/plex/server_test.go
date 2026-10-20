@@ -713,11 +713,14 @@ func TestPagingHugeContainerSize(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
 	f.srv.d.Recommender = &fakeRecommender{section: map[core.MediaType][]core.Hub{core.TypeMovie: {{ID: "movie.popular", Title: "Popular", Type: core.TypeMovie, Items: []core.Title{fightClub, alien}}}}}
+	f.cols.cols[core.CollectionKey(77)] = core.Collection{Key: core.CollectionKey(77), Title: "Two", Kind: "franchise", Type: core.TypeMovie, ChildCount: 2}
+	f.cols.items[core.CollectionKey(77)] = []core.Title{fightClub, alien}
 	page := "X-Plex-Container-Start=1&X-Plex-Container-Size=9223372036854775807"
 	for _, path := range []string{
 		"/library/metadata/" + bbS1.Key.String() + "/children?" + page,
 		"/library/metadata/" + bbS1.Key.String() + "/allLeaves?" + page,
 		"/hubs/items/movie.popular?contentDirectoryID=1&" + page,
+		"/library/collections/" + core.CollectionKey(77).String() + "/children?" + page,
 	} {
 		rec := f.get(t, path, jsonAccept...)
 		if rec.Code != 200 {
@@ -760,5 +763,84 @@ func TestRateNaNAndEmptyTerminateAreBadRequests(t *testing.T) {
 	rec := f.get(t, "/:/timeline?ratingKey=1000000000000550&state=playing&time=2000&duration=10000", "X-Plex-Token", friendToken)
 	if strings.Contains(rec.Body.String(), "terminationCode") {
 		t.Fatalf("an empty session id terminated a stream: %s", rec.Body.String())
+	}
+}
+
+// A kill whose client never sends another timeline must not stay queued
+// forever.
+func TestTerminationsExpire(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.setTermination("gone", "Bedtime")
+	f.srv.setTermination("back", "Bedtime")
+	f.srv.expireTerminations(fixedNow.Add(terminationTTL/2), terminationTTL)
+	if reason, ok := f.srv.takeTermination("back"); !ok || reason != "Bedtime" {
+		t.Fatalf("a fresh kill was dropped: %q %v", reason, ok)
+	}
+	f.srv.expireTerminations(fixedNow.Add(terminationTTL+time.Second), terminationTTL)
+	f.srv.termMu.Lock()
+	n := len(f.srv.terms)
+	f.srv.termMu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d stale kills kept", n)
+	}
+}
+
+// Unshuffling a shuffled queue whose items were all removed must not panic.
+func TestPlayQueueUnshuffleAfterRemovingEverything(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	js := map[string]string{"Accept": "application/json"}
+	rec := f.request(t, http.MethodPost, "/playQueues?type=video&uri="+urlEsc("server://m/com.plexapp.plugins.library/library/metadata/"+bbS1.Key.String()), js)
+	mc := decodeJSON(t, rec)
+	id := fmt.Sprint(int64(mc["playQueueID"].(float64)))
+	if rec := f.request(t, http.MethodPut, "/playQueues/"+id+"/shuffle", nil); rec.Code != http.StatusOK {
+		t.Fatalf("shuffle %d", rec.Code)
+	}
+	for _, it := range mc["Metadata"].([]any) {
+		itemID := int64(it.(map[string]any)["playQueueItemID"].(float64))
+		if rec := f.request(t, http.MethodDelete, fmt.Sprintf("/playQueues/%s/items/%d", id, itemID), nil); rec.Code != http.StatusOK {
+			t.Fatalf("remove %d: %d", itemID, rec.Code)
+		}
+	}
+	if rec := f.request(t, http.MethodPut, "/playQueues/"+id+"/unshuffle", nil); rec.Code != http.StatusOK {
+		t.Fatalf("unshuffle of an empty queue: %d", rec.Code)
+	}
+}
+
+// Moving a playlist item after itself leaves the playlist unchanged.
+func TestPlaylistMoveAfterItself(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	pl, err := f.pls.Create(context.Background(), ownerUser.ID, "Mine", []core.RatingKey{fightClub.Key, alien.Key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []string{"1", "2"} {
+		rec := f.request(t, http.MethodPut, "/playlists/"+pl.Key.String()+"/items/"+item+"/move?after="+item, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("move %s after itself: %d %s", item, rec.Code, rec.Body.String())
+		}
+		got, _ := f.pls.Get(context.Background(), ownerUser.ID, pl.Key)
+		if len(got.Items) != 2 || got.Items[0] != fightClub.Key || got.Items[1] != alien.Key {
+			t.Fatalf("move %s after itself reordered: %v", item, got.Items)
+		}
+	}
+}
+
+func TestRedactQueryHidesCredentials(t *testing.T) {
+	got := redactQuery("a=1&X-Plex-Token=secret&" + streamGrantParam + "=grant&x-plex-token=s2")
+	if strings.Contains(got, "secret") || strings.Contains(got, "grant") || strings.Contains(got, "s2") || !strings.Contains(got, "a=1") {
+		t.Fatalf("redactQuery = %q", got)
+	}
+}
+
+func TestAcceptsGzipQuality(t *testing.T) {
+	for v, want := range map[string]bool{"gzip": true, "gzip;q=0.8": true, "gzip; q=0.5, br": true, "gzip;q=0": false, "gzip;q=0.0": false, "br, gzip;q=0": false, "identity": false} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.Header.Set("Accept-Encoding", v)
+		if got := acceptsGzip(r); got != want {
+			t.Errorf("acceptsGzip(%q) = %v", v, got)
+		}
 	}
 }

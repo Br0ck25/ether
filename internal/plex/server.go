@@ -158,9 +158,10 @@ type Server struct {
 	titleJobs *bgQueue
 	blurJobs  *bgQueue
 
-	// Owner stream kills, delivered on the client's next timeline.
+	// Owner stream kills, delivered on the client's next timeline; the
+	// janitor drops those whose client never reports again.
 	termMu sync.Mutex
-	terms  map[string]string
+	terms  map[string]termination
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -379,6 +380,7 @@ func (s *Server) janitor() {
 			s.renderedVariants.expire(now, renderedVariantsTTL)
 			s.transcodes.expire(now, 2*time.Hour)
 			s.extraPlay.expire(now, 2*time.Hour)
+			s.expireTerminations(now, terminationTTL)
 			expired := s.sessions.expire(now, 2*time.Minute)
 			for _, e := range expired {
 				s.notifyPlaying(e, "stopped")

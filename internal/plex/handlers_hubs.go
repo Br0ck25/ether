@@ -600,7 +600,7 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 	if s.d.Recommender == nil {
 		return hubSpec{}, false
 	}
-	if k, err := core.ParseRatingKey(metadataID); err == nil {
+	if k, err := core.ParseRatingKey(metadataID); err == nil && s.relatedSourceVisible(ctx, pr, k) {
 		if hubs, err := s.d.Recommender.Related(ctx, pr.User, k, count); err == nil {
 			for _, h := range hubs {
 				if h.ID == id {
@@ -640,13 +640,30 @@ func containsInt(xs []int, x int) bool {
 	return false
 }
 
+// relatedSourceVisible reports whether the viewer may see the title a
+// related/post-play/similar request is about: its rows are built from the
+// title's own credits and collection, and are not the viewer's to see when
+// the title is hidden. Non-title keys are left to their own handlers.
+func (s *Server) relatedSourceVisible(ctx context.Context, pr *Request, k core.RatingKey) bool {
+	switch k.Kind() {
+	case core.KindMovie, core.KindShow, core.KindSeason, core.KindEpisode:
+	default:
+		return true
+	}
+	t, err := s.metadataTitle(ctx, pr, k)
+	if err != nil {
+		return true // unknown titles yield no rows anyway
+	}
+	return s.visibleTitle(ctx, pr.User, t)
+}
+
 // handleMetadataHubs is /hubs/metadata/{key}[/related] and
 // /library/metadata/{key}/related.
 func (s *Server) handleMetadataHubs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	k, err := keyParam(r)
-	if err != nil {
+	if err != nil || !s.relatedSourceVisible(ctx, pr, k) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
@@ -671,7 +688,7 @@ func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	k, err := core.ParseRatingKey(chi.URLParam(r, "key"))
-	if err != nil {
+	if err != nil || !s.relatedSourceVisible(ctx, pr, k) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
@@ -679,7 +696,9 @@ func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
 	mc := hubContainer()
 	seen := map[core.RatingKey]bool{k: true}
 	if k.Kind() == core.KindEpisode {
-		if next, err := s.d.Catalog.NextEpisode(ctx, k); err == nil && next != nil {
+		// visibleTitle, not just the item's own policy: the next episode
+		// may not carry its show's restrictions.
+		if next, err := s.d.Catalog.NextEpisode(ctx, k); err == nil && next != nil && s.visibleTitle(ctx, pr.User, next) {
 			h := core.Hub{ID: "tv.upnext", Title: "Up Next", Type: core.TypeEpisode, Context: "hub.tv.upnext", Items: []core.Title{*next}}
 			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{related: k}))
 			seen[next.Key] = true

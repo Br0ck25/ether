@@ -1170,7 +1170,7 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 		if s.d.EpisodeOrder != nil || items[i].LeafCount == nil || *items[i].LeafCount == 0 {
 			items[i].LeafCount = model.Ptr(len(eps))
 		}
-		if viewed == len(eps) {
+		if viewed > 0 && viewed == len(eps) {
 			items[i].ViewCount = max(items[i].ViewCount, 1)
 		}
 	}

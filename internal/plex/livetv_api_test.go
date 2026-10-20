@@ -334,3 +334,16 @@ func TestNativeLiveSubscriptionOwnershipAndPlayback(t *testing.T) {
 		t.Fatalf("owned numeric subscription stop: %d %s", stop.Code, stop.Body.String())
 	}
 }
+
+// Malformed guide queries are the client's error, not the server's.
+func TestLiveGuideBadQueriesAreBadRequests(t *testing.T) {
+	f, _, _ := liveFixture(t)
+	for _, q := range []string{"date=tomorrow", "beginsAt=x", "endsAt=y", "beginsAt=2000&endsAt=1000", "beginsAt=0&endsAt=99999999999"} {
+		if r := f.request(t, "GET", liveProviderPath+"/grid?"+q, nil); r.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d", q, r.Code)
+		}
+	}
+	if r := f.request(t, "GET", liveProviderPath+"/grid", nil); r.Code != http.StatusOK {
+		t.Errorf("default grid: %d %s", r.Code, r.Body.String())
+	}
+}

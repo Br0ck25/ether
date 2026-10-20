@@ -252,6 +252,10 @@ func liveProgrammeMetadata(c livetv.Channel, p livetv.Programme) model.Metadata 
 	}
 	return model.Metadata{RatingKey: p.ID, Key: liveProviderPath + "/metadata/" + url.PathEscape(p.ID), GUID: "ether://livetv/" + p.ID, Type: "clip", Title: p.Item.Title, Summary: p.Item.Summary, ContentRating: rating, Thumb: p.Item.Thumb, Duration: dur, Extra: []model.Attr{model.A("live", true)}, Media: []model.Media{{ID: p.Start.Unix(), Duration: dur, Protocol: "livetv", Extra: []model.Attr{model.A("beginsAt", p.Start.Unix()), model.A("endsAt", p.End.Unix()), model.A("channelIdentifier", c.ID), model.A("channelID", c.ID), model.A("channelTitle", c.Name), model.A("channelCallSign", c.Name), model.A("channelVcn", c.Number), model.A("channelThumb", liveLogo(c)), model.A("gridKey", c.ID)}}}}
 }
+
+// errLiveBadRequest marks a guide query the client got wrong (400, not 500).
+var errLiveBadRequest = errors.New("invalid guide request")
+
 func (s *Server) liveGuideMetadata(r *http.Request) ([]model.Metadata, error) {
 	from := s.now()
 	until := from.Add(time.Second)
@@ -260,14 +264,14 @@ func (s *Server) liveGuideMetadata(r *http.Request) ([]model.Metadata, error) {
 		var err error
 		from, err = time.Parse("2006-01-02", date)
 		if err != nil {
-			return nil, fmt.Errorf("invalid guide date")
+			return nil, fmt.Errorf("%w: date", errLiveBadRequest)
 		}
 		until = from.Add(24 * time.Hour)
 	}
 	if raw := q.Get("beginsAt"); raw != "" {
 		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid beginsAt")
+			return nil, fmt.Errorf("%w: beginsAt", errLiveBadRequest)
 		}
 		from = time.Unix(n, 0)
 		until = from.Add(24 * time.Hour)
@@ -275,7 +279,7 @@ func (s *Server) liveGuideMetadata(r *http.Request) ([]model.Metadata, error) {
 	if raw := q.Get("endsAt"); raw != "" {
 		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("invalid endsAt")
+			return nil, fmt.Errorf("%w: endsAt", errLiveBadRequest)
 		}
 		until = time.Unix(n, 0)
 	}
@@ -292,6 +296,9 @@ func (s *Server) liveGuideMetadata(r *http.Request) ([]model.Metadata, error) {
 			from = s.now().Add(-24 * time.Hour)
 			until = s.now().Add(6 * 24 * time.Hour)
 		}
+	}
+	if !until.After(from) || until.Sub(from) > 7*24*time.Hour {
+		return nil, fmt.Errorf("%w: window", errLiveBadRequest)
 	}
 	ps, err := s.d.LiveTV.Guide(r.Context(), FromContext(r.Context()).User, from, until)
 	if err != nil {
@@ -319,6 +326,10 @@ func (s *Server) liveGuideMetadata(r *http.Request) ([]model.Metadata, error) {
 }
 func (s *Server) handleLiveGuide(w http.ResponseWriter, r *http.Request) {
 	md, err := s.liveGuideMetadata(r)
+	if errors.Is(err, errLiveBadRequest) {
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
