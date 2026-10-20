@@ -23,7 +23,7 @@ import { DragHandle, SortableList } from "../../components/Sortable";
 import { viewerName } from "../../components/pickers";
 import { api, isAbort } from "../../lib/api";
 import type { HomeLayout, HomeRow, RowPolicy, Viewer, ViewerHome } from "../../lib/contract";
-import { WEEKDAYS, WEEKDAYS_LONG, formatHour } from "../../lib/format";
+import { WEEKDAYS, WEEKDAYS_LONG, formatHour, plural } from "../../lib/format";
 import { useDebouncedValue } from "../../lib/hooks";
 import {
   CONTINUE,
@@ -241,6 +241,9 @@ export function HomeCanvas({
         >
           <p className="text-xs text-fg-muted">
             {arranged.length} rows on the page{hidden.length ? ` · ${hidden.length} not shown` : ""}
+            {home.homeDeduped
+              ? ` · ${plural(home.homeDeduped, "title")} held back because Home shows ${home.homeDeduped === 1 ? "it" : "them"}`
+              : ""}
           </p>
           {fixed.map((r) => (
             <RowCard key={r.hubId} row={r} who={who} />

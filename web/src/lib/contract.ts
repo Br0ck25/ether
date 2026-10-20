@@ -252,6 +252,8 @@ export interface ViewerHome {
   context: HomeContext;
   /** layout/preview: the previewed viewer, null for the typical viewer. */
   viewer?: { id: number; title: string } | null;
+  /** Movies/TV: titles kept off this page because the Home leads with them. */
+  homeDeduped?: number;
 }
 
 export type LayoutSection = "home" | "movies" | "shows";
