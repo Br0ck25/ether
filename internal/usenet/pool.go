@@ -775,7 +775,12 @@ func (p *pool) failed(err error, reused bool, ctx context.Context) error {
 		} else {
 			p.brk.noteError(err)
 		}
-		if reused && isNetworkError(err) {
+		// EOF or a reset on a connection that had been idle means the
+		// server dropped it, and very likely its idle siblings with it. A
+		// timeout is one slow or stalled command: the siblings are still
+		// good, and closing them on a flaky link would redial on every
+		// stall and trip the breaker.
+		if reused && isNetworkError(err) && !isTimeoutError(err) {
 			p.log.Debug("usenet: idle connection was dropped by the server; discarding idle connections", "err", err)
 			p.discardIdle()
 		}

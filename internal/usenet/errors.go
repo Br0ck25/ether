@@ -104,6 +104,16 @@ func isNetworkError(err error) bool {
 	return errors.As(err, &ne)
 }
 
+// isTimeoutError reports a deadline or inactivity timeout: the connection
+// it happened on is unusable, but it says nothing about its idle siblings.
+func isTimeoutError(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 // ctxErr is ctx.Err(), but also reports DeadlineExceeded as soon as the
 // deadline has passed: network deadlines derived from ctx can fire a moment
 // before the context's own timer, and such failures are the caller's, not
