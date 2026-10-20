@@ -576,7 +576,7 @@ func TestDatabaseSettingsRedactedAndNotEditable(t *testing.T) {
 		c.SetupComplete = true
 		c.Database = config.Database{Driver: config.DatabasePostgres, URL: dbURL}
 	})
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	r := req(http.MethodGet, "/ether/api/config", "")
 	r.Header.Set("X-Plex-Token", ownerToken)
 	rec := serve(h, r)

@@ -121,7 +121,7 @@ func TestClusterRemoteSessionsAndDeadNodes(t *testing.T) {
 		remote = b.m.RemoteSessions(context.Background())
 		return len(remote) == 1
 	})
-	if r := remote[0]; r.ID != ps.ID || r.Node != "a" || r.TitleName != "The Matrix (1999)" || r.Username != "friend" || r.Source != nil {
+	if r := remote[0]; r.ID != ps.ID || r.Node != "a" || r.TitleName != "The Signal (1999)" || r.Username != "friend" || r.Source != nil {
 		t.Fatalf("remote session %+v", r)
 	}
 	if got := a.m.RemoteSessions(context.Background()); len(got) != 0 {

@@ -111,9 +111,9 @@ func TestPinsFollowOtherNode(t *testing.T) {
 	a.SetBus(hub.Node("a"))
 	b.SetBus(hub.Node("b"))
 	key := matrixTitle().Key
-	rel := core.Release{ID: "rel-pin", Name: "The.Matrix.1999.1080p.BluRay.x264-GRP", Indexer: "idx"}
+	rel := core.Release{ID: "rel-pin", Name: "The.Signal.1999.1080p.BluRay.x264-GRP", Indexer: "idx"}
 
-	if _, err := a.Pin(ctx, key, "The Matrix (1999)", rel, "keep"); err != nil {
+	if _, err := a.Pin(ctx, key, "The Signal (1999)", rel, "keep"); err != nil {
 		t.Fatal(err)
 	}
 	waitUntil(t, "B sees the pin", func() bool { p, ok := b.PinFor(key); return ok && p.Release.ID == "rel-pin" && p.Note == "keep" })
