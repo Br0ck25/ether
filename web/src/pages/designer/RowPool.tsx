@@ -7,10 +7,13 @@ import type {
   AvailableRow,
   HomeLayout,
   LayoutSection,
+  RowGroup,
+  RowInsight,
   RowPolicy,
   RowStatus,
   Viewer,
 } from "../../lib/contract";
+import { api } from "../../lib/api";
 import { WEEKDAYS, plural } from "../../lib/format";
 import {
   FRONT_END_ROWS,
@@ -20,6 +23,7 @@ import {
   policyChips,
   policyIn,
   removePolicy,
+  rowFits,
   setPolicy,
   viewersOverriding,
   type LayerKey,
@@ -30,7 +34,19 @@ interface PoolEntry {
   row: string;
   title: string;
   description: string;
+  group: RowGroup | "custom";
+  kind?: string;
 }
+
+const GROUPS: { key: RowGroup | "custom"; label: string; hint: string }[] = [
+  { key: "picks", label: "Picks for you", hint: "Personal, high-confidence rows" },
+  { key: "explore", label: "Explore", hint: "Lenses into the catalogue" },
+  { key: "shows", label: "Series", hint: "Built around shows and seasons" },
+  { key: "household", label: "Household", hint: "What the server is watching" },
+  { key: "collections", label: "Collections", hint: "Your Collection Studio rows" },
+  { key: "plex", label: "Plex", hint: "Rows Plex itself provides" },
+  { key: "custom", label: "Custom patterns", hint: "Hub ids, kinds or globs" },
+];
 
 /**
  * The row catalogue: every row the engine, Plex or the owner's collections
@@ -58,10 +74,27 @@ export function RowPool({
   const [q, setQ] = useState("");
   const [custom, setCustom] = useState("");
   const [patternOpen, setPatternOpen] = useState(false);
+  const [insights, setInsights] = useState<RowInsight[]>([]);
+  useEffect(() => {
+    let live = true;
+    api
+      .rowInsights()
+      .then((r) => live && setInsights(r))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
   const entries = useMemo<PoolEntry[]>(() => {
     const out: PoolEntry[] = available
-      .filter((a) => !FRONT_END_ROWS.has(a.kind))
-      .map((a) => ({ row: a.hubId, title: a.title, description: a.description }));
+      .filter((a) => !FRONT_END_ROWS.has(a.kind) && rowFits(a, section))
+      .map((a) => ({
+        row: a.hubId,
+        title: a.title,
+        description: a.description,
+        group: a.group ?? "picks",
+        kind: a.kind,
+      }));
     // Policies for patterns or hub ids that are not in the catalogue.
     for (const layerKey of ["global", layer] as LayerKey[]) {
       for (const p of pageOf(draft, layerKey, section)?.rows ?? []) {
@@ -70,6 +103,7 @@ export function RowPool({
             row: p.row,
             title: p.row,
             description: "Custom row pattern (hub id, kind or glob).",
+            group: "custom",
           });
       }
     }
@@ -90,7 +124,7 @@ export function RowPool({
         <p className="mt-0.5 text-xs text-fg-muted">
           {layer === "global"
             ? "Always: on the page whenever it has titles. Eligible: personalization decides. Off: never."
-            : "Changes here override Global for this viewer only; reset to follow Global again."}
+            : "Changes here override Everyone for this viewer only; reset to follow Everyone again."}
         </p>
       </div>
       <div className="relative">
@@ -106,21 +140,39 @@ export function RowPool({
           className="h-8 pl-8"
         />
       </div>
-      <ul className="space-y-1.5">
-        {shown.map((e) => (
-          <PoolItem
-            key={e.row}
-            entry={e}
-            draft={draft}
-            onChange={onChange}
-            layer={layer}
-            section={section}
-            viewers={viewers}
-            open={focusRow === e.row}
-            onToggle={() => onFocusRow(focusRow === e.row ? null : e.row)}
-          />
-        ))}
-      </ul>
+      {GROUPS.map((g) => {
+        const rows = shown.filter((e) => e.group === g.key);
+        if (!rows.length) return null;
+        return (
+          <div key={g.key} className="space-y-1.5 pt-1" role="group" aria-label={g.label}>
+            <div className="flex items-baseline gap-2 px-0.5">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle">
+                {g.label}
+              </h3>
+              <span className="truncate text-[11px] text-fg-subtle/80">{g.hint}</span>
+            </div>
+            <ul className="space-y-1.5">
+              {rows.map((e) => (
+                <PoolItem
+                  key={e.row}
+                  entry={e}
+                  insight={insightFor(insights, e)}
+                  draft={draft}
+                  onChange={onChange}
+                  layer={layer}
+                  section={section}
+                  viewers={viewers}
+                  open={focusRow === e.row}
+                  onToggle={() => onFocusRow(focusRow === e.row ? null : e.row)}
+                />
+              ))}
+            </ul>
+          </div>
+        );
+      })}
+      {shown.length === 0 ? (
+        <p className="px-1 py-3 text-center text-xs text-fg-muted">No rows match.</p>
+      ) : null}
       <Button
         variant="ghost"
         size="sm"
@@ -174,8 +226,36 @@ export function RowPool({
   );
 }
 
+/** The 7-day engagement of a row (by hub id, else by kind). */
+function insightFor(all: RowInsight[], e: PoolEntry): RowInsight | undefined {
+  return (
+    all.find((i) => i.hubId === e.row) ??
+    (e.kind ? all.find((i) => i.hubId.endsWith(`.${e.kind}`) || i.hubId === e.kind) : undefined)
+  );
+}
+
+function Engagement({ insight }: { insight?: RowInsight }) {
+  if (!insight || insight.impressions7d < 5) return null;
+  const pct = Math.round(insight.playRate * 1000) / 10;
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-fg-muted"
+      title={`${insight.plays7d} plays from ${insight.impressions7d} times shown in the last 7 days`}
+    >
+      <span className="relative h-1 w-10 overflow-hidden rounded-full bg-border">
+        <span
+          className="absolute inset-y-0 left-0 rounded-full bg-primary"
+          style={{ width: `${Math.min(100, insight.playRate * 400)}%` }}
+        />
+      </span>
+      {pct}% played
+    </span>
+  );
+}
+
 function PoolItem({
   entry,
+  insight,
   draft,
   onChange,
   layer,
@@ -185,6 +265,7 @@ function PoolItem({
   onToggle,
 }: {
   entry: PoolEntry;
+  insight?: RowInsight;
   draft: HomeLayout;
   onChange: (d: HomeLayout) => void;
   layer: LayerKey;
@@ -236,11 +317,12 @@ function PoolItem({
             {source === "override" ? (
               <Badge variant="info">Override</Badge>
             ) : source === "global" && layer !== "global" ? (
-              <Badge variant="secondary">From Global</Badge>
+              <Badge variant="secondary">From Everyone</Badge>
             ) : source === "default" ? (
               <span className="text-[11px] text-fg-subtle">Default</span>
             ) : null}
           </div>
+          <p className="mt-0.5 line-clamp-2 text-xs text-fg-muted">{entry.description}</p>
           {chips.length ? (
             <div className="mt-1 flex flex-wrap gap-1">
               {chips.map((c) => (
@@ -262,7 +344,10 @@ function PoolItem({
           {open ? <ChevronDown size={15} /> : <SlidersHorizontal size={14} />}
         </Button>
       </div>
-      <p className="mt-2 text-xs text-fg-muted">{STATUS_LABEL[effective.status]}</p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <p className="text-xs text-fg-muted">{STATUS_LABEL[effective.status]}</p>
+        <Engagement insight={insight} />
+      </div>
       {layer === "global" && own ? (
         <p className="mt-1.5 text-[11px] text-fg-muted">
           Affects {plural(viewers.length - overriding.length, "viewer")}
@@ -298,9 +383,9 @@ function PoolItem({
               size="sm"
               className="h-7 px-2 text-xs"
               onClick={reset}
-              aria-label={`${layer === "global" ? "Back to default" : "Reset to global"}: ${entry.title}`}
+              aria-label={`${layer === "global" ? "Back to default" : "Reset to Everyone"}: ${entry.title}`}
             >
-              <RotateCcw size={12} /> {layer === "global" ? "Default" : "Reset to global"}
+              <RotateCcw size={12} /> {layer === "global" ? "Default" : "Reset to Everyone"}
             </Button>
           ) : null}
         </div>

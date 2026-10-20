@@ -252,6 +252,8 @@ export interface ViewerHome {
   context: HomeContext;
   /** layout/preview: the previewed viewer, null for the typical viewer. */
   viewer?: { id: number; title: string } | null;
+  /** Movies/TV: titles kept off this page because the Home leads with them. */
+  homeDeduped?: number;
 }
 
 export type LayoutSection = "home" | "movies" | "shows";
@@ -293,7 +295,18 @@ export interface LayoutPage {
   maxRows?: number;
   deviceMaxRows?: Partial<Record<Device, number>>;
   rows: RowPolicy[];
+  /** Keep what the viewer's Home leads with off this page (Movies/TV; default on). */
+  dedupeHome?: boolean;
+  tuning?: LayoutTuning;
 }
+
+/** The page's three dials, each 0..1 (0.5 = engine default); unset inherits. */
+export interface LayoutTuning {
+  discovery?: number;
+  freshness?: number;
+  variety?: number;
+}
+export type TuningDial = keyof LayoutTuning;
 
 export interface ViewerLayout {
   userId: number;
@@ -306,11 +319,32 @@ export interface HomeLayout {
   updatedAt?: string;
 }
 
+export type RowGroup = "picks" | "explore" | "shows" | "household" | "collections" | "plex";
+
 export interface AvailableRow {
   hubId: string;
   title: string;
   kind: string;
   description: string;
+  /** Pages the row can appear on; empty or missing means every page. */
+  sections?: LayoutSection[];
+  group?: RowGroup;
+}
+
+export interface RankerFeature {
+  name: string;
+  label: string;
+  weight: number;
+}
+
+export interface RankerInsight {
+  trainedAt?: string;
+  examples: number;
+  positives: number;
+  auc: number;
+  baselineAuc: number;
+  active: boolean;
+  features: RankerFeature[] | null;
 }
 
 export interface LayoutDoc {

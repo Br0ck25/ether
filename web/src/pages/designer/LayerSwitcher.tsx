@@ -70,7 +70,7 @@ export function LayerSwitcher({
       options={options}
       searchable={viewers.length > 6}
       searchPlaceholder="Find a viewer…"
-      className="min-w-[10rem] flex-1 justify-start"
+      className="min-w-[8.5rem] flex-1 justify-start"
       trigger={
         <>
           {current ? (

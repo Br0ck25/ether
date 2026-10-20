@@ -118,7 +118,7 @@ export function OverrideList({
             className="h-7 px-2 text-xs"
             onClick={() => onChange(resetViewer(draft, layer))}
           >
-            <RotateCcw size={12} /> Reset all to Global
+            <RotateCcw size={12} /> Reset all to Everyone
           </Button>
         ) : null}
       </div>
@@ -145,7 +145,7 @@ export function OverrideList({
                   variant="ghost"
                   size="sm"
                   className="h-7 px-2 text-xs"
-                  aria-label={`Reset to global: ${label}`}
+                  aria-label={`Reset to Everyone: ${label}`}
                   onClick={() =>
                     onChange(setPageLength(draft, layer, section, l.device, undefined))
                   }
@@ -170,7 +170,7 @@ export function OverrideList({
                 variant="ghost"
                 size="sm"
                 className="h-7 px-2 text-xs"
-                aria-label={`Reset to global: ${p.row}`}
+                aria-label={`Reset to Everyone: ${p.row}`}
                 onClick={() => onChange(removePolicy(draft, layer, section, p.row))}
               >
                 <RotateCcw size={12} /> Reset

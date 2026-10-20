@@ -11,6 +11,7 @@ import type {
   PreviewContext,
   LookupKind,
   LookupResult,
+  RankerInsight,
   RowInsight,
   TasteOverride,
   TasteProfile,
@@ -310,6 +311,11 @@ export const api = {
   // ---- Insights ---------------------------------------------------------------------
   rowInsights: async () =>
     (await apiFetch<{ rows: RowInsight[] | null }>("/insights/rows")).rows ?? [],
+  /** The learned ranking model's state (bare or wrapped as { ranker }). */
+  rankerInsight: async (): Promise<RankerInsight> => {
+    const r = await apiFetch<RankerInsight | { ranker: RankerInsight }>("/insights/ranker");
+    return "ranker" in r ? r.ranker : r;
+  },
   activity: async () =>
     (await apiFetch<{ days: ActivityDay[] | null }>("/insights/activity")).days ?? [],
 };

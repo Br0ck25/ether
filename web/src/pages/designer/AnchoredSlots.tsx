@@ -148,7 +148,7 @@ export function AnchoredSlots({
                 {p.slot}
               </span>
               <span className="min-w-0 flex-1 truncate text-sm">{rowTitle(available, p.row)}</span>
-              <Badge variant="secondary">Global</Badge>
+              <Badge variant="secondary">Everyone</Badge>
             </li>
           ))}
         </ul>

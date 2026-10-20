@@ -4,18 +4,20 @@ import type {
   HomeLayout,
   LayoutPage,
   LayoutSection,
+  LayoutTuning,
   LayoutWhen,
   RowPolicy,
   RowStatus,
+  TuningDial,
 } from "./contract";
 
 /**
- * Home Designer helpers for the layered layout: a Global Home template,
+ * Home Designer helpers for the layered layout: an Everyone template,
  * per-viewer overrides on top. Edits are immutable; empty pages and viewer
  * layers are pruned so an untouched document compares equal to the saved one.
  */
 
-/** A layer of the document: the Global Home, or a viewer's overrides (their id). */
+/** A layer of the document: Everyone's page, or a viewer's overrides (their id). */
 export type LayerKey = "global" | number;
 
 export const EMPTY_LAYOUT: HomeLayout = { global: [], viewers: [] };
@@ -285,7 +287,9 @@ export function overrideCount(doc: HomeLayout, userId: number, section?: LayoutS
       n +
       p.rows.length +
       (p.maxRows ? 1 : 0) +
-      Object.values(p.deviceMaxRows ?? {}).filter(Boolean).length,
+      Object.values(p.deviceMaxRows ?? {}).filter(Boolean).length +
+      (p.dedupeHome !== undefined ? 1 : 0) +
+      tuningCount(p.tuning),
     0,
   );
 }
@@ -330,7 +334,91 @@ export function effectiveLength(
 // ---- editing ------------------------------------------------------------------------
 
 function emptyPage(p: LayoutPage): boolean {
-  return p.rows.length === 0 && !p.maxRows && !Object.values(p.deviceMaxRows ?? {}).some(Boolean);
+  return (
+    p.rows.length === 0 &&
+    !p.maxRows &&
+    !Object.values(p.deviceMaxRows ?? {}).some(Boolean) &&
+    p.dedupeHome === undefined &&
+    !tuningCount(p.tuning)
+  );
+}
+
+function tuningCount(t: LayoutTuning | undefined): number {
+  return t ? TUNING_DIALS.filter((d) => t[d] !== undefined).length : 0;
+}
+
+export const TUNING_DIALS: TuningDial[] = ["discovery", "freshness", "variety"];
+export const DIAL_DEFAULT = 0.5;
+
+/** The dial value a layer sets (undefined = inherits). */
+export function tuningIn(
+  doc: HomeLayout,
+  layer: LayerKey,
+  section: LayoutSection,
+  dial: TuningDial,
+): number | undefined {
+  return pageOf(doc, layer, section)?.tuning?.[dial];
+}
+
+/** Effective dial value and where it comes from (viewer → Everyone → default). */
+export function effectiveTuning(
+  doc: HomeLayout,
+  layer: LayerKey,
+  section: LayoutSection,
+  dial: TuningDial,
+): { v: number; from: "override" | "global" | "default" } {
+  if (layer !== "global") {
+    const own = tuningIn(doc, layer, section, dial);
+    if (own !== undefined) return { v: own, from: "override" };
+  }
+  const g = tuningIn(doc, "global", section, dial);
+  if (g !== undefined) return { v: g, from: "global" };
+  return { v: DIAL_DEFAULT, from: "default" };
+}
+
+/** Set or clear (undefined) one dial in a layer. */
+export function setTuning(
+  doc: HomeLayout,
+  layer: LayerKey,
+  section: LayoutSection,
+  dial: TuningDial,
+  v: number | undefined,
+): HomeLayout {
+  return updatePage(doc, layer, section, (page) => {
+    const t: LayoutTuning = { ...(page.tuning ?? {}) };
+    if (v === undefined) delete t[dial];
+    else t[dial] = Math.round(Math.min(1, Math.max(0, v)) * 100) / 100;
+    return { ...page, tuning: tuningCount(t) ? t : undefined };
+  });
+}
+
+/** Whether a page keeps the Home's lead titles off (Movies/TV), and from which layer. */
+export function effectiveDedupe(
+  doc: HomeLayout,
+  layer: LayerKey,
+  section: LayoutSection,
+): { on: boolean; from: "override" | "global" | "default" } {
+  if (layer !== "global") {
+    const own = pageOf(doc, layer, section)?.dedupeHome;
+    if (own !== undefined) return { on: own, from: "override" };
+  }
+  const g = pageOf(doc, "global", section)?.dedupeHome;
+  if (g !== undefined) return { on: g, from: "global" };
+  return { on: true, from: "default" };
+}
+
+export function setDedupe(
+  doc: HomeLayout,
+  layer: LayerKey,
+  section: LayoutSection,
+  on: boolean | undefined,
+): HomeLayout {
+  return updatePage(doc, layer, section, (page) => ({ ...page, dedupeHome: on }));
+}
+
+/** Rows that can appear on a page. */
+export function rowFits(row: { sections?: LayoutSection[] }, section: LayoutSection): boolean {
+  return !row.sections || row.sections.length === 0 || row.sections.includes(section);
 }
 
 /** Drop empty pages and viewer layers; order pages and viewers canonically. */
