@@ -352,34 +352,43 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 // InvalidateTitle drops the warm (pre-resolved) entries for a title, from
 // both the detail and speculative budgets, so the next Play resolves
 // afresh — after the owner pins, unpins, blocks or unblocks a release, or
-// forgets a title's search. A show or season key also drops its
-// episodes' entries. A warm-up still in flight finishes into nothing. It
-// returns how many entries were dropped.
+// forgets a title's search. Stored source choices are invalidated too;
+// watch progress and container indexes remain intact. A show or season key
+// also drops its episodes' entries. A warm-up still in flight finishes into
+// nothing. It returns how many warm entries were dropped.
 func (m *Manager) InvalidateTitle(key core.RatingKey) int {
 	if key == 0 {
 		return 0
 	}
-	matches := func(k core.RatingKey) bool {
-		switch {
-		case k == key:
-			return true
-		case k.Kind() != core.KindEpisode:
-			return false
-		case key.Kind() == core.KindShow:
-			return k.TMDB() == key.TMDB()
-		case key.Kind() == core.KindSeason:
-			return k.Parent() == key
-		}
-		return false
-	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	n := 0
 	for id := range m.warm {
-		if matches(id.key) {
+		if titleIncludes(key, id.key) {
 			delete(m.warm, id)
 			n++
 		}
 	}
+	m.mu.Unlock()
+	if m.resume != nil {
+		ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+		defer cancel()
+		if err := m.resume.invalidateTitle(ctx, key); err != nil {
+			m.log.Warn("invalidate remembered source", "key", key, "err", err)
+		}
+	}
 	return n
+}
+
+func titleIncludes(parent, key core.RatingKey) bool {
+	switch {
+	case key == parent:
+		return true
+	case key.Kind() != core.KindEpisode:
+		return false
+	case parent.Kind() == core.KindShow:
+		return key.TMDB() == parent.TMDB()
+	case parent.Kind() == core.KindSeason:
+		return key.Parent() == parent
+	}
+	return false
 }

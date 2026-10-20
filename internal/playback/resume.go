@@ -243,6 +243,28 @@ func (s *resumeStore) delete(ctx context.Context, userID int64, key core.RatingK
 	return nil
 }
 
+// invalidateTitle drops a reusable source choice after an owner changes
+// release policy. This table contains source identities, not watch progress.
+// Keep the content-addressed payload and index caches for ordinary pruning.
+func (s *resumeStore) invalidateTitle(ctx context.Context, key core.RatingKey) error {
+	if key.Kind() != core.KindShow && key.Kind() != core.KindSeason {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM playback_resume WHERE rating_key=?`, int64(key))
+		return err
+	}
+	records, err := s.all(ctx)
+	if err != nil {
+		return err
+	}
+	for _, rec := range records {
+		if titleIncludes(key, rec.key) {
+			if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_resume WHERE user_id=? AND rating_key=?`, rec.userID, int64(rec.key)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // gcNZB removes an NZB file no row references any more.
 func (s *resumeStore) gcNZB(ctx context.Context, hash string) {
 	var n int
