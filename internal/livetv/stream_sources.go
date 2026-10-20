@@ -19,6 +19,9 @@ type StreamSource struct {
 	URL      string `json:"url"`
 	Enabled  bool   `json:"enabled"`
 	Priority int    `json:"priority"` // smaller first; equal priorities retain list order
+	// AuthSourceID names the source whose provider credentials this input
+	// uses; empty means the channel's own source.
+	AuthSourceID string `json:"authSourceId,omitempty"`
 }
 
 type StreamSourceStatus struct {

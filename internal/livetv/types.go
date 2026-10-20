@@ -66,6 +66,9 @@ type Source struct {
 	Playlist  string    `json:"playlist,omitempty"`
 	Guide     string    `json:"guide,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Auth authenticates playlist, guide and stream requests to the provider.
+	// Secrets are redacted by the owner API (see auth.go).
+	Auth *SourceAuth `json:"auth,omitempty"`
 	// RefreshHours caps the time between automatic refreshes of URL-backed
 	// sources: 0 uses the 6 hour default, a negative value means manual
 	// refresh only. Sources also refresh before mapped listings run out.

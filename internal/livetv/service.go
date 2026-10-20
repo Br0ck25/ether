@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -29,6 +28,7 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
+	authCache        authCache // provider credentials for the stream path (auth.go)
 	probeMu          sync.Mutex
 	probeCache       map[string]liveProbeEntry
 	sourceMu         sync.Mutex
@@ -525,6 +525,7 @@ func (s *Service) Sources(ctx context.Context) ([]Source, error) {
 		v.HasGuide = v.Guide != "" || v.GuideURL != ""
 		v.Playlist = ""
 		v.Guide = ""
+		redactSourceAuth(&v)
 		out = append(out, v)
 	}
 	if err = rows.Err(); err != nil {
@@ -533,29 +534,7 @@ func (s *Service) Sources(ctx context.Context) ([]Source, error) {
 	return out, s.fillSourceStats(ctx, out)
 }
 func (s *Service) readURL(ctx context.Context, raw string, max int64) (string, error) {
-	if !validHTTP(raw) {
-		return "", fmt.Errorf("source must use HTTP(S)")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		return "", err
-	}
-	res, err := s.o.HTTPClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("source fetch failed")
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		return "", fmt.Errorf("source returned HTTP %d", res.StatusCode)
-	}
-	b, err := io.ReadAll(io.LimitReader(res.Body, max+1))
-	if int64(len(b)) > max {
-		return "", fmt.Errorf("source exceeds size limit")
-	}
-	if err != nil {
-		return "", err
-	}
-	return gunzipBounded(b, max)
+	return s.readURLWith(ctx, raw, max, nil)
 }
 
 // ImportSource atomically replaces source programming. Owner changes to mapping,
@@ -570,15 +549,18 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	if err := s.keepStoredUploads(ctx, &src); err != nil {
 		return src, err
 	}
+	if err := s.prepareSourceAuth(ctx, &src); err != nil {
+		return src, err
+	}
 	var err error
 	if src.PlaylistURL != "" {
-		src.Playlist, err = s.readURL(ctx, src.PlaylistURL, 16<<20)
+		src.Playlist, err = s.readURLWith(ctx, src.PlaylistURL, 16<<20, src.Auth.header())
 		if err != nil {
 			return src, err
 		}
 	}
 	if src.GuideURL != "" {
-		src.Guide, err = s.readURL(ctx, src.GuideURL, 64<<20)
+		src.Guide, err = s.readURLWith(ctx, src.GuideURL, 64<<20, src.Auth.header())
 		if err != nil {
 			return src, err
 		}
@@ -680,11 +662,13 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			s.invalidate(id, "")
 		}
 	}
+	s.forgetSourceAuth(src.ID)
 	src = storedSource(src)
 	src.HasPlaylist = src.Playlist != "" || src.PlaylistURL != ""
 	src.HasGuide = src.Guide != "" || src.GuideURL != ""
 	src.Playlist = ""
 	src.Guide = ""
+	redactSourceAuth(&src)
 	if err == nil {
 		one := []Source{src}
 		if e := s.fillSourceStats(ctx, one); e == nil {
@@ -694,6 +678,7 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	return src, err
 }
 func (s *Service) DeleteSource(ctx context.Context, id string) error {
+	defer s.forgetSourceAuth(id)
 	tx, err := s.o.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
