@@ -116,6 +116,9 @@ func (f *fakeEngine) PreviewLayout(_ context.Context, u *core.User, hc core.HubC
 	if len(d.Global) > 0 {
 		p.Rows = append(p.Rows, core.HomeRow{HubID: "new", Title: "New", Kind: "new", Layer: "personalized", Slot: 2})
 	}
+	if sec == "movies" || sec == "shows" {
+		p.HomeDeduped = 12
+	}
 	return p, nil
 }
 func (f *fakeEngine) AvailableRows(context.Context) ([]core.RowDescriptor, error) {

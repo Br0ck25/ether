@@ -44,3 +44,21 @@ func TestLayoutDocumentEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestLayoutPreviewCarriesDialsAndHomeDeduped(t *testing.T) {
+	e := &fakeEngine{}
+	h := personalizationHandler(t, e)
+	draft := `{"layout":{"global":[{"section":"movies","dedupeHome":false,"tuning":{"discovery":0.8,"variety":0.2},"rows":[]}],"viewers":[]},"section":"movies"}`
+	rec := serve(h, req(http.MethodPost, "/ether/api/layout/preview", draft))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"homeDeduped":12`) {
+		t.Fatalf("preview %d %s", rec.Code, rec.Body)
+	}
+	p := e.draft.Global[0]
+	if p.DedupeHome == nil || *p.DedupeHome || p.Tuning == nil || *p.Tuning.Discovery != 0.8 || p.Tuning.Freshness != nil || *p.Tuning.Variety != 0.2 {
+		t.Fatalf("draft dials not passed through: %+v", p)
+	}
+	rec = serve(h, req(http.MethodPost, "/ether/api/layout/preview", `{"section":"home"}`))
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "homeDeduped") {
+		t.Fatalf("home preview %d %s", rec.Code, rec.Body)
+	}
+}
