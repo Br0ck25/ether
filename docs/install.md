@@ -5,7 +5,7 @@ archive from the [Releases page](https://github.com/braedonsaunders/ether/releas
 Docker images are available at `ghcr.io/braedonsaunders/ether`. Packaged
 installers and archives bundle FFmpeg and FFprobe.
 
-The v0.2.1 macOS app is ad-hoc signed and **not notarised**; macOS may require
+The v0.2.2 macOS app is ad-hoc signed and **not notarised**; macOS may require
 **System Settings › Privacy & Security › Open Anyway** after you attempt to
 open it. The Windows installer is unsigned and may trigger SmartScreen.
 The automatic-update manifest is signed separately with Ether's release key.
