@@ -96,6 +96,8 @@ type Options struct {
 	// VerifyNativeProbe runs ffprobe in the background after every native
 	// probe and logs disagreements (soak testing; off by default).
 	VerifyNativeProbe bool
+	// TracePlayback logs every loopback range request (soak testing).
+	TracePlayback bool
 	// FailoverTimeout bounds a background (loopback-triggered) failover (default 90s).
 	FailoverTimeout time.Duration
 	// ConnectionsPerStream derives the server-wide stream cap from the total

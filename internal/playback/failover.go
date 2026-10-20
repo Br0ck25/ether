@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -257,8 +258,8 @@ func (m *Manager) probeMedia(ctx context.Context, g *generation, src core.MediaS
 		started := time.Now()
 		info, err := m.deps.NativeProbe(ctx, src)
 		if err == nil && info != nil {
-			if m.opts.VerifyNativeProbe {
-				m.startProbeVerify(g, *info)
+			if m.opts.VerifyNativeProbe && g.res != nil {
+				m.startProbeVerify(g.res, *info)
 			}
 			return info, "native", nil
 		}
@@ -321,32 +322,45 @@ func (m *Manager) startTrailerFill(g *generation) {
 
 // startProbeVerify runs ffprobe after a native probe and logs any
 // decision-relevant disagreement. It is a soak-test aid, off by default.
-func (m *Manager) startProbeVerify(g *generation, native core.MediaInfo) {
-	if !g.acquire() {
-		return
-	}
+// The check opens its own source and serves it on a private loopback
+// listener, because the generation that was probed may be retired (a
+// decision-only session) long before ffprobe finishes.
+func (m *Manager) startProbeVerify(res *core.Resolution, native core.MediaInfo) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		g.release()
 		return
 	}
 	m.wg.Add(1)
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
-		defer g.release()
-		ctx, cancel := context.WithTimeout(g.ctx, m.opts.ProbeTimeout)
+		ctx, cancel := context.WithTimeout(m.ctx, 2*m.opts.ProbeTimeout)
 		defer cancel()
-		ref, err := m.deps.Transcoder.Probe(ctx, m.urlFor(g))
+		src, err := m.deps.Engine.Open(ctx, res.Release.ID, res.NZB)
+		if err != nil {
+			return
+		}
+		defer src.Close()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return
+		}
+		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, src.Name(), time.Time{}, io.NewSectionReader(src, 0, src.Size()))
+		})}
+		go srv.Serve(ln)
+		defer srv.Close()
+		ref, err := m.deps.Transcoder.Probe(ctx, "http://"+ln.Addr().String()+"/media")
 		if err != nil || ref == nil {
+			m.log.Debug("native probe verification skipped", "release", res.Release.Name, "err", err)
 			return
 		}
 		if diff := probeDifference(native, *ref); diff != "" {
-			m.log.Warn("native probe disagrees with ffprobe", "release", g.releaseID(), "diff", diff)
+			m.log.Warn("native probe disagrees with ffprobe", "release", res.Release.Name, "diff", diff)
 			return
 		}
-		m.log.Info("native probe verified", "release", g.releaseID(), "streams", len(native.Streams))
+		m.log.Info("native probe verified", "release", res.Release.Name, "streams", len(native.Streams))
 	}()
 }
 

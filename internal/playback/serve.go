@@ -310,7 +310,22 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	rep.body = func(w io.Writer, start, length int64) error {
-		n, rerr, werr := m.copyFrom(r.Context(), w, g, start, length, count, background)
+		began, first := time.Now(), true
+		timed := func(n int) {
+			if first {
+				first = false
+				// ffmpeg waits on this byte at every start and seek.
+				if wait := time.Since(began); wait > 250*time.Millisecond && !background {
+					m.log.Info("slow source start", "session", s.id, "release", g.releaseID(), "offset", start, "wait", wait)
+				}
+			}
+			count(n)
+		}
+		n, rerr, werr := m.copyFrom(r.Context(), w, g, start, length, timed, background)
+		if m.opts.TracePlayback {
+			m.log.Info("loopback read", "session", s.id, "offset", start, "length", length, "written", n,
+				"took", time.Since(began), "background", background, "err", errors.Join(rerr, werr))
+		}
 		if werr != nil {
 			return werr
 		}

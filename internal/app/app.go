@@ -458,7 +458,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Cluster:       a.clusterNode(),
 		DescribeGroup: a.describeLiveGroup,
 		Availability:  a.dbAvail,
-	}, cfg, playback.Options{DataDir: dataDir, VerifyNativeProbe: os.Getenv("ETHER_VERIFY_NATIVE_PROBE") == "1"})
+	}, cfg, playback.Options{DataDir: dataDir, VerifyNativeProbe: os.Getenv("ETHER_VERIFY_NATIVE_PROBE") == "1", TracePlayback: os.Getenv("ETHER_TRACE_PLAYBACK") == "1"})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)
 	}

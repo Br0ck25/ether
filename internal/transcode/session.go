@@ -1303,6 +1303,9 @@ func (s *Session) poll(r *run, playlist string) {
 			continue
 		}
 		s.noteInitLocked(r, t)
+		if r.produced == 0 {
+			s.log.Info("first segment ready", "run", r.seq, "segment", n, "after", time.Since(r.started))
+		}
 		r.produced++
 		r.maxDone = n
 		s.done[t][n] = true

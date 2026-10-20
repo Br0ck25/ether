@@ -377,6 +377,9 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		}
 	}
 	if produced > r.produced {
+		if r.produced == 0 {
+			s.log.Info("first segment ready", "run", r.seq, "segment", r.startSeg, "after", time.Since(r.started))
+		}
 		r.produced, r.maxDone = produced, maxDone
 		changed = true
 	}
