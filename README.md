@@ -24,8 +24,8 @@ own Usenet providers and indexers.
   rows for each viewer, with optional Trakt and AI integrations.
 - **Playback that fits your devices** — quality profiles, hardware transcoding,
   audio and subtitle preferences, next-episode prefetch and resume caching.
-- **Local libraries and migration** — include existing media, import Plex
-  history and lists, and back up your configuration and watch state.
+- **Migration and backups** — import Plex history and lists, and back up your
+  configuration and watch state.
 - **Live TV** — build virtual channels or add an M3U playlist and XMLTV guide.
 - **Owner controls** — manage Home layouts, viewer restrictions, stream limits,
   notifications and activity from the browser.
@@ -36,7 +36,8 @@ own Usenet providers and indexers.
 configured for Windows, macOS and Linux; available downloads will appear on the
 [Releases page](https://github.com/braedonsaunders/ether/releases).
 
-See [installation](docs/install.md) and the [user guide](docs/user-guide.md).
+See [installation](docs/install.md), the [user guide](docs/user-guide.md), and the
+[product and architecture specification](docs/design.md).
 Once Ether is running, open <http://localhost:32400/ether/> to sign in to Plex
 and configure your providers and indexers. Share the server through Plex to add
 viewers.

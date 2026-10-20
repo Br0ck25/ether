@@ -1,0 +1,488 @@
+package resolver
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+)
+
+var _ core.VariantResolver = (*Service)(nil)
+
+// maxVariants caps the Play Version picker at the product requirement
+// (Auto plus up to three alternatives).
+const maxVariants = 4
+
+// variantSearchWait bounds how long Variants waits for an already
+// in-flight resolve of the same title to populate the search cache.
+const variantSearchWait = 2 * time.Second
+
+// Variants implements core.VariantResolver. It reads only the cached
+// search results — rendering a detail page never spends indexer budget.
+// When nothing is cached it returns (nil, nil) and the caller renders the
+// single Auto media; the detail page's PreResolve populates the cache, so
+// a later load shows versions.
+func (s *Service) Variants(ctx context.Context, req core.ResolveRequest, max int) ([]core.ReleaseVariant, error) {
+	if req.Title == nil {
+		return nil, fmt.Errorf("resolver: nil title")
+	}
+	if max <= 0 || max > maxVariants {
+		max = maxVariants
+	}
+	profile := s.ProfileFor(req.Client, req.User)
+	sreq := searchRequestFor(req.Title)
+	results, ok := s.cachedSearchResults(ctx, req.Title.Key, sreq)
+	if !ok || len(results) == 0 {
+		return nil, nil
+	}
+	// Auto is exactly what normal resolution would pick: strict profile.
+	strict, _, err := s.scoreCandidates(ctx, req, sreq, profile, results, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(strict) == 0 {
+		return nil, nil
+	}
+	pool := strict
+	// The alternative pool may exceed the profile's height cap (a 4K pick
+	// on a 1080p remote profile), but never the client's own limits; every
+	// other acceptability rule still applies. Resolve honours the pick via
+	// ResolveRequest.Prefer's profile-gate bypass.
+	if relaxed, ok := relaxedVariantProfile(profile, req.Client); ok {
+		pool, _, err = s.scoreCandidates(ctx, req, sreq, relaxed, results, nil)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return pickVariants(req.Title, req.Client, profile, strict[0].rel, pool, max), nil
+}
+
+// relaxedVariantProfile raises the profile's height cap to the client's
+// own maximum so taller tiers can be offered as explicit picks. It
+// reports false when nothing changes.
+func relaxedVariantProfile(profile core.QualityProfile, caps core.ClientCaps) (core.QualityProfile, bool) {
+	clientMax := caps.MaxHeight
+	if clientMax <= 0 {
+		clientMax = 2160
+	}
+	if profile.MaxHeight <= 0 || profile.MaxHeight >= clientMax {
+		return profile, false
+	}
+	p := profile
+	p.MaxHeight = clientMax
+	return p, true
+}
+
+// cachedSearchResults returns the cached search results for a title,
+// awaiting an already in-flight resolve of the same title briefly (its
+// search populates the cache). It never starts a search.
+func (s *Service) cachedSearchResults(ctx context.Context, key core.RatingKey, sreq core.SearchRequest) ([]core.Release, bool) {
+	ck := searchCacheKey(sreq)
+	if res, ok := s.peekSearchCache(ck); ok {
+		return res, true
+	}
+	prefix := fmt.Sprintf("%d|", int64(key))
+	s.flightMu.Lock()
+	var f *inflight
+	for k, fl := range s.flights {
+		if strings.HasPrefix(k, prefix) {
+			f = fl
+			break
+		}
+	}
+	s.flightMu.Unlock()
+	if f == nil {
+		return nil, false
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, variantSearchWait)
+	defer cancel()
+	select {
+	case <-f.done:
+	case <-waitCtx.Done():
+		return nil, false
+	}
+	return s.peekSearchCache(ck)
+}
+
+func (s *Service) peekSearchCache(key string) ([]core.Release, bool) {
+	s.mu.RLock()
+	e, ok := s.searchCache[key]
+	s.mu.RUnlock()
+	if !ok || !s.now().Before(e.expires) {
+		return nil, false
+	}
+	return append([]core.Release(nil), e.results...), true
+}
+
+// qualityTier buckets a release for deduplication: height plus HDR kind.
+func qualityTier(info core.ReleaseInfo) string {
+	kind := "sdr"
+	switch {
+	case info.DolbyVision:
+		kind = "dv"
+	case info.HDR10:
+		kind = "hdr"
+	}
+	return strconv.Itoa(info.Height) + "-" + kind
+}
+
+func variantKey(info core.ReleaseInfo) string {
+	return info.Edition + "|" + qualityTier(info)
+}
+
+// pickVariants assembles up to max distinct versions: Auto first, then a
+// 4K HDR/DV tier, a high-compatibility 1080p tier, one entry per distinct
+// cut, then any remaining distinct tiers — best-scored first within each
+// slot, deduplicated by (edition, quality tier).
+func pickVariants(t *core.Title, caps core.ClientCaps, profile core.QualityProfile, auto core.Release, pool []candidate, max int) []core.ReleaseVariant {
+	usedRel := map[string]bool{}
+	usedKey := map[string]bool{}
+	var out []core.ReleaseVariant
+	add := func(rel core.Release, kind string, isAuto bool) bool {
+		if len(out) >= max || usedRel[rel.ID] || usedKey[variantKey(rel.Info)] {
+			return false
+		}
+		usedRel[rel.ID] = true
+		usedKey[variantKey(rel.Info)] = true
+		out = append(out, core.ReleaseVariant{
+			ID:      rel.ID,
+			Label:   variantLabel(rel, kind),
+			Edition: rel.Info.Edition,
+			Auto:    isAuto,
+			Release: rel,
+			Info:    estimateVariantInfo(t, rel),
+		})
+		return true
+	}
+	add(auto, "auto", true)
+
+	// 4K HDR / Dolby Vision, only when this client can direct-play it.
+	if canOffer4KHDR(caps, profile) {
+		for _, c := range pool {
+			if c.rel.Info.Height >= 2160 && (c.rel.Info.HDR10 || c.rel.Info.DolbyVision) && add(c.rel, "4k", false) {
+				break
+			}
+		}
+	}
+	// High-compatibility tier (most-compatible codec/audio, SDR).
+	if rel, ok := bestCompat(pool, caps, usedRel); ok {
+		add(rel, "compat", false)
+	}
+	// One entry per distinct cut, best first.
+	seenEdition := map[string]bool{auto.Info.Edition: true}
+	for _, c := range pool {
+		ed := c.rel.Info.Edition
+		if ed == "" || seenEdition[ed] || usedRel[c.rel.ID] {
+			continue
+		}
+		seenEdition[ed] = true
+		add(c.rel, "edition", false)
+	}
+	// Remaining distinct tiers fill any open slots.
+	for _, c := range pool {
+		add(c.rel, "tier", false)
+	}
+	return out
+}
+
+func canOffer4KHDR(caps core.ClientCaps, profile core.QualityProfile) bool {
+	if caps.MaxHeight > 0 && caps.MaxHeight < 2160 {
+		return false
+	}
+	// profile.AllowHDR/AllowDolbyVision are already clamped to the
+	// client's HDR/DV support by SelectProfile.
+	return profile.AllowHDR || profile.AllowDolbyVision
+}
+
+// bestCompat picks the most compatible release at (or below) the client's
+// comfort height: SDR, the most widely playable video codec the client
+// supports (H.264 preferred), AAC/AC3/E-AC-3 audio, WEB-DL preferred.
+func bestCompat(pool []candidate, caps core.ClientCaps, used map[string]bool) (core.Release, bool) {
+	target := 1080
+	if caps.MaxHeight > 0 && caps.MaxHeight < target {
+		target = caps.MaxHeight
+	}
+	var best core.Release
+	bestScore := -1e18
+	found := false
+	for _, c := range pool {
+		rel := c.rel
+		if used[rel.ID] || rel.Info.Height <= 0 || rel.Info.Height > target || rel.Info.Height < 720 {
+			continue
+		}
+		if rel.Info.HDR10 || rel.Info.DolbyVision {
+			continue
+		}
+		sc := rel.Score / 10 // overall rank as tiebreak
+		if rel.Info.Height == target {
+			sc += 100
+		} else if rel.Info.Height == 720 {
+			sc += 60
+		}
+		switch rel.Info.VideoCodec {
+		case "h264":
+			sc += 50
+		case "":
+			sc += 5
+		default:
+			sc += 20
+		}
+		switch rel.Info.AudioCodec {
+		case "aac", "ac3", "eac3":
+			sc += 30
+		case "truehd", "dtshd", "dts", "flac":
+			sc -= 20
+		}
+		switch rel.Info.Source {
+		case core.SourceWEBDL:
+			sc += 20
+		case core.SourceWEBRip:
+			sc += 10
+		case core.SourceBluRay:
+			sc += 5
+		}
+		if !found || sc > bestScore {
+			best, bestScore, found = rel, sc, true
+		}
+	}
+	return best, found
+}
+
+// variantLabel is the viewer-facing version name, e.g.
+// "4K Dolby Vision Remux" or "Director's Cut — 1080p Blu-ray".
+func variantLabel(rel core.Release, kind string) string {
+	switch kind {
+	case "auto":
+		return "Auto / Best for Device"
+	case "compat":
+		return qualityPhrase(rel.Info) + " (High Compatibility)"
+	case "edition":
+		return rel.Info.Edition + " — " + qualityPhrase(rel.Info)
+	}
+	q := qualityPhrase(rel.Info)
+	if rel.Info.Edition != "" {
+		q += " · " + rel.Info.Edition
+	}
+	return q
+}
+
+func qualityPhrase(info core.ReleaseInfo) string {
+	res := "SD"
+	switch {
+	case info.Height >= 2160:
+		res = "4K"
+	case info.Height > 0:
+		res = strconv.Itoa(info.Height) + "p"
+	}
+	parts := []string{res}
+	switch {
+	case info.DolbyVision:
+		parts = append(parts, "Dolby Vision")
+	case info.HDR10:
+		parts = append(parts, "HDR10")
+	}
+	if src := sourceWord(info.Source); src != "" {
+		parts = append(parts, src)
+	}
+	return strings.Join(parts, " ")
+}
+
+func sourceWord(s core.Source) string {
+	switch s {
+	case core.SourceRemux:
+		return "Remux"
+	case core.SourceWEBDL:
+		return "WEB-DL"
+	case core.SourceBluRay:
+		return "Blu-ray"
+	case core.SourceWEBRip:
+		return "WEBRip"
+	case core.SourceHDTV:
+		return "HDTV"
+	case core.SourceDVD:
+		return "DVD"
+	case core.SourceScreener:
+		return "Screener"
+	case core.SourceCam:
+		return "CAM"
+	}
+	return ""
+}
+
+// estimateVariantInfo derives the expected MediaInfo from a parsed release
+// name: resolution, codecs, HDR/DV, channels, and a bitrate from the
+// release size over the title runtime (typical bitrates when unknown).
+func estimateVariantInfo(t *core.Title, rel core.Release) core.MediaInfo {
+	info := rel.Info
+	height := info.Height
+	if height <= 0 {
+		height = 1080
+	}
+	codec := info.VideoCodec
+	if codec == "" {
+		codec = "h264"
+		if height >= 2160 {
+			codec = "hevc"
+		}
+	}
+	video := core.StreamInfo{
+		Index: 0, Type: "video", Codec: codec,
+		Width: variantWidth(height), Height: height,
+		FrameRate: 23.976, BitDepth: 8, Default: true,
+	}
+	if codec == "h264" {
+		video.Profile = "high"
+	} else {
+		video.Profile = "main"
+	}
+	if info.HDR10 || info.DolbyVision {
+		video.BitDepth = 10
+		video.ColorTransfer = "smpte2084"
+		if codec == "hevc" {
+			video.Profile = "main 10"
+		}
+	}
+	video.DolbyVision = info.DolbyVision
+
+	audioCodec := info.AudioCodec
+	if audioCodec == "" {
+		audioCodec = "eac3"
+	}
+	channels := channelsFromString(info.Channels)
+	audio := core.StreamInfo{
+		Index: 1, Type: "audio", Codec: audioCodec,
+		Channels: channels.count, ChannelLayout: channels.layout,
+		SampleRate: 48000, Default: true,
+	}
+	if t != nil {
+		audio.Language = t.Language
+	}
+
+	var dur time.Duration
+	if t != nil {
+		dur = t.Runtime
+	}
+	bitrate := 0
+	switch {
+	case rel.Size > 0 && dur > 0:
+		bitrate = int(float64(rel.Size) * 8 / dur.Seconds() / 1000)
+	case rel.Size > 0:
+		bitrate = typicalVariantKbps(height, codec)
+		if bitrate > 0 {
+			dur = time.Duration(float64(rel.Size) * 8 / (float64(bitrate) * 1000) * float64(time.Second))
+		}
+	default:
+		bitrate = typicalVariantKbps(height, codec)
+	}
+	size := rel.Size
+	if size <= 0 && dur > 0 && bitrate > 0 {
+		size = int64(float64(bitrate) * 1000 / 8 * dur.Seconds())
+	}
+	audio.BitrateKbps = audioKbpsGuess(audioCodec, channels.count)
+	if bitrate > audio.BitrateKbps {
+		video.BitrateKbps = bitrate - audio.BitrateKbps
+	}
+
+	container := info.Container
+	if container == "" {
+		container = "mkv"
+	}
+	return core.MediaInfo{
+		Container:   container,
+		Duration:    dur,
+		Size:        size,
+		BitrateKbps: bitrate,
+		Streams:     []core.StreamInfo{video, audio},
+		Estimated:   true,
+	}
+}
+
+func variantWidth(h int) int {
+	switch h {
+	case 2160:
+		return 3840
+	case 1080:
+		return 1920
+	case 720:
+		return 1280
+	case 576:
+		return 1024
+	case 480:
+		return 854
+	default:
+		return h * 16 / 9
+	}
+}
+
+type channelInfo struct {
+	count  int
+	layout string
+}
+
+// channelsFromString parses "5.1"-style channel strings (a+b channels).
+func channelsFromString(s string) channelInfo {
+	switch s {
+	case "7.1":
+		return channelInfo{8, "7.1"}
+	case "6.1":
+		return channelInfo{7, "6.1"}
+	case "5.1":
+		return channelInfo{6, "5.1(side)"}
+	case "2.1":
+		return channelInfo{3, "2.1"}
+	case "2.0", "1.0":
+		return channelInfo{2, "stereo"}
+	}
+	if a, b, ok := strings.Cut(s, "."); ok {
+		ai, err1 := strconv.Atoi(a)
+		bi, err2 := strconv.Atoi(b)
+		if err1 == nil && err2 == nil && ai > 0 {
+			return channelInfo{ai + bi, s}
+		}
+	}
+	return channelInfo{6, "5.1(side)"}
+}
+
+func audioKbpsGuess(codec string, channels int) int {
+	switch codec {
+	case "truehd", "dtshd", "flac":
+		return 1500
+	case "dts":
+		return 768
+	case "eac3", "ac3":
+		if channels > 2 {
+			return 640
+		}
+		return 192
+	default: // aac, opus, mp3
+		if channels > 2 {
+			return 384
+		}
+		return 192
+	}
+}
+
+// typicalVariantKbps mirrors playback's representative bitrates; kept local
+// to avoid a resolver→playback dependency.
+func typicalVariantKbps(height int, codec string) int {
+	var kbps int
+	switch height {
+	case 2160:
+		kbps = 20000
+	case 1080:
+		kbps = 8000
+	case 720:
+		kbps = 4000
+	case 576:
+		kbps = 2500
+	default:
+		kbps = 1500
+	}
+	if codec == "hevc" && height < 2160 || codec == "av1" {
+		kbps = kbps * 6 / 10
+	}
+	return kbps
+}

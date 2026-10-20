@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"slices"
 	"time"
 
@@ -14,20 +16,25 @@ import (
 // being opened or probed.
 var errSourceBroken = fmt.Errorf("playback: source broken: %w", core.ErrArticleMissing)
 
+// errRequireRemux reports a completed failover that swapped the session to
+// a healthy release whose bytes cannot continue the in-flight direct-play
+// response: the response must end and the next decision/start is a remux.
+var errRequireRemux = errors.New("playback: failover requires remux")
+
 // openInitial finds and opens the first release of a session: the stored
 // resume release when it was resolved for the same profile, else the
 // resolver's answer, moving to the next candidate when a release fails.
 func (m *Manager) openInitial(ctx context.Context, s *session, profile core.QualityProfile) (*generation, error) {
-	if g, err := m.openLocal(ctx, s, profile); g != nil || err != nil {
-		return g, err
-	}
 	var res *core.Resolution
 	var cached *probeCache
-	if warm := m.takeWarmResolution(ctx, s.ident, profile.Name); warm != nil {
+	if warm := m.takeWarmResolution(ctx, s.ident, profile, s.caps, s.prefer); warm != nil {
 		res, cached = warm.res, warm.probe
 	}
 	if res == nil {
 		res = m.resumeResolution(ctx, s.ident.userID, s.ident.key, profile.Name)
+		if res != nil && s.prefer != "" && res.Release.ID != s.prefer {
+			res = nil // a picked version wins over the remembered release
+		}
 	}
 	var (
 		tried      []string
@@ -102,6 +109,7 @@ func (m *Manager) nextResolution(ctx context.Context, s *session, tried []string
 		Client:  s.caps,
 		User:    &u,
 		Exclude: slices.Clone(tried),
+		Prefer:  s.prefer,
 	})
 	if err != nil {
 		return nil, err
@@ -135,7 +143,8 @@ func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Reso
 }
 
 func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Resolution, src core.MediaSource, fallback func(int64) core.MediaInfo, cached ...*probeCache) (*generation, error) {
-	g := &generation{sess: s, n: s.nextGen(), token: randomID(16), src: src, res: res}
+	g := &generation{sess: s, n: s.nextGen(), token: randomID(16), src: src, res: res, indexReady: make(chan struct{})}
+	g.ctx, g.cancel = context.WithCancel(m.ctx)
 	m.mu.Lock()
 	m.tokens[s.id+"/"+g.token] = g
 	m.mu.Unlock()
@@ -154,10 +163,16 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	cancel()
 	var mi core.MediaInfo
 	switch {
-	case g.articleMissing.Load():
+	case g.sourceFailure() != nil || g.articleMissing.Load():
+		failure := g.sourceFailure()
+		if failure == nil {
+			failure = errSourceBroken
+		}
 		m.dropGeneration(g)
-		m.markBad(res.Release.ID, "articles missing while probing")
-		return nil, errSourceBroken
+		if permanentSourceFailure(failure) {
+			m.markBad(res.Release.ID, "invalid source while probing")
+		}
+		return nil, failure
 	case perr != nil && ctx.Err() != nil:
 		m.dropGeneration(g)
 		return nil, ctx.Err()
@@ -174,23 +189,79 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	if mi.Container == "" {
 		mi.Container = containerFromName(src.Name())
 	}
-	if m.deps.AugmentMedia != nil {
+	// A cached warm probe was already augmented when it was made; running
+	// AugmentMedia again would put its cost back on the Play path.
+	if facts == nil && m.deps.AugmentMedia != nil {
 		m.deps.AugmentMedia(ctx, s.title, &s.user, res, src, &mi)
 	}
 	var points []IndexPoint
 	if facts != nil {
 		points = facts.points
-	} else if !mi.Estimated && mi.Duration > 0 {
-		indexCtx, cancelIndex := context.WithTimeout(ctx, 2*time.Second)
-		points = containerIndex(indexCtx, src, src.Size())
-		cancelIndex()
+		if len(points) == 0 {
+			points = indexPointsOf(facts.info.Keyframes)
+		}
+	} else if len(mi.Keyframes) > 0 {
+		points = indexPointsOf(mi.Keyframes)
 	}
+	mi.Keyframes = keyframesOf(points)
+	needIndex := facts == nil && len(points) == 0 && !mi.Estimated && mi.Duration > 0
 	// The loopback server may already hold g; publish under its lock.
 	g.mu.Lock()
 	g.info = mi
 	g.tmap = TimeMap{Size: src.Size(), Duration: mi.Duration, Points: points}
 	g.mu.Unlock()
+	if needIndex {
+		// Play never waits for the container index: publish now and fill
+		// TimeMap.Points / MediaInfo.Keyframes in the background.
+		m.startIndexFill(g)
+	} else {
+		g.markIndexReady()
+	}
 	return g, nil
+}
+
+// startIndexFill reads the container keyframe index off the critical path
+// and installs it on the generation (and the session's virtual map when
+// this generation defines it) once read.
+func (m *Manager) startIndexFill(g *generation) {
+	if !g.acquire() {
+		g.markIndexReady()
+		return
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		g.release()
+		g.markIndexReady()
+		return
+	}
+	m.wg.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.wg.Done()
+		defer g.release()
+		defer g.markIndexReady()
+		ctx, cancel := context.WithTimeout(g.ctx, m.opts.IndexTimeout)
+		defer cancel()
+		points := containerIndex(ctx, g.src, g.src.Size())
+		if len(points) == 0 {
+			return
+		}
+		g.setIndex(points)
+		s := g.sess
+		if m.resume != nil {
+			ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
+			if err := m.resume.saveIndex(ctx, s.ident.userID, s.ident.key, g.releaseID(), keyframesOf(points)); err != nil {
+				m.log.Warn("save resume keyframe index failed", "key", s.ident.key, "err", err)
+			}
+			cancel()
+		}
+		s.mu.Lock()
+		if s.virtualGen == g {
+			s.virtual.Points = points
+		}
+		s.mu.Unlock()
+	}()
 }
 
 // dropGeneration discards a generation that never became current.
@@ -218,16 +289,29 @@ func (m *Manager) Failover(ctx context.Context, sessionID string, at time.Durati
 	if s == nil {
 		return nil, fmt.Errorf("playback: session %s: %w", sessionID, core.ErrNotFound)
 	}
-	if _, err := m.failover(ctx, s, s.current(), at, "failover requested"); err != nil {
+	if _, err := m.failover(ctx, s, s.current(), at, "failover requested"); err != nil && !errors.Is(err, errRequireRemux) {
 		return nil, err
 	}
 	return s.snapshot(m.now()), nil
 }
 
-// failover replaces generation observed. Concurrent callers that observed
-// the same failing generation share one swap: the first does the work and
-// the others return the generation it installed.
+// failoverOpts distinguishes a broken-source failover (markBad) from a
+// speed-driven down-failover (down: pick a lower-bitrate candidate, never
+// mark the slow release bad).
+type failoverOpts struct {
+	reason  string
+	markBad bool
+	down    bool
+}
+
 func (m *Manager) failover(ctx context.Context, s *session, observed *generation, at time.Duration, reason string) (*generation, error) {
+	return m.failoverWith(ctx, s, observed, at, failoverOpts{reason: reason, markBad: true})
+}
+
+// failoverWith replaces generation observed. Concurrent callers that
+// observed the same failing generation share one swap: the first does the
+// work and the others return the generation it installed.
+func (m *Manager) failoverWith(ctx context.Context, s *session, observed *generation, at time.Duration, fo failoverOpts) (*generation, error) {
 	if err := lock(ctx, s.failSem); err != nil {
 		return nil, err
 	}
@@ -247,8 +331,11 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 		return nil, fmt.Errorf("%w: session %s gave up after %d failovers", core.ErrNotAvailable, s.id, failovers)
 	}
 	log := m.log.With("session", s.id, "key", s.ident.key, "at", at)
-	log.Warn("failing over", "release", cur.res.Release.Name, "reason", reason)
-	m.markBad(cur.releaseID(), reason)
+	log.Warn("failing over", "release", cur.res.Release.Name, "reason", fo.reason, "down", fo.down)
+	// A provider outage is not evidence that the release itself is invalid.
+	if failure := cur.sourceFailure(); permanentSourceFailure(failure) {
+		m.markBad(cur.releaseID(), fo.reason)
+	}
 
 	s.mu.Lock()
 	s.tried = append(s.tried, cur.releaseID())
@@ -256,16 +343,27 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 	alternates := s.alternates
 	s.mu.Unlock()
 
-	oldInfo := cur.info
+	oldInfo := cur.infoSnapshot()
+	if direct {
+		// Identical-size reposts can continue the client's byte stream;
+		// try them before opening candidates in rank order.
+		alternates = orderExactSizeFirst(alternates, cur.res.Release)
+	} else if fo.down {
+		alternates = orderLowerBitrateFirst(alternates, cur.res.Release)
+	}
 	fallback := func(size int64) core.MediaInfo {
 		info := oldInfo
 		info.Size = size
 		info.Estimated = true
+		info.Keyframes = nil
 		return info
 	}
+	curBps := mediaBps(oldInfo, cur.src.Size())
 	var (
-		g       *generation
-		lastErr error
+		g           *generation
+		fallbackGen *generation // healthy but not spliceable into direct play
+		remuxSwitch bool
+		lastErr     error
 	)
 	for attempt := 0; attempt < m.opts.MaxAttempts; attempt++ {
 		res, err := m.nextResolution(ctx, s, tried, alternates)
@@ -274,17 +372,33 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 			break
 		}
 		g, err = m.openGeneration(ctx, s, res, fallback)
-		// Byte-range clients retain the original container headers and offsets.
-		// Only an exact-size repost may replace a non-spliceable direct source.
+		// Byte-range clients retain the original container headers and
+		// offsets. Only an exact-size repost may replace a non-spliceable
+		// direct source in place; a healthy mismatched candidate is kept
+		// as a remux-switch fallback instead of being spliced in.
 		if err == nil && direct && g.src.Size() != cur.src.Size() {
-			m.dropGeneration(g)
+			if fallbackGen == nil {
+				fallbackGen = g
+			} else {
+				m.dropGeneration(g)
+			}
 			g = nil
 			err = fmt.Errorf("incompatible direct-play replacement size: %w", core.ErrNotAvailable)
+		}
+		if err == nil && fo.down {
+			if bps := mediaBps(g.infoSnapshot(), g.src.Size()); curBps > 0 && bps > 0 && bps >= curBps {
+				m.dropGeneration(g)
+				g = nil
+				err = fmt.Errorf("down-failover candidate is not lower bitrate: %w", core.ErrNotAvailable)
+			}
 		}
 		if err == nil {
 			break
 		}
 		if ctx.Err() != nil {
+			if fallbackGen != nil {
+				m.dropGeneration(fallbackGen)
+			}
 			return nil, ctx.Err()
 		}
 		lastErr = err
@@ -293,6 +407,27 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 		if len(res.Alternates) > 0 {
 			alternates = res.Alternates
 		}
+		if direct {
+			alternates = orderExactSizeFirst(alternates, cur.res.Release)
+		} else if fo.down {
+			alternates = orderLowerBitrateFirst(alternates, cur.res.Release)
+		}
+	}
+	if g == nil && fallbackGen != nil && fo.down {
+		// A down-failover only helps with a lower-bitrate fallback.
+		if bps := mediaBps(fallbackGen.infoSnapshot(), fallbackGen.src.Size()); curBps > 0 && bps > 0 && bps >= curBps {
+			m.dropGeneration(fallbackGen)
+			fallbackGen = nil
+		}
+	}
+	if g == nil && fallbackGen != nil {
+		// No exact-size repost: do not splice. Swap anyway and restart
+		// the client as a zero-encode remux at the mapped time.
+		g, fallbackGen, remuxSwitch = fallbackGen, nil, true
+		log.Warn("no exact-size direct-play replacement; switching to remux", "release", g.res.Release.Name)
+	}
+	if fallbackGen != nil {
+		m.dropGeneration(fallbackGen)
 	}
 	if g == nil {
 		log.Error("failover found no working release", "err", lastErr)
@@ -311,6 +446,9 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 	}
 	s.cur = g
 	s.failovers++
+	if fo.down {
+		s.downFailovers++
+	}
 	s.tried = tried
 	if len(g.res.Alternates) > 0 {
 		s.alternates = g.res.Alternates
@@ -326,17 +464,125 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 	m.pinLive(g.releaseID())
 	m.unpinLive(cur.releaseID())
 	m.saveResume(ctx, s, g)
+	s.resetSpeed(m.now(), m.opts.SpeedGrace)
 
+	newInfo := g.infoSnapshot()
 	if hls, ok := m.deps.HLSLookup(s.id); ok && hls != nil {
-		target := AlignTime(at, oldInfo.Duration, g.info.Duration)
-		if err := hls.SwapInput(ctx, m.urlFor(g), g.info, target); err != nil {
+		target := m.alignForFailover(ctx, s, cur, g, at)
+		if err := hls.SwapInput(ctx, m.urlFor(g), newInfo, target); err != nil {
 			log.Error("hls input swap failed", "err", err)
 			return g, fmt.Errorf("playback: swap hls input: %w", err)
 		}
+		remuxSwitch = false // ffmpeg already restarted on fresh headers
 	}
-	m.emitEvent("failover", s, nil)
-	log.Info("failed over", "release", g.res.Release.Name, "size", g.tmap.Size, "duration", g.info.Duration)
+	if remuxSwitch {
+		s.mu.Lock()
+		s.requiresRemux = true
+		s.mu.Unlock()
+	}
+	if fo.down {
+		m.emitEvent("downfailover", s, nil)
+	} else {
+		m.emitEvent("failover", s, nil)
+	}
+	log.Info("failed over", "release", g.res.Release.Name, "size", g.src.Size(), "duration", newInfo.Duration, "remuxSwitch", remuxSwitch)
+	if remuxSwitch {
+		return g, errRequireRemux
+	}
 	return g, nil
+}
+
+// alignForFailover maps a failover timestamp between releases: through
+// the optional dialogue TimelineAligner (300ms budget) when wired, else
+// duration-based AlignTime (PAL rule).
+func (m *Manager) alignForFailover(ctx context.Context, s *session, from, to *generation, at time.Duration) time.Duration {
+	fromDur := from.infoSnapshot().Duration
+	toDur := to.infoSnapshot().Duration
+	if m.deps.Aligner != nil && from.res != nil && to.res != nil {
+		req := core.AlignRequest{
+			Key:          s.ident.key,
+			From:         from.res.Release,
+			To:           to.res.Release,
+			FromDuration: fromDur,
+			ToDuration:   toDur,
+		}
+		type result struct {
+			mapped time.Duration
+			ok     bool
+		}
+		ch := make(chan result, 1)
+		actx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+		go func() {
+			mapped, ok := m.deps.Aligner.AlignTime(actx, req, at)
+			ch <- result{mapped, ok}
+		}()
+		select {
+		case r := <-ch:
+			cancel()
+			if r.ok {
+				if r.mapped < 0 {
+					return 0
+				}
+				if toDur > 0 && r.mapped > toDur {
+					return toDur
+				}
+				return r.mapped
+			}
+		case <-actx.Done():
+			cancel()
+			m.log.Debug("timeline aligner timed out; using duration alignment", "session", s.id)
+		}
+	}
+	return AlignTime(at, fromDur, toDur)
+}
+
+// orderExactSizeFirst stably moves candidates whose known size matches
+// the failing release (identical reposts — same size, then same name,
+// then same group) ahead of rank order for direct-play failover.
+func orderExactSizeFirst(alts []core.Release, cur core.Release) []core.Release {
+	if cur.Size <= 0 || len(alts) < 2 {
+		return alts
+	}
+	out := slices.Clone(alts)
+	rank := func(r core.Release) int {
+		switch {
+		case r.Size == cur.Size && r.Name == cur.Name:
+			return 0
+		case r.Size == cur.Size && r.Info.Group != "" && r.Info.Group == cur.Info.Group:
+			return 1
+		case r.Size == cur.Size:
+			return 2
+		}
+		return 3
+	}
+	sortStableByRank(out, rank)
+	return out
+}
+
+// orderLowerBitrateFirst stably moves candidates of known smaller size
+// (lower bitrate at equal duration) ahead for down-failover, keeping the
+// resolver's ranking within each group.
+func orderLowerBitrateFirst(alts []core.Release, cur core.Release) []core.Release {
+	if cur.Size <= 0 || len(alts) < 2 {
+		return alts
+	}
+	out := slices.Clone(alts)
+	rank := func(r core.Release) int {
+		if r.Size > 0 && r.Size < cur.Size {
+			return 0
+		}
+		return 1
+	}
+	sortStableByRank(out, rank)
+	return out
+}
+
+func sortStableByRank(rs []core.Release, rank func(core.Release) int) {
+	for i := 1; i < len(rs); i++ {
+		for j := i; j > 0 && rank(rs[j]) < rank(rs[j-1]); j-- {
+			rs[j], rs[j-1] = rs[j-1], rs[j]
+		}
+	}
 }
 
 func withoutTried(rs []core.Release, tried []string) []core.Release {
@@ -403,12 +649,18 @@ func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
 		key:       s.ident.key,
 		release:   g.res.Release,
 		profile:   s.profile,
-		size:      g.tmap.Size,
-		duration:  g.info.Duration,
+		size:      g.src.Size(),
+		duration:  g.infoSnapshot().Duration,
 		updatedAt: m.now(),
 	}
 	if err := m.resume.save(ctx, rec, g.res.NZB); err != nil {
 		m.log.Warn("save resume record failed", "err", err)
+		return
+	}
+	if points := g.infoSnapshot().Keyframes; len(points) > 0 {
+		if err := m.resume.saveIndex(ctx, s.ident.userID, s.ident.key, g.releaseID(), points); err != nil {
+			m.log.Warn("save resume keyframe index failed", "key", s.ident.key, "err", err)
+		}
 	}
 }
 
@@ -426,7 +678,12 @@ func (m *Manager) ResumePoint(ctx context.Context, userID int64, key core.Rating
 	if err != nil {
 		return nil, err
 	}
-	return rec.point(nzb), nil
+	point := rec.point(nzb)
+	point.Keyframes, err = m.resume.loadIndex(ctx, userID, key, rec.releaseID)
+	if err != nil {
+		return nil, err
+	}
+	return point, nil
 }
 
 // Remember stores a resolution for a title the user has not played yet
@@ -468,4 +725,15 @@ func (m *Manager) ResumeFor(ctx context.Context, user *core.User, key core.Ratin
 		return nil, nil
 	}
 	return rp, nil
+}
+
+func permanentSourceFailure(err error) bool {
+	return errors.Is(err, core.ErrArticleMissing) || errors.Is(err, core.ErrArticleCorrupt) || errors.Is(err, core.ErrReleaseRejected)
+}
+func recoverableSourceFailure(err error) bool {
+	if permanentSourceFailure(err) || errors.Is(err, core.ErrSourceUnavailable) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.ErrNoProgress) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
 }

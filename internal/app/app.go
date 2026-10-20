@@ -28,10 +28,10 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/episodeorder"
+	"github.com/braedonsaunders/ether/internal/extras"
 	"github.com/braedonsaunders/ether/internal/invites"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/llm"
-	"github.com/braedonsaunders/ether/internal/localmedia"
 	"github.com/braedonsaunders/ether/internal/markers"
 	"github.com/braedonsaunders/ether/internal/migrate"
 	"github.com/braedonsaunders/ether/internal/newznab"
@@ -117,7 +117,7 @@ type App struct {
 	livetv            *livetv.Service
 	trackprefs        *trackprefs.Service
 	markers           *markers.Service
-	localmedia        *localmedia.Service
+	extras            *extras.Service
 	backups           *backup.Service
 	migration         *migrate.Service
 	invites           *invites.Service
@@ -205,9 +205,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Catalog: a.catalog,
 		Logger:  log.With("component", "llm"),
 	})
+	if a.collections != nil {
+		a.collections.SetVibeRefiner(a.llm)
+	}
 	a.recommend = recommend.New(recommend.Options{
-		Catalog: a.catalog, State: a.state, Collections: a.collections,
-		Trakt: a.trakt, LLM: a.llm, Events: a.state,
+		Catalog: a.catalog, State: a.state, LLM: a.llm,
 		Logger: log.With("component", "recommend"),
 	})
 	a.closers = append(a.closers, a.recommend.Close)
@@ -219,10 +221,20 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Collections: a.collections, // owner collections as targeted Home/section rows
 		ServerName:  func() string { return a.cfg.Get().Server.FriendlyName },
 		Logger:      log.With("component", "personalize"),
+		// Netflix-style hooks (#31/#32) follow the owner's live switches.
+		IntentEnabled: func() bool { return a.cfg.Get().Personalize.SessionIntent },
+		ClockFormat: func() string {
+			c := a.cfg.Get()
+			if c.Personalize.ClockFormat != "" {
+				return c.Personalize.ClockFormat
+			}
+			return c.Catalog.Language
+		},
 	}); err != nil {
 		return fmt.Errorf("personalization: %w", err)
 	}
 	a.recommend.SetScorer(a.personalize)
+	a.recommend.SetHomeSource(a.personalize)
 	a.collections.SetScorer(a.personalize) // "personal" collection sort
 	a.closers = append(a.closers, a.personalize.Close)
 	a.subtitles = subtitles.New(subtitles.Options{
@@ -233,7 +245,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	})
 
 	// Usenet, cache, stream engine.
-	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet")})
+	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet"), MinIdle: cfg.Usenet.MinIdle})
 	a.closers = append(a.closers, func() { a.fetcher.Close() })
 	if a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log); err != nil {
 		return fmt.Errorf("segment cache: %w", err)
@@ -265,20 +277,15 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 
 	a.trackprefs = trackprefs.New(a.db, trackprefs.Options{ShowName: func(ctx context.Context, id int64) string {
-		var name string
-		_ = a.db.QueryRowContext(ctx, `SELECT title FROM catalog_titles WHERE key=?`, int64(core.ShowKey(id))).Scan(&name)
-		return name
+		if title, err := a.catalog.CachedTitle(ctx, core.ShowKey(id)); err == nil {
+			return title.Title
+		}
+		return ""
 	}})
-	markerFFmpeg := cfg.Transcode.FFmpegPath
-	if a.transcoder != nil {
-		markerFFmpeg = a.transcoder.FFmpegPath()
-	}
-	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}})
-	a.closers = append(a.closers, func() { a.markers.Close() })
+	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
 	a.buildAdoption()
 	// Playback and prefetch.
 	a.playback, err = playback.New(playback.Deps{
-		LocalMedia:   a.localmedia,
 		AugmentMedia: a.enrichSubtitles,
 		Resolver:     a.resolver,
 		Engine:       a.engine,
@@ -290,6 +297,12 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
 		},
 		FetchNZB: a.indexers.FetchNZB,
+		Aligner: func() core.TimelineAligner {
+			if a.subtitles == nil {
+				return nil
+			}
+			return a.subtitles.TimelineAligner()
+		}(),
 		// Transcode sessions are keyed by the client's session id; the Plex
 		// front end (built below) maps playback sessions to them.
 		HLSLookup: func(id string) (core.HLSSession, bool) {
@@ -362,10 +375,22 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger: log.With("component", "gdm"),
 	})
 
+	// Post-play pre-buffering (#30): prewarm through the playback manager
+	// once it implements core.Prewarmer; until then prefetch resolves and
+	// pulls the opening bytes itself.
+	var prewarmer core.Prewarmer
+	if pw, ok := any(a.playback).(core.Prewarmer); ok {
+		prewarmer = pw
+	}
 	a.prefetch, err = prefetch.New(prefetch.Deps{
 		Catalog: a.catalog, Resolver: a.resolver, Engine: a.engine,
 		State: a.state, Auth: a.users, Hints: a.playback,
-		Logger: log.With("component", "prefetch"),
+		Logger:   log.With("component", "prefetch"),
+		PostPlay: a.personalize, Prewarmer: prewarmer, Markers: a.markers,
+		PostPlayEnabled: func() bool {
+			c := a.cfg.Get().Personalize
+			return c.PostPlay && c.PostPlayPrebuffer
+		},
 	}, cfg.Cache, prefetch.Options{})
 	if err != nil {
 		return fmt.Errorf("prefetch: %w", err)
@@ -383,6 +408,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.cleanHome = &cleanHomeStatus{app: a}
 	a.cfg.Subscribe(a.applyConfig)
 
+	a.buildExtras()
 	plexHandler, err := a.buildPlex(cfg)
 	if err != nil {
 		return fmt.Errorf("plex front end: %w", err)
@@ -400,7 +426,9 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 
 // applyConfig pushes an edited config into the running components.
 func (a *App) applyConfig(c config.Config) {
-	a.fetcher.Update(c.Usenet.Providers)
+	a.tmdb.UpdateConfig(c.Catalog)
+	a.llm.UpdateConfig(c.LLM)
+	a.fetcher.UpdateConfig(c.Usenet)
 	a.indexers.ApplyConfig(c)
 	a.resolver.UpdateConfig(c)
 	a.catalog.UpdateConfig(c.Catalog)
@@ -458,9 +486,6 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.ratings.Run(ctx) })
 	background.start(func() { a.plexDiscovery.Run(ctx) })
 	background.start(func() { a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) }) })
-	background.start(func() {
-		a.localmedia.Watch(ctx, time.Minute, func(err error) { a.log.Warn("local library scan", "err", err) })
-	})
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)

@@ -422,6 +422,7 @@ type Part struct {
 	Has64bitOffsets       *bool    `plex:"has64bitOffsets"`
 	OptimizedForStreaming *bool    `plex:"optimizedForStreaming"`
 	VideoProfile          string   `plex:"videoProfile,omitempty"`
+	Indexes               string   `plex:"indexes,omitempty"`
 	Bitrate               int      `plex:"bitrate,omitempty"`
 	Width                 int      `plex:"width,omitempty"`
 	Height                int      `plex:"height,omitempty"`

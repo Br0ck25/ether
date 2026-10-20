@@ -396,14 +396,28 @@ func (s *Server) handleLiveHubs(w http.ResponseWriter, r *http.Request) {
 	}
 	s.write(w, r, mc)
 }
-func liveSessionMetadata(info livetv.SessionInfo) model.Metadata {
-	md := model.Metadata{RatingKey: info.ID, Key: "/livetv/sessions/" + info.ID, Type: "clip", Title: info.Channel.Name, Summary: "", Extra: []model.Attr{model.A("live", true), model.A("genuineMediaAnalysis", false)}}
+func (s *Server) liveSessionMetadata(info livetv.SessionInfo) model.Metadata {
+	md := model.Metadata{RatingKey: info.ID, Key: "/livetv/sessions/" + info.ID, GUID: "plex://livetv/session/" + info.ID, Type: "clip", Title: info.Channel.Name, Summary: "", Extra: []model.Attr{model.A("live", true), model.A("genuineMediaAnalysis", false)}}
 	if info.Programme != nil {
 		md.Title = info.Programme.Item.Title
 		md.Summary = info.Programme.Item.Summary
 		md.Thumb = info.Programme.Item.Thumb
 	}
-	md.Media = []model.Media{{Protocol: "hls", Container: "mpegts", Extra: []model.Attr{model.A("uuid", info.ID), model.A("origin", "livetv"), model.A("beginsAt", info.StartedAt.Unix()), model.A("channelIdentifier", info.Channel.ID), model.A("channelTitle", info.Channel.Name), model.A("channelCallSign", info.Channel.Name), model.A("channelVcn", info.Channel.Number), model.A("onAir", true)}, Part: []model.Part{{Key: "/livetv/sessions/" + info.ID + "/0/index.m3u8", Container: "mpegts", Protocol: "hls", Decision: "copy"}}}}
+	md.Media = []model.Media{{Protocol: "hls", Container: "mpegts", Extra: []model.Attr{model.A("uuid", info.ID), model.A("origin", "livetv"), model.A("beginsAt", info.StartedAt.Unix()), model.A("channelIdentifier", info.Channel.ID), model.A("channelTitle", info.Channel.Name), model.A("channelCallSign", info.Channel.Name), model.A("channelVcn", info.Channel.Number), model.A("onAir", true)}, Part: []model.Part{{Key: "/livetv/sessions/" + info.ID + "/0/index.m3u8", Container: "mpegts", Protocol: "hls", Decision: "directplay"}}}}
+	if info.MediaInfo != nil && info.MediaInfo.Video() != nil {
+		md.Extra = []model.Attr{model.A("live", true), model.A("genuineMediaAnalysis", true)}
+		live := md.Media[0]
+		m := buildMedia(&core.Title{Title: info.Channel.Name}, *info.MediaInfo, info.StartedAt.Unix())
+		m.Extra = live.Extra
+		m.Protocol = "hls"
+		m.Container = "mpegts"
+		m.ID = tagID("live", info.ID) + 1
+		m.Duration = 0
+		m.Part[0] = live.Part[0]
+		m.Part[0].ID = m.ID
+		m.Part[0].Stream = s.buildStreams(0, *info.MediaInfo, selection{}, nil)
+		md.Media = []model.Media{m}
+	}
 	return md
 }
 func (s *Server) handleLiveTune(w http.ResponseWriter, r *http.Request) {
@@ -429,18 +443,20 @@ func (s *Server) handleLiveTune(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, 404)
 		return
 	}
-	info, err := s.d.LiveTV.Tune(r.Context(), pr.User, id, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+	info, err := s.d.LiveTV.TuneWithSession(r.Context(), pr.User, id, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps), pr.SessionID)
 	if err != nil {
+		s.log.Warn("live tune failed", "channel", id, "client", pr.ClientID, "product", pr.Product, "err", err)
 		s.writeErr(w, r, err)
 		return
 	}
+	s.log.Info("live tune ready", "channel", info.Channel.Name, "session", info.ID, "client", pr.ClientID, "product", pr.Product, "analyzed", info.MediaInfo != nil)
 	s.writeLiveSubscription(w, r, info)
 }
 func (s *Server) handleLiveSessions(w http.ResponseWriter, r *http.Request) {
 	infos := s.d.LiveTV.Sessions(r.Context(), FromContext(r.Context()).User)
 	md := []model.Metadata{}
 	for _, info := range infos {
-		md = append(md, liveSessionMetadata(info))
+		md = append(md, s.liveSessionMetadata(info))
 	}
 	s.write(w, r, &model.MediaContainer{Size: len(md), Identifier: livetv.Provider, Metadata: md})
 }
@@ -450,7 +466,7 @@ func (s *Server) handleLiveSession(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	s.write(w, r, &model.MediaContainer{Size: 1, Identifier: livetv.Provider, Metadata: []model.Metadata{liveSessionMetadata(info)}})
+	s.write(w, r, &model.MediaContainer{Size: 1, Identifier: livetv.Provider, Metadata: []model.Metadata{s.liveSessionMetadata(info)}})
 }
 
 // handleLiveTVPlayback hooks the universal decision/start endpoints before the
@@ -482,7 +498,7 @@ func (s *Server) handleLiveTVPlayback(w http.ResponseWriter, r *http.Request) bo
 		return true
 	}
 	if strings.HasSuffix(r.URL.Path, "/decision") {
-		s.write(w, r, &model.MediaContainer{Size: 1, Identifier: livetv.Provider, Extra: []model.Attr{model.A("generalDecisionCode", 1001), model.A("generalDecisionText", "Live TV stream available."), model.A("transcodeDecisionCode", 1001), model.A("transcodeDecisionText", "Live TV HLS streaming.")}, Metadata: []model.Metadata{liveSessionMetadata(info)}})
+		s.write(w, r, &model.MediaContainer{Size: 1, Identifier: livetv.Provider, Extra: []model.Attr{model.A("generalDecisionCode", 1001), model.A("generalDecisionText", "Live TV stream available."), model.A("transcodeDecisionCode", 1001), model.A("transcodeDecisionText", "Live TV HLS streaming.")}, Metadata: []model.Metadata{s.liveSessionMetadata(info)}})
 		return true
 	}
 	if strings.HasSuffix(r.URL.Path, "/start.mpd") {
@@ -549,10 +565,11 @@ type liveSubscriptionContainer struct {
 	Metadata     []model.Metadata   `plex:"Metadata"`
 	Subscription []liveSubscription `plex:"MediaSubscription"`
 	Operation    *liveOperation     `plex:"MediaGrabOperation,object"`
+	Extra        []model.Attr
 }
 
-func liveSubscriptionFor(info livetv.SessionInfo) liveSubscription {
-	md := liveSessionMetadata(info)
+func (s *Server) liveSubscriptionFor(info livetv.SessionInfo) liveSubscription {
+	md := s.liveSessionMetadata(info)
 	timeline := md
 	if info.Programme != nil {
 		timeline = liveProgrammeMetadata(info.Channel, *info.Programme)
@@ -561,20 +578,33 @@ func liveSubscriptionFor(info livetv.SessionInfo) liveSubscription {
 	op := liveOperation{Key: "/media/grabbers/operations/" + info.ID, ID: info.ID, Subscription: info.ID, Provider: livetv.Provider, Status: "inprogress", Rolling: true, Metadata: md}
 	return liveSubscription{Key: info.ID, Type: 12, Title: info.Channel.Name, Operation: op, Timeline: liveTimeline{Metadata: []model.Metadata{timeline}}}
 }
+
 func (s *Server) writeLiveSubscription(w http.ResponseWriter, r *http.Request, info livetv.SessionInfo) {
+	if nativeLiveRequest(r) {
+		s.writeNativeLiveTune(w, r, info)
+		return
+	}
 	w.Header().Set("X-Plex-Activity", "livetv-"+info.ID)
-	s.write(w, r, &liveSubscriptionContainer{Size: 1, Identifier: livetv.Provider, Metadata: []model.Metadata{liveSessionMetadata(info)}, Subscription: []liveSubscription{liveSubscriptionFor(info)}})
+	s.write(w, r, &liveSubscriptionContainer{Size: 1, Identifier: livetv.Provider, Metadata: []model.Metadata{s.liveSessionMetadata(info)}, Subscription: []liveSubscription{s.liveSubscriptionFor(info)}})
 }
 func (s *Server) handleLiveSubscriptions(w http.ResponseWriter, r *http.Request) {
 	infos := s.d.LiveTV.Sessions(r.Context(), FromContext(r.Context()).User)
+	if nativeLiveRequest(r) {
+		out := []nativeLiveSubscription{}
+		for _, info := range infos {
+			out = append(out, s.nativeLiveSubscriptionFor(info))
+		}
+		s.write(w, r, &nativeLiveContainer{Size: len(out), Subscriptions: out})
+		return
+	}
 	out := []liveSubscription{}
 	for _, info := range infos {
-		out = append(out, liveSubscriptionFor(info))
+		out = append(out, s.liveSubscriptionFor(info))
 	}
 	s.write(w, r, &liveSubscriptionContainer{Size: len(out), Identifier: livetv.Provider, Subscription: out})
 }
 func (s *Server) handleLiveSubscription(w http.ResponseWriter, r *http.Request) {
-	info, err := s.d.LiveTV.Session(r.Context(), chi.URLParam(r, "subscription"), FromContext(r.Context()).User)
+	info, err := s.liveSubscriptionSession(r, chi.URLParam(r, "subscription"))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -582,7 +612,10 @@ func (s *Server) handleLiveSubscription(w http.ResponseWriter, r *http.Request) 
 	s.writeLiveSubscription(w, r, info)
 }
 func (s *Server) handleLiveSubscriptionStop(w http.ResponseWriter, r *http.Request) {
-	err := s.d.LiveTV.Stop(r.Context(), chi.URLParam(r, "subscription"), FromContext(r.Context()).User)
+	info, err := s.liveSubscriptionSession(r, chi.URLParam(r, "subscription"))
+	if err == nil {
+		err = s.d.LiveTV.Stop(r.Context(), info.ID, FromContext(r.Context()).User)
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -595,7 +628,11 @@ func (s *Server) handleLiveOperation(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
-	op := liveSubscriptionFor(info).Operation
+	if nativeLiveRequest(r) {
+		s.write(w, r, &nativeLiveContainer{Size: 1, Grabs: s.nativeLiveSubscriptionFor(info).Grab})
+		return
+	}
+	op := s.liveSubscriptionFor(info).Operation
 	s.write(w, r, &liveSubscriptionContainer{Size: 1, Identifier: livetv.Provider, Operation: &op})
 }
 func (s *Server) handleLiveOperationStop(w http.ResponseWriter, r *http.Request) {

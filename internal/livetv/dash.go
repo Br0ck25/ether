@@ -20,19 +20,27 @@ func (s *Service) ServeDASH(w http.ResponseWriter, r *http.Request, id string, u
 		return
 	}
 	ss.mu.Lock()
+	ss.consumed = true
 	if ss.dash == nil {
 		if ss.info.Channel.Kind != "iptv" || s.o.Transcoder == nil {
 			ss.mu.Unlock()
 			writeStreamError(w, core.ErrNotAvailable)
 			return
 		}
-		info, e := s.o.Transcoder.Probe(r.Context(), ss.info.Channel.StreamURL)
+		info := ss.info.MediaInfo
+		var e error
+		if info == nil {
+			info, e = s.o.Transcoder.Probe(r.Context(), ss.info.Channel.StreamURL)
+		}
 		if e != nil {
 			ss.mu.Unlock()
 			writeStreamError(w, e)
 			return
 		}
+		copy := *info
+		info = &copy
 		info.Duration = 0
+		ss.info.MediaInfo = info
 		dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectStream: true, AudioStream: -1, SubtitleStream: -1})
 		if dec.Kind == core.DecisionDirectPlay {
 			dec.Kind = core.DecisionRemux

@@ -1,51 +1,94 @@
 import { SettingsRow } from "./SettingsRow";
-import { Button, SearchSelect,  SettingsSection, toast } from "@braedonsaunders/appkit-ui";
-import { Save } from "lucide-react";
-import { useEffect, useState } from "react";
-import { api, errorMessage } from "../lib/api";
+import { SearchSelect } from "@braedonsaunders/appkit-ui";
+import type { ReactNode } from "react";
 import type { EtherUser } from "../lib/types";
-import { ListInput, NumberInput } from "./fields";
+import { NumberInput } from "./fields";
 
 export const CONTENT_RATINGS = [
   { value: "", label: "Unrestricted" },
-  { value: "G", label: "G" }, { value: "PG", label: "PG" }, { value: "PG-13", label: "PG-13" }, { value: "R", label: "R" }, { value: "NC-17", label: "NC-17" },
-  { value: "TV-Y", label: "TV-Y" }, { value: "TV-Y7", label: "TV-Y7" }, { value: "TV-G", label: "TV-G" }, { value: "TV-PG", label: "TV-PG" }, { value: "TV-14", label: "TV-14" }, { value: "TV-MA", label: "TV-MA" },
+  { value: "G", label: "G" },
+  { value: "PG", label: "PG" },
+  { value: "PG-13", label: "PG-13" },
+  { value: "R", label: "R" },
+  { value: "NC-17", label: "NC-17" },
+  { value: "TV-Y", label: "TV-Y" },
+  { value: "TV-Y7", label: "TV-Y7" },
+  { value: "TV-G", label: "TV-G" },
+  { value: "TV-PG", label: "TV-PG" },
+  { value: "TV-14", label: "TV-14" },
+  { value: "TV-MA", label: "TV-MA" },
 ];
 
-/** Stream limit, content-rating cap and language preferences for one user. */
-export function UserLimitsForm({ user, onSaved, defaultStreamLimit }: { user: EtherUser; onSaved?: (u: EtherUser) => void; defaultStreamLimit?: number }) {
-  const [draft, setDraft] = useState(user);
-  const [saving, setSaving] = useState(false);
-  useEffect(() => setDraft(user), [user]);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(user);
-  const save = async () => {
-    setSaving(true);
-    try {
-      const saved = await api.updateUser(user.id, {
-        streamLimit: draft.streamLimit, maxContentRating: draft.maxContentRating,
-        subtitleLanguages: draft.subtitleLanguages, audioLanguages: draft.audioLanguages,
-      });
-      onSaved?.(saved ?? draft);
-      toast.success("Saved", { description: `Limits for ${user.title || user.username} updated.` });
-    } catch (e) { toast.error("Couldn't save", { description: errorMessage(e) }); }
-    finally { setSaving(false); }
+/** The user-record fields a viewer's limits edit. */
+export type UserLimits = Pick<
+  EtherUser,
+  "streamLimit" | "maxContentRating" | "subtitleLanguages" | "audioLanguages"
+>;
+
+export function userLimits(u: EtherUser): UserLimits {
+  return {
+    streamLimit: u.streamLimit,
+    maxContentRating: u.maxContentRating,
+    subtitleLanguages: u.subtitleLanguages,
+    audioLanguages: u.audioLanguages,
   };
+}
+
+/** Controlled stream-limit and rating-cap rows, for a form saved elsewhere. */
+export function UserLimitRows({
+  value,
+  onChange,
+  isOwner,
+  defaultStreamLimit,
+  streamLimitHint,
+}: {
+  value: UserLimits;
+  onChange: (next: UserLimits) => void;
+  isOwner?: boolean;
+  defaultStreamLimit?: number;
+  /** Extra copy after the stream-limit description (e.g. a settings link). */
+  streamLimitHint?: ReactNode;
+}) {
   return (
-    <SettingsSection title="Limits and preferences" description={user.isOwner ? "The owner is never limited by content rating." : undefined}
-      footer={<>
-        <Button variant="ghost" size="sm" onClick={() => setDraft(user)} disabled={!dirty || saving}>Discard</Button>
-        <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}><Save size={14} /> {saving ? "Saving…" : "Save"}</Button>
-      </>}>
-      <SettingsRow title="Stream limit" description={`Simultaneous streams. 0 uses the server default${defaultStreamLimit !== undefined ? ` (${defaultStreamLimit})` : ""}.`}
-        control={<NumberInput aria-label="Stream limit" className="w-24" value={draft.streamLimit} min={0} onChange={(n) => setDraft({ ...draft, streamLimit: Math.max(0, Math.round(n)) })} />} />
-      <SettingsRow title="Content rating cap" description="Titles above this rating are hidden from this user."
-        control={<div className="w-44"><SearchSelect value={draft.maxContentRating} onChange={(v) => setDraft({ ...draft, maxContentRating: v })} options={CONTENT_RATINGS} ariaLabel="Content rating cap" searchable={false} /></div>} />
-      <SettingsRow stacked title="Subtitle languages" description="ISO codes in preference order, e.g. en, fr.">
-        <ListInput ariaLabel="Subtitle languages" value={draft.subtitleLanguages} onChange={(v) => setDraft({ ...draft, subtitleLanguages: v.map(String) })} placeholder="en, fr" />
-      </SettingsRow>
-      <SettingsRow stacked title="Audio languages" description="Preferred audio tracks in order.">
-        <ListInput ariaLabel="Audio languages" value={draft.audioLanguages} onChange={(v) => setDraft({ ...draft, audioLanguages: v.map(String) })} placeholder="en" />
-      </SettingsRow>
-    </SettingsSection>
+    <>
+      <SettingsRow
+        title="Stream limit"
+        description={
+          <>
+            Simultaneous streams. 0 uses the server default
+            {defaultStreamLimit !== undefined ? ` (${defaultStreamLimit})` : ""}.
+            {streamLimitHint ? <> {streamLimitHint}</> : null}
+          </>
+        }
+        control={
+          <NumberInput
+            aria-label="Stream limit"
+            className="w-24"
+            value={value.streamLimit}
+            min={0}
+            onChange={(n) => onChange({ ...value, streamLimit: Math.max(0, Math.round(n)) })}
+          />
+        }
+      />
+      <SettingsRow
+        title="Content rating cap"
+        description={
+          isOwner
+            ? "The owner is never limited by content rating."
+            : "Titles above this rating are hidden from this viewer."
+        }
+        control={
+          <div className="w-44">
+            <SearchSelect
+              value={value.maxContentRating}
+              onChange={(v) => onChange({ ...value, maxContentRating: v })}
+              options={CONTENT_RATINGS}
+              ariaLabel="Content rating cap"
+              searchable={false}
+            />
+          </div>
+        }
+      />
+    </>
   );
 }

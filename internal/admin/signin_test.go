@@ -11,18 +11,17 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 )
 
-// The server machine itself needs no sign-in, but only when the browser
-// addressed it as localhost (a rebinding page would carry its own Host).
-func TestTrustedLocalhost(t *testing.T) {
+// A reverse proxy can use loopback and Host: localhost. Neither grants access.
+func TestLoopbackStillRequiresOwner(t *testing.T) {
 	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	for _, tc := range []struct {
 		remote, host string
 		want         int
 	}{
-		{"127.0.0.1:5000", "localhost:32400", 200},
-		{"[::1]:5000", "[::1]:32400", 200},
-		{"127.0.0.1:5000", "127.0.0.1:32400", 200},
+		{"127.0.0.1:5000", "localhost:32400", 401},
+		{"[::1]:5000", "[::1]:32400", 401},
+		{"127.0.0.1:5000", "127.0.0.1:32400", 401},
 		{"127.0.0.1:5000", "evil.example:32400", 401}, // DNS rebinding
 		{"10.0.0.5:1", "localhost:32400", 401},        // LAN peer claiming localhost
 	} {
@@ -32,16 +31,16 @@ func TestTrustedLocalhost(t *testing.T) {
 			t.Errorf("%s via %s: got %d want %d", tc.remote, tc.host, rec.Code, tc.want)
 		}
 	}
-	// Bootstrap tells the SPA not to show the login screen locally.
+	// Bootstrap requires sign-in locally as well.
 	r := req(http.MethodGet, "/ether/api/bootstrap", "")
 	r.RemoteAddr, r.Host = "127.0.0.1:5000", "localhost:32400"
 	var boot struct {
-		Authenticated, AuthRequired, LocalTrusted bool
+		Authenticated, AuthRequired bool
 	}
 	if err := json.Unmarshal(serve(h, r).Body.Bytes(), &boot); err != nil {
 		t.Fatal(err)
 	}
-	if !boot.Authenticated || boot.AuthRequired || !boot.LocalTrusted {
+	if boot.Authenticated || !boot.AuthRequired {
 		t.Fatalf("bootstrap %+v", boot)
 	}
 }
@@ -74,7 +73,7 @@ func (f *fakeSignIn) approve(id, token string) {
 func TestSignInWithPlex(t *testing.T) {
 	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
 	si := &fakeSignIn{tokens: map[string]string{}}
-	h := admin.New(admin.Deps{Config: store, SignIn: si})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), SignIn: si})
 
 	start := func() string {
 		r := req(http.MethodPost, "/ether/api/auth/pin", "{}")

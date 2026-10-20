@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"crypto/subtle"
 	"net"
 	"net/http"
 	"strings"
@@ -26,17 +25,7 @@ func tokenFromRequest(r *http.Request) string {
 }
 
 func (h *Handler) isOwner(r *http.Request, token string) bool {
-	if token == "" {
-		return false
-	}
-	if h.deps.IsOwnerToken != nil {
-		return h.deps.IsOwnerToken(r.Context(), token)
-	}
-	stored := h.deps.Config.Get().Plex.Token
-	if stored == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(stored)) == 1
+	return token != "" && h.deps.IsOwnerToken(r.Context(), token)
 }
 
 // isLocalOrLAN reports whether the direct peer is loopback, RFC-1918
@@ -54,33 +43,8 @@ func isLocalOrLAN(r *http.Request) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
-// isTrustedLocal reports a request from the server machine itself: the peer
-// is loopback and the browser addressed it as localhost. Checking Host keeps
-// a hostile page from borrowing this trust through DNS rebinding (its
-// requests would carry its own hostname). CSRF checks still apply.
-func isTrustedLocal(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
-	if ip == nil || !ip.IsLoopback() {
-		return false
-	}
-	name := r.Host
-	if h, _, err := net.SplitHostPort(name); err == nil {
-		name = h
-	}
-	switch strings.ToLower(strings.Trim(name, "[]")) {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	}
-	return false
-}
-
 // requireAuth implements the admin access policy:
 //
-//   - Requests from the server machine itself (see isTrustedLocal) pass.
 //   - A valid owner token always passes, from anywhere.
 //   - Before setup is complete, requests from localhost/LAN pass without a
 //     token (there is no owner credential yet); remote requests do not.
@@ -93,7 +57,7 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		token := tokenFromRequest(r)
-		if isTrustedLocal(r) || h.isOwner(r, token) {
+		if h.isOwner(r, token) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -116,16 +80,13 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	cfg := h.deps.Config.Get()
 	token := tokenFromRequest(r)
-	local := isTrustedLocal(r)
-	authed := local || h.isOwner(r, token) || (!cfg.SetupComplete && isLocalOrLAN(r))
+	authed := h.isOwner(r, token) || (!cfg.SetupComplete && isLocalOrLAN(r))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":            true,
 		"version":       h.version,
 		"setupComplete": cfg.SetupComplete,
 		"authenticated": authed,
-		"authRequired":  cfg.SetupComplete && !local,
-		"localTrusted":  local,
-		"signIn":        h.deps.SignIn != nil,
+		"authRequired":  cfg.SetupComplete,
 		"serverName":    cfg.Server.FriendlyName,
 	})
 }

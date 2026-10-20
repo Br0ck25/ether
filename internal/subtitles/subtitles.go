@@ -62,6 +62,9 @@ type Options struct {
 	// MaxRetryAfter caps a 429 Retry-After wait (default 3s).
 	MaxRetryAfter time.Duration
 	Now           func() time.Time
+	// AlignLanguages are tried in order for dialogue timeline alignment
+	// (default ["en"]: the most widely subtitled language).
+	AlignLanguages []string
 }
 
 // Service is the OpenSubtitles client + disk cache.
@@ -81,6 +84,10 @@ type Service struct {
 	flights   map[string]*flight
 	negative  map[string]time.Time // title+lang -> when nothing was found
 	quotaTill time.Time            // downloads refused until then
+
+	alignLanguages []string
+	aligner        *Aligner
+	alignOnce      sync.Once
 }
 
 type flight struct {
@@ -112,10 +119,25 @@ func New(opts Options) *Service {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	alignLangs := []string{"en"}
+	if len(opts.AlignLanguages) > 0 {
+		alignLangs = alignLangs[:0]
+		seenLang := map[string]bool{}
+		for _, l := range opts.AlignLanguages {
+			if n := normLang(l); n != "" && !seenLang[n] && len(alignLangs) < 3 {
+				seenLang[n] = true
+				alignLangs = append(alignLangs, n)
+			}
+		}
+		if len(alignLangs) == 0 {
+			alignLangs = []string{"en"}
+		}
+	}
 	return &Service{
 		cfg: opts.Config, dir: opts.CacheDir, base: strings.TrimSuffix(opts.BaseURL, "/"),
 		http: opts.HTTPClient, log: opts.Logger, agent: opts.UserAgent, flights: map[string]*flight{},
 		negative: map[string]time.Time{}, negTTL: opts.NegativeTTL, maxWait: opts.MaxRetryAfter, now: opts.Now,
+		alignLanguages: alignLangs,
 	}
 }
 

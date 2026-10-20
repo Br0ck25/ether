@@ -29,14 +29,15 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
-	transMu    sync.RWMutex
-	transcodes map[string]core.HLSSession
-	o          Options
-	mu         sync.Mutex
-	sessions   map[string]*session
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
+	transMu          sync.RWMutex
+	transcodes       map[string]core.HLSSession
+	o                Options
+	mu               sync.Mutex
+	sessions         map[string]*session
+	nextSubscription int64 // guarded by mu
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
 }
 
 func New(o Options) (*Service, error) {
@@ -100,6 +101,18 @@ func randomID() string {
 	}
 	return hex.EncodeToString(b[:])
 }
+
+// Native clients parse Media.uuid as a canonical UUID.
+func liveSessionID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	b[6] = (b[6] & 15) | 64
+	b[8] = (b[8] & 63) | 128
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
 func (s *Service) maintain() {
 	defer s.wg.Done()
 	t := time.NewTicker(30 * time.Second)

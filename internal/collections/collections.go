@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/artwork"
+	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -48,6 +49,7 @@ type TitleUpserter interface {
 // Service is the collection engine.
 type Service struct {
 	db       *sql.DB
+	mirror   *catalog.Mirror
 	cat      core.Catalog
 	log      *slog.Logger
 	now      func() time.Time
@@ -61,11 +63,16 @@ type Service struct {
 	state    core.State
 	auth     core.Auth
 	chat     Chatter
-	scorer   atomic.Pointer[scorerBox]
-	art      *artwork.Renderer
-	images   *artwork.Images
-	catCfg   func() config.Catalog
-	traktCfg func() config.Trakt
+	// Ephemeral vibe-search collections (vibe_ephemeral.go).
+	vibeRefiner core.VibeRefiner
+	vibe        *vibeRegistry
+	vibeTTL     time.Duration
+	vibeMax     int
+	scorer      atomic.Pointer[scorerBox]
+	art         *artwork.Renderer
+	images      *artwork.Images
+	catCfg      func() config.Catalog
+	traktCfg    func() config.Trakt
 
 	liveTTL     time.Duration
 	tick        time.Duration
@@ -173,6 +180,7 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 	}
 	s.api = newTMDBAPI(s.opts.tmdb, s.now)
 	s.names = newNameResolver(db, s.api, s.now)
+	s.mirror = catalog.NewMirror(db, s.now)
 	s.idx = newIndex(db, s.now, s.opts.indexTTL)
 	ua := s.opts.userAgent
 	if ua == "" {
@@ -184,9 +192,6 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 		s.bases = *s.opts.bases
 	}
 	ctx := context.Background()
-	if err := s.migrateLegacy(ctx); err != nil {
-		return nil, fmt.Errorf("collections: migrate: %w", err)
-	}
 	if err := s.seedBuiltins(ctx); err != nil {
 		return nil, fmt.Errorf("collections: built-ins: %w", err)
 	}
@@ -601,6 +606,7 @@ func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) (
 		}
 		out = append(out, s.collectionFor(ctx, row, user, t, keys))
 	}
+	out = append(out, s.listEphemeral(user, t)...)
 	if t == "" || t == core.TypeMovie {
 		fr, err := s.listFranchises(ctx, user)
 		if err == nil {
@@ -614,6 +620,9 @@ func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) (
 
 // Get returns one collection by key.
 func (s *Service) Get(ctx context.Context, user *core.User, key core.RatingKey) (*core.Collection, error) {
+	if key.IsEphemeral() {
+		return s.getEphemeral(ctx, user, key)
+	}
 	switch key.Kind() {
 	case core.KindCollection:
 		return s.getFranchise(ctx, user, key)
@@ -642,6 +651,9 @@ func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey
 	}
 	if offset < 0 {
 		offset = 0
+	}
+	if key.IsEphemeral() {
+		return s.ephemeralItems(ctx, user, key, offset, limit)
 	}
 	switch key.Kind() {
 	case core.KindCollection:
@@ -675,7 +687,7 @@ func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey
 	return core.Page{}, core.ErrNotFound
 }
 
-// CreateSmart persists a v1-style smart collection (core.Filter) as a spec.
+// CreateSmart persists a filter-based smart collection (core.Filter) as a spec.
 // OwnerUserID 0 = server-wide; otherwise only that user sees it.
 func (s *Service) CreateSmart(ctx context.Context, c core.Collection) (*core.Collection, error) {
 	if c.Title == "" {
@@ -684,7 +696,7 @@ func (s *Service) CreateSmart(ctx context.Context, c core.Collection) (*core.Col
 	if c.Filter == nil {
 		return nil, fmt.Errorf("collections: smart collection needs a filter")
 	}
-	sp := specFromLegacy(c)
+	sp := specFromFilter(c)
 	if err := Validate(&sp); err != nil {
 		return nil, err
 	}
@@ -727,36 +739,8 @@ func (s *Service) DeleteSmart(ctx context.Context, key core.RatingKey) error {
 // Franchises (TMDB collections in the catalogue)
 
 func (s *Service) listFranchises(ctx context.Context, user *core.User) ([]core.Collection, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.collection_id,
-		       COALESCE(NULLIF(MAX(t.collection_name),''), MAX(cc.name), ''),
-		       COUNT(*),
-		       COALESCE(MAX(cc.poster),''), COALESCE(MAX(cc.backdrop),''),
-		       COALESCE(MAX(cc.summary),'')
-		FROM catalog_titles t
-		LEFT JOIN catalog_collections cc ON cc.tmdb_id = t.collection_id
-		WHERE t.type='movie' AND t.browsable=1 AND t.collection_id>0
-		GROUP BY t.collection_id HAVING COUNT(*)>=2
-		ORDER BY COUNT(*) DESC`)
+	out, err := s.mirror.Franchises(ctx)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []core.Collection
-	for rows.Next() {
-		var id int64
-		var name, poster, backdrop, summary string
-		var n int
-		if err := rows.Scan(&id, &name, &n, &poster, &backdrop, &summary); err != nil {
-			return nil, err
-		}
-		if name == "" {
-			name = fmt.Sprintf("Collection %d", id)
-		}
-		out = append(out, core.Collection{Key: core.CollectionKey(id), Title: name, Summary: summary,
-			Kind: "franchise", Type: core.TypeMovie, PosterPath: poster, BackdropPath: backdrop, ChildCount: n})
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	if user != nil && user.MaxContentRating != "" {
@@ -793,9 +777,9 @@ func (s *Service) getFranchise(ctx context.Context, user *core.User, key core.Ra
 	}
 	allowed := filterTitlesByRating(items, user)
 	c := &core.Collection{Key: key, Title: name, Kind: "franchise", Type: core.TypeMovie, ChildCount: len(allowed)}
-	var poster, backdrop, summary string
-	_ = s.db.QueryRowContext(ctx, `SELECT poster, backdrop, summary FROM catalog_collections WHERE tmdb_id=?`, key.TMDB()).Scan(&poster, &backdrop, &summary)
-	c.PosterPath, c.BackdropPath, c.Summary = poster, backdrop, summary
+	if art, err := s.mirror.CollectionArt(ctx, key.TMDB()); err == nil {
+		c.PosterPath, c.BackdropPath, c.Summary = art.PosterPath, art.BackdropPath, art.Summary
+	}
 	if c.PosterPath == "" && len(items) > 0 {
 		c.PosterPath = items[0].PosterPath
 	}

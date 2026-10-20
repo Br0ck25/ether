@@ -33,11 +33,13 @@ type track struct {
 	count      int
 }
 type session struct {
+	consumed        bool
 	reserved        bool
 	ready           bool
 	nextSequence    int64
 	discontinuities int64
 	relay           core.HLSSession
+	relayInfo       *core.MediaInfo
 	dash            core.DASHSession
 	mu              sync.Mutex
 	info            SessionInfo
@@ -78,6 +80,15 @@ func (ss *session) close(s *Service) {
 }
 
 func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps core.ClientCaps) (SessionInfo, error) {
+	return s.TuneWithSession(ctx, u, channelID, caps, caps.ClientID)
+}
+
+// TuneWithSession preserves the client's playback-session identity independently
+// of the server's stream, subscription and activity identities.
+func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID string, caps core.ClientCaps, clientSessionID string) (SessionInfo, error) {
+	if clientSessionID == "" {
+		clientSessionID = caps.ClientID
+	}
 	if u == nil || (s.o.CanPlay != nil && !s.o.CanPlay(u, caps.Remote, s.o.Now())) {
 		return SessionInfo{}, core.ErrUnauthorized
 	}
@@ -98,6 +109,25 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 	}
 	if c.Kind == "virtual" && p == nil {
 		return SessionInfo{}, core.ErrNotAvailable
+	}
+	// A client can abandon a successful tune before requesting any media.
+	// Reclaim only its unused session; other viewers/active players stay intact.
+	if caps.ClientID != "" {
+		var abandoned []*session
+		s.mu.Lock()
+		for id, old := range s.sessions {
+			old.mu.Lock()
+			unused := old.ready && !old.consumed && old.info.UserID == u.ID && old.caps.ClientID == caps.ClientID
+			old.mu.Unlock()
+			if unused {
+				delete(s.sessions, id)
+				abandoned = append(abandoned, old)
+			}
+		}
+		s.mu.Unlock()
+		for _, old := range abandoned {
+			old.close(s)
+		}
 	}
 	var playbackSessions []*core.PlaySession
 	if s.o.Playback != nil {
@@ -125,7 +155,15 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 		s.mu.Unlock()
 		return SessionInfo{}, core.ErrStreamLimit
 	}
-	ss := &session{info: SessionInfo{ID: randomID(), UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now()}, user: *u, caps: caps, last: s.o.Now(), resources: map[string]string{}}
+	s.nextSubscription++
+	ss := &session{
+		info: SessionInfo{
+			ID: liveSessionID(), SubscriptionID: s.nextSubscription,
+			ActivityID: liveSessionID(), ClientSessionID: clientSessionID,
+			UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now(),
+		},
+		user: *u, caps: caps, last: s.o.Now(), resources: map[string]string{},
+	}
 	s.sessions[ss.info.ID] = ss
 	s.mu.Unlock()
 	if limiter, ok := s.o.Playback.(channelLimiter); ok {
@@ -167,6 +205,9 @@ func (s *Service) Tune(ctx context.Context, u *core.User, channelID string, caps
 	}
 	ss.ready = true
 	info := ss.info
+	if ss.relayInfo != nil {
+		info.MediaInfo = ss.relayInfo
+	}
 	ss.mu.Unlock()
 	info.Channel.StreamURL = ""
 	return info, nil
@@ -216,6 +257,9 @@ func (s *Service) Session(ctx context.Context, id string, u *core.User) (Session
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	info := ss.info
+	if ss.relayInfo != nil {
+		info.MediaInfo = ss.relayInfo
+	}
 	info.Channel.StreamURL = ""
 	ps, err := s.programmes(ctx, ss.info.Channel, s.o.Now(), s.o.Now().Add(time.Second))
 	if err == nil && len(ps) > 0 {
@@ -295,6 +339,7 @@ func (s *Service) prepareTrack(ctx context.Context, ss *session, p Programme) (*
 		return nil, err
 	}
 	info := ps.Info
+	ss.info.MediaInfo = &info
 	info.Duration = p.End.Sub(p.Start)
 	decision := s.o.Transcoder.Decide(info, caps, core.DecideOptions{DirectStream: true, AudioStream: -1, SubtitleStream: -1})
 	if decision.Kind == core.DecisionDirectPlay {
@@ -339,6 +384,9 @@ func (s *Service) ServePlaylist(w http.ResponseWriter, r *http.Request, id strin
 		writeStreamError(w, err)
 		return
 	}
+	ss.mu.Lock()
+	ss.consumed = true
+	ss.mu.Unlock()
 	if ss.relay != nil {
 		s.serveRelayPlaylist(w, r, ss)
 		return
@@ -535,25 +583,45 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 		return readErr
 	}
 	isHLS := strings.HasPrefix(strings.TrimSpace(string(prefix[:n])), "#EXTM3U") || strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "mpegurl")
+	var info *core.MediaInfo
 	if isHLS && !c.Transcode {
+		analyze := len(ss.caps.VideoCodecs) > 0 || len(ss.caps.AudioCodecs) > 0 || strings.Contains(strings.ToLower(ss.caps.Product), "apple") || strings.EqualFold(ss.caps.Platform, "tvos") || strings.EqualFold(ss.caps.Platform, "ios")
+		if s.o.Transcoder != nil && analyze {
+			info, err = s.o.Transcoder.Probe(ctx, c.StreamURL)
+			if err != nil {
+				return err
+			}
+			if info == nil || info.Video() == nil {
+				return core.ErrNotAvailable
+			}
+			copy := *info
+			copy.Duration = 0
+			info = &copy
+			ss.info.MediaInfo = info
+			// A playlist is a transport, not evidence that its codecs are
+			// playable. MPEG-2/MP2 HLS needs conversion on Apple TV too.
+			dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectPlay: true, DirectStream: true, AudioStream: -1, SubtitleStream: -1})
+			if !dec.VideoCopy || !dec.AudioCopy {
+				return s.startIPTVRelay(ss, *info)
+			}
+		}
 		ss.resources["index.m3u8"] = c.StreamURL
 		return nil
 	}
 	if s.o.Transcoder == nil {
 		return core.ErrNotAvailable
 	}
-	info, err := s.o.Transcoder.Probe(ctx, c.StreamURL)
+	info, err = s.o.Transcoder.Probe(ctx, c.StreamURL)
 	if err != nil {
 		return err
 	}
-	info.Duration = 0
-	dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectStream: !c.Transcode, AudioStream: -1, SubtitleStream: -1})
-	if dec.Kind == core.DecisionDirectPlay {
-		dec.Kind = core.DecisionRemux
+	if info == nil {
+		return core.ErrNotAvailable
 	}
-	dec.Container = "mpegts"
-	ss.relay, err = s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-" + ss.info.ID, InputURL: c.StreamURL, Info: *info, Decision: dec, SegmentDuration: segmentDuration})
-	return err
+	copy := *info
+	copy.Duration = 0
+	ss.info.MediaInfo = &copy
+	return s.startIPTVRelay(ss, copy)
 }
 func (s *Service) serveRelayPlaylist(w http.ResponseWriter, r *http.Request, ss *session) {
 	rec := httptest.NewRecorder()
@@ -561,6 +629,23 @@ func (s *Service) serveRelayPlaylist(w http.ResponseWriter, r *http.Request, ss 
 	if rec.Code != 200 {
 		http.Error(w, "IPTV playout unavailable", rec.Code)
 		return
+	}
+	// An unknown-duration transcoder initially has no completed segments.
+	// Native players can reject that empty EVENT playlist immediately. Use
+	// the session's bounded segment wait before returning the first playlist.
+	if !relayPlaylistHasMedia(rec.Body.String()) {
+		ready := &relayReadinessWriter{header: make(http.Header)}
+		ss.relay.ServeSegment(ready, r, 0)
+		if ready.status >= 400 {
+			http.Error(w, "IPTV playout unavailable", ready.status)
+			return
+		}
+		rec = httptest.NewRecorder()
+		ss.relay.ServePlaylist(rec, r)
+		if rec.Code != 200 || !relayPlaylistHasMedia(rec.Body.String()) {
+			http.Error(w, "IPTV playout unavailable", http.StatusBadGateway)
+			return
+		}
 	}
 	lines := strings.Split(rec.Body.String(), "\n")
 	for i, line := range lines {

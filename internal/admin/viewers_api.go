@@ -25,8 +25,16 @@ type Personalization interface {
 	// the context.
 	PreviewHome(ctx context.Context, user *core.User, hc core.HubContext, section string, limit int) (*core.HomePreview, error)
 	Refresh(ctx context.Context, user *core.User) error
-	Layout(ctx context.Context) ([]core.LayoutRule, error)
-	SetLayout(ctx context.Context, rules []core.LayoutRule) ([]core.LayoutRule, error)
+	// HomeLayout is the saved Home layout document; SetHomeLayout
+	// validates and replaces it, applying from the next /hubs request.
+	HomeLayout(ctx context.Context) (core.HomeLayout, error)
+	SetHomeLayout(ctx context.Context, d core.HomeLayout) (core.HomeLayout, error)
+	// PreviewLayout assembles what the viewer would see under a draft
+	// document without saving it.
+	PreviewLayout(ctx context.Context, user *core.User, hc core.HubContext, section string, limit int, d core.HomeLayout) (*core.HomePreview, error)
+	// LayoutDefaults is the default row count per section (home, movies,
+	// shows).
+	LayoutDefaults() map[string]int
 	AvailableRows(ctx context.Context) ([]core.RowDescriptor, error)
 	RowInsights(ctx context.Context, days int) ([]core.RowInsight, error)
 	Activity(ctx context.Context, days int) ([]core.ActivityDay, error)
@@ -52,20 +60,6 @@ func (h *Handler) personalizationRoutes(api func(pattern string, fn http.Handler
 	api("POST /api/layout/impact", h.handleLayoutImpact)
 	api("GET /api/insights/rows", h.handleInsightRows)
 	api("GET /api/insights/activity", h.handleInsightActivity)
-}
-
-// personalizationReady answers 501 when the engine (or the user list the
-// viewer endpoints need) is not wired.
-func (h *Handler) personalizationReady(w http.ResponseWriter, needUsers bool) bool {
-	if h.deps.Personalization == nil {
-		writeNotImplemented(w, "personalization")
-		return false
-	}
-	if needUsers && h.deps.Users == nil {
-		writeNotImplemented(w, "user administration")
-		return false
-	}
-	return true
 }
 
 // writeEngineError maps engine errors onto the API's error shapes.
@@ -139,9 +133,6 @@ func (h *Handler) viewerByID(w http.ResponseWriter, r *http.Request) (*core.User
 }
 
 func (h *Handler) handleViewers(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, true) {
-		return
-	}
 	users, err := h.deps.Users.Users(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
@@ -171,9 +162,6 @@ type recentViewing struct {
 }
 
 func (h *Handler) handleViewer(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, true) {
-		return
-	}
 	u, ok := h.viewerByID(w, r)
 	if !ok {
 		return
@@ -199,9 +187,6 @@ func (h *Handler) handleViewer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleViewerTaste(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, true) {
-		return
-	}
 	u, ok := h.viewerByID(w, r)
 	if !ok {
 		return
@@ -215,9 +200,6 @@ func (h *Handler) handleViewerTaste(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleViewerOverrides(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, true) {
-		return
-	}
 	u, ok := h.viewerByID(w, r)
 	if !ok {
 		return
@@ -264,9 +246,6 @@ type homeRow struct {
 }
 
 func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, true) {
-		return
-	}
 	u, ok := h.viewerByID(w, r)
 	if !ok {
 		return
@@ -335,9 +314,6 @@ func (h *Handler) writeHomePreview(w http.ResponseWriter, p *core.HomePreview, v
 }
 
 func (h *Handler) handleViewerRefresh(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, true) {
-		return
-	}
 	u, ok := h.viewerByID(w, r)
 	if !ok {
 		return

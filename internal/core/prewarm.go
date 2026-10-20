@@ -1,0 +1,33 @@
+package core
+
+import "context"
+
+// Reasons for PrewarmOptions.Reason.
+const (
+	PrewarmDetail   = "detail"   // a detail page was opened
+	PrewarmTrailer  = "trailer"  // a trailer or Cinema Trailer for the title is playing
+	PrewarmPostPlay = "postplay" // the viewer is near the end of something and this is up next
+)
+
+// PrewarmOptions tune a speculative warm-up of a title before the viewer
+// presses Play.
+type PrewarmOptions struct {
+	// Reason labels the trigger for logs and budgets (Prewarm* constants).
+	Reason string `json:"reason"`
+	// PrefetchBytes is how much of the opening of the file to pre-buffer at
+	// background priority once the release is resolved, opened and probed.
+	// Zero uses the implementation's default for the reason.
+	PrefetchBytes int64 `json:"prefetchBytes,omitempty"`
+	// DuringPlayback allows the warm-up while the viewer already has an
+	// active session (a trailer, or the end of a film, is playing).
+	DuringPlayback bool `json:"duringPlayback,omitempty"`
+}
+
+// Prewarmer is implemented by playback managers that can resolve, open,
+// probe and pre-buffer a title ahead of Play, so the later Prepare for the
+// same user, client and title is near-instant. A warm-up never reserves a
+// stream or writes resume/history records. It reports whether a warm-up was
+// scheduled (false when skipped by budgets or already warm).
+type Prewarmer interface {
+	Prewarm(ctx context.Context, user *User, key RatingKey, caps ClientCaps, opts PrewarmOptions) bool
+}

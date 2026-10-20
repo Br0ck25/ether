@@ -19,9 +19,10 @@ import (
 
 // Default timeouts for a single connection.
 const (
-	DefaultDialTimeout    = 15 * time.Second
-	DefaultCommandTimeout = 60 * time.Second
-	readBufferSize        = 64 << 10
+	DefaultDialTimeout     = 15 * time.Second
+	DefaultCommandTimeout  = 60 * time.Second
+	DefaultIdleReadTimeout = 5 * time.Second
+	readBufferSize         = 64 << 10
 )
 
 // DialOptions describe how to reach and log in to one NNTP server.
@@ -38,6 +39,8 @@ type DialOptions struct {
 	Timeout time.Duration
 	// CommandTimeout bounds each command including reading its response.
 	CommandTimeout time.Duration
+	// IdleReadTimeout bounds a stalled read; progress renews it. Negative disables.
+	IdleReadTimeout time.Duration
 	// DialContext overrides the network dialer.
 	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
 	// BytesRead, when set, is incremented with every byte read off the wire.
@@ -145,6 +148,12 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 		nc = tc
 	}
 
+	if o.IdleReadTimeout == 0 {
+		o.IdleReadTimeout = DefaultIdleReadTimeout
+	}
+	if o.IdleReadTimeout > 0 {
+		nc = &idleReadConn{Conn: nc, idle: o.IdleReadTimeout}
+	}
 	now := time.Now()
 	c := &Conn{
 		nc:             nc,
@@ -253,7 +262,7 @@ func (c *Conn) begin(ctx context.Context, timeout time.Duration) (func(error) er
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
-				if fromCtx && errors.Is(err, os.ErrDeadlineExceeded) {
+				if fromCtx && ctxErr(ctx) != nil && errors.Is(err, os.ErrDeadlineExceeded) {
 					// The deadline taken from ctx expired the I/O a moment
 					// before ctx itself noticed.
 					return context.DeadlineExceeded

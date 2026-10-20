@@ -10,13 +10,22 @@ import (
 
 const preResolveTTL = 10 * time.Minute
 
+const (
+	detailPrefetchBytes  = 2 << 20
+	bigWarmPrefetchBytes = 48 << 20
+	maxWarmPrefetchBytes = 64 << 20
+)
+
 type warmEntry struct {
-	profile string
-	done    chan struct{}
-	ready   sync.Once
-	expires time.Time
-	res     *core.Resolution
-	probe   *probeCache
+	profile    string
+	profileObj core.QualityProfile
+	caps       core.ClientCaps
+	done       chan struct{}
+	ready      sync.Once
+	expires    time.Time
+	runtime    time.Duration // title runtime, for size rules without a probe
+	res        *core.Resolution
+	probe      *probeCache
 }
 
 type probeCache struct {
@@ -25,24 +34,52 @@ type probeCache struct {
 	points    []IndexPoint
 }
 
-// PreResolve schedules detail-page warming under a separate speculative budget:
-// two concurrent titles server-wide, one per user, six requests/minute/user,
-// 8 seconds each, bounded probing/index reads, and a 2 MiB background prefetch. Request cancellation
-// does not cancel a detail-page warmup; manager shutdown always does. It neither
-// reserves a live stream nor writes resume/history. False means skipped.
-func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps) bool {
-	if local, ok := m.deps.LocalMedia.(interface {
-		Available(context.Context, core.RatingKey) bool
-	}); ok && local.Available(m.ctx, key) {
-		return false
-	}
+// PreResolve schedules detail-page warming; it is the core.PrewarmDetail
+// form of Prewarm, kept for existing callers.
+func (m *Manager) PreResolve(ctx context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps) bool {
+	return m.Prewarm(ctx, user, key, caps, core.PrewarmOptions{Reason: core.PrewarmDetail})
+}
+
+// Prewarm implements core.Prewarmer: it resolves, opens, probes (including
+// the container keyframe index) and pre-buffers a title ahead of Play, so
+// the later Prepare for the same user, client and title needs no resolver
+// or probe round trip. Request cancellation does not cancel a warm-up;
+// manager shutdown always does. It neither reserves a live stream nor
+// writes resume/history. False means skipped.
+//
+// Budgets: two warm-ups in flight server-wide, one per user, six
+// requests/minute/user. A detail warm-up runs 8s, prefetches 2 MiB and is
+// skipped while anything is playing. Trailer/post-play warm-ups may run
+// during playback (DuringPlayback), prefetch 48 MiB by default (hard cap
+// 64 MiB) and get 45s. Prefetch goes through Engine.Prefetch, which runs
+// at core.PriorityPrefetch and yields to live streams.
+func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey, caps core.ClientCaps, opts core.PrewarmOptions) bool {
 	if user == nil || caps.ClientID == "" || caps.Product == "" {
 		return false
+	}
+	reason := opts.Reason
+	if reason != core.PrewarmTrailer && reason != core.PrewarmPostPlay {
+		reason = core.PrewarmDetail
+	}
+	prefetchBytes := opts.PrefetchBytes
+	if prefetchBytes <= 0 {
+		if reason == core.PrewarmDetail {
+			prefetchBytes = detailPrefetchBytes
+		} else {
+			prefetchBytes = bigWarmPrefetchBytes
+		}
+	}
+	if prefetchBytes > maxWarmPrefetchBytes {
+		prefetchBytes = maxWarmPrefetchBytes
+	}
+	timeout := 8 * time.Second
+	if reason != core.PrewarmDetail {
+		timeout = 45 * time.Second
 	}
 	id := identity{userID: user.ID, clientID: caps.ClientID, key: key}
 	now := m.now()
 	m.mu.Lock()
-	if m.closed || m.byIdent[id] != nil || m.flights[id] != nil {
+	if m.closed || m.byIdent[id] != nil || m.hasFlightLocked(id) {
 		m.mu.Unlock()
 		return false
 	}
@@ -90,12 +127,19 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 		}
 		delete(m.warm, oldest)
 	}
-	// Active playback always takes priority over speculation.
-	if len(m.sessions) > 0 || m.pendingN > 0 {
+	// Active playback takes priority over speculation, unless the caller
+	// is warming the next thing while the viewer watches (a trailer or
+	// the end of a film).
+	if !opts.DuringPlayback && (len(m.sessions) > 0 || m.pendingN > 0) {
 		m.mu.Unlock()
 		return false
 	}
-	requests := m.warmRequests[user.ID]
+	budgetReason := "speculative"
+	if reason == core.PrewarmDetail {
+		budgetReason = core.PrewarmDetail
+	}
+	bk := warmBudgetKey{userID: user.ID, reason: budgetReason}
+	requests := m.warmRequests[bk]
 	recent := requests[:0]
 	for _, at := range requests {
 		if now.Sub(at) < time.Minute {
@@ -106,8 +150,9 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 		m.mu.Unlock()
 		return false
 	}
-	m.warmRequests[user.ID] = append(recent, now)
-	e := &warmEntry{profile: m.deps.SelectProfile(caps, user).Name, done: make(chan struct{}), expires: now.Add(preResolveTTL)}
+	m.warmRequests[bk] = append(recent, now)
+	profileObj := m.deps.SelectProfile(caps, user)
+	e := &warmEntry{profile: profileObj.Name, profileObj: profileObj, caps: caps, done: make(chan struct{}), expires: now.Add(preResolveTTL)}
 	m.warm[id] = e
 	u := *user
 	m.wg.Add(1)
@@ -122,7 +167,7 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 			m.mu.Unlock()
 			e.ready.Do(func() { close(e.done) })
 		}()
-		ctx, cancel := context.WithTimeout(m.ctx, 8*time.Second)
+		ctx, cancel := context.WithTimeout(m.ctx, timeout)
 		defer cancel()
 		title, err := m.deps.Catalog.Get(ctx, key)
 		if err != nil || title == nil || title.Type == core.TypeShow || title.Type == core.TypeSeason {
@@ -145,25 +190,126 @@ func (m *Manager) PreResolve(_ context.Context, user *core.User, key core.Rating
 		if err != nil {
 			return
 		}
-		facts := &probeCache{releaseID: res.Release.ID, info: generation.info, points: generation.tmap.Points}
+		// Unlike Play, warming waits for the keyframe index so the cached
+		// probe is complete; the warm-up timeout bounds the wait.
+		if generation.indexReady != nil {
+			select {
+			case <-generation.indexReady:
+			case <-ctx.Done():
+			}
+		}
+		facts := &probeCache{releaseID: res.Release.ID, info: generation.infoSnapshot(), points: generation.timeMapSnapshot().Points}
 		m.dropGeneration(generation)
 		if facts.info.Estimated {
 			facts = nil
 		}
 		// Publish before prefetch so a play request need not wait for background IO.
 		m.mu.Lock()
-		e.res, e.probe = res, facts
+		e.res, e.probe, e.runtime = res, facts, title.Runtime
 		m.mu.Unlock()
 		e.ready.Do(func() { close(e.done) })
-		_ = m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, 0, 2<<20)
+		m.log.Debug("prewarm ready", "key", key, "reason", reason, "release", res.Release.Name, "prefetch", prefetchBytes)
+		_ = m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, 0, prefetchBytes)
 	}()
 	return true
 }
 
-func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile string) *warmEntry {
+// warmFacts are the release properties a Play-time profile is checked
+// against, from the cached probe when there is one, else the parsed
+// release name.
+type warmFacts struct {
+	height   int
+	codec    string
+	hdr      bool
+	dv       bool
+	size     int64
+	duration time.Duration
+	known    bool // at least one property was known
+}
+
+func (e *warmEntry) facts() warmFacts {
+	var f warmFacts
+	if e.probe != nil {
+		info := e.probe.info
+		f.size, f.duration = info.Size, info.Duration
+		if v := info.Video(); v != nil {
+			f.height, f.codec = v.Height, v.Codec
+			f.hdr = v.ColorTransfer == "smpte2084" || v.ColorTransfer == "arib-std-b67"
+			f.dv = v.DolbyVision
+		}
+		f.known = f.height > 0 || f.codec != "" || f.size > 0
+		return f
+	}
+	if e.res != nil {
+		ri := e.res.Release.Info
+		f.height, f.codec, f.hdr, f.dv = ri.Height, ri.VideoCodec, ri.HDR10, ri.DolbyVision
+		f.size, f.duration = e.res.Release.Size, e.runtime
+		f.known = f.height > 0 || f.codec != "" || f.size > 0
+	}
+	return f
+}
+
+// warmAcceptable reports whether the warm release is acceptable for the
+// Play-time profile and caps. The detail request that produced the warm
+// entry derived caps without decision query params or the client-profile
+// extra, so its profile name frequently differs from the Play-time one
+// for the same device; equality is sufficient but not required. Unknown
+// properties never reject; with no facts at all, the Play-time profile
+// must be at least as permissive as the warm one.
+func warmAcceptable(e *warmEntry, profile core.QualityProfile, caps core.ClientCaps) bool {
+	if e == nil || e.res == nil {
+		return false
+	}
+	f := e.facts()
+	if !f.known {
+		w := e.profileObj
+		heightOK := profile.MaxHeight == 0 || w.MaxHeight == 0 || profile.MaxHeight >= w.MaxHeight
+		return heightOK && profile.MinHeight <= w.MinHeight &&
+			(profile.AllowHDR || !w.AllowHDR) && (profile.AllowDolbyVision || !w.AllowDolbyVision)
+	}
+	capHeight := profile.MaxHeight
+	if caps.MaxHeight > 0 && (capHeight == 0 || caps.MaxHeight < capHeight) {
+		capHeight = caps.MaxHeight
+	}
+	if capHeight > 0 && f.height > capHeight {
+		return false
+	}
+	if profile.MinHeight > 0 && f.height > 0 && f.height < profile.MinHeight {
+		return false
+	}
+	if f.codec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(f.codec) {
+		return false
+	}
+	if f.hdr && !(profile.AllowHDR && caps.HDR10) {
+		return false
+	}
+	if f.dv && !(profile.AllowDolbyVision && caps.DolbyVision) {
+		return false
+	}
+	if f.size > 0 && f.duration > 0 {
+		mbPerMin := float64(f.size) / (1024 * 1024) / f.duration.Minutes()
+		if profile.MaxSizeMBPerMin > 0 && mbPerMin > profile.MaxSizeMBPerMin {
+			return false
+		}
+		if profile.MinSizeMBPerMin > 0 && mbPerMin < profile.MinSizeMBPerMin {
+			return false
+		}
+	}
+	return true
+}
+
+// takeWarmResolution consumes the warm entry for id when its release is
+// acceptable for the Play-time profile and caps (and, for a variant,
+// is the picked release); an unacceptable entry is discarded.
+func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile core.QualityProfile, caps core.ClientCaps, prefer string) *warmEntry {
 	m.mu.Lock()
 	e := m.warm[id]
-	if e == nil || e.profile != profile || !m.now().Before(e.expires) {
+	if e == nil {
+		m.mu.Unlock()
+		return nil
+	}
+	if !m.now().Before(e.expires) {
+		delete(m.warm, id)
 		m.mu.Unlock()
 		return nil
 	}
@@ -176,6 +322,13 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile s
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.warm[id] != e {
+		return nil
+	}
+	if prefer != "" && (e.res == nil || e.res.Release.ID != prefer) {
+		return nil // keep it: a plain Prepare may still use it
+	}
+	if !warmAcceptable(e, profile, caps) {
+		delete(m.warm, id)
 		return nil
 	}
 	delete(m.warm, id)

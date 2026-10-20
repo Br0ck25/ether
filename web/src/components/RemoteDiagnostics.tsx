@@ -1,5 +1,93 @@
-import { Button, Badge, Spinner, toast } from "@braedonsaunders/appkit-ui";
-import { useEffect, useState } from "react";
+import { Badge, Button, SettingsSection, toast } from "@braedonsaunders/appkit-ui";
+import { RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { apiFetch, errorMessage } from "../lib/api";
-type Data={steps:{name:string;state:string;detail:string;action:string}[];compatibilityVersion:string;latestPublicVersion:string};
-export function RemoteDiagnostics(){const[d,setData]=useState<Data|null>(null);const[busy,setBusy]=useState(false);const load=()=>apiFetch<Data>("/safety/diagnostics/").then(setData);useEffect(()=>{void load().catch(e=>toast.error(errorMessage(e)))},[]);return <section className="space-y-4 rounded-xl border border-border bg-surface p-5"><h2 className="text-lg font-semibold">Remote access & security</h2><p className="text-sm text-fg-muted">These checks explain server discovery, account access, forwarding, and secure connections. External reachability uses Plex’s own connectivity result.</p><Button variant="outline" disabled={busy} onClick={()=>{setBusy(true);void apiFetch("/safety/diagnostics/refresh",{method:"POST",body:"{}"}).then(()=>load()).then(()=>toast.success("Remote checks scheduled")).catch(e=>toast.error(errorMessage(e))).finally(()=>setBusy(false))}}>Refresh checks</Button>{!d?<Spinner label="Loading diagnostics"/>:d.steps.map(step=><div key={step.name} className="space-y-1 border-t border-border pt-3"><div className="flex items-center justify-between"><h3 className="font-medium">{step.name}</h3><Badge variant={step.state==="ok"?"success":step.state==="unknown"?"secondary":"warning"}>{step.state==="ok"?"Ready":step.state==="unknown"?"Not verified":"Check settings"}</Badge></div><p className="text-sm text-fg-muted">{step.detail}</p>{step.state!=="ok"&&<p className="text-sm">{step.action}</p>}</div>)}</section>}
+import { LoadingRows } from "./feedback";
+import { SettingsRow } from "./SettingsRow";
+
+type Data = {
+  steps: { name: string; state: string; detail: string; action: string }[];
+  compatibilityVersion: string;
+  latestPublicVersion: string;
+};
+
+function StepBadge({ state }: { state: string }) {
+  if (state === "ok") return <Badge variant="success">Ready</Badge>;
+  if (state === "unknown") return <Badge variant="secondary">Not verified</Badge>;
+  return <Badge variant="warning">Check settings</Badge>;
+}
+
+/**
+ * Step-by-step checks for how Plex apps find and reach this server: discovery,
+ * account access, port forwarding and secure connections.
+ */
+export function RemoteDiagnostics() {
+  const [data, setData] = useState<Data | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(
+    () =>
+      apiFetch<Data>("/safety/diagnostics/").then(
+        (d) => {
+          setData(d);
+          setError(null);
+        },
+        (e) => setError(e),
+      ),
+    [],
+  );
+  useEffect(() => {
+    void load();
+  }, [load]);
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      await apiFetch("/safety/diagnostics/refresh", { method: "POST", body: "{}" });
+      await load();
+      toast.success("Remote checks scheduled");
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <SettingsSection
+      title="Connection checks"
+      description="How Plex apps find and reach this server. Outside reachability uses Plex's own connectivity result."
+      footer={
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => void refresh()}>
+          <RefreshCw size={14} /> {busy ? "Checking…" : "Run checks again"}
+        </Button>
+      }
+    >
+      {error && !data ? (
+        <p className="px-5 py-4 text-sm text-fg-muted">
+          Connection checks aren't available right now: {errorMessage(error)}
+        </p>
+      ) : !data ? (
+        <div className="px-5 py-4">
+          <LoadingRows rows={3} />
+        </div>
+      ) : data.steps.length === 0 ? (
+        <p className="px-5 py-4 text-sm text-fg-muted">No checks have run yet.</p>
+      ) : (
+        data.steps.map((step) => (
+          <SettingsRow
+            key={step.name}
+            title={step.name}
+            description={
+              <>
+                {step.detail}
+                {step.state !== "ok" && step.action ? (
+                  <span className="mt-1 block text-fg">{step.action}</span>
+                ) : null}
+              </>
+            }
+            control={<StepBadge state={step.state} />}
+          />
+        ))
+      )}
+    </SettingsSection>
+  );
+}

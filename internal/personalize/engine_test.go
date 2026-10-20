@@ -248,18 +248,18 @@ func TestOverridesAndLayoutPersist(t *testing.T) {
 		}
 	}
 
-	rules, err := h.e.SetLayout(ctx, []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindTrending, Action: "hide"}}}})
-	if err != nil || len(rules) != 1 || rules[0].ID == "" {
-		t.Fatalf("set layout = %+v %v", rules, err)
+	saved, err := h.e.SetHomeLayout(ctx, core.HomeLayout{Global: []core.LayoutPage{{Section: "home", Rows: []core.RowPolicy{{Row: KindTrending, Status: "off"}}}}})
+	if err != nil || len(saved.Global) != 1 || saved.UpdatedAt.IsZero() {
+		t.Fatalf("set layout = %+v %v", saved, err)
 	}
-	// A fresh engine over the same database loads them.
+	// A fresh engine over the same database loads it.
 	e2, err := New(Options{DB: h.db, Catalog: h.cat, Logger: quietLogger(), Now: h.clock.Now, Location: time.UTC, RefreshEvery: -1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer e2.Close()
-	got, _ := e2.Layout(ctx)
-	if len(got) != 1 || got[0].ID != rules[0].ID || got[0].Rows[0].Action != "hide" {
+	got, _ := e2.HomeLayout(ctx)
+	if len(got.Global) != 1 || got.Global[0].Rows[0].Row != KindTrending || got.Global[0].Rows[0].Status != "off" {
 		t.Fatalf("persisted layout = %+v", got)
 	}
 	os, _ := e2.store.overrides(ctx, 1)

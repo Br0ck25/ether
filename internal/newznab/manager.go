@@ -135,8 +135,8 @@ func (m *Manager) Remaining(ctx context.Context) ([]Remaining, error) {
 	return out, nil
 }
 
-// Search implements core.Indexer: it queries enabled, non-exhausted
-// indexers in parallel (up to MaxParallel), merges by priority order
+// Search implements core.Indexer: it queries enabled indexers in parallel
+// (up to MaxParallel), letting each client check its cache before budgets, merges by priority order
 // and de-duplicates by normalised name + size.
 func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
 	clients := m.Clients()
@@ -152,11 +152,6 @@ func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	for i, cl := range clients {
 		if !cl.Config().Enabled {
 			slots[i].skipped = true
-			continue
-		}
-		if cl.Exhausted(ctx) {
-			slots[i].skipped = true
-			slots[i].err = fmt.Errorf("indexer %q: %w", cl.Name(), core.ErrBudgetExhausted)
 			continue
 		}
 		wg.Add(1)

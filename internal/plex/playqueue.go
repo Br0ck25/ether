@@ -39,6 +39,7 @@ type playQueue struct {
 	playlistTitle string
 	version       int
 	updatedAt     time.Time
+	liveSession   string // live queues resolve through LiveTV, never the catalogue
 }
 
 type playQueueStore struct {
@@ -206,6 +207,30 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
+	// Cinema Trailers: prepend trailers of other movies before the
+	// feature and warm the feature while they play.
+	prefixAt := -1
+	if n, err := strconv.Atoi(q.Get("extrasPrefixCount")); err == nil && n > 0 && q.Get("shuffle") != "1" {
+		featureIdx := 0
+		if start := keyFromPath(q.Get("key")); start != 0 {
+			for i, k := range keys {
+				if k == start {
+					featureIdx = i
+					break
+				}
+			}
+		}
+		if keys[featureIdx].Kind() == core.KindMovie {
+			if prefix := s.cinemaTrailerKeys(ctx, pr, keys[featureIdx], n); len(prefix) > 0 {
+				feature := keys[featureIdx]
+				merged := append([]core.RatingKey(nil), keys[:featureIdx]...)
+				merged = append(append(merged, prefix...), keys[featureIdx:]...)
+				keys = merged
+				prefixAt = featureIdx
+				s.prewarmFeature(ctx, pr, feature, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+			}
+		}
+	}
 	pq := s.queues.create(pr.User.ID, pr.ClientID, keys, s.now())
 	snap, _ := s.queues.with(pq.id, pr.User.ID, s.now(), func(p *playQueue) {
 		p.sourceURI = uri
@@ -217,6 +242,9 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
+		}
+		if prefixAt >= 0 {
+			p.selected = prefixAt // playback starts with the first trailer
 		}
 		if q.Get("shuffle") == "1" {
 			shuffleQueue(p)
@@ -338,6 +366,10 @@ func (s *Server) handlePlayQueueMutate(op string) http.HandlerFunc {
 		ctx := r.Context()
 		pr := FromContext(ctx)
 		q := r.URL.Query()
+		if existing, found := s.queues.get(id, u.ID); found && existing.liveSession != "" {
+			writeHTTPError(w, http.StatusBadRequest)
+			return
+		}
 		var addKeys []core.RatingKey
 		if op == "add" {
 			var err error
@@ -426,6 +458,10 @@ func indexOfItem(items []pqItem, id int64) int {
 
 // writePlayQueue renders a queue window around the selected item.
 func (s *Server) writePlayQueue(w http.ResponseWriter, r *http.Request, pq playQueue) {
+	if pq.liveSession != "" {
+		s.writeLivePlayQueue(w, r, pq)
+		return
+	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	q := r.URL.Query()
@@ -477,6 +513,13 @@ func (s *Server) writePlayQueue(w http.ResponseWriter, r *http.Request, pq playQ
 		mc.Extra = append(mc.Extra, model.A("playQueuePlaylistID", pq.playlistID.String()), model.A("playQueuePlaylistTitle", pq.playlistTitle))
 	}
 	for _, it := range slice {
+		if it.key.Kind() == core.KindExtra {
+			if md, ok := s.extraMetadataByKey(ctx, pr, it.key); ok {
+				md.PlayQueueItemID = it.id
+				mc.Metadata = append(mc.Metadata, md)
+			}
+			continue
+		}
 		t, ok := byKey[it.key]
 		if !ok {
 			continue

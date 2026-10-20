@@ -1,16 +1,63 @@
-import { Drawer } from "./components/Drawer";
 import {
-  AppShell, Button, ConfirmRoot, Popover, PromptRoot, Spinner, ThemeProvider, ThemeToggle, Toaster, UiLinkProvider,
-  type LinkRender, type SidebarNavGroup,
+  AppShell,
+  Button,
+  ConfirmRoot,
+  Popover,
+  PromptRoot,
+  Spinner,
+  ThemeProvider,
+  ThemeToggle,
+  Toaster,
+  UiLinkProvider,
+  type LinkRender,
+  type SidebarNavGroup,
 } from "@braedonsaunders/appkit-ui";
 import {
-  Activity, Gauge, LayoutTemplate, Layers, LogOut, ScrollText, Settings as SettingsIcon, Sparkles, Users,
+  Activity as ActivityIcon,
+  ArchiveRestore,
+  ArrowDownToLine,
+  Globe,
+  LifeBuoy,
+  Plug,
+  Server,
+  Bell,
+  Gauge,
+  LayoutTemplate,
+  Layers,
+  ListFilter,
+  LogOut,
+  MonitorPlay,
+  Network,
+  ScrollText,
+  Sparkles,
+  Tags,
+  Tv,
+  Users,
 } from "lucide-react";
-import { forwardRef, lazy, Suspense, useCallback, useEffect, useState, type AnchorHTMLAttributes } from "react";
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  forwardRef,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useState,
+  type AnchorHTMLAttributes,
+} from "react";
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import { AppProvider, useApp } from "./app-context";
 import { Brand, BrandSplash, EtherMark } from "./components/brand";
+import { CommandSearch } from "./components/CommandSearch";
+import { Drawer } from "./components/Drawer";
 import { ErrorPanel } from "./components/feedback";
+import { SaveBarHost } from "./components/SaveBar";
 import { LEVEL_LABEL, LevelBadge, StatusDot } from "./components/status";
 import { api, getToken, setToken } from "./lib/api";
 import type { Bootstrap } from "./lib/types";
@@ -23,79 +70,148 @@ const CollectionEditor = lazy(() => import("./pages/collections/Editor"));
 const Designer = lazy(() => import("./pages/designer/Designer"));
 const ViewersList = lazy(() => import("./pages/viewers/ViewersList"));
 const ViewerProfile = lazy(() => import("./pages/viewers/ViewerProfile"));
-const Settings = lazy(() => import("./pages/settings/Settings"));
+const settingsPage = <K extends keyof typeof import("./pages/settings/pages")>(name: K) =>
+  lazy(() => import("./pages/settings/pages").then((m) => ({ default: m[name] })));
+const GeneralPage = settingsPage("GeneralPage");
+const RemoteAccessPage = settingsPage("RemoteAccessPage");
+const ServicesPage = settingsPage("ServicesPage");
+const BackupsPage = settingsPage("BackupsPage");
+const UpdatesPage = settingsPage("UpdatesPage");
+const TroubleshootingPage = settingsPage("TroubleshootingPage");
 const Setup = lazy(() => import("./pages/Setup"));
 const Logs = lazy(() => import("./pages/Logs"));
-const Adoption = lazy(() => import("./pages/Adoption"));
-const StreamPreferences = lazy(() => import("./pages/StreamPreferences"));
-const PlaybackPolicy = lazy(() => import("./pages/PlaybackPolicy"));
-const Insights = lazy(() => import("./pages/Insights"));
+const Activity = lazy(() => import("./pages/activity/Activity"));
+const Notifications = lazy(() => import("./pages/notifications/Notifications"));
 const LiveTV = lazy(() => import("./pages/livetv/LiveTV"));
-const Discovery = lazy(() => import("./pages/Discovery"));
-const Metadata = lazy(() => import("./pages/Metadata"));
-const Safety = lazy(() => import("./pages/Safety"));
-const Traces = lazy(() => import("./pages/Traces"));
+const Metadata = lazy(() => import("./pages/metadata/Metadata"));
+const Sources = lazy(() => import("./pages/sources/Sources"));
+const Releases = lazy(() => import("./pages/releases/Releases"));
+const Playback = lazy(() => import("./pages/playback/Playback"));
 
 /** react-router links for every AppKit navigation primitive. */
-const RouterAnchor = forwardRef<HTMLAnchorElement, AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }>(
-  function RouterAnchor({ href, ...rest }, ref) {
-    if (/^(https?:)?\/\//.test(href)) return <a ref={ref} href={href} {...rest} />;
-    return <Link ref={ref} to={href} {...rest} />;
-  },
-);
+const RouterAnchor = forwardRef<
+  HTMLAnchorElement,
+  AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }
+>(function RouterAnchor({ href, ...rest }, ref) {
+  if (/^(https?:)?\/\//.test(href)) return <a ref={ref} href={href} {...rest} />;
+  return <Link ref={ref} to={href} {...rest} />;
+});
 
 const linkRender: LinkRender = ({ href, children, className, title, ariaCurrent, role }) => (
-  <Link to={href} className={className} title={title} aria-current={ariaCurrent} role={role}>{children}</Link>
+  <Link to={href} className={className} title={title} aria-current={ariaCurrent} role={role}>
+    {children}
+  </Link>
 );
 
+/**
+ * Grouped by the owner's questions: what's happening and who watches; what
+ * viewers see in Plex; how titles reach the screen; how the server runs.
+ */
 function navigation(setupComplete: boolean): SidebarNavGroup[] {
-  const items: SidebarNavGroup["items"] = [
-    { href: "/", label: "Home", icon: <Gauge size={18} />, exact: true, mobile: true },
-    { href: "/collections", label: "Collections", icon: <Layers size={18} />, mobile: true },
-    { href: "/designer", label: "Home Designer", icon: <LayoutTemplate size={18} />, mobile: true },
-    { href: "/viewers", label: "Viewers", icon: <Users size={18} />, mobile: true },
-    { href: "/discovery", label: "Discovery & artwork", icon: <Sparkles size={18} /> },
-    { href: "/livetv", label: "Live TV & IPTV", icon: <Activity size={18} /> },
-    { href: "/insights", label: "Activity & notifications", icon: <Gauge size={18} /> },
-    { href: "/adoption", label: "Libraries & backups", icon: <Layers size={18} /> },
-    { href: "/playback", label: "Playback & releases", icon: <Activity size={18} /> },
-    { href: "/metadata", label: "Episode ordering", icon: <Layers size={18} /> },
-    { href: "/streams", label: "Audio & subtitles", icon: <Activity size={18} /> },
-    { href: "/safety", label: "Safety & sharing", icon: <Users size={18} /> },
-    { href: "/settings", label: "Settings", icon: <SettingsIcon size={18} /> },
-    { href: "/logs", label: "Logs", icon: <ScrollText size={18} /> },
-    { href: "/traces", label: "Resolver traces", icon: <Activity size={18} /> },
+  const icon = 18;
+  return [
+    {
+      label: "",
+      items: [
+        ...(setupComplete
+          ? []
+          : [
+              {
+                href: "/setup",
+                label: "Finish setup",
+                icon: <Sparkles size={icon} />,
+                mobile: true,
+              },
+            ]),
+        { href: "/", label: "Overview", icon: <Gauge size={icon} />, exact: true, mobile: true },
+        { href: "/activity", label: "Activity", icon: <ActivityIcon size={icon} />, mobile: true },
+        { href: "/viewers", label: "Viewers", icon: <Users size={icon} />, mobile: true },
+      ],
+    },
+    {
+      label: "In Plex",
+      items: [
+        { href: "/home-screens", label: "Home screens", icon: <LayoutTemplate size={icon} /> },
+        { href: "/collections", label: "Collections", icon: <Layers size={icon} />, mobile: true },
+        { href: "/livetv", label: "Live TV", icon: <Tv size={icon} /> },
+        { href: "/metadata", label: "Metadata", icon: <Tags size={icon} /> },
+      ],
+    },
+    {
+      label: "Streaming",
+      items: [
+        { href: "/sources", label: "Sources", icon: <Network size={icon} /> },
+        { href: "/releases", label: "Releases", icon: <ListFilter size={icon} /> },
+        { href: "/playback", label: "Playback", icon: <MonitorPlay size={icon} /> },
+      ],
+    },
+    {
+      label: "Server",
+      items: [
+        { href: "/server", label: "General", icon: <Server size={icon} /> },
+        { href: "/remote-access", label: "Plex & remote access", icon: <Globe size={icon} /> },
+        { href: "/services", label: "Connected services", icon: <Plug size={icon} /> },
+        { href: "/notifications", label: "Notifications", icon: <Bell size={icon} /> },
+      ],
+    },
+    {
+      label: "Maintenance",
+      items: [
+        { href: "/backups", label: "Backups & import", icon: <ArchiveRestore size={icon} /> },
+        { href: "/updates", label: "Updates", icon: <ArrowDownToLine size={icon} /> },
+        { href: "/troubleshooting", label: "Troubleshooting", icon: <LifeBuoy size={icon} /> },
+        { href: "/logs", label: "Logs", icon: <ScrollText size={icon} /> },
+      ],
+    },
   ];
-  if (!setupComplete) items.unshift({ href: "/setup", label: "Finish setup", icon: <Sparkles size={18} />, mobile: true });
-  return [{label:"Library",items:items.filter(item=>["/setup","/","/collections","/designer","/viewers","/discovery","/livetv","/metadata"].includes(item.href))},{label:"Playback & access",items:items.filter(item=>["/playback","/streams","/safety"].includes(item.href))},{label:"Server",items:items.filter(item=>["/insights","/adoption","/settings","/logs","/traces"].includes(item.href))}];
 }
 
 function HealthIndicator() {
   const { health, overall, dashboard, dashboardError } = useApp();
   const [open, setOpen] = useState(false);
-  const label = overall === "ok" || overall === "off" ? "All systems normal" : overall === "unknown" ? "Checking…" : LEVEL_LABEL[overall];
+  const label =
+    overall === "ok" || overall === "off"
+      ? "All systems normal"
+      : overall === "unknown"
+        ? "Checking…"
+        : LEVEL_LABEL[overall];
   return (
     <Popover
       open={open}
       onOpenChange={setOpen}
       trigger={
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-label={`Server health: ${label}`}
-          className="inline-flex h-9 items-center gap-2 rounded-md px-2.5 text-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-label={`Server health: ${label}`}
+          className="inline-flex h-9 items-center gap-2 rounded-md px-2.5 text-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
           <StatusDot level={overall === "off" ? "ok" : overall} pulse />
           <span className="hidden md:inline">{label}</span>
         </button>
       }
     >
       <div className="w-80 p-1">
-        <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">Server health</p>
-        {dashboardError && !dashboard ? <p className="px-2 pb-2 text-sm text-danger">Status is unavailable right now.</p> : null}
+        <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+          Server health
+        </p>
+        {dashboardError && !dashboard ? (
+          <p className="px-2 pb-2 text-sm text-danger">Status is unavailable right now.</p>
+        ) : null}
         <ul className="space-y-0.5">
           {health.map((h) => (
             <li key={h.id}>
-              <Link to={`/settings/${h.settings}`} onClick={() => setOpen(false)} className="flex items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surface-hover">
+              <Link
+                to={h.href}
+                onClick={() => setOpen(false)}
+                className="flex items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surface-hover"
+              >
                 <StatusDot level={h.level} className="mt-1.5" />
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-center justify-between gap-2 text-sm font-medium text-fg">{h.label}<LevelBadge level={h.level} /></span>
+                  <span className="flex items-center justify-between gap-2 text-sm font-medium text-fg">
+                    {h.label}
+                    <LevelBadge level={h.level} />
+                  </span>
                   <span className="block truncate text-xs text-fg-muted">{h.summary}</span>
                 </span>
               </Link>
@@ -112,19 +228,34 @@ function versionLabel(v: string): string {
   return /^\d/.test(v) ? `v${v}` : v;
 }
 
-/** A fresh editor per new-collection draft (each navigation carries its own draft id). */
-function CollectionDrawer({fresh=false}:{fresh?:boolean}) {
-  const navigate=useNavigate();
-  return <><div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col"><CollectionsGallery/></div><Drawer open onClose={()=>navigate("/collections")} title="Collection Studio" size="2xl" initialFullscreen bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0">{fresh?<NewCollection/>:<CollectionEditor/>}</Drawer></>;
-}
-
-function NewCollection() {
+/** Collection Studio opens over the gallery: a collection is a record, so it gets a drawer. */
+function CollectionDrawer({ fresh = false }: { fresh?: boolean }) {
+  const navigate = useNavigate();
   const [search] = useSearchParams();
-  return <CollectionEditor key={search.get("draft") ?? "new"} />;
+  return (
+    <>
+      <div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col">
+        <CollectionsGallery />
+      </div>
+      <Drawer
+        open
+        onClose={() => navigate("/collections")}
+        title={fresh ? "New collection" : "Edit collection"}
+        size="2xl"
+        bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0"
+      >
+        {fresh ? <CollectionEditor key={search.get("draft") ?? "new"} /> : <CollectionEditor />}
+      </Drawer>
+    </>
+  );
 }
 
 function PageFallback() {
-  return <div className="grid flex-1 place-items-center p-10"><Spinner size={22} label="Loading" /></div>;
+  return (
+    <div className="grid flex-1 place-items-center p-10">
+      <Spinner size={22} label="Loading" />
+    </div>
+  );
 }
 
 function Shell() {
@@ -137,48 +268,82 @@ function Shell() {
       pathname={location.pathname}
       navigationMode="sidebar"
       linkRender={linkRender}
-      brand={<Link to="/" aria-label="Ether home" className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"><Brand serverName={boot.serverName} /></Link>}
-      headerMiddle={<span className="hidden truncate text-sm text-fg-muted lg:block">{boot.serverName}<span className="text-fg-subtle"> · {versionLabel(boot.version)}</span></span>}
+      brand={
+        <Link
+          to="/"
+          aria-label="Ether home"
+          className="block rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        >
+          <Brand serverName={boot.serverName} />
+        </Link>
+      }
+      headerMiddle={<CommandSearch />}
       header={
         <>
           <HealthIndicator />
           <ThemeToggle collapsed />
           {remoteSession ? (
-            <Button variant="ghost" size="sm" onClick={() => { setToken(""); window.location.reload(); }}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setToken("");
+                window.location.reload();
+              }}
+            >
               <LogOut size={15} /> <span className="hidden sm:inline">Sign out</span>
             </Button>
           ) : null}
         </>
       }
-      sidebarFooter={<p className="px-1 text-xs text-fg-subtle">Ether {versionLabel(boot.version)}</p>}
-      sidebarCollapsedFooter={<div className="flex justify-center"><EtherMark size={20} /></div>}
+      sidebarFooter={
+        <p className="truncate px-1 text-xs text-fg-subtle" title={boot.serverName}>
+          {boot.serverName ? `${boot.serverName} · ` : "Ether "}
+          {versionLabel(boot.version)}
+        </p>
+      }
+      sidebarCollapsedFooter={
+        <div className="flex justify-center">
+          <EtherMark size={20} />
+        </div>
+      }
       mobileTabCount={4}
     >
-      <Suspense fallback={<PageFallback />}>
-        <Routes>
-          <Route path="/" element={boot.setupComplete ? <Home /> : <Navigate to="/setup" replace />} />
-          <Route path="/setup" element={<Setup />} />
-          <Route path="/collections" element={<CollectionsGallery />} />
-          <Route path="/collections/new" element={<CollectionDrawer fresh />} />
-          <Route path="/collections/:id" element={<CollectionDrawer />} />
-          <Route path="/designer" element={<Designer />} />
-          <Route path="/viewers" element={<ViewersList />} />
-          <Route path="/viewers/:id" element={<ViewerProfile />} />
-          <Route path="/settings" element={<Navigate to="/settings/server" replace />} />
-          <Route path="/settings/:section" element={<Settings />} />
-          <Route path="/insights" element={<Insights />} />
-          <Route path="/livetv" element={<LiveTV />} />
-          <Route path="/discovery" element={<Discovery />} />
-          <Route path="/adoption" element={<Adoption />} />
-          <Route path="/playback" element={<PlaybackPolicy />} />
-          <Route path="/metadata" element={<Metadata />} />
-          <Route path="/streams" element={<StreamPreferences />} />
-          <Route path="/safety" element={<Safety />} />
-          <Route path="/logs" element={<Logs />} />
-          <Route path="/traces" element={<Traces />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
+      <SaveBarHost>
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route
+              path="/"
+              element={boot.setupComplete ? <Home /> : <Navigate to="/setup" replace />}
+            />
+            <Route path="/setup" element={<Setup />} />
+            <Route path="/activity/:tab?" element={<Activity />} />
+            <Route path="/viewers" element={<ViewersList />} />
+            <Route path="/viewers/people" element={<ViewersList tab="people" />} />
+            <Route path="/viewers/invitations" element={<ViewersList tab="invitations" />} />
+            <Route path="/viewers/defaults" element={<ViewersList tab="defaults" />} />
+            <Route path="/viewers/:id/:tab?" element={<ViewerProfile />} />
+            <Route path="/home-screens" element={<Designer />} />
+            <Route path="/collections" element={<CollectionsGallery />} />
+            <Route path="/collections/new" element={<CollectionDrawer fresh />} />
+            <Route path="/collections/:id" element={<CollectionDrawer />} />
+            <Route path="/livetv/:tab?" element={<LiveTV />} />
+            <Route path="/metadata/:tab?" element={<Metadata />} />
+            <Route path="/sources/:tab?" element={<Sources />} />
+            <Route path="/releases/:tab?" element={<Releases />} />
+            <Route path="/playback/:tab?" element={<Playback />} />
+            <Route path="/notifications/:tab?" element={<Notifications />} />
+            <Route path="/server" element={<GeneralPage />} />
+            <Route path="/remote-access" element={<RemoteAccessPage />} />
+            <Route path="/services" element={<ServicesPage />} />
+            <Route path="/backups" element={<BackupsPage />} />
+            <Route path="/updates" element={<UpdatesPage />} />
+            <Route path="/troubleshooting" element={<TroubleshootingPage />} />
+            <Route path="/logs" element={<Logs />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+      </SaveBarHost>
     </AppShell>
   );
 }
@@ -189,23 +354,46 @@ function Gate({ onReady }: { onReady: () => void }) {
   const [unlocked, setUnlocked] = useState(false);
 
   const loadBoot = useCallback(async () => {
-    try { setBoot(await api.bootstrap()); setError(null); }
-    catch (e) { setError(e); }
+    try {
+      setBoot(await api.bootstrap());
+      setError(null);
+    } catch (e) {
+      setError(e);
+    }
   }, []);
-  useEffect(() => { void loadBoot(); }, [loadBoot]);
-  useEffect(() => { if (boot || error) onReady(); }, [boot, error, onReady]);
+  useEffect(() => {
+    void loadBoot();
+  }, [loadBoot]);
+  useEffect(() => {
+    if (boot || error) onReady();
+  }, [boot, error, onReady]);
 
   if (!boot) {
     return (
       <main className="grid min-h-screen place-items-center bg-bg-subtle p-4">
-        {error ? <div className="w-full max-w-md"><ErrorPanel error={error} onRetry={() => void loadBoot()} /></div> : (
-          <div className="flex flex-col items-center gap-3 text-sm text-fg-muted"><EtherMark size={40} motion="loop" /><span role="status">Connecting to Ether…</span></div>
+        {error ? (
+          <div className="w-full max-w-md">
+            <ErrorPanel error={error} onRetry={() => void loadBoot()} />
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-3 text-sm text-fg-muted">
+            <EtherMark size={40} motion="loop" />
+            <span role="status">Connecting to Ether…</span>
+          </div>
         )}
       </main>
     );
   }
   if (boot.authRequired && !boot.authenticated && !unlocked) {
-    return <Login boot={boot} onReady={() => { setUnlocked(true); void loadBoot(); }} />;
+    return (
+      <Login
+        boot={boot}
+        onReady={() => {
+          setUnlocked(true);
+          void loadBoot();
+        }}
+      />
+    );
   }
   return (
     <AppProvider boot={boot} reloadBoot={loadBoot}>

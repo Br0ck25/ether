@@ -103,9 +103,15 @@ type Options struct {
 	Warm func(context.Context, core.RatingKey) error
 }
 type SessionInfo struct {
-	ID        string     `json:"id"`
-	UserID    int64      `json:"userId"`
-	Channel   Channel    `json:"channel"`
-	Programme *Programme `json:"programme,omitempty"`
-	StartedAt time.Time  `json:"startedAt"`
+	// Plex's rolling subscription identity is numeric; the stream UUID remains
+	// separate. These are ephemeral identities, scoped to this service lifetime.
+	SubscriptionID  int64           `json:"-"`
+	ActivityID      string          `json:"-"`
+	ClientSessionID string          `json:"-"`
+	MediaInfo       *core.MediaInfo `json:"-"` // Actual source analysis for native clients.
+	ID              string          `json:"id"`
+	UserID          int64           `json:"userId"`
+	Channel         Channel         `json:"channel"`
+	Programme       *Programme      `json:"programme,omitempty"`
+	StartedAt       time.Time       `json:"startedAt"`
 }

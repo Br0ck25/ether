@@ -27,6 +27,11 @@ func newFetcher(t *testing.T, providers []config.UsenetProvider, o Options) *Fet
 	if o.Logger == nil {
 		o.Logger = quiet
 	}
+	// Tests assert exact lazy dial/idle counts, so the warm floor is opt-in
+	// here: a test that wants it sets MinIdle explicitly.
+	if o.MinIdle == 0 {
+		o.MinIdle = -1
+	}
 	if o.DialTimeout == 0 {
 		o.DialTimeout = 2 * time.Second
 	}
@@ -516,7 +521,7 @@ func TestTransientErrorsRetried(t *testing.T) {
 		}
 		return nntptest.Fault{}
 	})
-	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 2)}, Options{Retries: 2})
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 2)}, Options{Retries: 2, FailThreshold: 3})
 	got, err := f.Body(context.Background(), "a@x", nil, core.PriorityLive)
 	if err != nil || string(got) != "alpha" {
 		t.Fatalf("err = %v", err)

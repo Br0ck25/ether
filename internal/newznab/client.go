@@ -55,6 +55,7 @@ type Client struct {
 
 	budgetMu sync.Mutex
 	mem      memBudget
+	rate     rateLimitState
 
 	cacheMu  sync.RWMutex
 	memCache map[string]memCacheEntry
@@ -175,6 +176,11 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// Record throttling before reading the body: even a broken error response
+	// must not cause every new play request to hammer a throttled indexer.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, c.recordRateLimit(ctx, resp.Header.Get("Retry-After"), apiError(429, "too many requests"))
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, err
@@ -182,8 +188,18 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("newznab: response exceeds %d bytes", limit)
 	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, apiError(429, "too many requests")
+	// Newznab quota errors can arrive with HTTP 200, including NZB grabs.
+	// Detect these here so caps, searches and downloads share the same backoff.
+	if bytes.Contains(bytes.ToLower(body[:min(len(body), 4096)]), []byte("error")) {
+		if _, perr := parseFeed(body, c.Name()); perr != nil {
+			var ae *APIError
+			if errors.As(perr, &ae) {
+				if ae.Budget {
+					return nil, c.recordRateLimit(ctx, resp.Header.Get("Retry-After"), perr)
+				}
+				return nil, perr
+			}
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Indexers often still return a Newznab error document.
@@ -366,6 +382,11 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	key := cacheKey(c, req)
 	if cached, ok := c.cacheGet(ctx, key); ok {
 		return cached, nil
+	}
+	// Exhausted limits prohibit new requests, not reuse of already fetched
+	// results and NZBs. The manager must reach this cache before this check.
+	if c.Exhausted(ctx) {
+		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
 	}
 	caps, _ := c.Caps(ctx) // best effort; failures just mean no param gating
 	attempts := c.searchAttempts(req, caps)

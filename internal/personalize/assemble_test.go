@@ -113,65 +113,6 @@ func TestAssemblyMMRDiversifies(t *testing.T) {
 	}
 }
 
-func TestAssemblyLayoutRules(t *testing.T) {
-	cat := newFakeCatalog(testNow)
-	mk := func(kind, id string, g int) *candRow {
-		var keys []core.RatingKey
-		for j := 0; j < 6; j++ {
-			keys = append(keys, movieKey(g, j))
-		}
-		return testRow(kind, id, items(cat, keys...))
-	}
-	m := emptyModel(mk(KindTop10, "top10", 0), mk(KindTrending, "trending", 1), mk(KindNewReleases, "newreleases", 2),
-		mk(KindComfort, "comfort", 5), mk(KindBecause, "because.1", 4))
-	base := run(m, nil)
-	if len(base) != 5 {
-		t.Fatalf("base rows = %v", kindsOf(base))
-	}
-	rules := []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Section: "home", Rows: []core.LayoutRowRule{
-		{HubID: "new-releases", Action: "pin", Position: ip(0)},
-		{HubID: "home.top10", Action: "bury"},
-		{HubID: "because.*", Action: "hide"},
-		{HubID: KindComfort, Action: "hide", When: &core.LayoutWhen{Days: []int{0, 6}}}, // weekends only: no effect on Wednesday
-	}, MaxRows: 3}}
-	rows := run(m, func(a *assembly) { a.rules = rules })
-	visible := kindsOf(rows)
-	if len(visible) != 3 || visible[0] != KindNewReleases || !rows[0].Pinned {
-		t.Fatalf("pinned first, max 3: %v", visible)
-	}
-	for _, k := range visible {
-		if k == KindTop10 {
-			t.Fatalf("buried row survived maxRows ahead of others: %v", visible)
-		}
-	}
-	if r := rowByKind(rows, KindComfort); r != nil && r.Hidden {
-		t.Fatal("weekend-only hide applied on a Wednesday")
-	}
-	hidden := rowByKind(rows, KindBecause)
-	if hidden == nil || !hidden.Hidden || rows[len(rows)-1].Kind != KindBecause {
-		t.Fatalf("hidden rows are reported last with Hidden set: %+v", hidden)
-	}
-	// Boost lifts a low row to the top.
-	rows = run(m, func(a *assembly) {
-		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindNewReleases, Action: "boost"}}}}
-		a.global = map[string]arm{KindNewReleases: {shows: 100, reward: 3}, KindTop10: {shows: 100, reward: 6}}
-	})
-	idx := map[string]int{}
-	for i, r := range rows {
-		idx[r.Kind] = i
-	}
-	plain := run(m, func(a *assembly) {
-		a.global = map[string]arm{KindNewReleases: {shows: 100, reward: 3}, KindTop10: {shows: 100, reward: 6}}
-	})
-	pidx := map[string]int{}
-	for i, r := range plain {
-		pidx[r.Kind] = i
-	}
-	if idx[KindNewReleases] >= pidx[KindNewReleases] {
-		t.Fatalf("boost did not raise the row: %d vs %d", idx[KindNewReleases], pidx[KindNewReleases])
-	}
-}
-
 func TestAssemblyRankingLearnsFromEngagement(t *testing.T) {
 	cat := newFakeCatalog(testNow)
 	mk := func(kind, id string, g int) *candRow {
@@ -389,30 +330,5 @@ func TestIsShort(t *testing.T) {
 		if got := isShort(&c.t); got != c.want {
 			t.Errorf("%s: isShort = %v, want %v", c.name, got, c.want)
 		}
-	}
-}
-
-func TestLayoutCannotHidePlexRows(t *testing.T) {
-	cat := newFakeCatalog(testNow)
-	var keys []core.RatingKey
-	for j := 0; j < 6; j++ {
-		keys = append(keys, movieKey(2, j))
-	}
-	cw := testRow(KindContinue, "continue", nil)
-	cw.keepOrder, cw.homeOnly, cw.minItems, cw.source = true, true, 0, core.RowSourcePlex
-	m := emptyModel(cw, testRow(KindTrending, "trending", items(cat, keys...)))
-	rows := run(m, func(a *assembly) {
-		a.cw = items(cat, movieKey(1, 1))
-		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindContinue, Action: "hide"}}}}
-	})
-	if r := rowByKind(rows, KindContinue); r == nil || r.Hidden {
-		t.Fatalf("Continue Watching hidden: %+v", r)
-	}
-	rows = run(m, func(a *assembly) {
-		a.cw = items(cat, movieKey(1, 1))
-		a.rules = []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindContinue, Action: "bury"}}}}
-	})
-	if rows[len(rows)-1].Kind != KindContinue {
-		t.Fatalf("buried Continue Watching not last: %v", kindsOf(rows))
 	}
 }

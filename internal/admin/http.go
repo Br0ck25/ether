@@ -34,10 +34,6 @@ func writeValidationError(w http.ResponseWriter, fields []FieldError) {
 	})
 }
 
-func writeNotImplemented(w http.ResponseWriter, what string) {
-	writeError(w, http.StatusNotImplemented, "not_implemented", what+" is not wired into this server build")
-}
-
 var errBadJSON = errors.New("invalid JSON body")
 
 // decodeJSON reads one JSON document, rejecting unknown fields so typos in

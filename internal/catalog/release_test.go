@@ -42,7 +42,7 @@ func TestAirDateGateIncludesTodayAndHidesFutureSeasons(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(body)
 	}))
 	defer srv.Close()
-	c := newTestCatalog(t, srv) // even a legacy ShowUnreleased=true config cannot bypass it
+	c := newTestCatalog(t, srv)
 	ctx := context.Background()
 	seasons, err := c.Children(ctx, core.ShowKey(100))
 	if err != nil || len(seasons) != 1 || seasons[0].Season != 1 {

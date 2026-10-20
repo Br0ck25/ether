@@ -43,6 +43,10 @@ func newDASHState(reps []dashRep, urls DASHURLs, sessionID string) *dashState {
 type dashRun struct {
 	dir    string
 	tracks []*dashTrack
+	// sessionTrack maps a muxer track (0=video, 1=audio in the run) to
+	// the session track its segments belong to (a ladder video rung may
+	// be a session track > 1).
+	sessionTrack []int
 }
 
 // dashTrack follows one representation's chunks in a run directory.
@@ -55,9 +59,9 @@ type dashTrack struct {
 	sl        *slotter
 }
 
-func newDASHRun(dir string, tracks int, base, segDur time.Duration, total, startSeg int) *dashRun {
-	dr := &dashRun{dir: dir}
-	for t := 0; t < tracks; t++ {
+func newDASHRun(dir string, sessionTracks []int, base, segDur time.Duration, total, startSeg int) *dashRun {
+	dr := &dashRun{dir: dir, sessionTrack: sessionTracks}
+	for t := range sessionTracks {
 		dr.tracks = append(dr.tracks, &dashTrack{rep: t, next: 1, sl: newSlotter(base, segDur, total, startSeg)})
 	}
 	return dr
@@ -121,9 +125,12 @@ func (s *Session) ServeManifest(w http.ResponseWriter, r *http.Request) {
 		}
 		body := s.dash.mpd
 		if body == nil {
+			// Only the primary video and the audio track must have exact
+			// codecs; ladder rungs that never ran keep their estimates.
 			complete := true
-			for _, c := range s.dash.codecs {
-				if c == "" {
+			for i, rep := range s.dash.reps {
+				needed := rep.Kind == "audio" || i == 0
+				if needed && s.dash.codecs[i] == "" {
 					complete = false
 				}
 			}
@@ -135,20 +142,7 @@ func (s *Session) ServeManifest(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if s.info.Duration <= 0 {
-				common := -1
-				if len(s.done) > 0 {
-					for n := range s.done[0] {
-						if n > common {
-							common = n
-						}
-					}
-				}
-				for _, track := range s.done[1:] {
-					for common >= 0 && !track[common] {
-						common--
-					}
-				}
-				complete = complete && common >= 0
+				complete = complete && s.commonDoneLocked() >= 0
 			}
 			if complete || timedOut || (idle && s.info.Duration > 0) {
 				body = s.renderMPDLocked()
@@ -181,6 +175,31 @@ func (s *Session) ServeManifest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// commonDoneLocked is the highest segment finished on the primary video
+// and audio tracks (ladder rungs do not gate the manifest).
+func (s *Session) commonDoneLocked() int {
+	common := -1
+	seen := false
+	for i, rep := range s.dash.reps {
+		if !(rep.Kind == "audio" || i == 0) || i >= len(s.done) {
+			continue
+		}
+		if !seen {
+			seen = true
+			for n := range s.done[i] {
+				if n > common {
+					common = n
+				}
+			}
+			continue
+		}
+		for common >= 0 && !s.done[i][common] {
+			common--
+		}
+	}
+	return common
+}
+
 // renderMPDLocked renders the MPD with the best codecs known.
 func (s *Session) renderMPDLocked() []byte {
 	reps := append([]dashRep(nil), s.dash.reps...)
@@ -190,20 +209,7 @@ func (s *Session) renderMPDLocked() []byte {
 		}
 	}
 	if s.info.Duration <= 0 {
-		last := -1
-		if len(s.done) > 0 {
-			for n := range s.done[0] {
-				if n > last {
-					last = n
-				}
-			}
-		}
-		for _, track := range s.done[1:] {
-			for last >= 0 && !track[last] {
-				last--
-			}
-		}
-		return renderLiveMPD(s.created, time.Now(), s.segDur, last, s.dash.initURL, s.dash.mediaURL, reps)
+		return renderLiveMPD(s.created, time.Now(), s.segDur, s.commonDoneLocked(), s.dash.initURL, s.dash.mediaURL, reps)
 	}
 	return renderMPD(s.info.Duration, s.segDur, s.dash.initURL, s.dash.mediaURL, reps)
 }
@@ -239,7 +245,8 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		info trackInit
 	}
 	type segPub struct {
-		t    int
+		t    int // session track
+		mt   int // muxer track (index into dr.tracks)
 		out  slotOut
 		file string
 	}
@@ -250,6 +257,10 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		eof = !stopped && r.proc.Err() == nil
 	}
 	for t, tr := range dr.tracks {
+		st := t
+		if t < len(dr.sessionTrack) {
+			st = dr.sessionTrack[t]
+		}
 		for {
 			chunk := filepath.Join(dr.dir, dashChunkFile(tr.rep, tr.next))
 			if _, err := os.Stat(chunk); err != nil {
@@ -270,9 +281,9 @@ func (s *Session) collectDASH(r *run, exited bool) {
 			}
 			if !tr.published {
 				tr.published = true
-				name := fmt.Sprintf("init-%d-%d.mp4", t, r.seq)
+				name := fmt.Sprintf("init-%d-%d.mp4", st, r.seq)
 				if err := os.WriteFile(filepath.Join(s.dir, name), tr.init, 0o644); err == nil {
-					inits = append(inits, initPub{t: t, file: name, info: tr.info})
+					inits = append(inits, initPub{t: st, file: name, info: tr.info})
 				}
 			}
 			c, err := scanChunk(chunk, tr.info)
@@ -285,12 +296,12 @@ func (s *Session) collectDASH(r *run, exited bool) {
 			}
 			tr.next++
 			for _, o := range tr.sl.add(c) {
-				segs = append(segs, segPub{t: t, out: o})
+				segs = append(segs, segPub{t: st, mt: t, out: o})
 			}
 		}
 		if exited {
 			for _, o := range tr.sl.flush(eof) {
-				segs = append(segs, segPub{t: t, out: o})
+				segs = append(segs, segPub{t: st, mt: t, out: o})
 			}
 		}
 	}
@@ -301,7 +312,7 @@ func (s *Session) collectDASH(r *run, exited bool) {
 			continue
 		}
 		file := filepath.Join(dr.dir, fmt.Sprintf("seg-%d-%05d.m4s", sp.t, sp.out.n))
-		if err := writeSegmentFile(file, dr.tracks[sp.t].init, sp.out.chunks); err != nil {
+		if err := writeSegmentFile(file, dr.tracks[sp.mt].init, sp.out.chunks); err != nil {
 			s.log.Warn("assemble DASH segment", "segment", sp.out.n, "rep", sp.t, "err", err)
 			continue
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -36,9 +37,21 @@ type pool struct {
 	// the semaphore runs smaller because the server refused connections.
 	size         int
 	limitedUntil time.Time
+	// Warm-floor background redial state (guarded by mu): at most one
+	// warmLoop runs at a time, and after a failed dial it waits until
+	// warmNext (exponential backoff) before trying again.
+	warmActive bool
+	warmFails  int
+	warmNext   time.Time
 
-	stop chan struct{}
-	wg   sync.WaitGroup
+	// minIdle is this pool's effective warm floor setting (per-provider
+	// override or the fetcher-wide value); negative disables the floor.
+	minIdle atomic.Int32
+
+	ctx    context.Context // cancelled by close; parent of background dials
+	cancel context.CancelFunc
+	stop   chan struct{}
+	wg     sync.WaitGroup
 
 	bytes         atomic.Int64
 	articles      atomic.Int64
@@ -55,6 +68,8 @@ type pool struct {
 	authTime      atomic.Int64
 	statBatches   atomic.Int64
 	statBatchTime atomic.Int64
+	bgRedials     atomic.Int64 // connections dialled by the floor janitor
+	redialFails   atomic.Int64 // failed background redials
 
 	latMu    sync.Mutex
 	latency  ewma // command round trip
@@ -76,24 +91,43 @@ func (e *ewma) add(d time.Duration) {
 	e.n++
 }
 
-func newPool(key string, cfg config.UsenetProvider, o *Options, log *slog.Logger) *pool {
+// effectiveMinIdle resolves a provider's warm floor: the provider's own
+// MinIdle when set (nonzero), else the fetcher-wide value.
+func effectiveMinIdle(cfg config.UsenetProvider, global int) int {
+	if cfg.MinIdle != 0 {
+		return cfg.MinIdle
+	}
+	return global
+}
+
+func newPool(key string, cfg config.UsenetProvider, o *Options, log *slog.Logger, globalMinIdle int) *pool {
 	size := cfg.Connections
 	if size <= 0 {
 		size = DefaultConnections
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	p := &pool{
-		size: size,
-		key:  key,
-		cfg:  cfg,
-		o:    o,
-		log:  log.With("provider", providerLabel(cfg)),
-		sem:  newPrioSem(size, prefetchSlots(size, o.PrefetchFraction)),
-		brk:  newBreaker(o.BackoffMin, o.BackoffMax, o.FailThreshold, time.Now),
-		stop: make(chan struct{}),
+		size:   size,
+		key:    key,
+		cfg:    cfg,
+		o:      o,
+		log:    log.With("provider", providerLabel(cfg)),
+		sem:    newPrioSem(size, prefetchSlots(size, o.PrefetchFraction)),
+		brk:    newBreaker(o.BackoffMin, o.BackoffMax, o.FailThreshold, time.Now),
+		ctx:    ctx,
+		cancel: cancel,
+		stop:   make(chan struct{}),
 	}
+	p.minIdle.Store(int32(effectiveMinIdle(cfg, globalMinIdle)))
 	p.wg.Add(1)
 	go p.janitor()
 	return p
+}
+
+// setGlobalMinIdle applies a changed fetcher-wide floor to this pool
+// (honouring its per-provider override).
+func (p *pool) setGlobalMinIdle(global int) {
+	p.minIdle.Store(int32(effectiveMinIdle(p.cfg, global)))
 }
 
 func providerLabel(cfg config.UsenetProvider) string {
@@ -109,16 +143,17 @@ func providerLabel(cfg config.UsenetProvider) string {
 func (p *pool) dialOptions() DialOptions {
 	connID := p.connSeq.Add(1)
 	return DialOptions{
-		Host:           p.cfg.Host,
-		Port:           p.cfg.Port,
-		TLS:            p.cfg.TLS,
-		Username:       p.cfg.Username,
-		Password:       p.cfg.Password,
-		TLSConfig:      p.o.TLSConfig,
-		Timeout:        p.o.DialTimeout,
-		CommandTimeout: p.o.CommandTimeout,
-		DialContext:    p.o.DialContext,
-		BytesRead:      &p.bytes,
+		Host:            p.cfg.Host,
+		Port:            p.cfg.Port,
+		TLS:             p.cfg.TLS,
+		Username:        p.cfg.Username,
+		Password:        p.cfg.Password,
+		TLSConfig:       p.o.TLSConfig,
+		Timeout:         p.o.DialTimeout,
+		CommandTimeout:  p.o.CommandTimeout,
+		IdleReadTimeout: p.o.IdleReadTimeout,
+		DialContext:     p.o.DialContext,
+		BytesRead:       &p.bytes,
 		OnPhase: func(phase string, d time.Duration) {
 			switch phase {
 			case "tcp":
@@ -184,6 +219,9 @@ func (p *pool) shrinkTo(n int) {
 }
 
 func (p *pool) conn(ctx context.Context) (*Conn, error) {
+	// The floor is read once, outside p.mu: idleFloor takes the semaphore
+	// lock, and the lock order elsewhere is semaphore before p.mu.
+	floor := p.idleFloor()
 	for {
 		p.mu.Lock()
 		if p.closed {
@@ -194,7 +232,7 @@ func (p *pool) conn(ctx context.Context) (*Conn, error) {
 			c := p.idle[n-1]
 			p.idle[n-1] = nil
 			p.idle = p.idle[:n-1]
-			expire := time.Since(c.idleSince) > p.o.IdleTimeout && p.live > p.idleFloor()
+			expire := time.Since(c.idleSince) > p.o.IdleTimeout && p.live > floor
 			p.mu.Unlock()
 			if expire {
 				p.discard(c)
@@ -202,10 +240,22 @@ func (p *pool) conn(ctx context.Context) (*Conn, error) {
 			}
 			return c, nil
 		}
-		p.live++
 		p.mu.Unlock()
 		break
 	}
+	return p.dialNew(ctx)
+}
+
+// dialNew dials, negotiates TLS and authenticates one fresh connection,
+// accounting it in live. The caller must hold a semaphore slot.
+func (p *pool) dialNew(ctx context.Context) (*Conn, error) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return nil, ErrPoolClosed
+	}
+	p.live++
+	p.mu.Unlock()
 	// Re-check the breaker: another request may have tripped it while we
 	// waited for a slot.
 	if err := p.brk.allow(); err != nil {
@@ -239,7 +289,6 @@ func (p *pool) conn(ctx context.Context) (*Conn, error) {
 		}
 		return nil, err
 	}
-	p.brk.success()
 	p.dials.Add(1)
 	return c, nil
 }
@@ -292,10 +341,15 @@ func (p *pool) discardIdle() {
 	for _, c := range idle {
 		_ = c.Close()
 	}
+	if len(idle) > 0 {
+		p.maintainFloor()
+	}
 }
 
-// janitor closes connections idle beyond IdleTimeout and pings ones idle
-// beyond KeepAlive so servers do not drop them silently.
+// janitor closes connections idle beyond IdleTimeout, pings ones idle
+// beyond KeepAlive so servers do not drop them silently, and maintains
+// the warm floor by redialling in the background when live connections
+// have fallen below it.
 func (p *pool) janitor() {
 	defer p.wg.Done()
 	every := p.o.IdleTimeout / 2
@@ -303,6 +357,9 @@ func (p *pool) janitor() {
 		every = p.o.KeepAlive / 2
 	}
 	every = max(every, 50*time.Millisecond)
+	// Establish the floor right away so the first Play after startup (or
+	// after a config Update created this pool) does not pay a cold dial.
+	p.maintainFloor()
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -326,11 +383,12 @@ func (p *pool) sweep() {
 	if restore && p.sem.setSize(p.size, p.o.PrefetchFraction) {
 		p.log.Info("usenet: trying the configured connection count again", "connections", p.size)
 	}
+	floor := p.idleFloor()
 	var expired []*Conn
 	p.mu.Lock()
 	keep := p.idle[:0]
 	for _, c := range p.idle {
-		if now.Sub(c.idleSince) > p.o.IdleTimeout && p.live-len(expired) > p.idleFloor() {
+		if now.Sub(c.idleSince) > p.o.IdleTimeout && p.live-len(expired) > floor {
 			expired = append(expired, c)
 		} else {
 			keep = append(keep, c)
@@ -343,14 +401,104 @@ func (p *pool) sweep() {
 	for _, c := range expired {
 		_ = c.Quit()
 	}
-	if p.o.KeepAlive <= 0 {
-		return
-	}
-	for i := 0; i < 4; i++ {
-		if !p.keepAliveOne(now) {
-			return
+	if p.o.KeepAlive > 0 {
+		for i := 0; i < 4; i++ {
+			if !p.keepAliveOne(now) {
+				break
+			}
 		}
 	}
+	// A failed keepalive above may have discarded a floor connection, or
+	// the server may have dropped idle sockets since the last sweep.
+	p.maintainFloor()
+}
+
+// maintainFloor starts a background redial when this primary pool has
+// fewer live connections than its warm floor. It never blocks: at most
+// one warmLoop runs, dials happen outside locks at prefetch priority,
+// and a provider in circuit-breaker backoff or past a failed redial's
+// backoff deadline is left alone.
+func (p *pool) maintainFloor() {
+	floor := p.idleFloor()
+	if floor == 0 {
+		return
+	}
+	if err := p.brk.allow(); err != nil {
+		return
+	}
+	p.mu.Lock()
+	if p.closed || p.warmActive || p.live >= floor || time.Now().Before(p.warmNext) {
+		p.mu.Unlock()
+		return
+	}
+	p.warmActive = true
+	p.wg.Add(1) // under mu: close sets closed under mu before it Waits
+	p.mu.Unlock()
+	go p.warmLoop()
+}
+
+// warmLoop dials until the floor is reached, the pool gets busy (no free
+// prefetch slot — live traffic will create its own connections), a dial
+// fails (back off), or the pool closes.
+func (p *pool) warmLoop() {
+	defer p.wg.Done()
+	defer func() {
+		p.mu.Lock()
+		p.warmActive = false
+		p.mu.Unlock()
+	}()
+	for {
+		floor := p.idleFloor()
+		if floor == 0 {
+			return
+		}
+		if err := p.brk.allow(); err != nil {
+			return
+		}
+		p.mu.Lock()
+		done := p.closed || p.live >= floor || time.Now().Before(p.warmNext)
+		p.mu.Unlock()
+		if done {
+			return
+		}
+		if !p.sem.TryAcquire(core.PriorityPrefetch) {
+			return
+		}
+		c, err := p.dialNew(p.ctx)
+		if err != nil {
+			p.sem.Release(core.PriorityPrefetch)
+			if p.ctx.Err() != nil {
+				return
+			}
+			p.redialFails.Add(1)
+			p.mu.Lock()
+			p.warmFails++
+			p.warmNext = time.Now().Add(p.warmBackoff(p.warmFails))
+			p.mu.Unlock()
+			p.log.Debug("usenet: background warm redial failed; backing off", "err", err)
+			return
+		}
+		p.bgRedials.Add(1)
+		p.mu.Lock()
+		p.warmFails = 0
+		p.warmNext = time.Time{}
+		p.mu.Unlock()
+		p.put(c, core.PriorityPrefetch)
+	}
+}
+
+// warmBackoff is the delay before the next background redial after fails
+// consecutive failures: BackoffMin doubling up to BackoffMax, plus jitter.
+func (p *pool) warmBackoff(fails int) time.Duration {
+	d := p.o.BackoffMin
+	for i := 1; i < fails && d < p.o.BackoffMax; i++ {
+		d *= 2
+	}
+	d = min(d, p.o.BackoffMax)
+	if d > 0 {
+		d += time.Duration(rand.Float64() * float64(d) / 4)
+	}
+	return d
 }
 
 // keepAliveOne pings the longest-idle connection if it has been idle beyond
@@ -418,6 +566,7 @@ func (p *pool) close() {
 	p.idle = nil
 	p.live -= len(idle)
 	p.mu.Unlock()
+	p.cancel() // interrupt any background warm dial
 	p.sem.Close()
 	close(p.stop)
 	p.wg.Wait()
@@ -454,6 +603,7 @@ func (p *pool) body(ctx context.Context, id string, groups []string, prio core.P
 		}
 		return nil, p.failed(err, reused, ctx)
 	}
+	p.brk.success()
 	p.articles.Add(1)
 	p.latMu.Lock()
 	p.latency.add(rtt)
@@ -476,6 +626,7 @@ func (p *pool) stat(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, p.failed(err, reused, ctx)
 	}
+	p.brk.success()
 	if !ok {
 		p.misses.Add(1)
 	}
@@ -505,6 +656,7 @@ func (p *pool) statMany(ctx context.Context, ids []string) (map[string]bool, err
 	if err != nil {
 		return nil, p.failed(err, reused, ctx)
 	}
+	p.brk.success()
 	for _, ok := range result {
 		if !ok {
 			p.misses.Add(1)
@@ -563,11 +715,16 @@ func (p *pool) failed(err error, reused bool, ctx context.Context) error {
 	case ctxErr(ctx) != nil:
 		return ctxErr(ctx)
 	case errors.Is(err, ErrNoSuchArticle):
+		p.brk.success()
 		p.misses.Add(1)
 	case errors.Is(err, ErrInvalidMessageID):
 	default:
 		p.errs.Add(1)
-		p.brk.noteError(err)
+		if isNetworkError(err) || errors.Is(err, ErrServiceUnavailable) {
+			p.brk.connFailure(err)
+		} else {
+			p.brk.noteError(err)
+		}
 		if reused && isNetworkError(err) {
 			p.log.Debug("usenet: idle connection was dropped by the server; discarding idle connections", "err", err)
 			p.discardIdle()
@@ -600,10 +757,16 @@ type ProviderStats struct {
 	LiveConnections       int `json:"liveConnections"`   // open sockets
 	ActiveConnections     int `json:"activeConnections"` // slots in use
 	IdleConnections       int `json:"idleConnections"`
-	PrefetchActive        int `json:"prefetchActive"`
-	WaitingLive           int `json:"waitingLive"`
-	WaitingReadahead      int `json:"waitingReadahead"`
-	WaitingPrefetch       int `json:"waitingPrefetch"`
+	// MinIdle is the configured warm floor (0 = none for this pool);
+	// WarmIdleConnections is how much of it is currently held idle.
+	MinIdle             int   `json:"minIdle"`
+	WarmIdleConnections int   `json:"warmIdleConnections"`
+	BackgroundRedials   int64 `json:"backgroundRedials"` // floor janitor dials
+	RedialFailures      int64 `json:"redialFailures"`
+	PrefetchActive      int   `json:"prefetchActive"`
+	WaitingLive         int   `json:"waitingLive"`
+	WaitingReadahead    int   `json:"waitingReadahead"`
+	WaitingPrefetch     int   `json:"waitingPrefetch"`
 
 	Bytes         int64 `json:"bytes"` // received off the wire
 	Articles      int64 `json:"articles"`
@@ -645,6 +808,7 @@ func (p *pool) stats() ProviderStats {
 	st.WaitingLive = ss.Waiting[core.PriorityLive]
 	st.WaitingReadahead = ss.Waiting[core.PriorityReadahead]
 	st.WaitingPrefetch = ss.Waiting[core.PriorityPrefetch]
+	st.MinIdle = p.idleFloor()
 	p.mu.Lock()
 	st.LiveConnections = p.live
 	st.IdleConnections = len(p.idle)
@@ -652,6 +816,9 @@ func (p *pool) stats() ProviderStats {
 		st.State = StateClosed
 	}
 	p.mu.Unlock()
+	st.WarmIdleConnections = min(st.IdleConnections, st.MinIdle)
+	st.BackgroundRedials = p.bgRedials.Load()
+	st.RedialFailures = p.redialFails.Load()
 	st.Bytes = p.bytes.Load()
 	st.Articles = p.articles.Load()
 	st.Misses = p.misses.Load()
@@ -673,9 +840,14 @@ func (p *pool) stats() ProviderStats {
 	return st
 }
 
+// idleFloor is how many live connections the janitor keeps warm for this
+// pool: zero for backfill pools, when the floor is disabled, or when
+// keepalive pings are off (unpinged connections would go stale anyway).
+// It never exceeds the pool's effective (possibly server-limited) size.
 func (p *pool) idleFloor() int {
-	if p.cfg.Backfill || p.o.MinIdle < 0 || p.o.KeepAlive <= 0 {
+	m := int(p.minIdle.Load())
+	if p.cfg.Backfill || m < 0 || p.o.KeepAlive <= 0 {
 		return 0
 	}
-	return min(p.size, p.o.MinIdle)
+	return min(p.size, p.sem.stats().Size, m)
 }

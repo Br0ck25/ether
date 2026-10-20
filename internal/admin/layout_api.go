@@ -1,93 +1,55 @@
 package admin
 
 import (
-	"context"
 	"net/http"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// LayeredPersonalization is additive: old engine implementations and API
-// clients can continue using Layout/SetLayout during migration.
-type LayeredPersonalization interface {
-	HomeLayout(context.Context) (core.HomeLayout, error)
-	SetHomeLayout(context.Context, core.HomeLayout) (core.HomeLayout, error)
-	PreviewLayout(context.Context, *core.User, core.HubContext, string, int, core.HomeLayout) (*core.HomePreview, error)
-	LayoutDefaults() map[string]int
-}
-
-func (h *Handler) writeLayout(w http.ResponseWriter, r *http.Request, rules []core.LayoutRule) {
+// writeLayout answers with the saved Home layout document, the engine's
+// per-section row defaults and the rows the document can target.
+func (h *Handler) writeLayout(w http.ResponseWriter, r *http.Request, d core.HomeLayout) {
 	avail, err := h.deps.Personalization.AvailableRows(r.Context())
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	if rules == nil {
-		rules = []core.LayoutRule{}
-	}
 	if avail == nil {
 		avail = []core.RowDescriptor{}
 	}
-	result := map[string]any{"rules": rules, "availableRows": avail}
-	if e, ok := h.deps.Personalization.(LayeredPersonalization); ok {
-		d, err := e.HomeLayout(r.Context())
-		if err != nil {
-			writeEngineError(w, err)
-			return
-		}
-		result["layout"] = d
-		result["defaults"] = map[string]any{"maxRows": e.LayoutDefaults()}
-	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"layout":        d,
+		"defaults":      map[string]any{"maxRows": h.deps.Personalization.LayoutDefaults()},
+		"availableRows": avail,
+	})
 }
 func (h *Handler) handleGetLayout(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, false) {
-		return
-	}
-	rules, err := h.deps.Personalization.Layout(r.Context())
+	d, err := h.deps.Personalization.HomeLayout(r.Context())
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	h.writeLayout(w, r, rules)
+	h.writeLayout(w, r, d)
 }
 func (h *Handler) handlePutLayout(w http.ResponseWriter, r *http.Request) {
-	if !h.personalizationReady(w, false) {
-		return
-	}
 	var body struct {
-		Rules  []core.LayoutRule `json:"rules"`
-		Layout *core.HomeLayout  `json:"layout"`
+		Layout *core.HomeLayout `json:"layout"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, 400, "bad_json", err.Error())
 		return
 	}
-	if body.Layout != nil {
-		e, ok := h.deps.Personalization.(LayeredPersonalization)
-		if !ok {
-			writeNotImplemented(w, "layered home layout")
-			return
-		}
-		if _, err := e.SetHomeLayout(r.Context(), *body.Layout); err != nil {
-			writeEngineError(w, err)
-			return
-		}
-		rules, err := h.deps.Personalization.Layout(r.Context())
-		if err != nil {
-			writeEngineError(w, err)
-			return
-		}
-		h.writeLayout(w, r, rules)
+	if body.Layout == nil {
+		writeValidationError(w, []FieldError{{Field: "layout", Message: "is required"}})
 		return
 	}
-	rules, err := h.deps.Personalization.SetLayout(r.Context(), body.Rules)
+	d, err := h.deps.Personalization.SetHomeLayout(r.Context(), *body.Layout)
 	if err != nil {
 		writeEngineError(w, err)
 		return
 	}
-	h.writeLayout(w, r, rules)
+	h.writeLayout(w, r, d)
 }
 
 type layoutPreviewBody struct {
@@ -99,17 +61,10 @@ type layoutPreviewBody struct {
 	Count    int              `json:"count"`
 }
 
-func (h *Handler) decodeLayoutPreview(w http.ResponseWriter, r *http.Request) (layoutPreviewBody, core.HubContext, LayeredPersonalization, bool) {
+func (h *Handler) decodeLayoutPreview(w http.ResponseWriter, r *http.Request) (layoutPreviewBody, core.HubContext, Personalization, bool) {
 	var b layoutPreviewBody
 	var hc core.HubContext
-	if !h.personalizationReady(w, true) {
-		return b, hc, nil, false
-	}
-	e, ok := h.deps.Personalization.(LayeredPersonalization)
-	if !ok {
-		writeNotImplemented(w, "layered home layout")
-		return b, hc, nil, false
-	}
+	e := h.deps.Personalization
 	if err := decodeJSON(r, &b); err != nil {
 		writeError(w, 400, "bad_json", err.Error())
 		return b, hc, e, false

@@ -49,6 +49,19 @@ type Deps struct {
 	Auth     core.Auth
 	Hints    Hints
 	Logger   *slog.Logger
+
+	// PostPlay ranks the personalized hook queue (optional; #30). With
+	// it set, the end of a movie or season/series finale pre-buffers the
+	// #1 pick instead of relying on next-episode prefetch.
+	PostPlay core.PostPlayer
+	// Prewarmer warms the pick through the playback manager when it
+	// implements core.Prewarmer; nil falls back to resolve + Engine.Prefetch.
+	Prewarmer core.Prewarmer
+	// Markers supplies credits ranges through the markers service API
+	// (optional; without it the trigger is duration − 3 minutes).
+	Markers MarkerSource
+	// PostPlayEnabled reports the owner's switch (nil = on).
+	PostPlayEnabled func() bool
 }
 
 // Options tune the prefetcher. Zero values take the defaults noted.
@@ -71,6 +84,9 @@ type Options struct {
 	RetryAfter time.Duration
 	// JobTimeout bounds one job (default 10m).
 	JobTimeout time.Duration
+	// PostPlayBytes is how much of the #1 post-play pick to pre-buffer
+	// (default 40 MiB, inside the 32–48 MiB the countdown needs).
+	PostPlayBytes int64
 	// Now is the clock (tests).
 	Now func() time.Time
 }
@@ -99,6 +115,9 @@ func (o *Options) defaults() {
 	}
 	if o.JobTimeout <= 0 {
 		o.JobTimeout = 10 * time.Minute
+	}
+	if o.PostPlayBytes <= 0 {
+		o.PostPlayBytes = 40 << 20
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -153,6 +172,10 @@ type Prefetcher struct {
 	stats   Stats
 	idle    *sync.Cond
 
+	// Post-play sessions (postplay.go), keyed by user and title.
+	ppMu       sync.Mutex
+	ppSessions map[string]*ppSession
+
 	jobs   chan job
 	warmC  chan struct{}
 	ctx    context.Context
@@ -176,14 +199,15 @@ func New(deps Deps, cfg config.Cache, opts Options) (*Prefetcher, error) {
 		deps.Logger = slog.Default()
 	}
 	p := &Prefetcher{
-		deps:  deps,
-		opts:  opts,
-		log:   deps.Logger.With("component", "prefetch"),
-		now:   opts.Now,
-		cfg:   cfg,
-		seen:  map[string]*entry{},
-		jobs:  make(chan job, opts.QueueSize),
-		warmC: make(chan struct{}, 1),
+		deps:       deps,
+		opts:       opts,
+		log:        deps.Logger.With("component", "prefetch"),
+		now:        opts.Now,
+		cfg:        cfg,
+		seen:       map[string]*entry{},
+		ppSessions: map[string]*ppSession{},
+		jobs:       make(chan job, opts.QueueSize),
+		warmC:      make(chan struct{}, 1),
 	}
 	p.idle = sync.NewCond(&p.mu)
 	p.ctx, p.cancel = context.WithCancel(context.Background())
@@ -240,6 +264,9 @@ func (p *Prefetcher) Stats() Stats {
 // never blocks: past Cache.NextEpisodeAt of an episode it queues the next
 // episode's prefetch (once per user and episode).
 func (p *Prefetcher) OnTimeline(user *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
+	// Post-play hook queue (#30): movies and finales pre-buffer their
+	// #1 pick near the end. Runs before the episode-only path below.
+	p.onTimelinePostPlay(user, key, offset, duration, state)
 	if user == nil || key.Kind() != core.KindEpisode || duration <= 0 || offset <= 0 {
 		return
 	}
@@ -389,6 +416,11 @@ func (p *Prefetcher) nextEpisode(ctx context.Context, user *core.User, key core.
 	if next == nil || (!next.Released.IsZero() && next.Released.After(p.now())) {
 		return nil // not aired yet; don't spend indexer budget
 	}
+	if p.postplayEnabled() && next.Key.Season() != key.Season() {
+		// Season finale: the post-play hook queue owns the pre-buffer
+		// (its #1 pick may not be next season's opener) — don't warm both.
+		return nil
+	}
 	var caps core.ClientCaps
 	if p.deps.Hints != nil {
 		caps, _, _ = p.deps.Hints.ClientCaps(user.ID, key)
@@ -500,7 +532,8 @@ func (p *Prefetcher) warmPass(ctx context.Context) error {
 			if rp.Size <= 0 || dur <= 0 {
 				continue
 			}
-			start, length := WarmWindow(st.ViewOffset, dur, rp.Size, p.opts.WarmBehind, ahead)
+			tm := playback.TimeMap{Size: rp.Size, Duration: dur, Points: resumeIndexPoints(rp.Keyframes)}
+			start, length := WarmWindowFor(st.ViewOffset, tm, p.opts.WarmBehind, ahead)
 			if length <= 0 {
 				continue
 			}
@@ -522,12 +555,27 @@ func (p *Prefetcher) warmPass(ctx context.Context) error {
 // before the offset mapped from viewOffset (constant-bitrate mapping) and
 // ahead bytes after it, clamped to the file.
 func WarmWindow(viewOffset, duration time.Duration, size, behind, ahead int64) (start, length int64) {
-	off := playback.TimeMap{Size: size, Duration: duration}.OffsetAt(viewOffset)
+	return WarmWindowFor(viewOffset, playback.TimeMap{Size: size, Duration: duration}, behind, ahead)
+}
+
+func WarmWindowFor(viewOffset time.Duration, tm playback.TimeMap, behind, ahead int64) (start, length int64) {
+	off := tm.OffsetAt(viewOffset)
 	start = off - behind
 	if start < 0 {
 		start = 0
 	}
-	return start, clampLen(start, off-start+ahead, size)
+	return start, clampLen(start, off-start+ahead, tm.Size)
+}
+
+func resumeIndexPoints(points []core.KeyframePoint) []playback.IndexPoint {
+	if len(points) == 0 {
+		return nil
+	}
+	out := make([]playback.IndexPoint, len(points))
+	for i, p := range points {
+		out[i] = playback.IndexPoint{Offset: p.Offset, Time: p.Time}
+	}
+	return out
 }
 
 // prune forgets dedupe entries that no longer suppress anything.

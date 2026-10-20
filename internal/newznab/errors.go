@@ -43,6 +43,14 @@ func apiError(code int, desc string) error {
 	return &APIError{Code: code, Description: desc, Budget: budget}
 }
 
+// Codes 500 and 501 mean quota exhaustion in an API error document,
+// but HTTP 500/501 statuses alone are server failures, not quota signals.
+func documentError(code int, desc string) error {
+	e := apiError(code, desc).(*APIError)
+	e.Budget = e.Budget || code == 500 || code == 501
+	return e
+}
+
 // humanError renders an error for the setup wizard.
 func humanError(indexer string, err error) error {
 	if err == nil {

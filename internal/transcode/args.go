@@ -32,10 +32,19 @@ type runSpec struct {
 	Protocol string
 	// ChunkDur is the DASH muxer's chunk length (default 1s).
 	ChunkDur time.Duration
+	// FastStart selects the low-latency encode (fastest presets) used for
+	// the fast-start ramp segments.
+	FastStart bool
+	// Rate is the quality-targeted VBV rate control for this run; the zero
+	// value keeps the historic bitrate-target encoding.
+	Rate rateControl
 }
 
 // segmentExt is the segment file extension for a decision's container.
 func segmentExt(container string) string {
+	if container == ContainerMatroska {
+		return "mkv"
+	}
 	if container == ContainerFMP4 {
 		return "m4s"
 	}
@@ -122,9 +131,7 @@ func buildCodecArgs(s runSpec) []string {
 	}
 	vp := planVideo(s, v)
 	args = append(args, vp.inputArgs...)
-	// Keep source timestamps so segment n always carries media time
-	// Start+n*SegDur no matter where a run starts.
-	args = append(args, "-start_at_zero", "-copyts")
+	args = append(args, inputTimestampArgs(s)...)
 	if s.Start > 0 {
 		args = append(args, "-ss", secs(s.Start))
 	}
@@ -155,13 +162,18 @@ func buildCodecArgs(s runSpec) []string {
 				args = append(args, "-tag:v", tag)
 			}
 			if v.Codec == "hevc" && container == ContainerFMP4 {
-				args = append(args, "-tag:v", "hvc1")
+				tag := "hvc1"
+				if v.DolbyVision && v.DolbyVisionProfile == 5 {
+					tag = "dvh1"
+				}
+				args = append(args, "-tag:v", tag)
 			}
 			if v.DolbyVision && container == ContainerFMP4 {
 				args = append(args, "-strict", "unofficial") // write the dvcC box
 			}
 		} else {
 			args = append(args, vp.encodeArgs...)
+			args = append(args, videotoolboxCaptionArgs(v, vp.encodeArgs)...)
 			args = append(args, "-force_key_frames", "expr:gte(t,n_forced*"+secs(segDur)+")")
 		}
 	}
@@ -214,6 +226,9 @@ func hlsMuxArgs(s runSpec) []string {
 		segDur = DefaultSegmentDuration
 	}
 	container := s.Decision.Container
+	if container == ContainerMatroska {
+		return matroskaHLSMuxArgs(s, segDur)
+	}
 	if container != ContainerFMP4 {
 		container = ContainerMPEGTS
 	}
@@ -500,42 +515,90 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 
 	// Encoder.
 	videoKbps := videoBitrate(s.Info, d)
+	if s.Rate.TargetKbps > 0 {
+		videoKbps = s.Rate.TargetKbps
+	}
 	b := fmt.Sprintf("%dk", videoKbps)
 	maxr := fmt.Sprintf("%dk", videoKbps*3/2)
 	buf := fmt.Sprintf("%dk", videoKbps*2)
+	if s.Rate.MaxrateKbps > 0 {
+		maxr = fmt.Sprintf("%dk", s.Rate.MaxrateKbps)
+	}
+	if s.Rate.BufsizeKbps > 0 {
+		buf = fmt.Sprintf("%dk", s.Rate.BufsizeKbps)
+	}
 	e := []string{"-c:v", enc}
+	xPreset := "veryfast"
+	if s.FastStart {
+		xPreset = "ultrafast"
+	}
 	switch enc {
 	case "libx264":
-		e = append(e, "-preset", "veryfast", "-crf", "21", "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		crf := "21"
+		if s.Rate.Quality {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		} else {
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+		}
+		if s.FastStart {
+			e = append(e, "-tune", "zerolatency")
+		}
 	case "libx265":
 		params := "log-level=error"
 		if keepHDR {
 			params += hdrX265Params(v)
 		}
-		e = append(e, "-preset", "veryfast", "-crf", "23", "-maxrate", b, "-bufsize", buf, "-x265-params", params)
+		peak := b
+		if s.Rate.Quality {
+			peak = maxr
+		}
+		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", peak, "-bufsize", buf, "-x265-params", params)
 	case "h264_videotoolbox", "hevc_videotoolbox":
-		e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		if s.Rate.Quality {
+			e = append(e, "-q:v", "65", "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		} else {
+			e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+		}
+		if s.FastStart {
+			e = append(e, "-realtime", "1")
+		}
 		if enc == "h264_videotoolbox" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_nvenc", "hevc_nvenc":
-		e = append(e, "-preset", "p4", "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		preset := "p4"
+		if s.FastStart {
+			preset = "p1"
+		}
+		if s.Rate.Quality {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-cq", "21", "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		} else {
+			e = append(e, "-preset", preset, "-rc", "vbr", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-forced-idr", "1")
+		}
 		if enc == "h264_nvenc" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_qsv", "hevc_qsv":
-		e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
+		if s.Rate.Quality {
+			e = append(e, "-preset", "veryfast", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "1")
+		} else {
+			e = append(e, "-preset", "veryfast", "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-look_ahead", "0")
+		}
 		if enc == "h264_qsv" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_vaapi", "hevc_vaapi":
-		e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
+		if s.Rate.Quality {
+			e = append(e, "-rc_mode", "QVBR", "-global_quality", "23", "-maxrate", maxr, "-bufsize", buf)
+		} else {
+			e = append(e, "-rc_mode", "VBR", "-b:v", b, "-maxrate", maxr, "-bufsize", buf)
+		}
 		if enc == "h264_vaapi" {
 			e = append(e, "-profile:v", "high")
 		} else if keepHDR {
