@@ -359,11 +359,73 @@ func (e *Engine) HomeHubsFor(ctx context.Context, user *core.User, hc core.HubCo
 
 // SectionHubsFor implements core.ContextualRecommender for a library
 // section's rows (below the front end's Continue Watching and Recently
-// Added).
+// Added). Passing t == "" assembles a mixed Movie+TV "For You" section.
 func (e *Engine) SectionHubsFor(ctx context.Context, user *core.User, t core.MediaType, hc core.HubContext, limit int) ([]core.Hub, error) {
 	p := e.home(ctx, user, hc, t, limit, false)
 	p.Rows = arrangeLayout(p.Rows, e.layoutForContext(ctx), userID(user), hc, sectionName(t), e.opts.MaxSectionRows)
+	if t == "" {
+		filtered := p.Rows[:0]
+		for _, r := range p.Rows {
+			if r.Kind != KindContinue {
+				filtered = append(filtered, r)
+			}
+		}
+		p.Rows = filtered
+	}
 	return toHubs(p.Rows), nil
+}
+
+// ForYouFeed returns a deduplicated, conviction-ranked stream of mixed
+// Movies and TV Shows for the viewer in hc, leading with Top 10 for You
+// followed by interleaved picks from their highest-scoring rows.
+func (e *Engine) ForYouFeed(ctx context.Context, user *core.User, hc core.HubContext, limit int) ([]core.Title, error) {
+	if limit <= 0 {
+		limit = 60
+	}
+	p := e.home(ctx, user, hc, "", max(24, limit/2), false)
+	seen := make(map[core.RatingKey]bool, limit)
+	out := make([]core.Title, 0, limit)
+	add := func(t core.Title) {
+		if t.Key == 0 || seen[t.Key] || (t.Type != core.TypeMovie && t.Type != core.TypeShow) {
+			return
+		}
+		seen[t.Key] = true
+		out = append(out, t)
+	}
+	// Lead with Top 10 for You (or Top 10 Today for cold-start viewers) so
+	// the first items are the exact highest-conviction picks.
+	for _, r := range p.Rows {
+		if r.Hidden || (r.Kind != KindTop10 && r.Kind != KindTop10Today) {
+			continue
+		}
+		for _, it := range r.Items {
+			add(it)
+			if len(out) >= limit {
+				return out, nil
+			}
+		}
+	}
+	// Round-robin across the remaining personal and discovery rows so the
+	// feed mixes movies and shows across taste clusters.
+	for round := 0; len(out) < limit; round++ {
+		progressed := false
+		for _, r := range p.Rows {
+			if r.Hidden || r.Kind == KindContinue || r.Kind == KindUpNext || r.Kind == KindPlaylists {
+				continue
+			}
+			if round < len(r.Items) {
+				progressed = true
+				add(r.Items[round])
+				if len(out) >= limit {
+					return out, nil
+				}
+			}
+		}
+		if !progressed {
+			break
+		}
+	}
+	return out, nil
 }
 
 func toHubs(rows []core.HomeRow) []core.Hub {

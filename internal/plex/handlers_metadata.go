@@ -516,12 +516,29 @@ func (s *Server) sectionCollections(w http.ResponseWriter, r *http.Request, sec 
 	mc.ViewGroup = string(sec.Type)
 	var all []core.Collection
 	if s.d.Collections != nil {
-		cs, err := s.d.Collections.List(ctx, pr.User, sec.Type)
-		if err != nil {
-			s.writeErr(w, r, err)
-			return
+		if sec.Mixed {
+			seen := map[core.RatingKey]bool{}
+			for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
+				cs, err := s.d.Collections.List(ctx, pr.User, typ)
+				if err != nil {
+					s.writeErr(w, r, err)
+					return
+				}
+				for _, c := range cs {
+					if !seen[c.Key] {
+						seen[c.Key] = true
+						all = append(all, c)
+					}
+				}
+			}
+		} else {
+			cs, err := s.d.Collections.List(ctx, pr.User, sec.Type)
+			if err != nil {
+				s.writeErr(w, r, err)
+				return
+			}
+			all = cs
 		}
-		all = cs
 	}
 	lo, hi := pr.window(len(all))
 	for i := lo; i < hi; i++ {
@@ -538,14 +555,21 @@ func (s *Server) handleCollections(w http.ResponseWriter, r *http.Request) {
 	pr := FromContext(ctx)
 	mc := libraryContainer()
 	if s.d.Collections != nil {
+		seen := map[core.RatingKey]bool{}
 		for _, sec := range s.userSections(pr.User) {
+			if sec.Mixed {
+				continue
+			}
 			cs, err := s.d.Collections.List(ctx, pr.User, sec.Type)
 			if err != nil {
 				s.writeErr(w, r, err)
 				return
 			}
 			for i := range cs {
-				mc.Metadata = append(mc.Metadata, s.collectionMetadata(&cs[i]))
+				if !seen[cs[i].Key] {
+					seen[cs[i].Key] = true
+					mc.Metadata = append(mc.Metadata, s.collectionMetadata(&cs[i]))
+				}
 			}
 		}
 	}

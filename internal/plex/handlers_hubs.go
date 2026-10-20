@@ -144,7 +144,7 @@ const (
 // continueHub builds a Continue Watching hub.
 func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec Section, count int) hubSpec {
 	t := core.MediaType("")
-	if v == cwSection {
+	if v == cwSection && !sec.Mixed {
 		t = sec.Type
 	}
 	items, state := s.inProgressTitles(ctx, pr, t, count+1)
@@ -160,9 +160,12 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 		id := strconv.Itoa(sec.ID)
 		hs.Style, hs.noPromoted = "shelf", true
 		hs.key = "/hubs/sections/" + id + "/continueWatching/items"
-		if sec.Type == core.TypeShow {
+		switch {
+		case sec.Mixed:
+			hs.ID, hs.Context, hs.Type = "movie.inprogress."+id, "hub.home.continue", ""
+		case sec.Type == core.TypeShow:
 			hs.ID, hs.Context, hs.Type = "tv.inprogress."+id, "hub.tv.inprogress", core.TypeEpisode
-		} else {
+		default:
 			hs.ID, hs.Context, hs.Type = "movie.inprogress."+id, "hub.movie.inprogress", core.TypeMovie
 		}
 	}
@@ -174,6 +177,35 @@ func (s *Server) continueHub(ctx context.Context, pr *Request, v cwVariant, sec 
 }
 
 func (s *Server) recentlyAddedHub(ctx context.Context, pr *Request, sec Section, count int) (hubSpec, error) {
+	id := strconv.Itoa(sec.ID)
+	if sec.Mixed {
+		var items []core.Title
+		for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
+			q := core.BrowseQuery{Filter: core.Filter{Type: typ}, Sort: core.SortAdded, Desc: true, Limit: count + 1}
+			if pr.User != nil {
+				q.Filter.MaxContentRating = pr.User.MaxContentRating
+			}
+			page, err := s.d.Catalog.Browse(ctx, q)
+			if err != nil {
+				return hubSpec{}, err
+			}
+			items = append(items, page.Items...)
+		}
+		sort.SliceStable(items, func(i, j int) bool { return items[i].UpdatedAt.After(items[j].UpdatedAt) })
+		hs := hubSpec{Hub: core.Hub{
+			ID:       "movie.recentlyadded." + id,
+			Title:    "Recently Added",
+			Type:     "",
+			Context:  "hub.movie.recentlyadded",
+			Style:    "shelf",
+			Promoted: true,
+			Items:    items,
+		}, key: "/library/sections/" + id + "/recentlyAdded"}
+		if len(hs.Items) > count {
+			hs.Items, hs.More = hs.Items[:count], true
+		}
+		return hs, nil
+	}
 	q := core.BrowseQuery{Filter: core.Filter{Type: sec.Type}, Sort: core.SortAdded, Desc: true, Limit: count + 1}
 	if pr.User != nil {
 		q.Filter.MaxContentRating = pr.User.MaxContentRating
@@ -182,7 +214,6 @@ func (s *Server) recentlyAddedHub(ctx context.Context, pr *Request, sec Section,
 	if err != nil {
 		return hubSpec{}, err
 	}
-	id := strconv.Itoa(sec.ID)
 	hs := hubSpec{Hub: core.Hub{Title: "Recently Added in " + sec.Title, Type: sec.Type, Style: "shelf", Promoted: true, Items: page.Items}}
 	if sec.Type == core.TypeShow {
 		hs.ID, hs.Context, hs.Type = "tv.recentlyadded."+id, "hub.tv.recentlyadded", ""
@@ -480,13 +511,15 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 		served[mh.HubIdentifier] = hs.Hub
 	}
 	add(s.continueHub(ctx, pr, cwSection, sec, count))
-	if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
-		add(ra)
-	} else {
-		s.log.Warn("recently added hub", "section", sec.ID, "err", err)
+	if !sec.Mixed {
+		if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
+			add(ra)
+		} else {
+			s.log.Warn("recently added hub", "section", sec.ID, "err", err)
+		}
 	}
 	if s.d.Recommender != nil {
-		hubs, err := s.recommendSection(ctx, pr, sec.Type, pc, count)
+		hubs, err := s.recommendSection(ctx, pr, sec.recommendType(), pc, count)
 		if err != nil {
 			s.log.Warn("section hubs", "section", sec.ID, "err", err)
 		}
@@ -494,13 +527,20 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 			add(hubSpec{Hub: h})
 		}
 	}
+	if sec.Mixed {
+		if ra, err := s.recentlyAddedHub(ctx, pr, sec, count); err == nil {
+			add(ra)
+		}
+	}
 	for _, hs := range s.discoveryHubs(ctx, pr, count) {
-		if hs.Type == sec.Type {
+		if sec.Mixed || hs.Type == sec.Type {
 			add(hs)
 		}
 	}
 	sectionName := "movies"
-	if sec.Type == core.TypeShow {
+	if sec.Mixed {
+		sectionName = "home"
+	} else if sec.Type == core.TypeShow {
 		sectionName = "shows"
 	}
 	mc.Hub = s.finalizeHomeRows(ctx, pr, pc, sectionName, mc.Hub)
@@ -608,7 +648,7 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 		if len(sections) > 0 && !containsInt(sections, sec.ID) {
 			continue
 		}
-		if hubs, err := s.recommendSection(ctx, pr, sec.Type, s.hubContext(pr, sec.ID), count); err == nil {
+		if hubs, err := s.recommendSection(ctx, pr, sec.recommendType(), s.hubContext(pr, sec.ID), count); err == nil {
 			for _, h := range hubs {
 				if h.ID == id {
 					return hubSpec{Hub: h}, true

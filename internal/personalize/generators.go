@@ -190,11 +190,36 @@ func (b *builder) genTop10() []*candRow {
 	if !b.personal() || b.taste.Confidence < top10Confidence {
 		return nil // "Top 10 on <server> Today" leads instead
 	}
+	recentSeeds := b.seeds(3)
+	simSeed := map[core.RatingKey]string{}
+	simBoost := map[core.RatingKey]float64{}
+	for si, s := range recentSeeds {
+		w := b.seedRecencyWeight(s.At, si)
+		for idx, nb := range b.similar(s.Key, 20) {
+			score := (0.65 + 0.35*rankScore(idx, 20)) * w
+			if score > simBoost[nb.Key] {
+				simBoost[nb.Key] = score
+				simSeed[nb.Key] = s.Title.Title
+			}
+		}
+	}
 	items := b.rank(b.pool(), func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
 		if why == "" {
 			why = "Highly rated and widely loved"
 		}
-		return 0.5*fit + 0.3*quality(t) + 0.1*popularity(t) + 0.1*recency(t, b.now), why
+		mom, momSeed := b.momentumScore(t, recentSeeds, simBoost[t.Key], simSeed[t.Key])
+		pct := int(math.Round(55 + 32*clamp(fit, 0, 1) + 12*clamp(mom, 0, 1)))
+		if pct < 65 {
+			pct = 65
+		} else if pct > 99 {
+			pct = 99
+		}
+		if momSeed != "" && mom >= 0.30 {
+			why = fmt.Sprintf("%d%% Match · Momentum from %s · %s", pct, momSeed, why)
+		} else {
+			why = fmt.Sprintf("%d%% Match · %s", pct, why)
+		}
+		return 0.44*fit + 0.24*mom + 0.22*quality(t) + 0.05*popularity(t) + 0.05*recency(t, b.now), why
 	})
 	kept := items[:0:0]
 	for _, it := range items {
@@ -202,9 +227,83 @@ func (b *builder) genTop10() []*candRow {
 			kept = append(kept, it)
 		}
 	}
-	r := newRow(KindTop10, "top10", "Top 10 for You", "The ten titles your taste model rates highest right now.", capItems(kept, 40))
+	r := newRow(KindTop10, "top10", "Top 10 for You", "The ten titles your taste model and recent viewing momentum rate highest right now.", capItems(kept, 40))
 	r.maxItems, r.minItems = 10, 5
 	return []*candRow{r}
+}
+
+func (b *builder) seedRecencyWeight(at time.Time, rank int) float64 {
+	rankDecay := math.Max(0.4, 1.0-0.22*float64(rank))
+	if at.IsZero() {
+		return 0.65 * rankDecay
+	}
+	days := math.Max(0, b.now.Sub(at).Hours()/24.0)
+	return math.Exp(-days/14.0) * rankDecay
+}
+
+// momentumScore measures how strongly t continues the viewer's immediate
+// recent viewing streak (last 3 liked/finished titles).
+func (b *builder) momentumScore(t *core.Title, recent []Evidence, directSim float64, directSeed string) (float64, string) {
+	best := directSim
+	bestSeed := directSeed
+	tGenres := normGenres(t.Genres)
+	for si, s := range recent {
+		w := b.seedRecencyWeight(s.At, si)
+		overlap := 0.0
+		// Shared director or lead cast with a recent watch.
+		for _, d := range s.Title.Directors {
+			if d.TMDB != 0 && hasPerson(t, d.TMDB) {
+				overlap += 0.48
+				break
+			}
+		}
+		for i, c := range s.Title.Cast {
+			if i >= 3 {
+				break
+			}
+			if c.TMDB != 0 && hasPerson(t, c.TMDB) {
+				overlap += 0.30
+				break
+			}
+		}
+		// Shared keywords with a recent watch.
+		if len(s.Title.Keywords) > 0 && len(t.Keywords) > 0 {
+			kwHits := 0
+			for _, kw := range t.Keywords {
+				for _, skw := range s.Title.Keywords {
+					if strings.EqualFold(kw, skw) {
+						kwHits++
+						break
+					}
+				}
+			}
+			if kwHits > 0 {
+				overlap += math.Min(0.45, 0.22*float64(kwHits))
+			}
+		}
+		// Shared genres with a recent watch.
+		sGenres := normGenres(s.Title.Genres)
+		if len(sGenres) > 0 && len(tGenres) > 0 {
+			gHits := 0
+			for _, g := range tGenres {
+				for _, sg := range sGenres {
+					if g == sg {
+						gHits++
+						break
+					}
+				}
+			}
+			if gHits > 0 {
+				overlap += 0.22 * float64(gHits) / float64(max(len(sGenres), 1))
+			}
+		}
+		score := clamp(overlap*w, 0, 1)
+		if score > best {
+			best = score
+			bestSeed = s.Title.Title
+		}
+	}
+	return clamp(best, 0, 1), bestSeed
 }
 
 func (b *builder) genBecause() []*candRow {

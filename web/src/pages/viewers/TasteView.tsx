@@ -19,17 +19,82 @@ import {
   Plus,
   Sparkles,
   Tags,
+  ThumbsDown,
+  ThumbsUp,
   UserRound,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { Artwork } from "../../components/Artwork";
 import { Columns, DivergingBars, HourStrip, Meter } from "../../components/charts";
 import { Segmented } from "../../components/fields";
 import { SaveBar } from "../../components/SaveBar";
 import { FacetSelect, LookupPicker } from "../../components/pickers";
 import { api, errorMessage } from "../../lib/api";
-import type { OverrideKind, TasteOverride, TasteProfile } from "../../lib/contract";
+import type {
+  Device,
+  OverrideKind,
+  TasteOverride,
+  TasteProfile,
+  TitleCard,
+  ViewerHome,
+} from "../../lib/contract";
 import { formatMinutes, relativeTime } from "../../lib/format";
+import { useAsync } from "../../lib/hooks";
+
+type ContextPresetKey = "weeknight" | "weekend" | "mobile" | "late";
+
+const CONTEXT_PRESETS: {
+  key: ContextPresetKey;
+  label: string;
+  device: Device;
+  day: number;
+  hour: number;
+}[] = [
+  { key: "weeknight", label: "Weeknight TV", device: "tv", day: 2, hour: 20 },
+  { key: "weekend", label: "Weekend Night", device: "tv", day: 6, hour: 21 },
+  { key: "mobile", label: "Phone / Tablet", device: "mobile", day: 3, hour: 13 },
+  { key: "late", label: "Late Night", device: "tv", day: 4, hour: 23 },
+];
+
+function presetIso(day: number, hour: number): string {
+  const d = new Date(2026, 9, 18, hour, 0, 0);
+  d.setDate(d.getDate() + ((day - d.getDay() + 7) % 7));
+  return d.toISOString();
+}
+
+interface RankedPick {
+  item: TitleCard;
+  reason: string;
+  rowTitle: string;
+  rowKind: string;
+}
+
+function extractTopPicks(preview: ViewerHome | null | undefined, limit = 10): RankedPick[] {
+  if (!preview?.rows) return [];
+  const seen = new Set<string>();
+  const out: RankedPick[] = [];
+  const rows = preview.rows.filter(
+    (r) => !r.hidden && r.kind !== "continue-watching" && r.kind !== "playlists",
+  );
+  // Lead with Top 10 for You / Top 10 Today so #1 and #2 are the highest-conviction picks.
+  const lead = rows.filter((r) => r.kind === "top-10" || r.kind === "top-10-today");
+  const rest = rows.filter((r) => r.kind !== "top-10" && r.kind !== "top-10-today");
+  for (const r of [...lead, ...rest]) {
+    for (const it of r.items) {
+      if (seen.has(it.key)) continue;
+      seen.add(it.key);
+      out.push({
+        item: it,
+        reason: r.itemReasons?.[it.key] || r.reason || r.title,
+        rowTitle: r.title,
+        rowKind: r.kind,
+      });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
 
 const DEVICE_NAMES: Record<string, string> = {
   tv: "TV",
@@ -67,12 +132,31 @@ export function TasteView({
   onChange: (t: TasteProfile) => void;
 }) {
   const [tab, setTab] = useState("overview");
+  const [preset, setPreset] = useState<ContextPresetKey>("weeknight");
   const [overrides, setOverrides] = useState<TasteOverride[]>(taste.overrides ?? []);
   const [names, setNames] = useState<Record<string, string>>({});
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => setOverrides(taste.overrides ?? []), [taste]);
   const dirty = JSON.stringify(overrides) !== JSON.stringify(taste.overrides ?? []);
+
+  const activePreset = CONTEXT_PRESETS.find((p) => p.key === preset) ?? CONTEXT_PRESETS[0]!;
+  const preview = useAsync(
+    (signal) =>
+      api.viewerHome(
+        userId,
+        {
+          device: activePreset.device,
+          section: "home",
+          at: presetIso(activePreset.day, activePreset.hour),
+        },
+        signal,
+      ),
+    [userId, activePreset.key, taste.updatedAt],
+  );
+  const topPicks = useMemo(() => extractTopPicks(preview.data, 10), [preview.data]);
+  const spotlight = topPicks.slice(0, 2);
+  const nextUp = topPicks.slice(2, 10);
 
   const personName = (id: string) =>
     names[id] ?? taste.people.find((p) => String(p.id) === id)?.name ?? `Person ${id}`;
@@ -134,47 +218,195 @@ export function TasteView({
         ]}
       />
       {tab === "overview" && (
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6">
           <DashboardPanel
-            title="What Ether has learned"
-            icon={<Brain size={16} />}
-            className="lg:col-span-1"
+            title="Up First — What They'll Want to Watch Right Now"
+            icon={<Sparkles size={16} />}
+            actions={
+              <Segmented
+                ariaLabel="Recommendation context"
+                size="sm"
+                value={preset}
+                onChange={setPreset}
+                options={CONTEXT_PRESETS.map((p) => ({ value: p.key, label: p.label }))}
+              />
+            }
           >
-            <Meter
-              value={taste.confidence}
-              label="Confidence"
-              valueLabel={`${Math.round(taste.confidence * 100)}%`}
-            />
-            <p className="mt-3 text-sm text-fg-muted">{confidenceText(taste.confidence)}</p>
-            <p className="mt-3 text-xs text-fg-subtle">Updated {relativeTime(taste.updatedAt)}</p>
-          </DashboardPanel>
-          <DashboardPanel title="Habits" icon={<Clock3 size={16} />} className="lg:col-span-2">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
-                <dt className="text-fg-muted">Weeknights</dt>
-                <dd className="tabular-nums text-fg">
-                  {formatMinutes(taste.habits.weeknightMinutes)} a night
-                </dd>
-                <dt className="text-fg-muted">Weekends</dt>
-                <dd className="tabular-nums text-fg">
-                  {formatMinutes(taste.habits.weekendMinutes)} a day
-                </dd>
-                <dt className="text-fg-muted">Usually on</dt>
-                <dd className="text-fg">
-                  {DEVICE_NAMES[taste.habits.preferredDevice] ??
-                    (taste.habits.preferredDevice || "—")}
-                </dd>
-              </dl>
-              <div className="space-y-2.5">
-                <Meter value={taste.habits.bingeScore} label="Binge watching" />
-                <Meter value={taste.habits.rewatchScore} label="Rewatching" />
+            <p className="mb-4 text-sm text-fg-muted">
+              The #1 and #2 high-conviction picks across Movies and TV for this viewing
+              window—blending long-term taste, recent viewing momentum, and session-length fit.
+              Click any genre tag to boost or mute it.
+            </p>
+            {spotlight.length === 0 ? (
+              <p className="text-sm text-fg-muted">Building recommendations for this viewer…</p>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid gap-4 lg:grid-cols-2" aria-label="Top spotlight picks">
+                  {spotlight.map((pick, idx) => (
+                    <div
+                      key={pick.item.key}
+                      className="flex gap-4 rounded-xl border border-primary/30 bg-bg-subtle p-3.5"
+                    >
+                      <Artwork
+                        src={pick.item.poster}
+                        alt=""
+                        title={pick.item.title}
+                        className="aspect-[2/3] w-24 shrink-0 rounded-lg"
+                      />
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant={idx === 0 ? "info" : "secondary"}>
+                            #{idx + 1} Pick Right Now
+                          </Badge>
+                          <Badge variant="outline">
+                            {pick.item.type === "show" ? "TV Series" : "Movie"}
+                          </Badge>
+                          {pick.item.year ? (
+                            <span className="text-xs text-fg-muted">{pick.item.year}</span>
+                          ) : null}
+                          {pick.item.rating ? (
+                            <span className="text-xs font-medium text-fg">
+                              ★ {pick.item.rating.toFixed(1)}
+                            </span>
+                          ) : null}
+                          {pick.item.runtimeMinutes ? (
+                            <span className="text-xs text-fg-muted">
+                              · {formatMinutes(pick.item.runtimeMinutes)}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="truncate text-base font-semibold text-fg">
+                          {pick.item.title}
+                        </p>
+                        <p className="text-xs font-medium text-primary">{pick.reason}</p>
+                        {pick.item.summary ? (
+                          <p className="line-clamp-2 text-xs text-fg-muted">{pick.item.summary}</p>
+                        ) : null}
+                        {pick.item.genres && pick.item.genres.length > 0 ? (
+                          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                            {pick.item.genres.slice(0, 3).map((g) => {
+                              const ov = overrideFor("genre", g);
+                              return (
+                                <span
+                                  key={g}
+                                  className="inline-flex items-center gap-1 rounded-full border border-border bg-surface px-2 py-0.5 text-xs text-fg"
+                                >
+                                  <span>{g}</span>
+                                  <button
+                                    type="button"
+                                    title={`Boost ${g}`}
+                                    aria-label={`Boost ${g}`}
+                                    onClick={() =>
+                                      setOverride("genre", g, ov?.weight === 1 ? null : 1)
+                                    }
+                                    className={cn(
+                                      "rounded p-0.5 hover:bg-primary-subtle hover:text-primary",
+                                      ov?.weight === 1 && "text-success",
+                                    )}
+                                  >
+                                    <ThumbsUp size={11} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    title={`Mute ${g}`}
+                                    aria-label={`Mute ${g}`}
+                                    onClick={() =>
+                                      setOverride("genre", g, ov?.weight === -1 ? null : -1)
+                                    }
+                                    className={cn(
+                                      "rounded p-0.5 hover:bg-danger/10 hover:text-danger",
+                                      ov?.weight === -1 && "text-danger",
+                                    )}
+                                  >
+                                    <ThumbsDown size={11} />
+                                  </button>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {nextUp.length > 0 ? (
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+                      Next in their feed (#3–#{topPicks.length})
+                    </p>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+                      {nextUp.map((pick, idx) => (
+                        <div
+                          key={pick.item.key}
+                          className="group flex flex-col rounded-lg border border-border bg-surface p-2"
+                        >
+                          <div className="relative">
+                            <Artwork
+                              src={pick.item.poster}
+                              alt=""
+                              title={pick.item.title}
+                              className="aspect-[2/3] w-full rounded"
+                            />
+                            <span className="absolute left-1.5 top-1.5 rounded bg-bg/90 px-1.5 py-0.5 text-[10px] font-semibold text-fg">
+                              #{idx + 3}
+                            </span>
+                          </div>
+                          <p className="mt-1.5 truncate text-xs font-medium text-fg">
+                            {pick.item.title}
+                          </p>
+                          <p className="truncate text-[11px] text-fg-muted">{pick.reason}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
-            </div>
-            <div className="mt-4">
-              <p className="mb-1.5 text-xs text-fg-muted">When they watch</p>
-              <HourStrip peaks={taste.habits.peakHours ?? []} ariaLabel="Peak viewing hours" />
-            </div>
+            )}
           </DashboardPanel>
+
+          <div className="grid gap-6 lg:grid-cols-3">
+            <DashboardPanel
+              title="What Ether has learned"
+              icon={<Brain size={16} />}
+              className="lg:col-span-1"
+            >
+              <Meter
+                value={taste.confidence}
+                label="Confidence"
+                valueLabel={`${Math.round(taste.confidence * 100)}%`}
+              />
+              <p className="mt-3 text-sm text-fg-muted">{confidenceText(taste.confidence)}</p>
+              <p className="mt-3 text-xs text-fg-subtle">Updated {relativeTime(taste.updatedAt)}</p>
+            </DashboardPanel>
+            <DashboardPanel title="Habits" icon={<Clock3 size={16} />} className="lg:col-span-2">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+                  <dt className="text-fg-muted">Weeknights</dt>
+                  <dd className="tabular-nums text-fg">
+                    {formatMinutes(taste.habits.weeknightMinutes)} a night
+                  </dd>
+                  <dt className="text-fg-muted">Weekends</dt>
+                  <dd className="tabular-nums text-fg">
+                    {formatMinutes(taste.habits.weekendMinutes)} a day
+                  </dd>
+                  <dt className="text-fg-muted">Usually on</dt>
+                  <dd className="text-fg">
+                    {DEVICE_NAMES[taste.habits.preferredDevice] ??
+                      (taste.habits.preferredDevice || "—")}
+                  </dd>
+                </dl>
+                <div className="space-y-2.5">
+                  <Meter value={taste.habits.bingeScore} label="Binge watching" />
+                  <Meter value={taste.habits.rewatchScore} label="Rewatching" />
+                </div>
+              </div>
+              <div className="mt-4">
+                <p className="mb-1.5 text-xs text-fg-muted">When they watch</p>
+                <HourStrip peaks={taste.habits.peakHours ?? []} ariaLabel="Peak viewing hours" />
+              </div>
+            </DashboardPanel>
+          </div>
         </div>
       )}
 

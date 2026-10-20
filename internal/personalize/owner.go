@@ -122,7 +122,7 @@ func (e *Engine) PreviewHome(ctx context.Context, user *core.User, hc core.HubCo
 func (e *Engine) resolveSection(name string) (int, core.MediaType, error) {
 	var want core.MediaType
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "home":
+	case "", "home", "foryou", "for-you":
 		return 0, "", nil
 	case "movies", "movie":
 		want = core.TypeMovie
