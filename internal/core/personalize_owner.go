@@ -129,6 +129,35 @@ type RowDescriptor struct {
 	Title       string `json:"title"`
 	Kind        string `json:"kind"`
 	Description string `json:"description"`
+	// Sections lists the pages this row can appear on ("home", "movies",
+	// "shows"); empty means every page.
+	Sections []string `json:"sections,omitempty"`
+	// Group is the designer's category: "picks", "explore", "shows",
+	// "household", "collections" or "plex".
+	Group string `json:"group,omitempty"`
+}
+
+// RankerInsight describes the learned ranking model for the owner UI.
+type RankerInsight struct {
+	TrainedAt *time.Time `json:"trainedAt,omitempty"`
+	// Examples/Positives are the impressions and plays the model last
+	// trained on.
+	Examples  int `json:"examples"`
+	Positives int `json:"positives"`
+	// AUC of the learned model and of the hand-tuned baseline on held-out
+	// impressions (0.5 = chance). Zero when there is not enough data.
+	AUC         float64 `json:"auc"`
+	BaselineAUC float64 `json:"baselineAuc"`
+	// Active is true when the learned model is being used for ranking.
+	Active   bool            `json:"active"`
+	Features []RankerFeature `json:"features"`
+}
+
+// RankerFeature is one learned weight, largest magnitude first.
+type RankerFeature struct {
+	Name   string  `json:"name"`
+	Label  string  `json:"label"`
+	Weight float64 `json:"weight"`
 }
 
 // RowInsight is the 7-day engagement of one row kind.
