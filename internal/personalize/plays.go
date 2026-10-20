@@ -144,6 +144,7 @@ func (e *Engine) trackProgress(ctx context.Context, ev state.Event) {
 			e.log.Warn("personalize: recording play failed", "err", err)
 			return
 		}
+		e.rankerLabelPlay(ctx, &rec) // label the serve it came from (servelog.go)
 		ap = &activePlay{rec: rec}
 		e.active[pk] = ap
 	}

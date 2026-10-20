@@ -252,4 +252,5 @@ func (e *Engine) RecordImpressions(user *core.User, hc core.HubContext, hubs []c
 	}
 	e.mu.Unlock()
 	e.rec.record(imp)
+	e.rankerRecordServe(user, hc, hubs, at) // serve log for the learned ranker (servelog.go)
 }
