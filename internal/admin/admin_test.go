@@ -69,6 +69,7 @@ func req(method, target, body string) *http.Request {
 	}
 	r := httptest.NewRequest(method, target, rdr)
 	r.RemoteAddr = "192.168.1.50:49152"
+	r.Host = "192.168.1.10:32400"
 	if body != "" {
 		r.Header.Set("Content-Type", "application/json")
 	}
@@ -692,5 +693,76 @@ func TestSystemLoadRoute(t *testing.T) {
 	}
 	if strings.Contains(serve(h, auth(req(http.MethodGet, "/ether/api/dashboard", ""))).Body.String(), `"cores"`) {
 		t.Fatal("dashboard should not carry system load")
+	}
+}
+
+// Reopening the wizard, or saving a config document loaded before setup
+// finished, must not bring back the tokenless local-network access of a
+// fresh install: any LAN device could then reconfigure and re-claim the
+// server.
+func TestReopenKeepsOwnerCredentialRequired(t *testing.T) {
+	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+	owner := func(r *http.Request) *http.Request { r.Header.Set("X-Plex-Token", ownerToken); return r }
+
+	if rec := serve(h, owner(req(http.MethodPost, "/ether/api/setup/reopen", `{}`))); rec.Code != http.StatusOK {
+		t.Fatalf("owner reopen: %d %s", rec.Code, rec.Body)
+	}
+	if rec := serve(h, req(http.MethodGet, "/ether/api/config", "")); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("tokenless LAN config read after reopen: got %d want 401", rec.Code)
+	}
+
+	// A stale document (setupComplete:false) saved by the owner.
+	rec := serve(h, owner(req(http.MethodGet, "/ether/api/config", "")))
+	var env struct {
+		Config config.Config `json:"config"`
+	}
+	decode(t, rec, &env)
+	env.Config.SetupComplete = false
+	raw, _ := json.Marshal(env)
+	if rec := serve(h, owner(req(http.MethodPut, "/ether/api/config", string(raw)))); rec.Code != http.StatusOK {
+		t.Fatalf("PUT config: %d %s", rec.Code, rec.Body)
+	}
+	if !store.Get().SetupComplete {
+		t.Fatal("PUT config cleared setupComplete")
+	}
+	if rec := serve(h, req(http.MethodGet, "/ether/api/config", "")); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("tokenless LAN config read after stale save: got %d want 401", rec.Code)
+	}
+}
+
+// Before setup, tokenless LAN access is limited to requests addressed to a
+// local name: a public domain re-pointed at the server's LAN address (DNS
+// rebinding) must not reach the setup API from the owner's browser.
+func TestSetupRejectsRebindingHost(t *testing.T) {
+	store := newStore(t, seededConfig) // setup not complete
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+	for host, want := range map[string]int{
+		"attacker.example.com:32400": http.StatusForbidden,
+		"rebind.evil.net":            http.StatusForbidden,
+		"192.168.1.10:32400":         http.StatusOK,
+		"[fe80::1]:32400":            http.StatusOK,
+		"localhost:32400":            http.StatusOK,
+		"nas:32400":                  http.StatusOK,
+		"nas.local:32400":            http.StatusOK,
+		"tower.home.arpa":            http.StatusOK,
+	} {
+		r := req(http.MethodGet, "/ether/api/config", "")
+		r.Host = host
+		if rec := serve(h, r); rec.Code != want {
+			t.Errorf("Host %s: got %d want %d (%s)", host, rec.Code, want, rec.Body)
+		}
+	}
+	r := req(http.MethodGet, "/ether/api/bootstrap", "")
+	r.Host = "attacker.example.com:32400"
+	if rec := serve(h, r); strings.Contains(rec.Body.String(), `"authenticated":true`) {
+		t.Fatalf("bootstrap reports a rebinding host as authenticated: %s", rec.Body)
+	}
+	// The owner's credential works under any name.
+	r = req(http.MethodGet, "/ether/api/config", "")
+	r.Host = "attacker.example.com:32400"
+	r.Header.Set("X-Plex-Token", ownerToken)
+	if rec := serve(h, r); rec.Code != http.StatusOK {
+		t.Fatalf("owner token under a public name: %d", rec.Code)
 	}
 }

@@ -101,11 +101,14 @@ func (h *Handler) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 	h.handleSetupStatus(w, r)
 }
 
+// handleSetupReopen lets the owner run the wizard again. Once setup is
+// complete this route is reachable only with an owner credential, and the
+// wizard works with that credential, so setup stays marked complete:
+// clearing it would reopen the tokenless local-network access meant for a
+// fresh install, letting any device on the LAN (or any client of a
+// reverse proxy on this host) reconfigure the server, replace its plex.tv
+// sign-in and claim it to another account.
 func (h *Handler) handleSetupReopen(w http.ResponseWriter, r *http.Request) {
-	if err := h.deps.Config.Update(func(c *config.Config) error { c.SetupComplete = false; return nil }); err != nil {
-		writeError(w, http.StatusInternalServerError, "save_failed", "could not save configuration")
-		return
-	}
 	h.handleSetupStatus(w, r)
 }
 

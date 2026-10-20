@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -188,5 +189,59 @@ func TestRegistrarRetriesFailedCertificateAfterRetryAfter(t *testing.T) {
 	r.runDue(ctx)
 	if st := r.Status(); st.Cert.SelfSigned || st.Cert.Hash != fakeHash {
 		t.Fatalf("certificate not retried after RetryAfter: %+v %q", st.Cert, st.CertError)
+	}
+}
+
+// portMapper grants a fixed external port, whatever was requested, as a
+// NAT-PMP gateway does when the requested port is taken.
+type portMapper struct {
+	fakeMapper
+	granted int
+}
+
+func (m *portMapper) Ensure(ctx context.Context, internal, external int) (remote.MappingStatus, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensures++
+	m.st = remote.MappingStatus{Active: true, Method: remote.MethodNATPMP, ExternalPort: m.granted, InternalPort: internal, ExternalIP: "203.0.113.7"}
+	return m.st, nil
+}
+
+// The WAN connection, servers.xml port and reachability probe must use the
+// external port the gateway mapped, not the one requested: advertising the
+// requested port leaves remote clients knocking on a closed port.
+func TestRegistrarPublishesGrantedExternalPort(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	cfg := testConfig()
+	cfg.Plex.Token, cfg.Plex.Claimed, cfg.Plex.OwnerPlexID = "server-token-42", true, 42
+	cfg.Plex.RemoteAccess, cfg.Plex.UseUPnP = true, true
+	mapper := &portMapper{granted: 41234}
+	r, err := NewRegistrar(RegistrarOptions{
+		Config: &memConfig{cfg: cfg}, Client: newServerClient(t, f), Mapper: mapper,
+		WAN:   &fakeWAN{ip: "198.51.100.1"},
+		LAN:   func() ([]net.IP, error) { return []net.IP{net.ParseIP("192.168.1.5")}, nil },
+		Reach: &remote.ReachabilityChecker{Client: &http.Client{}, Timeout: 50 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	r.runDue(ctx)
+	st := r.Status()
+	if !slices.Contains(st.PublishedURIs, "http://203.0.113.7:41234") || slices.Contains(st.PublishedURIs, "http://203.0.113.7:32400") {
+		t.Fatalf("published %v, want the granted WAN port 41234", st.PublishedURIs)
+	}
+	f.mu.Lock()
+	regs := slices.Clone(f.registered)
+	f.mu.Unlock()
+	if len(regs) == 0 || !strings.Contains(regs[len(regs)-1], `port="41234"`) {
+		t.Fatalf("servers.xml registration %v, want port 41234", regs)
+	}
+	res := r.CheckReachability(ctx)
+	for _, pr := range res.Results {
+		if strings.Contains(pr.URI, ":32400") && strings.Contains(pr.URI, "203.0.113.7") {
+			t.Fatalf("reachability probed the requested port: %v", res.Results)
+		}
 	}
 }
