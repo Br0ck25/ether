@@ -10,6 +10,10 @@ version: 2
 
 project_name: ether
 
+# Keep the output directory separate from dist/ffmpeg staged by hooks.
+# GoReleaser requires its own dist to remain empty until hooks finish.
+dist: dist/release
+
 before:
   hooks:
     - go mod tidy
@@ -61,6 +65,8 @@ universal_binaries:
 archives:
   - id: ether
     ids: [ether, ether-tray]
+    # macOS ships its GUI companion in the DMG, not the server archive.
+    allow_different_binary_count: true
     name_template: >-
       ether_{{ .Version }}_{{ .Os }}_{{ if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}
     formats: [tar.gz]

@@ -73,7 +73,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: goreleaser-dist
-          path: dist/
+          path: dist/release/
           retention-days: 7
 
   macos:
