@@ -49,6 +49,11 @@ type RankerOptions struct {
 	// RetrainLabels retrains early once this many new labels arrived
 	// (default 1000).
 	RetrainLabels int
+	// TrainHour is the local hour training prefers (default 4, the quiet
+	// small hours; negative = any hour). A model older than two days
+	// trains at the next quiet moment regardless. Training never starts
+	// while Options.Busy reports viewers streaming.
+	TrainHour int
 	// MinExamples / MinPositives gate activation (default 2000 / 30).
 	MinExamples, MinPositives int
 	// MinLift is the held-out AUC margin over the baseline required to
@@ -71,6 +76,9 @@ func (o *RankerOptions) defaults(refreshEvery time.Duration) {
 	def(&o.MaxServesPerDay, 48)
 	def(&o.MaxItems, 1_000_000)
 	def(&o.RetrainLabels, 1000)
+	if o.TrainHour == 0 {
+		o.TrainHour = 4
+	}
 	def(&o.MinExamples, 2000)
 	def(&o.MinPositives, 30)
 	if o.Retention <= 0 {
@@ -299,7 +307,7 @@ func (e *Engine) rankerLoop(ctx context.Context) {
 			fresh := labels - rs.lastLabels
 			rs.trainMu.Unlock()
 			due := now.Sub(lastTrain) >= rs.opts.TrainEvery && fresh > 0
-			if (due || fresh >= rs.opts.RetrainLabels) && labels >= rankMinTrain {
+			if (due || fresh >= rs.opts.RetrainLabels) && labels >= rankMinTrain && e.quietToTrain(now, lastTrain) {
 				lastTrain = now
 				if _, err := e.TrainRanker(ctx); err != nil && ctx.Err() == nil {
 					e.log.Warn("personalize: training ranker failed", "err", err)
@@ -312,6 +320,21 @@ func (e *Engine) rankerLoop(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// quietToTrain reports whether training may start now: never while viewers
+// are streaming, and in the overnight window unless the model is already
+// two days old (or has never been trained).
+func (e *Engine) quietToTrain(now, lastTrain time.Time) bool {
+	if e.opts.Busy != nil && e.opts.Busy() {
+		return false
+	}
+	h := e.rk.opts.TrainHour
+	if h < 0 || lastTrain.IsZero() || now.Sub(lastTrain) >= 48*time.Hour {
+		return true
+	}
+	local := now.In(e.loc).Hour()
+	return (local-h+24)%24 < 3 // a three-hour window from TrainHour
 }
 
 // refreshRankerStats reloads exposure counts and server play rates.
