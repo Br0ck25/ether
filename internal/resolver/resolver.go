@@ -64,14 +64,16 @@ type CandidateTrace struct {
 
 // Trace is one recorded resolution attempt, for the admin UI.
 type Trace struct {
-	TitleKey       core.RatingKey   `json:"titleKey"`
-	TitleName      string           `json:"titleName"`
-	Profile        string           `json:"profile"`
-	At             time.Time        `json:"at"`
-	Candidates     []CandidateTrace `json:"candidates"`
-	Winner         string           `json:"winner,omitempty"` // release id
-	Err            string           `json:"err,omitempty"`
-	SearchDuration time.Duration    `json:"searchDuration"`
+	TitleKey                  core.RatingKey   `json:"titleKey"`
+	TitleName                 string           `json:"titleName"`
+	Profile                   string           `json:"profile"`
+	At                        time.Time        `json:"at"`
+	Candidates                []CandidateTrace `json:"candidates"`
+	Winner                    string           `json:"winner,omitempty"` // release id
+	Err                       string           `json:"err,omitempty"`
+	SearchDuration            time.Duration    `json:"searchDuration"`
+	SourcePreparationDuration time.Duration    `json:"sourcePreparationDuration"`
+	TotalDuration             time.Duration    `json:"totalDuration"`
 	// Failover marks a resolution that excluded already-tried releases.
 	Failover bool `json:"failover,omitempty"`
 	// Pinned is the owner-pinned release id considered for the title;
@@ -375,9 +377,11 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 }
 
 func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile core.QualityProfile) (*core.Resolution, error) {
+	started := time.Now()
 	t := req.Title
 	trace := Trace{TitleKey: t.Key, TitleName: consoleTitleName(t), Profile: profile.Name, At: s.now(), Failover: len(req.Exclude) > 0}
 	defer func() {
+		trace.TotalDuration = time.Since(started)
 		s.addTrace(trace)
 		s.recordHistory(ctx, trace)
 	}()
@@ -510,7 +514,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 	}
 
+	prepareStart := time.Now()
 	cands = s.prepareSources(ctx, cands, req.Title, &trace)
+	trace.SourcePreparationDuration = time.Since(prepareStart)
 	if rcfg.OptimisticStart && !preferTried {
 		nzb, err := s.indexer.FetchNZB(ctx, cands[0].rel)
 		if err == nil {
