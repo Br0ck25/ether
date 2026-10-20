@@ -52,19 +52,28 @@ import type {
 
 const TOKEN_KEY = "ether-admin-token";
 
+// A browser may allow reads while rejecting writes (quota/privacy settings).
+// Keep the current tab's explicit sign-in/sign-out authoritative in that case.
+let sessionToken = "";
+let sessionOnly = false;
+
 export function getToken(): string {
+  if (sessionOnly) return sessionToken;
   try {
-    return localStorage.getItem(TOKEN_KEY) ?? "";
+    sessionToken = localStorage.getItem(TOKEN_KEY) ?? "";
   } catch {
-    return "";
+    // The current tab can still authenticate without persistent storage.
   }
+  return sessionToken;
 }
 export function setToken(token: string): void {
+  sessionToken = token;
   try {
     if (token) localStorage.setItem(TOKEN_KEY, token);
     else localStorage.removeItem(TOKEN_KEY);
+    sessionOnly = false;
   } catch {
-    /* private mode: the session simply won't persist */
+    sessionOnly = true;
   }
 }
 

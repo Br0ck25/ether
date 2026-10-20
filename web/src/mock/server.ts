@@ -1735,9 +1735,11 @@ export function createFakeServer(opts: FakeOptions = {}) {
         state.boot.setupComplete = true;
         return json({ setupComplete: true, requiredComplete: true, steps: [] });
       case "POST /setup/reopen":
-        state.config.setupComplete = false;
-        state.boot.setupComplete = false;
-        return json({ setupComplete: false, requiredComplete: true, steps: [] });
+        return json({
+          setupComplete: state.config.setupComplete,
+          requiredComplete: true,
+          steps: [],
+        });
       case "POST /plex/pin":
         return json({ id: "pin1", code: "WXYZ", authUrl: "https://app.plex.tv/auth#?code=WXYZ" });
       case "POST /plex/claim":

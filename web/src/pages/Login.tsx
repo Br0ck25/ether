@@ -16,26 +16,33 @@ export default function Login({ boot, onReady }: { boot: Bootstrap; onReady: () 
   const [pending, setPending] = useState<{ code: string; authUrl: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const cancelled = useRef(false);
-  useEffect(
-    () => () => {
+  const popupRef = useRef<Window | null>(null);
+  useEffect(() => {
+    cancelled.current = false;
+    return () => {
       cancelled.current = true;
-    },
-    [],
-  );
+      popupRef.current?.close();
+      popupRef.current = null;
+    };
+  }, []);
 
   const signIn = async () => {
     setError(null);
     setBusy(true);
     // Open the window inside the click so popup blockers allow it.
     const popup = window.open("", "plex-sign-in", "width=560,height=720");
+    popupRef.current = popup;
     try {
       const pin = await api.signInStart();
+      if (cancelled.current) return;
       setPending({ code: pin.code, authUrl: pin.authUrl });
       if (popup) popup.location.href = pin.authUrl;
       const deadline = Date.now() + SIGN_IN_TIMEOUT_MS;
       while (!cancelled.current && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, POLL_MS));
+        if (cancelled.current) return;
         const res = await api.signInPoll(pin.handle);
+        if (cancelled.current) return;
         if (res.done && res.token) {
           setToken(res.token);
           popup?.close();
@@ -45,6 +52,7 @@ export default function Login({ boot, onReady }: { boot: Bootstrap; onReady: () 
       }
       if (!cancelled.current) setError(new Error("Sign-in timed out. Try again."));
     } catch (err) {
+      if (cancelled.current) return;
       popup?.close();
       setError(
         err instanceof ApiError && err.code === "not_owner"
@@ -54,6 +62,8 @@ export default function Login({ boot, onReady }: { boot: Bootstrap; onReady: () 
           : err,
       );
     } finally {
+      popup?.close();
+      if (popupRef.current === popup) popupRef.current = null;
       if (!cancelled.current) {
         setBusy(false);
         setPending(null);
@@ -112,15 +122,25 @@ function TokenFallback({ onReady }: { onReady: () => void }) {
   const [value, setValue] = useState(getToken());
   const [error, setError] = useState<unknown>(null);
   const [checking, setChecking] = useState(false);
+  const cancelled = useRef(false);
+  useEffect(() => {
+    cancelled.current = false;
+    return () => {
+      cancelled.current = true;
+    };
+  }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setChecking(true);
     setError(null);
-    setToken(value.trim());
+    const token = value.trim();
+    setToken(token);
     try {
       await api.setupStatus(); // cheap authenticated probe
+      if (cancelled.current || getToken() !== token) return;
       onReady();
     } catch (err) {
+      if (cancelled.current || getToken() !== token) return;
       setToken("");
       setError(
         err instanceof ApiError && err.status === 401
@@ -128,7 +148,7 @@ function TokenFallback({ onReady }: { onReady: () => void }) {
           : err,
       );
     } finally {
-      setChecking(false);
+      if (!cancelled.current) setChecking(false);
     }
   };
   return (
