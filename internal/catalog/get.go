@@ -23,6 +23,11 @@ func (c *Catalog) Get(ctx context.Context, key core.RatingKey) (*core.Title, err
 	if err == nil && (t.Adult || !t.IsReleased(c.now())) {
 		return nil, core.ErrNotFound
 	}
+	// A season none of whose episodes has aired is not listed (seasonsOfShow)
+	// and must not open directly either.
+	if err == nil && t.Type == core.TypeSeason && !listableSeason(t, c.now()) {
+		return nil, core.ErrNotFound
+	}
 	return t, err
 }
 
@@ -100,7 +105,7 @@ func (c *Catalog) getShow(ctx context.Context, id int64) (*core.Title, error) {
 			return nil, uerr
 		}
 		if len(titles) > 1 {
-			if uerr := c.upsertMany(ctx, titles[1:], upsertOpts{}); uerr != nil {
+			if uerr := c.upsertMany(ctx, titles[1:], upsertOpts{airDates: true}); uerr != nil {
 				return nil, uerr
 			}
 		}
@@ -147,9 +152,10 @@ func (c *Catalog) fetchSeason(ctx context.Context, showID int64, season int) (*c
 		return nil, err
 	}
 	// If season row is fresh-detailed and episodes exist, skip network.
+	// Mirrored, not aired: a fresh season whose episodes are all still
+	// to air must not refetch on every read.
 	if st, lerr := c.loadByKey(ctx, key); lerr == nil && c.fresh(st) {
-		eps, qerr := c.episodesOfSeason(ctx, showID, season)
-		if qerr == nil && len(eps) > 0 {
+		if ok, qerr := c.seasonMirrored(ctx, showID, season); qerr == nil && ok {
 			return &st.t, nil
 		}
 	}
@@ -186,7 +192,7 @@ func (c *Catalog) fetchSeason(ctx context.Context, showID int64, season int) (*c
 	}
 	// Episodes from a season payload lack their own external ids, so they are
 	// not marked detail; Get(episode) enriches and marks them.
-	if err := c.upsertMany(ctx, eps, upsertOpts{}); err != nil {
+	if err := c.upsertMany(ctx, eps, upsertOpts{airDates: true}); err != nil {
 		return nil, err
 	}
 	return &seasonT, nil
@@ -240,11 +246,35 @@ func (c *Catalog) getEpisode(ctx context.Context, key core.RatingKey) (*core.Tit
 	return &st.t, nil
 }
 
+// seasonsOfShow lists a show's seasons that have aired: their own air date
+// has passed and at least one episode has aired (queryTitles drops
+// unreleased rows and applies aired counts).
 func (c *Catalog) seasonsOfShow(ctx context.Context, showID int64) ([]core.Title, error) {
-	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='season' AND show_tmdb=? ORDER BY season ASC`, showID)
+	all, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='season' AND show_tmdb=? ORDER BY season ASC`, showID)
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for i := range all {
+		if listableSeason(&all[i], c.now()) {
+			out = append(out, all[i])
+		}
+	}
+	return out, nil
 }
+
+// episodesOfSeason lists a season's aired episodes; queryTitles drops those
+// with unknown or future air dates.
 func (c *Catalog) episodesOfSeason(ctx context.Context, showID int64, season int) ([]core.Title, error) {
 	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='episode' AND show_tmdb=? AND season=? ORDER BY episode ASC`, showID, season)
+}
+
+// seasonMirrored reports whether any of a season's episodes, aired or not,
+// are in the mirror.
+func (c *Catalog) seasonMirrored(ctx context.Context, showID int64, season int) (bool, error) {
+	var n int
+	err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalog_titles WHERE type='episode' AND show_key=? AND season=?`, int64(core.ShowKey(showID)), season).Scan(&n)
+	return n > 0, err
 }
 
 // Children: seasons of a show, episodes of a season.

@@ -318,13 +318,21 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 	if parent.Type == core.TypeShow {
 		s.applyLeafCounts(ctx, pr, mc.Metadata, page)
 		if allLeaves != nil {
-			viewed := 0
+			viewed, leaves := 0, 0
 			for _, m := range mc.Metadata {
 				if m.ViewedLeafCount != nil {
 					viewed += *m.ViewedLeafCount
 				}
+				if m.LeafCount != nil {
+					leaves += *m.LeafCount
+				}
 			}
 			allLeaves.ViewedLeafCount = model.Ptr(viewed)
+			if lo == 0 && hi == len(kids) {
+				// Every season is on this page: total the same per-season
+				// counts the viewed total comes from.
+				allLeaves.LeafCount = model.Ptr(leaves)
+			}
 			mc.Directory = []model.Directory{*allLeaves}
 		}
 	}

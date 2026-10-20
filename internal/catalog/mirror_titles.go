@@ -122,6 +122,13 @@ func (m *Mirror) Titles(ctx context.Context, keys []core.RatingKey) ([]core.Titl
 			return nil, err
 		}
 	}
+	counted := make([]*core.Title, 0, len(byKey))
+	for _, t := range byKey {
+		counted = append(counted, t)
+	}
+	if err := applyAiredCounts(ctx, m.db, m.now(), counted); err != nil {
+		return nil, err
+	}
 	out := make([]core.Title, 0, len(keys))
 	for _, k := range keys {
 		if t := byKey[k]; t != nil && !t.Adult && t.IsReleased(m.now()) {
