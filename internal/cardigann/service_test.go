@@ -123,7 +123,7 @@ func TestServiceTestRecordsStatusAndRebuildsRunners(t *testing.T) {
 	}
 	ix := config.Indexer{ID: "priv", Name: "Private", URL: site.srv.URL, Kind: config.IndexerKindCardigann, Definition: "fakeprivate", Enabled: true,
 		Settings: map[string]string{"username": "alice"}, SecretSettings: map[string]string{"password": "secret"}}
-	res := s.Test(ctx, ix)
+	res := s.Test(ctx, ix, true)
 	if !res.OK || res.Results != 2 || len(res.Titles) != 2 {
 		t.Fatalf("test = %+v", res)
 	}
@@ -151,7 +151,7 @@ func TestServiceTestRecordsStatusAndRebuildsRunners(t *testing.T) {
 	if _, err := b.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "Private Film"}, func(context.Context, string) error { return nil }); !errors.Is(err, ErrLogin) {
 		t.Fatalf("stale credentials err = %v", err)
 	}
-	res = s.Test(ctx, ix)
+	res = s.Test(ctx, ix, true)
 	if res.OK || !strings.Contains(res.Error, "Wrong username or password") {
 		t.Fatalf("bad test = %+v", res)
 	}

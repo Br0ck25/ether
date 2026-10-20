@@ -26,6 +26,7 @@ type privateSite struct {
 	torrent  []byte
 	hash     string
 	badForms []string
+	noMarker bool // search pages omit the signed-in marker
 }
 
 func newPrivateSite(t *testing.T) *privateSite {
@@ -99,7 +100,10 @@ func (p *privateSite) serve(w http.ResponseWriter, r *http.Request) {
 	case "/index.php":
 		fmt.Fprint(w, `<a href="logout.php">Logout</a>`)
 	case "/torrents.php":
-		fmt.Fprintf(w, `<a href="logout.php">Logout</a>
+		if !p.noMarker {
+			fmt.Fprint(w, `<a href="logout.php">Logout</a>`)
+		}
+		fmt.Fprintf(w, `
 <div class="torrent"><span class="cat">10</span><h3>Private.Film.2020.1080p</h3><a class="details" href="details.php?id=5">open</a><span class="size">4 GB</span><span class="seed">8</span></div>
 <div class="torrent"><span class="cat">20</span><h3>Private.Show.S01E01</h3><a class="details" href="details.php?id=6">open</a><span class="size">1 GB</span><span class="seed">2</span></div>`)
 	case "/details.php":
@@ -341,5 +345,20 @@ func TestLoginLockHonoursContext(t *testing.T) {
 		t.Fatal(err)
 	} else {
 		u()
+	}
+}
+
+func TestSearchPageWithoutLoginMarkerKeepsSession(t *testing.T) {
+	site := newPrivateSite(t)
+	site.noMarker = true
+	r := testRunner(t, loadDef(t, "private.yml"), site.srv.URL, runnerSetup{settings: aliceSettings})
+	for i := 0; i < 3; i++ {
+		rels, err := r.Search(context.Background(), core.SearchRequest{Type: core.TypeMovie, Title: "Private Film"}, nil, nil, nil)
+		if err != nil || len(rels) != 1 {
+			t.Fatalf("search %d: %v %v", i, rels, err)
+		}
+	}
+	if site.loginCount() != 1 {
+		t.Fatalf("logins = %d, want 1", site.loginCount())
 	}
 }

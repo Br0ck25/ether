@@ -130,10 +130,16 @@ func (s *Service) Handler(deps HandlerDeps) http.Handler {
 			ix = deps.Unredact(ix)
 		}
 		ix.Enabled = true
+		saved := false
+		if deps.Indexers != nil && ix.ID != "" {
+			for _, c := range deps.Indexers() {
+				saved = saved || c.ID == ix.ID
+			}
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 		defer cancel()
 		start := time.Now()
-		res := s.Test(ctx, ix)
+		res := s.Test(ctx, ix, saved)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": res.OK, "results": res.Results, "titles": res.Titles, "error": res.Error,
 			"durationMs": time.Since(start).Milliseconds(),

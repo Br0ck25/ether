@@ -358,38 +358,56 @@ func (r *Runner) searchPath(ctx context.Context, p SearchPath, v vars, reserve R
 	if err != nil {
 		return nil, err
 	}
-	if r.def.Login != nil && r.loginNeeded(resp, p.Response.Type) {
-		if err := r.reauth(ctx, version); err != nil {
-			return nil, err
-		}
-		if resp, err = r.http.do(ctx, req); err != nil {
-			return nil, err
-		}
-		if r.loginNeeded(resp, p.Response.Type) {
-			return nil, fmt.Errorf("%s: %w: the site did not accept the session after signing in", r.def.Name, ErrLogin)
+	if r.def.Login != nil {
+		if needed, hard := r.loginNeeded(resp, p.Response.Type); needed {
+			if !hard {
+				// The page lacks the signed-in marker but may still list
+				// results (some sites omit it on search pages): only sign in
+				// again when nothing could be read.
+				if rows, err := r.readResponse(resp, p, v); err == nil && len(rows) > 0 {
+					return rows, nil
+				}
+			}
+			if err := r.reauth(ctx, version); err != nil {
+				return nil, err
+			}
+			if resp, err = r.http.do(ctx, req); err != nil {
+				return nil, err
+			}
+			if needed, hard := r.loginNeeded(resp, p.Response.Type); needed && hard {
+				return nil, fmt.Errorf("%s: %w: the site did not accept the session after signing in", r.def.Name, ErrLogin)
+			}
 		}
 	}
 	if resp.redirected() {
 		// Not a login redirect: follow it once more by hand.
-		next := req
-		next.url, next.method, next.form, next.raw, next.follow = resp.location, http.MethodGet, nil, "", true
 		if strings.HasPrefix(resp.location, "magnet:") {
 			return nil, fmt.Errorf("%s: search redirected to a magnet link", r.def.Name)
 		}
+		next := req
+		next.url, next.method, next.form, next.raw, next.follow = resp.location, http.MethodGet, nil, "", true
 		if resp, err = r.http.do(ctx, next); err != nil {
 			return nil, err
 		}
 	}
+	return r.readResponse(resp, p, v)
+}
+
+// readResponse checks a search response's status and parses its rows.
+func (r *Runner) readResponse(resp *response, p SearchPath, v vars) ([]found, error) {
 	switch {
 	case resp.status == http.StatusTooManyRequests:
 		return nil, fmt.Errorf("%s: the site is rate limiting requests (HTTP 429)", r.def.Name)
 	case resp.status == http.StatusUnauthorized || resp.status == http.StatusForbidden:
 		return nil, fmt.Errorf("%s: %w: HTTP %d", r.def.Name, ErrLogin, resp.status)
+	case resp.redirected():
+		return nil, fmt.Errorf("%s: search was redirected", r.def.Name)
 	case resp.status/100 != 2:
 		return nil, fmt.Errorf("%s: search returned HTTP %d", r.def.Name, resp.status)
 	}
 	body := r.http.text(resp)
 	if len(r.def.Search.PreprocessingFilters) > 0 {
+		var err error
 		if body, err = applyFilters(body, r.def.Search.PreprocessingFilters, r.env(v)); err != nil {
 			return nil, err
 		}
@@ -421,36 +439,33 @@ func (r *Runner) searchPath(ctx context.Context, p SearchPath, v vars, reserve R
 	}
 }
 
-// loginNeeded reports a response that shows the session is gone: an
-// unfollowed redirect, an auth status, or (for HTML) a page lacking the
-// login test selector.
-func (r *Runner) loginNeeded(resp *response, respType string) bool {
+// loginNeeded reports a response that shows the session is gone. hard
+// marks an unfollowed redirect or an auth status; a soft sign is an HTML
+// page lacking the login test selector.
+func (r *Runner) loginNeeded(resp *response, respType string) (needed, hard bool) {
 	if resp.redirected() && !strings.HasPrefix(resp.location, "magnet:") {
-		return true
+		return true, true
 	}
 	if resp.status == http.StatusUnauthorized || resp.status == http.StatusForbidden {
-		return true
+		return true, true
 	}
 	t := r.def.Login.Test
-	if t == nil || t.Selector == "" {
-		return false
-	}
-	if respType == "json" || respType == "xml" {
-		return false
+	if t == nil || t.Selector == "" || respType == "json" || respType == "xml" {
+		return false, false
 	}
 	ct := strings.ToLower(resp.header.Get("Content-Type"))
 	if ct != "" && !strings.Contains(ct, "html") {
-		return false
+		return false, false
 	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(r.http.text(resp)))
 	if err != nil {
-		return false
+		return false, false
 	}
 	m, err := compileCSS(mustRender(t.Selector, r.vars()))
 	if err != nil {
-		return false
+		return false, false
 	}
-	return doc.FindMatcher(m).Length() == 0
+	return doc.FindMatcher(m).Length() == 0, false
 }
 
 // parseDocument reads rows from an HTML or XML document.

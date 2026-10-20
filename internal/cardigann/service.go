@@ -285,11 +285,11 @@ func (s *Service) Backend(cfg config.Indexer) (newznab.Backend, error) {
 	return backend{r: r, movieCats: cfg.MovieCategories, tvCats: cfg.TVCategories}, nil
 }
 
-// Test signs in with cfg (saved or not) and runs a sample search. A
-// saved indexer's result is recorded for the indexer list.
-func (s *Service) Test(ctx context.Context, cfg config.Indexer) TestResult {
+// Test signs in with cfg (saved or not) and runs a sample search. With
+// record set (a saved indexer) the result is kept for the indexer list.
+func (s *Service) Test(ctx context.Context, cfg config.Indexer, record bool) TestResult {
 	res := s.test(ctx, cfg)
-	if cfg.ID != "" {
+	if record && cfg.ID != "" {
 		msg := res.Error
 		if res.OK {
 			msg = fmt.Sprintf("%d results", res.Results)
