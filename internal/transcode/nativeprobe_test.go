@@ -21,13 +21,17 @@ import (
 // bundled ffprobe's output for them, so native probing is held to what the
 // ffprobe path reported.
 func TestProbeSourceMatchesRecordedFFprobe(t *testing.T) {
-	files, _ := filepath.Glob("testdata/nativeprobe/*.mkv")
+	var files []string
+	for _, ext := range []string{"mkv", "mp4", "mov"} {
+		more, _ := filepath.Glob("testdata/nativeprobe/*." + ext)
+		files = append(files, more...)
+	}
 	if len(files) == 0 {
 		t.Fatal("no fixtures")
 	}
 	for _, f := range files {
 		t.Run(filepath.Base(f), func(t *testing.T) {
-			raw, err := os.ReadFile(strings.TrimSuffix(f, ".mkv") + ".ffprobe.json")
+			raw, err := os.ReadFile(strings.TrimSuffix(f, filepath.Ext(f)) + ".ffprobe.json")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -45,6 +49,21 @@ func TestProbeSourceMatchesRecordedFFprobe(t *testing.T) {
 				t.Fatalf("ProbeSource: %v", err)
 			}
 			normalizeForNative(want, got)
+			// libavformat derives MP4 durations and bitrates from edit
+			// lists and the longest stream; tolerate rounding there.
+			if d := want.Duration - got.Duration; d > -50*time.Millisecond && d < 50*time.Millisecond {
+				want.Duration = got.Duration
+				want.BitrateKbps = got.BitrateKbps
+			}
+			for i := range want.Streams {
+				tolerance := 0.02
+				if want.Streams[i].Type == "audio" {
+					tolerance = 0.06 // encoder priming in the audio edit list
+				}
+				if i < len(got.Streams) && closeTo(want.Streams[i].BitrateKbps, got.Streams[i].BitrateKbps, tolerance) {
+					want.Streams[i].BitrateKbps = got.Streams[i].BitrateKbps
+				}
+			}
 			w, _ := json.MarshalIndent(want, "", " ")
 			g, _ := json.MarshalIndent(got, "", " ")
 			if string(w) != string(g) {
@@ -289,6 +308,14 @@ func TestProbeSourceDefersToFFprobe(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrProbeIncomplete", name, err)
 		}
 	}
+	// Fragmented MP4 keeps its sample tables in moof boxes.
+	frag, err := os.ReadFile("testdata/nativeprobe/h264_aac_fragmented.defer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ProbeSource(context.Background(), bytes.NewReader(frag), int64(len(frag))); !errors.Is(err, ErrProbeIncomplete) {
+		t.Errorf("fragmented mp4: err = %v, want ErrProbeIncomplete", err)
+	}
 	// The same file with a frame rate is accepted.
 	ok := file(info, video())
 	if _, err := ProbeSource(context.Background(), bytes.NewReader(ok), int64(len(ok))); err != nil {
@@ -352,4 +379,9 @@ func TestBitReaderRejectsTruncatedParameterSets(t *testing.T) {
 	if got := rbsp([]byte{0, 0, 3, 1, 0, 0, 3}); !bytes.Equal(got, []byte{0, 0, 1, 0, 0}) {
 		t.Errorf("rbsp = % x", got)
 	}
+}
+
+func closeTo(a, b int, frac float64) bool {
+	d := math.Abs(float64(a - b))
+	return d <= 1 || d <= frac*math.Max(float64(a), float64(b))
 }

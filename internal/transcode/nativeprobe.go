@@ -236,8 +236,8 @@ func (s *nativeSource) header(off, end int64) (id uint64, start, stop int64, err
 	return id, start, start + int64(size), nil
 }
 
-// ProbeSource probes a media source natively. Only Matroska is supported;
-// other containers return ErrProbeIncomplete.
+// ProbeSource probes a media source natively: Matroska/WebM and
+// MP4/MOV/M4V. Other containers return ErrProbeIncomplete.
 func ProbeSource(ctx context.Context, src io.ReaderAt, size int64) (*core.MediaInfo, error) {
 	if size <= 0 {
 		return nil, incomplete("empty source")
@@ -248,10 +248,13 @@ func ProbeSource(ctx context.Context, src io.ReaderAt, size int64) (*core.MediaI
 		return nil, err
 	}
 	s.head = head
-	if len(head) < 4 || binary.BigEndian.Uint32(head) != mkvEBML {
-		return nil, incomplete("not matroska")
+	switch {
+	case len(head) >= 4 && binary.BigEndian.Uint32(head) == mkvEBML:
+		return s.matroska()
+	case isISOBMFF(head):
+		return s.mp4()
 	}
-	return s.matroska()
+	return nil, incomplete("container not supported natively")
 }
 
 type mkvTrack struct {
@@ -760,11 +763,27 @@ func (t mkvTrack) video(si *core.StreamInfo) error {
 	}
 	si.Width, si.Height = int(t.width), int(t.height)
 	si.FrameRate = math.Round(1e9/float64(t.defaultDur)*1000) / 1000
-	p := t.private
-	transfer := t.transfer
+	codec := ""
 	switch {
 	case strings.HasPrefix(t.codecID, "V_MPEG4/ISO/AVC"):
-		si.Codec = "h264"
+		codec = "h264"
+	case strings.HasPrefix(t.codecID, "V_MPEGH/ISO/HEVC"):
+		codec = "hevc"
+	case t.codecID == "V_AV1":
+		codec = "av1"
+	default:
+		return incomplete("video codec %s", t.codecID)
+	}
+	return videoConfig(si, codec, t.private, t.transfer, t.dovi)
+}
+
+// videoConfig fills codec facts from a decoder configuration record (avcC,
+// hvcC or av1C), the container's transfer characteristics (0 or 2 when
+// unknown) and an optional Dolby Vision configuration record.
+func videoConfig(si *core.StreamInfo, codec string, p []byte, transfer int, dovi []byte) error {
+	si.Codec = codec
+	switch codec {
+	case "h264":
 		if len(p) < 7 || p[0] != 1 {
 			return incomplete("bad avcC")
 		}
@@ -786,8 +805,7 @@ func (t mkvTrack) video(si *core.StreamInfo) error {
 		if transfer == 0 || transfer == 2 {
 			transfer = f.transfer
 		}
-	case strings.HasPrefix(t.codecID, "V_MPEGH/ISO/HEVC"):
-		si.Codec = "hevc"
+	case "hevc":
 		if len(p) < 23 || p[0] != 1 {
 			return incomplete("bad hvcC")
 		}
@@ -809,8 +827,7 @@ func (t mkvTrack) video(si *core.StreamInfo) error {
 		if transfer == 0 || transfer == 2 {
 			transfer = f.transfer
 		}
-	case t.codecID == "V_AV1":
-		si.Codec = "av1"
+	case "av1":
 		if len(p) < 4 || p[0] != 0x81 || transfer == 0 || transfer == 2 {
 			return incomplete("av1 colour unknown") // colour lives in the sequence header OBU
 		}
@@ -828,11 +845,11 @@ func (t mkvTrack) video(si *core.StreamInfo) error {
 			}
 		}
 	default:
-		return incomplete("video codec %s", t.codecID)
+		return incomplete("video codec %s", codec)
 	}
 	si.ColorTransfer = transferName(transfer)
-	if len(t.dovi) >= 4 {
-		d := t.dovi
+	if len(dovi) >= 4 {
+		d := dovi
 		si.DolbyVision = true
 		si.DolbyVisionVersion = fmt.Sprintf("%d.%d", d[0], d[1])
 		bits := binary.BigEndian.Uint16(d[2:4])
