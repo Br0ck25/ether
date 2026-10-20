@@ -731,7 +731,7 @@ type fixture struct {
 	art      *fakeArtwork
 }
 
-func newFixture() *fixture {
+func newFixture(opts ...func(*Deps)) *fixture {
 	cat := &fakeCatalog{
 		titles: map[core.RatingKey]core.Title{},
 		children: map[core.RatingKey][]core.RatingKey{
@@ -765,7 +765,7 @@ func newFixture() *fixture {
 			core.TypeMovie: {{ID: "movie.toprated", Title: "Top Rated", Type: core.TypeMovie, Context: "hub.movie.toprated", Items: []core.Title{fightClub}}},
 		},
 	}
-	f.srv = NewServer(Deps{
+	d := Deps{
 		Catalog:     cat,
 		Collections: f.cols,
 		Recommender: rec,
@@ -791,6 +791,10 @@ func newFixture() *fixture {
 			f.hooks <- fmt.Sprintf("%s %s %d %s", u.Username, k, off.Milliseconds(), state)
 		}},
 		Now: func() time.Time { return fixedNow },
-	})
+	}
+	for _, o := range opts {
+		o(&d)
+	}
+	f.srv = NewServer(d)
 	return f
 }

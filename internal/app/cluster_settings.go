@@ -58,6 +58,22 @@ func (a *App) connectClusterHooks() {
 	a.cfg.SetNotifier(a.cluster)
 	a.certs.SetEventBus(a.cluster)
 	a.certs.SetRenewalAllowed(a.cluster.IsLeader)
+	// In-memory caches follow writes made by other nodes.
+	bus := a.clusterNode()
+	a.users.SetBus(bus)
+	a.safety.SetBus(bus)
+	a.resolver.SetBus(bus)
+	a.personalize.SetBus(bus)
+	a.collections.SetBus(bus)
+	a.episodeorder.SetBus(bus)
+	a.closers = append(a.closers, func() {
+		a.users.Close()
+		a.safety.Close()
+		a.resolver.SetBus(nil)
+		a.personalize.SetBus(nil)
+		a.collections.SetBus(nil)
+		a.episodeorder.SetBus(nil)
+	})
 }
 
 // clusterSettingsHandler is the owner API for shared settings and join

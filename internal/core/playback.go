@@ -120,6 +120,9 @@ type PlaySession struct {
 	// find an exact-size replacement: the next decision/start for this
 	// session must be a zero-encode remux (additive).
 	RequiresRemux bool `json:"requiresRemux,omitempty"`
+	// Node is the cluster node serving a session reported by another node
+	// (empty for this node's own sessions and on a standalone server).
+	Node string `json:"node,omitempty"`
 }
 
 type Playback interface {

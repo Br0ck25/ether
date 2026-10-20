@@ -30,6 +30,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -82,6 +83,9 @@ type Service struct {
 	members  map[int64]*memberSet
 	flights  map[int64]*buildFlight
 	personal map[string]personalEntry
+
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
 
 	// settings captured from options before New finishes.
 	opts options
@@ -734,7 +738,7 @@ func (s *Service) DeleteSmart(ctx context.Context, key core.RatingKey) error {
 	if err := s.deleteRow(ctx, row.id); err != nil {
 		return err
 	}
-	s.invalidate(row.id)
+	s.changed(row.id)
 	return nil
 }
 

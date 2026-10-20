@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/releaseparse"
@@ -133,6 +134,9 @@ type Service struct {
 	route routingState // source routing: startup measurements and signals
 
 	con consoleState // pins, release memory, health results, history (console.go)
+
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
 }
 
 var _ core.Resolver = (*Service)(nil)

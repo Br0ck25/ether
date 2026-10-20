@@ -67,7 +67,7 @@ func (s *Service) UpdateSpec(ctx context.Context, id string, sp core.CollectionS
 	if err := s.updateRow(ctx, row.id, sp); err != nil {
 		return nil, err
 	}
-	s.invalidate(row.id)
+	s.changed(row.id)
 	row, err = s.rowByID(ctx, idString(row.id))
 	if err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func (s *Service) DeleteSpec(ctx context.Context, id string) error {
 	if err := s.deleteRow(ctx, row.id); err != nil {
 		return err
 	}
-	s.invalidate(row.id)
+	s.changed(row.id)
 	return nil
 }
 
@@ -116,6 +116,7 @@ func (s *Service) Rebuild(ctx context.Context, id string) (*core.CollectionSpec,
 		return nil, err
 	}
 	s.idx.invalidate()
+	s.notify("index")
 	if _, err := s.build(ctx, row); err != nil {
 		return nil, err
 	}

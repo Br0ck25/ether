@@ -172,6 +172,7 @@ func (s *Service) Unblock(ctx context.Context, releaseID string) (BlockEntry, er
 		switch {
 		case err == nil:
 			e, inMem = got, true
+			s.notify("bad:" + releaseID)
 		case !errors.Is(err, sql.ErrNoRows):
 			return BlockEntry{}, err
 		}

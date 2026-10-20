@@ -178,3 +178,24 @@ func TestImportOnTwoNodesRecordsHistoryOnce(t *testing.T) {
 		t.Fatal("duplicate imported history accepted")
 	}
 }
+
+// State events (which drive Trakt scrobbles, personalisation and stats)
+// fire only on the node that received the timeline, never on the others,
+// so a cluster scrobbles each play once.
+func TestStateEventsFireOnlyOnWritingNode(t *testing.T) {
+	db := store.OpenTest(t)
+	a, b := New(db, Options{}), New(db, Options{})
+	var mu sync.Mutex
+	got := map[string][]EventKind{}
+	a.Subscribe(func(ev Event) { mu.Lock(); got["a"] = append(got["a"], ev.Kind); mu.Unlock() })
+	b.Subscribe(func(ev Event) { mu.Lock(); got["b"] = append(got["b"], ev.Kind); mu.Unlock() })
+	key := core.MovieKey(9)
+	if err := a.Progress(context.Background(), 1, key, 95*time.Minute, 100*time.Minute, "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got["a"]) == 0 || len(got["b"]) != 0 {
+		t.Fatalf("events a=%v b=%v", got["a"], got["b"])
+	}
+}

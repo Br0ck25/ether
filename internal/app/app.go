@@ -380,8 +380,10 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 			}
 			return nil, false
 		},
-		DB:     a.db,
-		Logger: log,
+		DB:            a.db,
+		Logger:        log,
+		Cluster:       a.clusterNode(),
+		DescribeGroup: a.describeLiveGroup,
 	}, cfg, playback.Options{DataDir: dataDir})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)

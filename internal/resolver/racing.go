@@ -31,6 +31,7 @@ func (s *Service) Close() error {
 	s.bgCancel()
 	s.bgMu.Unlock()
 	s.bgWG.Wait()
+	s.SetBus(nil)
 	return nil
 }
 func (s *Service) optimisticCheck(r core.Release, nzb []byte) {

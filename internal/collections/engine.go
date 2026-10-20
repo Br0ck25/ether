@@ -431,6 +431,9 @@ func (s *Service) join(ctx context.Context, snap *snapshot, titles []core.Title,
 		}
 	}
 	s.idx.add(fresh)
+	if len(fresh) > 0 {
+		s.notify("index")
+	}
 	if cur := s.idx.current(); cur != nil {
 		return cur
 	}
