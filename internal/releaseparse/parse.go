@@ -38,6 +38,11 @@ var languages = []struct{ token, name string }{
 	{"FINNISH", "finnish"}, {"CZECH", "czech"}, {"HUNGARIAN", "hungarian"}, {"GREEK", "greek"},
 	{"THAI", "thai"}, {"VIETNAMESE", "vietnamese"}, {"INDONESIAN", "indonesian"},
 	{"ENGLISH", "english"}, {"ENG", "english"},
+	// Explicit regional language tags are used by WEB release groups.
+	// Do not treat bare country codes (BR/US/GB) as audio languages.
+	{"PT-BR", "portuguese"}, {"PT-PT", "portuguese"},
+	{"ES-ES", "spanish"}, {"ES-MX", "spanish"}, {"ES-419", "spanish"},
+	{"EN-US", "english"}, {"EN-GB", "english"},
 }
 
 // Parse extracts structured info from a release name.

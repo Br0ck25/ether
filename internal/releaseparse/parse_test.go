@@ -235,3 +235,23 @@ func TestTitleMatches(t *testing.T) {
 		t.Error("obfuscated detection")
 	}
 }
+
+func TestExplicitRegionalAudioTags(t *testing.T) {
+	for _, tc := range []struct{ name, language string }{
+		{"Harbor.Show.S02E18.Beach.Day.576p.WEB-DL.AAC2.0.H.264.pt-BR-GROUP", "portuguese"},
+		{"Harbor.Show.S02E18.1080p.WEB.EN-US-GROUP", "english"},
+		{"Harbor.Show.S02E18.1080p.WEB.es-419-GROUP", "spanish"},
+		{"Harbor.Show.S02E18.1080p.WEB.BR-GROUP", ""},
+	} {
+		got := Parse(tc.name)
+		found := false
+		for _, l := range got.Languages {
+			if l == tc.language {
+				found = true
+			}
+		}
+		if tc.language == "" && len(got.Languages) != 0 || tc.language != "" && !found {
+			t.Errorf("%s: languages=%v want=%q", tc.name, got.Languages, tc.language)
+		}
+	}
+}
