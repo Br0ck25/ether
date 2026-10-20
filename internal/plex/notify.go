@@ -31,6 +31,10 @@ type playEntry struct {
 	transcodeID     string
 	startedAt       time.Time
 	updatedAt       time.Time
+
+	// Set on entries another cluster node serves (read from plex_sessions).
+	node     string
+	remoteTS *model.TranscodeSess
 }
 
 type sessionTracker struct {
@@ -43,6 +47,27 @@ func newSessionTracker() *sessionTracker { return &sessionTracker{entries: map[s
 
 func trackID(userID int64, clientID, sessionID string) string {
 	return fmt.Sprintf("%d/%s/%s", userID, clientID, sessionID)
+}
+
+// has reports whether id is tracked.
+func (t *sessionTracker) has(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.entries[id]
+	return ok
+}
+
+// ensure starts tracking id with sessionKey key (allocated cluster-wide);
+// key 0, or an id already tracked, leaves numbering to update.
+func (t *sessionTracker) ensure(id string, key int) {
+	if key <= 0 {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if _, ok := t.entries[id]; !ok {
+		t.entries[id] = &playEntry{id: id, sessionKey: key}
+	}
 }
 
 // update records a timeline event and returns a copy of the entry.
@@ -153,21 +178,32 @@ func (n *notifier) unsubscribe(sub *subscriber) {
 	delete(n.subs, sub)
 }
 
-// publish delivers to every interested subscriber, dropping for slow ones.
-func (n *notifier) publish(nc model.NotificationContainer, userID int64) {
+// encode serialises a notification for subscribers.
+func encodeNotification(nc model.NotificationContainer) (notification, bool) {
 	data, err := model.Marshal(nc, model.JSON)
 	if err != nil {
-		return
+		return notification{}, false
 	}
 	data = []byte(strings.TrimSuffix(string(data), "\n"))
-	msg := notification{typ: nc.Type, data: data}
+	return notification{typ: nc.Type, data: data}, true
+}
+
+// publish delivers to every interested subscriber, dropping for slow ones.
+func (n *notifier) publish(nc model.NotificationContainer, userID int64) {
+	if msg, ok := encodeNotification(nc); ok {
+		n.deliver(msg, userID)
+	}
+}
+
+// deliver hands an encoded notification to every interested subscriber.
+func (n *notifier) deliver(msg notification, userID int64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	for sub := range n.subs {
 		if userID != 0 && sub.userID != userID && !sub.owner {
 			continue
 		}
-		if len(sub.filters) > 0 && !sub.filters[nc.Type] {
+		if len(sub.filters) > 0 && !sub.filters[msg.typ] {
 			continue
 		}
 		select {
@@ -315,7 +351,7 @@ func (s *Server) notifyPlaying(e playEntry, state string) {
 	if state == "" {
 		state = e.state
 	}
-	s.notifier.publish(model.NotificationContainer{
+	s.publishNotification(model.NotificationContainer{
 		Type: "playing",
 		Size: 1,
 		PlaySessionStateNotification: []model.PlaySessionStateNotification{{
@@ -337,7 +373,7 @@ func (s *Server) notifyPlaying(e playEntry, state string) {
 func (s *Server) notifyTimeline(key core.RatingKey, t core.MediaType, title string, userID int64) {
 	sec, _ := s.sectionFor(t)
 	typeNum := map[core.MediaType]int{core.TypeMovie: 1, core.TypeShow: 2, core.TypeSeason: 3, core.TypeEpisode: 4}[t]
-	s.notifier.publish(model.NotificationContainer{
+	s.publishNotification(model.NotificationContainer{
 		Type: "timeline",
 		Size: 1,
 		TimelineEntry: []model.TimelineEntry{{
@@ -350,4 +386,17 @@ func (s *Server) notifyTimeline(key core.RatingKey, t core.MediaType, title stri
 			UpdatedAt:  s.now().Unix(),
 		}},
 	}, userID)
+}
+
+// publishNotification delivers a notification to this node's subscribers
+// and, on a clustered node, to every other node's.
+func (s *Server) publishNotification(nc model.NotificationContainer, userID int64) {
+	msg, ok := encodeNotification(nc)
+	if !ok {
+		return
+	}
+	s.notifier.deliver(msg, userID)
+	if s.cl != nil {
+		s.cl.shareNotification(msg, userID)
+	}
 }

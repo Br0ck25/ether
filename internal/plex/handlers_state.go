@@ -80,6 +80,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 		if e, ok := s.sessions.remove(tid); ok {
 			e.offset = offset
 			s.notifyPlaying(e, "stopped")
+			s.cl.poke()
 		}
 		if ps != nil {
 			s.d.Playback.Stop(ps.ID)
@@ -93,7 +94,13 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	} else {
 		client := *pr
 		client.User = nil
+		fresh := !s.sessions.has(tid)
+		if fresh && s.cl != nil {
+			s.sessions.ensure(tid, s.cl.allocSessionKey())
+		}
+		var changed bool
 		e := s.sessions.update(tid, func(e *playEntry) {
+			changed = fresh || e.key != key || e.state != state
 			if e.key != key {
 				e.startedAt = s.now()
 			}
@@ -111,6 +118,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			e.updatedAt = s.now()
 		})
 		s.notifyPlaying(e, state)
+		if changed {
+			s.cl.poke() // share starts and state changes now; positions ride the heartbeat
+		}
 	}
 	if hook := s.d.Hooks.OnTimeline; hook != nil {
 		u := *user
@@ -238,7 +248,7 @@ func (s *Server) handleRemoveFromContinueWatching(w http.ResponseWriter, r *http
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
-	entries := s.sessions.list()
+	entries := s.sessionEntries(ctx)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].sessionKey < entries[j].sessionKey })
 	mc := &model.MediaContainer{}
 	for _, e := range entries {
@@ -288,7 +298,9 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if md.Session.ID == "" {
 			md.Session.ID = e.id
 		}
-		if e.transcodeID != "" {
+		if e.node != "" {
+			md.TranscodeSession = e.remoteTS
+		} else if e.transcodeID != "" {
 			if te, ok := s.transcodes.get(e.transcodeID); ok {
 				ts := transcodeSessionModel(te)
 				md.TranscodeSession = &ts
@@ -365,19 +377,42 @@ func (s *Server) handleTerminate(w http.ResponseWriter, r *http.Request) {
 	if reason == "" {
 		reason = "The server owner has ended this stream."
 	}
+	if s.terminateLocal(sid, reason) {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	// Another node may serve it: that node applies the kill.
+	if s.cl != nil {
+		for _, e := range s.cl.remoteEntries(r.Context()) {
+			if matchesSession(e, sid) {
+				s.cl.publish(topicTerminate, terminateEvent{Scope: "plex", ID: sid, Reason: reason, Node: e.node})
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+	}
+	writeHTTPError(w, http.StatusNotFound)
+}
+
+func matchesSession(e playEntry, sid string) bool {
+	return e.client.SessionID == sid || e.id == sid || strconv.Itoa(e.sessionKey) == sid
+}
+
+// terminateLocal ends a session this node tracks: the stop is delivered as
+// terminationCode/Text on the client's next timeline and the source closes.
+func (s *Server) terminateLocal(sid, reason string) bool {
 	for _, e := range s.sessions.list() {
-		if e.client.SessionID == sid || e.id == sid || strconv.Itoa(e.sessionKey) == sid {
+		if matchesSession(e, sid) {
 			s.setTermination(e.id, reason)
 			if s.d.Playback != nil {
 				if ps, ok := s.d.Playback.SessionFor(e.user.ID, e.client.ClientID, e.key); ok {
 					s.d.Playback.Stop(ps.ID)
 				}
 			}
-			w.WriteHeader(http.StatusOK)
-			return
+			return true
 		}
 	}
-	writeHTTPError(w, http.StatusNotFound)
+	return false
 }
 
 func (s *Server) setTermination(tid, reason string) {

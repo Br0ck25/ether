@@ -16,11 +16,14 @@ import (
 func (s *Server) writeModernLiveTune(w http.ResponseWriter, r *http.Request, info livetv.SessionInfo) {
 	w.Header().Del("X-Plex-Activity")
 	pr := FromContext(r.Context())
-	q := s.queues.create(pr.User.ID, pr.ClientID, []core.RatingKey{0}, s.now())
-	snap, _ := s.queues.with(q.id, pr.User.ID, s.now(), func(q *playQueue) {
+	snap, err := s.queues.createWith(pr.User.ID, pr.ClientID, []core.RatingKey{0}, s.now(), func(q *playQueue) {
 		q.liveSession = info.ID
 		q.sourceURI = "server://" + s.identity().MachineIdentifier + "/com.plexapp.plugins.library/livetv/sessions/" + info.ID
 	})
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
 	s.write(w, r, s.livePlayQueue(snap, info))
 }
 
