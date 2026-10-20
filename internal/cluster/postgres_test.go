@@ -34,6 +34,17 @@ func pgCluster(t *testing.T) func(name string, tweak func(*Options)) *Postgres {
 // pgClusterStart is pgCluster returning Start's error instead of failing.
 func pgClusterStart(t *testing.T) func(name string, tweak func(*Options)) (*Postgres, error) {
 	t.Helper()
+	build := pgClusterNew(t)
+	return func(name string, tweak func(*Options)) (*Postgres, error) {
+		t.Helper()
+		p := build(name, tweak)
+		return p, p.Start(context.Background())
+	}
+}
+
+// pgClusterNew is pgCluster returning nodes that are not started yet.
+func pgClusterNew(t *testing.T) func(name string, tweak func(*Options)) *Postgres {
+	t.Helper()
 	raw := os.Getenv(store.TestPostgresEnv)
 	if raw == "" {
 		t.Skip("set " + store.TestPostgresEnv + " to run PostgreSQL cluster tests")
@@ -55,7 +66,7 @@ func pgClusterStart(t *testing.T) func(name string, tweak func(*Options)) (*Post
 	q := u.Query()
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
-	return func(name string, tweak func(*Options)) (*Postgres, error) {
+	return func(name string, tweak func(*Options)) *Postgres {
 		t.Helper()
 		db, err := sql.Open(store.PostgresDriverName, u.String())
 		if err != nil {
@@ -83,7 +94,7 @@ func pgClusterStart(t *testing.T) func(name string, tweak func(*Options)) (*Post
 			p.Close()
 			db.Close()
 		})
-		return p, p.Start(ctx)
+		return p
 	}
 }
 
@@ -217,6 +228,29 @@ func TestPostgresBus(t *testing.T) {
 		defer mu.Unlock()
 		return len(gotB) == 3 && gotB[2] == "after"
 	})
+}
+
+// Components fill their caches before the node joins the bus, so events
+// sent before the first LISTEN must be covered by a resync as well.
+func TestPostgresBusResyncsAfterFirstListen(t *testing.T) {
+	build := pgClusterNew(t)
+	a := build("a", nil)
+	resync := make(chan struct{}, 4)
+	a.Subscribe(TopicResync, func([]byte) { resync <- struct{}{} })
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-resync:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no resync after the bus first listened")
+	}
+	time.Sleep(time.Second) // idle pings must not resync again
+	select {
+	case <-resync:
+		t.Fatal("resync without a reconnect")
+	default:
+	}
 }
 
 func TestPostgresLiveness(t *testing.T) {

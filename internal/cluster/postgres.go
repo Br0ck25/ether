@@ -114,7 +114,8 @@ func duplicateNodeError(nodeID, path string) error {
 // local subscribers immediately and sends pg_notify through the pool. The
 // sender's own echo is ignored. After the LISTEN connection is
 // re-established TopicResync is delivered locally, because notifications
-// sent while it was down are lost.
+// sent while it was down are lost; it is also delivered after the first
+// LISTEN, covering events sent before this node joined the bus.
 type Postgres struct {
 	o     Options
 	db    *sql.DB
@@ -899,12 +900,19 @@ func (p *Postgres) listenLoop(ctx context.Context) {
 			continue
 		}
 		p.setBusUp(true)
-		p.busOnce.Do(func() { close(p.busReady) })
 		p.busFail.OK()
-		if !first {
+		// Resync after every LISTEN, the first one included: components
+		// fill their caches before the node joins (and Start may give up
+		// waiting for the bus or be retried), so events other nodes sent
+		// before this node first listened were never received either. It
+		// is delivered before Start returns.
+		if first {
+			p.log.Debug("cluster: event bus listening; resynchronising caches")
+		} else {
 			p.log.Debug("cluster: event bus reconnected; resynchronising caches")
-			p.bus.deliver(TopicResync, nil)
 		}
+		p.bus.deliver(TopicResync, nil)
+		p.busOnce.Do(func() { close(p.busReady) })
 		first = false
 		backoff = p.o.MinBackoff
 		err = p.receive(ctx, conn)

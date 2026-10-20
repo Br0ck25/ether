@@ -2,10 +2,13 @@ package clusterbus
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/cluster"
 )
 
 // maxHints is how many distinct hints are queued before an invalidation
@@ -76,7 +79,14 @@ func (iv *Invalidator) Notify(hint string) {
 	if len(payload) > MaxPayload {
 		payload = Tag(iv.origin, nil)
 	}
-	if err := iv.bus.Publish(ctx, iv.topic, payload); err != nil {
+	err := iv.bus.Publish(ctx, iv.topic, payload)
+	if (errors.Is(err, cluster.ErrPayloadTooLarge) || errors.Is(err, ErrPayloadTooLarge)) && len(hint) > 0 {
+		// The hint fit MaxPayload but not once encoded (escaping, or base64
+		// for non-UTF-8): peers must still hear of the write, so ask them
+		// to reload everything.
+		err = iv.bus.Publish(ctx, iv.topic, Tag(iv.origin, nil))
+	}
+	if err != nil {
 		iv.log.Warn("cluster: publish cache invalidation", "topic", iv.topic, "err", err)
 	}
 }

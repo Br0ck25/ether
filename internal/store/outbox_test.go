@@ -254,3 +254,65 @@ func TestOutboxCloseReportsLostWrites(t *testing.T) {
 		t.Fatal("a write after Close cannot be queued")
 	}
 }
+
+// A direct write that fails after a later write for the same key was
+// queued (the database was marked down meanwhile) must not replace that
+// newer value with its older one.
+func TestOutboxFailedDirectWriteDoesNotOverwriteNewerQueued(t *testing.T) {
+	avail := NewAvailability(nil)
+	var mu sync.Mutex
+	db := map[string]int{}
+	inFlight := make(chan struct{})
+	release := make(chan struct{})
+	blocked := false // Apply runs one call at a time here
+	ob := NewOutbox(OutboxOptions[string, int]{
+		Name: "t", Availability: avail, Timeout: time.Minute,
+		MinBackoff: time.Hour, MaxBackoff: time.Hour,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Apply: func(ctx context.Context, k string, v int) error {
+			if v == 1 && !blocked {
+				blocked = true
+				close(inFlight)
+				<-release
+				return syscall.ECONNREFUSED
+			}
+			if avail.Down() {
+				return syscall.ECONNREFUSED
+			}
+			mu.Lock()
+			db[k] = v
+			mu.Unlock()
+			return nil
+		},
+	})
+	defer ob.Close(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if queued, err := ob.Write(context.Background(), "k", 1); !queued || err != nil {
+			t.Errorf("first write: queued=%v err=%v", queued, err)
+		}
+	}()
+	<-inFlight
+	avail.Fail(syscall.ECONNREFUSED) // another writer saw the outage
+	if queued, err := ob.Write(context.Background(), "k", 2); !queued || err != nil {
+		t.Fatalf("second write: queued=%v err=%v", queued, err)
+	}
+	close(release)
+	<-done
+
+	avail.OK() // replay
+	deadline := time.Now().Add(5 * time.Second)
+	for ob.Depth() > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("held write not replayed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if db["k"] != 2 {
+		t.Fatalf("replayed value %d, want the newer 2", db["k"])
+	}
+}

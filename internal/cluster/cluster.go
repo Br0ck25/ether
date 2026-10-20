@@ -31,8 +31,9 @@ const (
 	// addresses. The payload is the node ID.
 	TopicMembers = "cluster:members"
 	// TopicResync is delivered locally (never sent to other nodes) after the
-	// event bus reconnects: notifications may have been missed, so caches
-	// that rely on bus invalidations should drop everything.
+	// event bus starts listening and after every reconnect: notifications may
+	// have been missed, so caches that rely on bus invalidations should drop
+	// everything.
 	TopicResync = "bus:resync"
 )
 
