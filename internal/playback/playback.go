@@ -31,10 +31,16 @@ import (
 // Transcoder, Catalog and SelectProfile are required.
 type Deps struct {
 	AugmentMedia func(context.Context, *core.Title, *core.User, *core.Resolution, core.MediaSource, *core.MediaInfo) // synchronous enrichment before publishing a generation
-	Resolver     core.Resolver
-	Engine       core.Engine
-	Transcoder   core.Transcoder
-	Catalog      core.Catalog
+	// NativeProbe, when set, reads stream parameters straight from the
+	// source's container headers before falling back to Transcoder.Probe.
+	// It must return an error unless every decision-relevant field is
+	// exact. NativeTrailer later fills facts kept at the file tail.
+	NativeProbe   func(context.Context, core.MediaSource) (*core.MediaInfo, error)
+	NativeTrailer func(context.Context, core.MediaSource, *core.MediaInfo) bool
+	Resolver      core.Resolver
+	Engine        core.Engine
+	Transcoder    core.Transcoder
+	Catalog       core.Catalog
 	// Cache, when set, receives pins for live and in-progress releases.
 	Cache core.SegmentCache
 	// State, when set, tells which titles are in progress (cache protection).
@@ -87,6 +93,9 @@ type Options struct {
 	PrepareTimeout time.Duration
 	// ProbeTimeout bounds one Transcoder.Probe (default 30s).
 	ProbeTimeout time.Duration
+	// VerifyNativeProbe runs ffprobe in the background after every native
+	// probe and logs disagreements (soak testing; off by default).
+	VerifyNativeProbe bool
 	// FailoverTimeout bounds a background (loopback-triggered) failover (default 90s).
 	FailoverTimeout time.Duration
 	// ConnectionsPerStream derives the server-wide stream cap from the total

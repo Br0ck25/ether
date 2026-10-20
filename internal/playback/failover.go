@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -165,12 +166,13 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	var info *core.MediaInfo
 	var perr error
 	var facts *probeCache
+	prober := "cache"
 	if len(cached) > 0 && cached[0] != nil && cached[0].releaseID == res.Release.ID && cached[0].info.Size == src.Size() {
 		facts = cached[0]
 		copy := facts.info
 		info = &copy
 	} else {
-		info, perr = m.deps.Transcoder.Probe(pctx, m.urlFor(g))
+		info, prober, perr = m.probeMedia(pctx, g, src)
 	}
 	cancel()
 	probeDuration := time.Since(probeStarted)
@@ -189,6 +191,12 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	case perr != nil && ctx.Err() != nil:
 		m.dropGeneration(g)
 		return nil, ctx.Err()
+	case prober == "native" && permanentSourceFailure(perr):
+		// The native probe read the source directly, so the loopback
+		// server never saw the failure.
+		m.dropGeneration(g)
+		m.markBad(res.Release.ID, "invalid source while probing")
+		return nil, perr
 	case perr != nil || info == nil:
 		m.log.Warn("probe failed; using estimated media info", "release", res.Release.Name, "err", perr)
 		mi = fallback(src.Size())
@@ -209,7 +217,7 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		m.deps.AugmentMedia(ctx, s.title, &s.user, res, src, &mi)
 	}
 	m.log.Info("media preparation completed", "session", s.id, "release", res.Release.ID,
-		"probe", probeDuration, "probeCached", facts != nil, "estimated", mi.Estimated,
+		"probe", probeDuration, "probeCached", facts != nil, "prober", prober, "estimated", mi.Estimated,
 		"augment", time.Since(augmentStarted))
 	var points []IndexPoint
 	if facts != nil {
@@ -234,7 +242,147 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	} else {
 		g.markIndexReady()
 	}
+	if prober == "native" {
+		m.startTrailerFill(g)
+	}
 	return g, nil
+}
+
+// probeMedia reads stream parameters from the container headers when the
+// native prober can vouch for them, and otherwise runs ffprobe through the
+// loopback URL. A native probe costs no process and, for a validated Usenet
+// source, usually no network read: the first article is already cached.
+func (m *Manager) probeMedia(ctx context.Context, g *generation, src core.MediaSource) (*core.MediaInfo, string, error) {
+	if m.deps.NativeProbe != nil {
+		started := time.Now()
+		info, err := m.deps.NativeProbe(ctx, src)
+		if err == nil && info != nil {
+			if m.opts.VerifyNativeProbe {
+				m.startProbeVerify(g, *info)
+			}
+			return info, "native", nil
+		}
+		if ctx.Err() != nil || permanentSourceFailure(err) {
+			return nil, "native", err
+		}
+		m.log.Debug("native probe deferred to ffprobe", "release", g.releaseID(), "took", time.Since(started), "err", err)
+	}
+	info, err := m.deps.Transcoder.Probe(ctx, m.urlFor(g))
+	return info, "ffprobe", err
+}
+
+// startTrailerFill reads Matroska facts kept after the media (tail
+// chapters, per-track statistics) off the Play path and merges only
+// facts that were unknown, so a running decision never changes.
+func (m *Manager) startTrailerFill(g *generation) {
+	if m.deps.NativeTrailer == nil || !g.acquire() {
+		return
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		g.release()
+		return
+	}
+	m.wg.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.wg.Done()
+		defer g.release()
+		// The trailer usually sits next to the Cues the index fill reads;
+		// waiting lets it share that fetch instead of competing with it.
+		select {
+		case <-g.indexReady:
+		case <-g.ctx.Done():
+			return
+		}
+		ctx, cancel := context.WithTimeout(g.ctx, m.opts.IndexTimeout)
+		defer cancel()
+		info := g.infoSnapshot()
+		info.Streams = slices.Clone(info.Streams)
+		info.Chapters = slices.Clone(info.Chapters)
+		if !m.deps.NativeTrailer(ctx, g.src, &info) {
+			return
+		}
+		g.mu.Lock()
+		if len(g.info.Chapters) == 0 {
+			g.info.Chapters = info.Chapters
+		}
+		streams := slices.Clone(g.info.Streams)
+		for i := range streams {
+			if streams[i].BitrateKbps == 0 && i < len(info.Streams) && info.Streams[i].Index == streams[i].Index {
+				streams[i].BitrateKbps = info.Streams[i].BitrateKbps
+			}
+		}
+		g.info.Streams = streams
+		g.mu.Unlock()
+	}()
+}
+
+// startProbeVerify runs ffprobe after a native probe and logs any
+// decision-relevant disagreement. It is a soak-test aid, off by default.
+func (m *Manager) startProbeVerify(g *generation, native core.MediaInfo) {
+	if !g.acquire() {
+		return
+	}
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		g.release()
+		return
+	}
+	m.wg.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.wg.Done()
+		defer g.release()
+		ctx, cancel := context.WithTimeout(g.ctx, m.opts.ProbeTimeout)
+		defer cancel()
+		ref, err := m.deps.Transcoder.Probe(ctx, m.urlFor(g))
+		if err != nil || ref == nil {
+			return
+		}
+		if diff := probeDifference(native, *ref); diff != "" {
+			m.log.Warn("native probe disagrees with ffprobe", "release", g.releaseID(), "diff", diff)
+			return
+		}
+		m.log.Info("native probe verified", "release", g.releaseID(), "streams", len(native.Streams))
+	}()
+}
+
+// probeDifference compares the facts playback decisions use.
+func probeDifference(native, ref core.MediaInfo) string {
+	var diffs []string
+	add := func(format string, args ...any) { diffs = append(diffs, fmt.Sprintf(format, args...)) }
+	if d := native.Duration - ref.Duration; d > time.Second || d < -time.Second {
+		add("duration %v/%v", native.Duration, ref.Duration)
+	}
+	if len(native.Streams) != len(ref.Streams) {
+		add("streams %d/%d", len(native.Streams), len(ref.Streams))
+		return strings.Join(diffs, "; ")
+	}
+	for i, n := range native.Streams {
+		r := ref.Streams[i]
+		if r.ColorTransfer == "unknown" {
+			r.ColorTransfer = ""
+		}
+		if n.Index != r.Index || n.Type != r.Type || n.Codec != r.Codec || n.Language != r.Language || n.Default != r.Default || n.Forced != r.Forced {
+			add("stream %d identity %d/%s/%s/%s vs %d/%s/%s/%s", i, n.Index, n.Type, n.Codec, n.Language, r.Index, r.Type, r.Codec, r.Language)
+		}
+		switch n.Type {
+		case "video":
+			if !strings.EqualFold(n.Profile, r.Profile) || n.Level != r.Level || n.Width != r.Width || n.Height != r.Height || n.BitDepth != r.BitDepth ||
+				n.ColorTransfer != r.ColorTransfer || n.DolbyVision != r.DolbyVision || n.DolbyVisionProfile != r.DolbyVisionProfile ||
+				n.DolbyVisionCompatibilityID != r.DolbyVisionCompatibilityID || n.CodecString != r.CodecString {
+				add("video %+v vs %+v", n, r)
+			}
+		case "audio":
+			if n.Channels != r.Channels || n.SampleRate != r.SampleRate || (n.Profile != "" && !strings.EqualFold(n.Profile, r.Profile)) {
+				add("audio %d %s %dch %dHz vs %s %dch %dHz", n.Index, n.Profile, n.Channels, n.SampleRate, r.Profile, r.Channels, r.SampleRate)
+			}
+		}
+	}
+	return strings.Join(diffs, "; ")
 }
 
 // startIndexFill reads the container keyframe index off the critical path

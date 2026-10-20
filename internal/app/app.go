@@ -418,12 +418,18 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// Playback and prefetch.
 	a.playback, err = playback.New(playback.Deps{
 		AugmentMedia: a.enrichSubtitles,
-		Resolver:     a.resolver,
-		Engine:       a.media,
-		Transcoder:   tc,
-		Catalog:      a.catalog,
-		Cache:        a.cache,
-		State:        a.state,
+		NativeProbe: func(ctx context.Context, src core.MediaSource) (*core.MediaInfo, error) {
+			return transcode.ProbeSource(ctx, src, src.Size())
+		},
+		NativeTrailer: func(ctx context.Context, src core.MediaSource, info *core.MediaInfo) bool {
+			return transcode.ProbeTrailer(ctx, src, src.Size(), info)
+		},
+		Resolver:   a.resolver,
+		Engine:     a.media,
+		Transcoder: tc,
+		Catalog:    a.catalog,
+		Cache:      a.cache,
+		State:      a.state,
 		SelectProfile: func(caps core.ClientCaps, u *core.User) core.QualityProfile {
 			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
 		},
@@ -452,7 +458,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Cluster:       a.clusterNode(),
 		DescribeGroup: a.describeLiveGroup,
 		Availability:  a.dbAvail,
-	}, cfg, playback.Options{DataDir: dataDir})
+	}, cfg, playback.Options{DataDir: dataDir, VerifyNativeProbe: os.Getenv("ETHER_VERIFY_NATIVE_PROBE") == "1"})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)
 	}

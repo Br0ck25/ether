@@ -575,6 +575,9 @@ type harness struct {
 	db       *sql.DB         // shared database (two-node tests); nil opens a fresh one
 	node     clusterbus.Node // cluster membership; nil = standalone
 	avail    *store.Availability
+
+	nativeProbe   func(context.Context, core.MediaSource) (*core.MediaInfo, error)
+	nativeTrailer func(context.Context, core.MediaSource, *core.MediaInfo) bool
 }
 
 var (
@@ -644,9 +647,11 @@ func newHarness(t *testing.T, rels []*fakeRelease, ids []string, opts ...harness
 			}
 			return quality.Profiles[1]
 		},
-		DB:           db,
-		Cluster:      h.node,
-		Availability: h.avail,
+		DB:            db,
+		Cluster:       h.node,
+		Availability:  h.avail,
+		NativeProbe:   h.nativeProbe,
+		NativeTrailer: h.nativeTrailer,
 	}, h.cfg, o)
 	if err != nil {
 		t.Fatal(err)
