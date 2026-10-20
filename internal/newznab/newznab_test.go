@@ -79,7 +79,7 @@ func newFakeIndexer(t *testing.T, mode string) *fakeIndexer {
 		case "search":
 			if f.mode == "json" {
 				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"rss":{"channel":{"item":[{"title":"The.Matrix.1999.1080p.BluRay.x264-GRP","guid":"json-1","link":%q,"pubDate":"Mon, 02 Jan 2023 15:04:05 +0000","enclosure":{"@attributes":{"url":%q,"length":"8000000000"}},"attr":[{"@attributes":{"name":"size","value":"8000000000"}},{"@attributes":{"name":"grabs","value":"9"}}]}]}}}`, base+"/nzb?id=json-1", base+"/nzb?id=json-1")
+				fmt.Fprintf(w, `{"rss":{"channel":{"item":[{"title":"The.Signal.1999.1080p.BluRay.x264-GRP","guid":"json-1","link":%q,"pubDate":"Mon, 02 Jan 2023 15:04:05 +0000","enclosure":{"@attributes":{"url":%q,"length":"8000000000"}},"attr":[{"@attributes":{"name":"size","value":"8000000000"}},{"@attributes":{"name":"grabs","value":"9"}}]}]}}}`, base+"/nzb?id=json-1", base+"/nzb?id=json-1")
 				return
 			}
 			fmt.Fprint(w, loadFixture(t, "movie.xml", base))
@@ -123,7 +123,7 @@ func TestSearchMovieByIMDB(t *testing.T) {
 	f := newFakeIndexer(t, "")
 	c := New(testConfig(f.server.URL), nil, Options{})
 	res, err := c.Search(context.Background(), core.SearchRequest{
-		Type: core.TypeMovie, IDs: core.IDs{IMDB: "tt0133093"}, Title: "The Matrix", Year: 1999,
+		Type: core.TypeMovie, IDs: core.IDs{IMDB: "tt0133093"}, Title: "The Signal", Year: 1999,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestSearchFallbackToTMDB(t *testing.T) {
 	f := newFakeIndexer(t, "emptyimdb")
 	c := New(testConfig(f.server.URL), nil, Options{})
 	res, err := c.Search(context.Background(), core.SearchRequest{
-		Type: core.TypeMovie, IDs: core.IDs{IMDB: "tt0133093", TMDB: 603}, Title: "The Matrix", Year: 1999,
+		Type: core.TypeMovie, IDs: core.IDs{IMDB: "tt0133093", TMDB: 603}, Title: "The Signal", Year: 1999,
 	})
 	if err != nil || len(res) != 2 {
 		t.Fatalf("res=%d err=%v", len(res), err)
@@ -166,7 +166,7 @@ func TestSearchTV(t *testing.T) {
 	f := newFakeIndexer(t, "")
 	c := New(testConfig(f.server.URL), nil, Options{})
 	res, err := c.Search(context.Background(), core.SearchRequest{
-		Type: core.TypeEpisode, IDs: core.IDs{TVDB: 81189}, Title: "Breaking Bad", Season: 1, Episode: 1,
+		Type: core.TypeEpisode, IDs: core.IDs{TVDB: 81189}, Title: "Boundary Bay", Season: 1, Episode: 1,
 	})
 	if err != nil || len(res) != 1 || res[0].Info.Episodes[0] != 1 {
 		t.Fatalf("res=%+v err=%v", res, err)
@@ -176,7 +176,7 @@ func TestSearchTV(t *testing.T) {
 func TestSearchJSON(t *testing.T) {
 	f := newFakeIndexer(t, "json")
 	c := New(testConfig(f.server.URL), nil, Options{})
-	res, err := c.Search(context.Background(), core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix"})
+	res, err := c.Search(context.Background(), core.SearchRequest{Type: core.TypeMovie, Title: "The Signal"})
 	if err != nil || len(res) != 1 || res[0].Grabs != 9 || res[0].Size != 8000000000 {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
@@ -262,7 +262,7 @@ func TestResultCacheTTL(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2024, 5, 1, 12, 0, 0, 0, time.UTC)}
 	f := newFakeIndexer(t, "")
 	c := New(testConfig(f.server.URL), db, Options{Now: clock.now, SearchCacheTTL: time.Hour})
-	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix", Year: 1999}
+	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Signal", Year: 1999}
 	if _, err := c.Search(ctx, req); err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestManagerMergeDedupeSkipExhausted(t *testing.T) {
 			}
 		}
 	}
-	res, err := m.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix"})
+	res, err := m.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Signal"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestManagerMergeDedupeSkipExhausted(t *testing.T) {
 	m.Reload([]config.Indexer{cfg1, cfg2})
 	// Fresh clients cached searches under -1 TTL? cache disabled, fine,
 	// but A kept its caps cache. New search with a different title text path.
-	res, err = m.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix"})
+	res, err = m.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Signal"})
 	if err != nil || len(res) != 2 {
 		t.Fatalf("after reload res=%d err=%v", len(res), err)
 	}

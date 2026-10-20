@@ -22,7 +22,7 @@ func TestManagerReusesSearchAndNZBAfterBudgetsExhausted(t *testing.T) {
 	cfg.DailyLimit, cfg.DailyGrabs = 2, 1 // caps + search, one NZB
 	opts := Options{NZBDir: t.TempDir()}
 	m := NewManager(db, []config.Indexer{cfg}, opts)
-	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix", Year: 1999}
+	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Signal", Year: 1999}
 	results, err := m.Search(ctx, req)
 	if err != nil || len(results) == 0 {
 		t.Fatalf("initial search: %v %v", results, err)

@@ -33,7 +33,7 @@ func (h *continuationHealth) Check(ctx context.Context, nzb []byte) (bool, error
 func continuationReleases(n int) []core.Release {
 	var releases []core.Release
 	for i := 0; i < n; i++ {
-		r := rel(fmt.Sprintf("source%02d", i), "The.Matrix.1999.1080p.WEB-DL.H.264.AAC-GRP", 6000)
+		r := rel(fmt.Sprintf("source%02d", i), "The.Signal.1999.1080p.WEB-DL.H.264.AAC-GRP", 6000)
 		r.PubDate = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 		releases = append(releases, r)
 	}

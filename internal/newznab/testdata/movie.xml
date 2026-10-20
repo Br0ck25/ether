@@ -3,7 +3,7 @@
   <channel>
     <title>FakeIndexer</title>
     <item>
-      <title>The.Matrix.1999.1080p.BluRay.x264-GRP</title>
+      <title>The.Signal.1999.1080p.BluRay.x264-GRP</title>
       <guid isPermaLink="false">guid-matrix-1080</guid>
       <link>{{BASE}}/nzb?id=guid-matrix-1080</link>
       <pubDate>Mon, 02 Jan 2023 15:04:05 +0000</pubDate>
@@ -15,7 +15,7 @@
       <newznab:attr name="password" value="0"/>
     </item>
     <item>
-      <title>The.Matrix.1999.720p.BluRay.x264-PWD</title>
+      <title>The.Signal.1999.720p.BluRay.x264-PWD</title>
       <guid isPermaLink="false">guid-matrix-720</guid>
       <link>{{BASE}}/nzb?id=guid-matrix-720</link>
       <pubDate>Tue, 03 Jan 2023 15:04:05 +0000</pubDate>

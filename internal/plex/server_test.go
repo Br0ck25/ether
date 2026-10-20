@@ -153,8 +153,8 @@ func TestPaging(t *testing.T) {
 		t.Fatalf("paging headers: %v", rec.Header())
 	}
 	md := mc["Metadata"].([]any)[0].(map[string]any)
-	if md["title"] != "Fight Club" {
-		t.Fatalf("second by title should be Fight Club, got %v", md["title"])
+	if md["title"] != "Fjord Harbor" {
+		t.Fatalf("second by title should be Fjord Harbor, got %v", md["title"])
 	}
 	// Size 0 learns the total.
 	mc = decodeJSON(t, f.get(t, "/library/sections/1/all?X-Plex-Container-Start=0&X-Plex-Container-Size=0", jsonAccept...))
@@ -181,7 +181,7 @@ func TestBrowseFilters(t *testing.T) {
 	f.state.set(ownerUser.ID, ws(alien.Key, 0, 1))
 	mc := decodeJSON(t, f.get(t, "/library/sections/1/all?unwatched=1", jsonAccept...))
 	md := mc["Metadata"].([]any)
-	if len(md) != 1 || md[0].(map[string]any)["title"] != "Fight Club" {
+	if len(md) != 1 || md[0].(map[string]any)["title"] != "Fjord Harbor" {
 		t.Fatalf("unwatched: %v", md)
 	}
 }

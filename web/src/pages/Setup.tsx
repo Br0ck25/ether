@@ -633,7 +633,10 @@ export default function Setup() {
         <div className="space-y-4">
           <p className="text-sm text-fg-muted">All of these can be set up later in Settings.</p>
           <div className="grid gap-4 rounded-xl border border-border bg-surface p-4 sm:grid-cols-2">
-            <Field label="Your TMDB API key" hint="Leave empty to use the bundled key.">
+            <Field
+              label="Your TMDB API key"
+              hint="Enter your personal TMDB v3 API key or v4 read token."
+            >
               <div className="space-y-2">
                 <SecretInput
                   ariaLabel="TMDB API key"

@@ -45,7 +45,7 @@ func TestDiscoveryPlexHubsAndArtworkRespectViewerGuard(t *testing.T) {
 	for _, path := range []string{"/hubs", "/library/metadata/" + fightClub.Key.String() + "/discoveryPoster/version"} {
 		r := f.request(t, http.MethodGet, path, map[string]string{"X-Plex-Token": "kid"})
 		if path == "/hubs" {
-			if r.Code != 200 || strings.Contains(r.Body.String(), "Fight Club") {
+			if r.Code != 200 || strings.Contains(r.Body.String(), "Fjord Harbor") {
 				t.Fatalf("hub guard %d %s", r.Code, r.Body.String())
 			}
 		} else if r.Code != 404 {
@@ -93,7 +93,7 @@ func TestDiscoveryLocalizedGridQueuesWithoutNetworkWait(t *testing.T) {
 	cancel()
 	<-done
 	m = f.srv.metadata(ctx, pr, &fightClub, renderOpts{})
-	if m.Title != "Titre français" || fightClub.Title != "Fight Club" {
+	if m.Title != "Titre français" || fightClub.Title != "Fjord Harbor" {
 		t.Fatalf("localized cache/canonical mutation %q %q", m.Title, fightClub.Title)
 	}
 }

@@ -99,7 +99,7 @@ func matrixTitle() *core.Title {
 	return &core.Title{
 		Key: core.MovieKey(603), Type: core.TypeMovie,
 		IDs:   core.IDs{TMDB: 603, IMDB: "tt0133093"},
-		Title: "The Matrix", Year: 1999, Runtime: 136 * time.Minute,
+		Title: "The Signal", Year: 1999, Runtime: 136 * time.Minute,
 		Released: time.Date(1999, 3, 31, 0, 0, 0, 0, time.UTC),
 	}
 }
@@ -143,9 +143,9 @@ func TestSelectProfile(t *testing.T) {
 
 func movieReleases() []core.Release {
 	return []core.Release{
-		rel("uhd", "The.Matrix.1999.2160p.UHD.BluRay.REMUX.DV.HEVC.TrueHD.7.1-GRP", 50000),
-		rel("hd", "The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000),
-		rel("sd720", "The.Matrix.1999.720p.BluRay.x264-GRP", 4000),
+		rel("uhd", "The.Signal.1999.2160p.UHD.BluRay.REMUX.DV.HEVC.TrueHD.7.1-GRP", 50000),
+		rel("hd", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000),
+		rel("sd720", "The.Signal.1999.720p.BluRay.x264-GRP", 4000),
 	}
 }
 
@@ -238,7 +238,7 @@ func TestResolveValidatesLeadingCandidatesConcurrentlyInRankOrder(t *testing.T) 
 
 func TestResolveCamGating(t *testing.T) {
 	ctx := context.Background()
-	cam := []core.Release{rel("cam1", "The.Matrix.1999.CAM.x264-GRP", 1500)}
+	cam := []core.Release{rel("cam1", "The.Signal.1999.CAM.x264-GRP", 1500)}
 	svc := New(&fakeIndexer{releases: cam}, fakeHealth{}, nil, testCfg(), Options{})
 	_, err := svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: webCaps()})
 	if !errors.Is(err, core.ErrNotAvailable) {
@@ -312,17 +312,17 @@ func TestMarkBadPersists(t *testing.T) {
 
 func TestEpisodeFiltering(t *testing.T) {
 	idx := &fakeIndexer{releases: []core.Release{
-		rel("pack", "Breaking.Bad.S01.COMPLETE.720p.BluRay.x264-GRP", 10000),
-		rel("wrongep", "Breaking.Bad.S01E02.720p.HDTV.x264-GRP", 1500),
-		rel("sample", "Breaking.Bad.S01E01.Sample.720p.HDTV.x264-GRP", 1500),
-		rel("pwd", "Breaking.Bad.S01E01.1080p.WEB-DL.x264-GRP", 1500),
-		rel("good", "Breaking.Bad.S01E01.720p.HDTV.x264-CTU", 1500),
+		rel("pack", "Boundary.Bay.S01.COMPLETE.720p.BluRay.x264-GRP", 10000),
+		rel("wrongep", "Boundary.Bay.S01E02.720p.HDTV.x264-GRP", 1500),
+		rel("sample", "Boundary.Bay.S01E01.Sample.720p.HDTV.x264-GRP", 1500),
+		rel("pwd", "Boundary.Bay.S01E01.1080p.WEB-DL.x264-GRP", 1500),
+		rel("good", "Boundary.Bay.S01E01.720p.HDTV.x264-CTU", 1500),
 	}}
 	idx.releases[3].Password = true
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	title := &core.Title{
 		Key: core.EpisodeKey(1396, 1, 1), Type: core.TypeEpisode,
-		ShowTitle: "Breaking Bad", Season: 1, Episode: 1, Runtime: 49 * time.Minute,
+		ShowTitle: "Boundary Bay", Season: 1, Episode: 1, Runtime: 49 * time.Minute,
 		ShowIDs: core.IDs{TVDB: 81189},
 	}
 	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: title, Client: webCaps()})
@@ -341,9 +341,9 @@ func TestEpisodeFiltering(t *testing.T) {
 
 func TestSizeSanityAndBlockedGroup(t *testing.T) {
 	idx := &fakeIndexer{releases: []core.Release{
-		rel("tiny", "The.Matrix.1999.1080p.BluRay.x264-GRP", 100), // < 5 MB/min
-		rel("blocked", "The.Matrix.1999.1080p.BluRay.x264-BADGRP", 8000),
-		rel("good", "The.Matrix.1999.1080p.BluRay.x264-GOOD", 8000),
+		rel("tiny", "The.Signal.1999.1080p.BluRay.x264-GRP", 100), // < 5 MB/min
+		rel("blocked", "The.Signal.1999.1080p.BluRay.x264-BADGRP", 8000),
+		rel("good", "The.Signal.1999.1080p.BluRay.x264-GOOD", 8000),
 	}}
 	cfg := testCfg()
 	cfg.Resolver.BlockedGroups = []string{"BADGRP"}

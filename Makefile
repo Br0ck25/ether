@@ -5,8 +5,7 @@ COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
 LDFLAGS := -s -w \
 	-X github.com/braedonsaunders/ether/internal/updater.Version=$(VERSION) \
 	-X github.com/braedonsaunders/ether/internal/updater.Commit=$(COMMIT) \
-	-X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64=$(ETHER_UPDATE_PUBLIC_KEY) \
-	-X github.com/braedonsaunders/ether/internal/tmdb.BundledAPIKey=$(ETHER_TMDB_KEY)
+	-X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64=$(ETHER_UPDATE_PUBLIC_KEY)
 
 .PHONY: build test lint vet web spike run tray ffmpeg icons release-snapshot keys clean
 

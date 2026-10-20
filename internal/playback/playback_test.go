@@ -315,7 +315,7 @@ func TestServeRange(t *testing.T) {
 
 	// Status details.
 	st, _ := h.m.Session(ps.ID)
-	if st.Decision != core.DecisionDirectPlay || st.BytesServed < 2*size || st.TitleName != "The Matrix (1999)" ||
+	if st.Decision != core.DecisionDirectPlay || st.BytesServed < 2*size || st.TitleName != "The Signal (1999)" ||
 		st.Username != "owner" || st.Resolution.Release.Name != "Release.A" || st.Client.ClientID != "c1" {
 		t.Fatalf("status = %+v", st)
 	}
@@ -899,7 +899,7 @@ func TestRememberHint(t *testing.T) {
 	if ps.Resolution.Release.ID != "N" || h.resolver.callCount() != 0 {
 		t.Fatalf("prepare used %s (resolver calls %d)", ps.Resolution.Release.ID, h.resolver.callCount())
 	}
-	if ps.TitleName != "Breaking Bad - S01E01 - Pilot" {
+	if ps.TitleName != "Boundary Bay - S01E01 - Pilot" {
 		t.Fatalf("title = %q", ps.TitleName)
 	}
 	caps, live, ok := h.m.ClientCaps(owner.ID, epKey)

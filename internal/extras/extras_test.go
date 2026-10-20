@@ -30,7 +30,7 @@ func (f fakeVideos) EpisodeVideos(context.Context, int64, int, int, string) ([]t
 func lookOK(string) (string, error) { return "/bin/true", nil }
 
 func movie() *core.Title {
-	return &core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Matrix", IDs: core.IDs{TMDB: 603}}
+	return &core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Signal", IDs: core.IDs{TMDB: 603}}
 }
 
 func enabledCfg(cmd string) func() config.Extras {

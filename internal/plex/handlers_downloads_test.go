@@ -252,7 +252,7 @@ func TestDownloadQueueLifecycle(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "video/mp4" {
 		t.Fatalf("Content-Type = %q", ct)
 	}
-	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "Fight Club.mp4") {
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, "Fjord Harbor.mp4") {
 		t.Fatalf("Content-Disposition = %q", cd)
 	}
 	rec = f.do(t, http.MethodGet, media, ownerToken, map[string]string{"Range": "bytes=10-19"})

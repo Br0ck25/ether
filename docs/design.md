@@ -190,9 +190,11 @@ another component's tables. Catalogue readers support batched local snapshots
 and hydrated title reads without triggering remote requests.
 
 The backend supports pure Go builds with `CGO_ENABLED=0`. Package tests run
-offline using local fixtures and fake services. Release scripts inject the
-bundled TMDB key through the exported build symbol `tmdb.BundledKey`; a linker
-smoke test verifies the symbol. Owner-provided credentials take precedence.
+offline using local fixtures and fake services. Owners supply their own TMDB
+API key in configuration (`catalog.tmdbKey`); an optional build-time fallback
+symbol (`tmdb.BundledKey`) exists for private builds and is verified by a
+linker smoke test, while public releases ship with no embedded third-party API
+keys.
 
 Packaging workflows cover macOS, Windows and Linux. Installer availability is
 reported separately from packaging support; an unpublished build is not an

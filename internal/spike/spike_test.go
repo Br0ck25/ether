@@ -24,7 +24,7 @@ func TestParseFileName(t *testing.T) {
 		title string
 		year  int
 	}{
-		{"/m/The.Matrix.1999.1080p.BluRay.x264.mkv", "The Matrix", 1999},
+		{"/m/The.Signal.1999.1080p.BluRay.x264.mkv", "The Signal", 1999},
 		{"/m/Big Buck Bunny (2008).mp4", "Big Buck Bunny", 2008},
 		{"/m/Sintel_2010_720p.mkv", "Sintel", 2010},
 		{"/m/Blade.Runner.2049.2017.2160p.mkv", "Blade Runner 2049", 2017},

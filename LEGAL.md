@@ -3,18 +3,20 @@
 Ether is free, open-source software licensed under the GNU General
 Public License v3.0. See [LICENSE](LICENSE).
 
-## Ether ships no content
+## Ether ships no content, indexers or credentials
 
-- Ether contains **no media files** and hosts none. Its library is
-  metadata (titles, artwork, descriptions) from TMDB.
-- Ether contains **no Usenet providers, no indexers and no accounts**.
-  To play anything, the owner must supply their own Usenet provider
-  subscription(s) and their own Newznab indexer access in the setup
-  wizard. What those services return is between the owner and those
-  services.
-- Ether is a *client/server implementation*: it answers the HTTP API
-  that Plex apps use to talk to a Plex Media Server. It contains no Plex
-  code, assets or binaries.
+- Ether contains **no media files** and hosts none. Its catalogue is
+  metadata (titles, artwork, descriptions) fetched from TMDB using the
+  owner's API key.
+- Ether contains **no Usenet providers, no indexers, no site definitions,
+  no default indexer URLs, no accounts, and no embedded third-party API
+  keys**. To browse or play anything, the owner must supply their own
+  TMDB API key, Usenet provider subscription(s), and indexer access in
+  the setup wizard. What those services return is solely between the
+  owner and those services.
+- Ether is a clean-room *protocol implementation*: it answers the HTTP
+  API that compatible client apps use to talk to a media server. It
+  contains no proprietary Plex code, assets, or binaries.
 
 ## Owner responsibility
 

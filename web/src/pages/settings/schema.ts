@@ -227,7 +227,7 @@ export const CATALOG: FieldGroup[] = [
         key: "tmdbKey",
         label: "Your TMDB API key",
         kind: "secret",
-        help: "Optional. Leave empty to use the key bundled with Ether.",
+        help: "Your personal TMDB v3 API key or v4 read-access token.",
       },
       {
         key: "language",

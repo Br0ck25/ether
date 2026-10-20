@@ -114,7 +114,7 @@ func TestServiceMoreLikeThisAndRows(t *testing.T) {
 	client := NewClient(ClientOptions{Config: config.LLM{Enabled: true, BaseURL: srv.URL + "/v1", Model: "test-model"}})
 	svc := New(ServiceOptions{Client: client, Catalog: cat})
 
-	seed := &core.Title{Key: core.MovieKey(1), Type: core.TypeMovie, Title: "Interstellar", Year: 2014, Genres: []string{"Sci-Fi"}}
+	seed := &core.Title{Key: core.MovieKey(1), Type: core.TypeMovie, Title: "Starlight", Year: 2014, Genres: []string{"Sci-Fi"}}
 	titles, err := svc.MoreLikeThis(context.Background(), seed, 5)
 	if err != nil {
 		t.Fatal(err)

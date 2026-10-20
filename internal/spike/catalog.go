@@ -36,8 +36,8 @@ var (
 	releaseTag = regexp.MustCompile(`(?i)^(2160p|1080p|720p|480p|4k|uhd|hdr|hdr10|dv|bluray|blu-ray|bdrip|brrip|web-?dl|webrip|web|hdtv|dvdrip|remux|x264|x265|h264|h265|hevc|avc|aac|ac3|eac3|dts|truehd|atmos|proper|repack|extended|unrated|imax)$`)
 )
 
-// ParseFileName turns "The.Matrix.1999.1080p.BluRay.x264.mkv" into
-// ("The Matrix", 1999).
+// ParseFileName turns "The.Signal.1999.1080p.BluRay.x264.mkv" into
+// ("The Signal", 1999).
 func ParseFileName(path string) (string, int) {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	words := strings.FieldsFunc(base, func(r rune) bool {
