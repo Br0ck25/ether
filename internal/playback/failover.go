@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -38,9 +37,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 			res = nil // a picked version wins over the remembered release
 		}
 	}
-	if res != nil && s.title != nil && (!releaseparse.SeriesYearMatches(releaseparse.EpisodeSeriesYear(res.Release.Name, res.Release.Info.Year), s.title.ShowYear) ||
-		(s.title.Type == core.TypeEpisode && releaseparse.EpisodeSeriesYear(res.Release.Name, res.Release.Info.Year) == 0 && !releaseparse.EpisodeTitleMatches(res.Release.Name, s.title.Title)) ||
-		(s.title.Type == core.TypeEpisode && res.Release.Protocol == core.ProtocolTorrent && s.title.ShowYear > 0 && (res.Release.Target == nil || res.Release.Target.ShowYear != s.title.ShowYear || res.Release.Target.EpisodeTitle != s.title.Title))) {
+	if res != nil && !releaseMatchesTitle(res.Release, s.title) {
 		// An older stored/warmed selection may predate the series identity
 		// gate. Do not reuse a same-named reboot for this show's episode.
 		res, cached = nil, nil
@@ -92,7 +89,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 func (m *Manager) nextResolution(ctx context.Context, s *session, tried []string, alternates []core.Release) (*core.Resolution, error) {
 	if m.deps.FetchNZB != nil {
 		for i, alt := range alternates {
-			if alt.ID == "" || slices.Contains(tried, alt.ID) {
+			if alt.ID == "" || slices.Contains(tried, alt.ID) || !releaseMatchesTitle(alt, s.title) {
 				continue
 			}
 			nzb, err := m.deps.FetchNZB(ctx, alt)
@@ -137,6 +134,11 @@ func (m *Manager) nextResolution(ctx context.Context, s *session, tried []string
 // marked bad. When the probe fails for another reason, fallback supplies the
 // media info.
 func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Resolution, fallback func(size int64) core.MediaInfo, cached ...*probeCache) (*generation, error) {
+	// Recheck at the shared open boundary, including failover and old
+	// cached alternates. A mismatch is request-specific, not a bad release.
+	if !releaseMatchesTitle(res.Release, s.title) {
+		return nil, fmt.Errorf("%w: release does not match requested episode", core.ErrNotAvailable)
+	}
 	src, err := m.deps.Engine.Open(ctx, res.Release.ID, res.NZB)
 	if err != nil {
 		if errors.Is(err, core.ErrArticleMissing) {
