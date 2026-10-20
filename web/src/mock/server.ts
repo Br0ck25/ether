@@ -24,6 +24,7 @@ import { assemble } from "./assemble";
 import { normalizeSpec } from "../lib/rules";
 import type {
   Bootstrap,
+  LLMProvider,
   ClusterNode,
   ClusterStatus,
   EtherConfig,
@@ -264,7 +265,7 @@ function defaultConfig(): EtherConfig {
     },
     trakt: { enabled: false, clientId: "", clientSecret: "" },
     openSubtitles: { enabled: false, apiKey: "", username: "", password: "" },
-    llm: { enabled: true, baseUrl: "http://localhost:11434/v1", apiKey: "", model: "llama3" },
+    llm: { enabled: true, provider: "ollama", baseUrl: "", apiKey: "", model: "llama3" },
     updates: {
       channel: "stable",
       autoUpdate: true,
@@ -1741,6 +1742,17 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ ok: true });
       case "POST /auth/pin":
         return json({ handle: "h1", code: "ABCD", authUrl: "https://app.plex.tv/auth#?code=ABCD" });
+      case "GET /llm/providers":
+        return json({ providers: MOCK_LLM_PROVIDERS });
+      case "POST /llm/models": {
+        const req = body as { provider?: string; apiKey?: string };
+        const p = MOCK_LLM_PROVIDERS.find((x) => x.id === (req.provider || "custom"));
+        if (p?.needsKey && req.apiKey === "bad")
+          return json({ models: [], error: "401: invalid key" });
+        return json({
+          models: MOCK_LLM_MODELS[p?.id ?? ""] ?? [{ id: "llama3" }, { id: "qwen3:8b" }],
+        });
+      }
       case "POST /test/usenet":
       case "POST /test/indexer":
       case "POST /test/debrid":
@@ -2278,3 +2290,70 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
 export type FakeServer = ReturnType<typeof createFakeServer>;
 export type { TitleCard };
+
+const MOCK_LLM_PROVIDERS: LLMProvider[] = [
+  {
+    id: "anthropic",
+    label: "Anthropic — Claude",
+    api: "anthropic",
+    baseUrl: "https://api.anthropic.com/v1",
+    needsKey: true,
+    local: false,
+    requiresBaseUrl: false,
+    keyHint: "sk-ant-…",
+  },
+  {
+    id: "openai",
+    label: "OpenAI — GPT",
+    api: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    needsKey: true,
+    local: false,
+    requiresBaseUrl: false,
+    keyHint: "sk-…",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter — any model, one key",
+    api: "openai",
+    baseUrl: "https://openrouter.ai/api/v1",
+    needsKey: true,
+    local: false,
+    requiresBaseUrl: false,
+    keyHint: "sk-or-…",
+    modelHint: "Models are vendor/model slugs, e.g. openai/gpt-4o.",
+  },
+  {
+    id: "ollama",
+    label: "Ollama — on your network",
+    api: "openai",
+    baseUrl: "http://localhost:11434/v1",
+    needsKey: false,
+    local: true,
+    requiresBaseUrl: false,
+    keyHint: "Not needed",
+  },
+  {
+    id: "custom",
+    label: "Custom (OpenAI-compatible)",
+    api: "openai",
+    baseUrl: "",
+    needsKey: false,
+    local: true,
+    requiresBaseUrl: true,
+    keyHint: "Your provider API key",
+  },
+];
+
+const MOCK_LLM_MODELS: Record<string, { id: string; label?: string }[]> = {
+  anthropic: [
+    { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+    { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+    { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+  ],
+  openai: [{ id: "gpt-4o" }, { id: "gpt-4o-mini" }, { id: "o4-mini" }],
+  openrouter: [
+    { id: "anthropic/claude-sonnet-5-5", label: "Anthropic: Claude Sonnet 5.5" },
+    { id: "openai/gpt-4o", label: "OpenAI: GPT-4o" },
+  ],
+};

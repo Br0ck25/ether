@@ -1,0 +1,148 @@
+import { Input, SearchSelect, SettingsSection, Switch } from "@braedonsaunders/appkit-ui";
+import type { ReactNode } from "react";
+import { ErrorPanel } from "../../components/feedback";
+import { SecretInput } from "../../components/fields";
+import {
+  findProvider,
+  ModelPicker,
+  providerOptions,
+  useLLMProviders,
+  withProvider,
+} from "../../components/llm";
+import { SettingsRow } from "../../components/SettingsRow";
+import type { EtherConfig } from "../../lib/types";
+
+type LLMConfig = EtherConfig["llm"];
+
+function FieldError({ error }: { error?: string }) {
+  return error ? (
+    <span className="mt-1 block text-xs text-danger" role="alert">
+      {error}
+    </span>
+  ) : null;
+}
+
+/**
+ * Settings › Connected services › Language model: pick a provider, give it
+ * a key (or a local endpoint), then choose from the models it offers.
+ */
+export function LanguageModelSettings({
+  value,
+  saved,
+  onChange,
+  errors,
+  footer,
+}: {
+  value: LLMConfig;
+  saved: LLMConfig | undefined;
+  onChange: (next: LLMConfig) => void;
+  /** Field errors keyed by dotted path ("llm.model"). */
+  errors: Record<string, string>;
+  footer?: ReactNode;
+}) {
+  const { providers, error } = useLLMProviders();
+  if (error) return <ErrorPanel error={error} />;
+  const provider = findProvider(providers, value.provider);
+  const set = (patch: Partial<LLMConfig>) => onChange({ ...value, ...patch });
+  return (
+    <SettingsSection
+      title="Language model"
+      description="Powers “Describe it” in Collection Studio, themed Home rows, natural-language search and recaps."
+      footer={footer}
+    >
+      <SettingsRow
+        title={<label htmlFor="llm-enabled">Enabled</label>}
+        control={
+          <Switch
+            id="llm-enabled"
+            aria-label="Enabled"
+            checked={value.enabled}
+            onChange={(e) => set({ enabled: e.currentTarget.checked })}
+          />
+        }
+      />
+      <SettingsRow
+        title="Provider"
+        description={<FieldError error={errors["llm.provider"]} />}
+        control={
+          <div className="sm:w-72">
+            <SearchSelect
+              value={value.provider}
+              onChange={(id) => onChange(withProvider(value, saved, id))}
+              options={providerOptions(providers)}
+              ariaLabel="Provider"
+              placeholder={providers ? "Choose a provider" : "Loading…"}
+              searchable
+            />
+          </div>
+        }
+      />
+      {provider ? (
+        <>
+          {provider.local ? (
+            <SettingsRow
+              stacked
+              title={<label htmlFor="llm-base-url">Endpoint URL</label>}
+              description={
+                <>
+                  {provider.requiresBaseUrl
+                    ? provider.modelHint
+                    : `Leave empty to use ${provider.baseUrl}.`}
+                  <FieldError error={errors["llm.baseUrl"]} />
+                </>
+              }
+            >
+              <Input
+                id="llm-base-url"
+                aria-label="Endpoint URL"
+                aria-invalid={errors["llm.baseUrl"] ? true : undefined}
+                value={value.baseUrl}
+                placeholder={provider.baseUrl || "https://example.com/v1"}
+                onChange={(e) => set({ baseUrl: e.currentTarget.value })}
+                spellCheck={false}
+              />
+            </SettingsRow>
+          ) : null}
+          <SettingsRow
+            stacked
+            title={<label htmlFor="llm-api-key">API key</label>}
+            description={
+              <>
+                {provider.needsKey ? null : "Not needed for most local servers."}
+                <FieldError error={errors["llm.apiKey"]} />
+              </>
+            }
+          >
+            <SecretInput
+              id="llm-api-key"
+              ariaLabel="API key"
+              value={value.apiKey}
+              onChange={(apiKey) => set({ apiKey })}
+              placeholder={provider.keyHint}
+              invalid={Boolean(errors["llm.apiKey"])}
+            />
+          </SettingsRow>
+          <SettingsRow
+            stacked
+            title={<label htmlFor="llm-model">Model</label>}
+            description={
+              <>
+                {provider.requiresBaseUrl ? null : provider.modelHint}
+                <FieldError error={errors["llm.model"]} />
+              </>
+            }
+          >
+            <ModelPicker
+              id="llm-model"
+              cfg={value}
+              provider={provider}
+              value={value.model}
+              onChange={(model) => set({ model })}
+              invalid={Boolean(errors["llm.model"])}
+            />
+          </SettingsRow>
+        </>
+      ) : null}
+    </SettingsSection>
+  );
+}

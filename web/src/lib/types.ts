@@ -271,7 +271,7 @@ export interface EtherConfig {
   };
   trakt: { enabled: boolean; clientId: string; clientSecret: string };
   openSubtitles: { enabled: boolean; apiKey: string; username: string; password: string };
-  llm: { enabled: boolean; baseUrl: string; apiKey: string; model: string };
+  llm: { enabled: boolean; provider: string; baseUrl: string; apiKey: string; model: string };
   updates: {
     channel: string;
     autoUpdate: boolean;
@@ -428,6 +428,26 @@ export interface FieldError {
 }
 
 export const REDACTED = "••••";
+
+/** A language-model service from GET /llm/providers (internal/config/llm.go). */
+export interface LLMProvider {
+  id: string;
+  label: string;
+  api: "openai" | "anthropic" | "google";
+  /** Default endpoint; empty for "custom". */
+  baseUrl: string;
+  needsKey: boolean;
+  /** Runs on the owner's network; the endpoint is editable. */
+  local: boolean;
+  requiresBaseUrl: boolean;
+  keyHint?: string;
+  modelHint?: string;
+}
+
+export interface LLMModel {
+  id: string;
+  label?: string;
+}
 
 /** GET /dashboard: one JSON blob per wired status provider. */
 export interface DashboardData {

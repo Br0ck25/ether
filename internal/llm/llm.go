@@ -1,5 +1,6 @@
-// Package llm is an optional OpenAI-compatible chat client (Ollama, LM
-// Studio, OpenAI, …) used for natural-language recommendation rows:
+// Package llm is an optional multi-provider chat client (OpenAI, Anthropic,
+// Gemini, OpenRouter, Ollama, LM Studio, any OpenAI-compatible server, …)
+// used for natural-language recommendation rows:
 // "more like this" for a title and themed rows from a user's history
 // ("Slow-burn sci-fi with a twist"). The model only ever returns
 // titles+years; they are resolved to catalogue items via core.Catalog, so
@@ -32,7 +33,7 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// Client is a minimal OpenAI-compatible /chat/completions client.
+// Client talks to the owner's chosen provider (config.LLMProviders).
 type Client struct {
 	cfg  config.LLM
 	http *http.Client
@@ -67,15 +68,21 @@ func (c *Client) UpdateConfig(cfg config.LLM) {
 
 // Enabled reports whether the LLM is configured on.
 func (c *Client) Enabled() bool {
+	cfg := c.config()
+	_, base := cfg.Endpoint()
+	return cfg.Enabled && base != "" && cfg.Model != ""
+}
+
+func (c *Client) config() config.LLM {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.cfg.Enabled && c.cfg.BaseURL != "" && c.cfg.Model != ""
+	return c.cfg
 }
 
 type chatRequest struct {
 	Model          string         `json:"model"`
 	Messages       []Message      `json:"messages"`
-	Temperature    float64        `json:"temperature"`
+	Temperature    *float64       `json:"temperature,omitempty"`
 	ResponseFormat map[string]any `json:"response_format,omitempty"`
 }
 
@@ -90,31 +97,61 @@ type chatResponse struct {
 	} `json:"error,omitempty"`
 }
 
-// Chat sends messages and returns the assistant content. When jsonMode is
-// set it first tries response_format=json_object and retries without it on
-// a 400 (many local servers reject the field).
+// temperature keeps suggestions varied without drifting off the request.
+const temperature = 0.4
+
+// Chat sends messages and returns the assistant content. Anthropic is
+// spoken natively; Gemini and every other provider through the OpenAI
+// chat-completions shape.
 func (c *Client) Chat(ctx context.Context, msgs []Message, jsonMode bool) (string, error) {
-	c.mu.RLock()
-	cfg := c.cfg
-	c.mu.RUnlock()
+	cfg := c.config()
 	if !cfg.Enabled {
 		return "", fmt.Errorf("llm disabled")
 	}
-	if cfg.BaseURL == "" || cfg.Model == "" {
-		return "", fmt.Errorf("llm base URL and model are required")
+	p, base := cfg.Endpoint()
+	if base == "" || cfg.Model == "" {
+		return "", fmt.Errorf("llm endpoint and model are required")
 	}
-	content, status, err := c.chatOnce(ctx, cfg, msgs, jsonMode)
-	if err != nil && jsonMode && (status == http.StatusBadRequest || status == http.StatusUnprocessableEntity) {
-		// Many local servers (older Ollama/LM Studio/llama.cpp builds)
-		// reject response_format; the prompt still asks for JSON and the
-		// parsers below are tolerant.
-		c.log.Debug("llm rejected response_format, retrying without", "err", err)
-		content, _, err = c.chatOnce(ctx, cfg, msgs, false)
+	var content string
+	var err error
+	switch p.API {
+	case config.LLMAPIAnthropic:
+		content, err = c.anthropicChat(ctx, base, cfg, msgs)
+	case config.LLMAPIGoogle:
+		content, err = c.openAIChat(ctx, base+"/openai", cfg, msgs, jsonMode)
+	default:
+		content, err = c.openAIChat(ctx, base, cfg, msgs, jsonMode)
 	}
 	if err != nil {
 		return "", err
 	}
 	return StripReasoning(content), nil
+}
+
+// openAIChat first asks for response_format=json_object (when jsonMode is
+// set) and a low temperature, and drops either on a 400/422: many local
+// servers reject response_format, and reasoning models (o-series, GPT-5)
+// reject any temperature but the default. The prompt still asks for JSON
+// and the parsers below are tolerant.
+func (c *Client) openAIChat(ctx context.Context, base string, cfg config.LLM, msgs []Message, jsonMode bool) (string, error) {
+	temp := true
+	for {
+		content, status, err := c.chatOnce(ctx, base, cfg, msgs, jsonMode, temp)
+		if err == nil || (status != http.StatusBadRequest && status != http.StatusUnprocessableEntity) {
+			return content, err
+		}
+		switch {
+		case temp && strings.Contains(strings.ToLower(err.Error()), "temperature"):
+			temp = false
+		case jsonMode:
+			jsonMode = false
+		case temp:
+			temp = false
+		default:
+			return "", err
+		}
+		c.log.Debug("llm rejected a request option, retrying without it", "err", err)
+	}
 }
 
 var thinkRe = regexp.MustCompile(`(?is)<(think|thinking|reasoning)>.*?</(think|thinking|reasoning)>`)
@@ -134,47 +171,93 @@ func StripReasoning(content string) string {
 	return strings.TrimSpace(content)
 }
 
-func (c *Client) chatOnce(ctx context.Context, cfg config.LLM, msgs []Message, jsonMode bool) (string, int, error) {
-	cr := chatRequest{Model: cfg.Model, Messages: msgs, Temperature: 0.4}
+func (c *Client) chatOnce(ctx context.Context, base string, cfg config.LLM, msgs []Message, jsonMode, temp bool) (string, int, error) {
+	cr := chatRequest{Model: cfg.Model, Messages: msgs}
+	if temp {
+		t := temperature
+		cr.Temperature = &t
+	}
 	if jsonMode {
 		cr.ResponseFormat = map[string]any{"type": "json_object"}
 	}
-	body, err := json.Marshal(cr)
+	var out chatResponse
+	status, err := c.postJSON(ctx, base+"/chat/completions", openAIHeaders(cfg.APIKey), cr, &out)
 	if err != nil {
-		return "", 0, err
+		return "", status, fmt.Errorf("llm chat: %w", err)
 	}
-	url := strings.TrimSuffix(cfg.BaseURL, "/") + "/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if out.Error != nil {
+		return "", status, fmt.Errorf("llm chat: %s", out.Error.Message)
+	}
+	if len(out.Choices) == 0 {
+		return "", status, fmt.Errorf("llm chat: no choices")
+	}
+	return out.Choices[0].Message.Content, status, nil
+}
+
+func openAIHeaders(key string) http.Header {
+	h := http.Header{}
+	if key != "" {
+		h.Set("Authorization", "Bearer "+key)
+	}
+	return h
+}
+
+// postJSON POSTs body and decodes a 200 response into out. Non-200
+// responses become errors carrying the provider's message.
+func (c *Client) postJSON(ctx context.Context, url string, h http.Header, body, out any) (int, error) {
+	b, err := json.Marshal(body)
 	if err != nil {
-		return "", 0, err
+		return 0, err
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return 0, err
+	}
+	req.Header = h.Clone()
 	req.Header.Set("Content-Type", "application/json")
-	if cfg.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-	}
+	return c.do(req, out)
+}
+
+func (c *Client) do(req *http.Request, out any) (int, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", 0, err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return "", resp.StatusCode, err
+		return resp.StatusCode, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", resp.StatusCode, fmt.Errorf("llm chat: %s: %s", resp.Status, truncate(string(b), 200))
+		return resp.StatusCode, fmt.Errorf("%s: %s", resp.Status, providerMessage(b))
 	}
-	var cr2 chatResponse
-	if err := json.Unmarshal(b, &cr2); err != nil {
-		return "", resp.StatusCode, fmt.Errorf("llm chat decode: %w", err)
+	if err := json.Unmarshal(b, out); err != nil {
+		return resp.StatusCode, fmt.Errorf("decode: %w", err)
 	}
-	if cr2.Error != nil {
-		return "", resp.StatusCode, fmt.Errorf("llm chat: %s", cr2.Error.Message)
+	return resp.StatusCode, nil
+}
+
+// providerMessage pulls error.message out of an error body (OpenAI and
+// Anthropic both use that shape; Gemini wraps it in a one-element array),
+// falling back to the raw text.
+func providerMessage(b []byte) string {
+	var e struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
 	}
-	if len(cr2.Choices) == 0 {
-		return "", resp.StatusCode, fmt.Errorf("llm chat: no choices")
+	if json.Unmarshal(b, &e) == nil && e.Error.Message != "" {
+		return truncate(e.Error.Message, 300)
 	}
-	return cr2.Choices[0].Message.Content, resp.StatusCode, nil
+	var arr []struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(b, &arr) == nil && len(arr) > 0 && arr[0].Error.Message != "" {
+		return truncate(arr[0].Error.Message, 300)
+	}
+	return truncate(strings.TrimSpace(string(b)), 200)
 }
 
 // TitleRef is a title the model suggested.

@@ -429,31 +429,6 @@ export const OPENSUBTITLES: FieldGroup[] = [
   },
 ];
 
-export const LLM: FieldGroup[] = [
-  {
-    title: "Language model",
-    description:
-      "Powers “Describe it” in Collection Studio and themed Home rows. Any OpenAI-compatible endpoint works, including a local Ollama.",
-    fields: [
-      { key: "enabled", label: "Enabled", kind: "bool" },
-      {
-        key: "baseUrl",
-        label: "Endpoint URL",
-        kind: "text",
-        wide: true,
-        placeholder: "http://localhost:11434/v1",
-      },
-      { key: "model", label: "Model", kind: "text", placeholder: "llama3.1" },
-      {
-        key: "apiKey",
-        label: "API key",
-        kind: "secret",
-        help: "Not needed for most local servers.",
-      },
-    ],
-  },
-];
-
 export const UPDATES: FieldGroup[] = [
   {
     title: "Release channel",

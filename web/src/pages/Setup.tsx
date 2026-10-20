@@ -4,6 +4,7 @@ import {
   Button,
   Checkbox,
   Input,
+  SearchSelect,
   Slider,
   Spinner,
   Switch,
@@ -11,12 +12,19 @@ import {
   cn,
 } from "@braedonsaunders/appkit-ui";
 import { Check, ExternalLink, Plus, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAppOptional } from "../app-context";
 import { EtherMark } from "../components/brand";
 import { ErrorPanel, MutationError } from "../components/feedback";
 import { Field, NumberInput, SecretInput, TestButton, type TestState } from "../components/fields";
+import {
+  findProvider,
+  ModelPicker,
+  providerOptions,
+  useLLMProviders,
+  withProvider,
+} from "../components/llm";
 import { api, newId } from "../lib/api";
 import { formatBytes } from "../lib/format";
 import type { DiskInfo, EtherConfig, Indexer, UsenetProvider } from "../lib/types";
@@ -678,38 +686,16 @@ export default function Setup() {
                 }
               />
             </Field>
-            <Field
-              label="LLM endpoint (OpenAI-compatible)"
-              hint="e.g. http://localhost:11434/v1. Powers “Describe it”."
-            >
-              <div className="space-y-2">
-                <Input
-                  value={cfg.llm.baseUrl}
-                  onChange={(e) =>
-                    setCfg({
-                      ...cfg,
-                      llm: {
-                        ...cfg.llm,
-                        baseUrl: e.currentTarget.value,
-                        enabled: Boolean(e.currentTarget.value),
-                      },
-                    })
-                  }
-                />
+            <LanguageModelFields
+              llm={cfg.llm}
+              onChange={(llm) => setCfg({ ...cfg, llm })}
+              test={
                 <TestButton
                   state={optTests.llm ?? { status: "idle" }}
                   onTest={() => void runTest("opt", "llm", () => api.testLLM(cfg.llm))}
                 />
-              </div>
-            </Field>
-            <Field label="LLM model">
-              <Input
-                value={cfg.llm.model}
-                onChange={(e) =>
-                  setCfg({ ...cfg, llm: { ...cfg.llm, model: e.currentTarget.value } })
-                }
-              />
-            </Field>
+              }
+            />
             <label className="flex items-center gap-2 self-end text-sm text-fg">
               <Switch
                 checked={cfg.resolver.allowCam}
@@ -732,5 +718,67 @@ export default function Setup() {
         </div>
       ) : null}
     </WizardLayout>
+  );
+}
+
+/** Wizard step 4's language model: provider, key or endpoint, then model. */
+function LanguageModelFields({
+  llm,
+  onChange,
+  test,
+}: {
+  llm: EtherConfig["llm"];
+  onChange: (llm: EtherConfig["llm"]) => void;
+  test: ReactNode;
+}) {
+  const { providers } = useLLMProviders();
+  const provider = findProvider(providers, llm.provider);
+  return (
+    <>
+      <Field label="Language model provider" hint="Powers “Describe it” and themed Home rows.">
+        <SearchSelect
+          value={llm.provider}
+          onChange={(id) => onChange({ ...withProvider(llm, undefined, id), enabled: false })}
+          options={providerOptions(providers)}
+          ariaLabel="Language model provider"
+          placeholder={providers ? "None" : "Loading…"}
+          searchable
+        />
+      </Field>
+      {provider?.local ? (
+        <Field label="Language model endpoint" htmlFor="setup-llm-url">
+          <Input
+            id="setup-llm-url"
+            value={llm.baseUrl}
+            placeholder={provider.baseUrl || "https://example.com/v1"}
+            onChange={(e) => onChange({ ...llm, baseUrl: e.currentTarget.value })}
+            spellCheck={false}
+          />
+        </Field>
+      ) : null}
+      {provider ? (
+        <Field label="Language model API key">
+          <SecretInput
+            ariaLabel="Language model API key"
+            value={llm.apiKey}
+            placeholder={provider.keyHint}
+            onChange={(apiKey) => onChange({ ...llm, apiKey })}
+          />
+        </Field>
+      ) : null}
+      {provider ? (
+        <Field label="Language model" hint={provider.modelHint}>
+          <div className="space-y-2">
+            <ModelPicker
+              cfg={llm}
+              provider={provider}
+              value={llm.model}
+              onChange={(model) => onChange({ ...llm, model, enabled: Boolean(model) })}
+            />
+            {test}
+          </div>
+        </Field>
+      ) : null}
+    </>
   );
 }

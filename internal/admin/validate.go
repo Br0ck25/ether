@@ -240,13 +240,20 @@ func ValidateConfig(cfg config.Config) []FieldError {
 		v.add("transcode.remoteMaxBitrateKbps", "must be >= 0")
 	}
 
-	if cfg.LLM.Enabled {
-		v.httpURL("llm.baseUrl", cfg.LLM.BaseURL, true)
-		if strings.TrimSpace(cfg.LLM.Model) == "" {
-			v.add("llm.model", "is required when the LLM is enabled")
+	if p, ok := config.LookupLLMProvider(cfg.LLM.Provider); !ok {
+		v.add("llm.provider", "is not a supported provider")
+	} else {
+		if p.Local {
+			v.httpURL("llm.baseUrl", cfg.LLM.BaseURL, cfg.LLM.Enabled && p.RequiresBaseURL)
 		}
-	} else if cfg.LLM.BaseURL != "" {
-		v.httpURL("llm.baseUrl", cfg.LLM.BaseURL, false)
+		if cfg.LLM.Enabled {
+			if p.NeedsKey && strings.TrimSpace(cfg.LLM.APIKey) == "" {
+				v.add("llm.apiKey", "is required for %s", p.Label)
+			}
+			if strings.TrimSpace(cfg.LLM.Model) == "" {
+				v.add("llm.model", "is required when the language model is enabled")
+			}
+		}
 	}
 	if cfg.Trakt.Enabled && strings.TrimSpace(cfg.Trakt.ClientID) == "" {
 		v.add("trakt.clientId", "is required when Trakt is enabled")

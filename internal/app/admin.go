@@ -58,9 +58,18 @@ func (a *App) buildAdmin() http.Handler {
 		TestOpenSubtitles: subtitles.Test,
 		TestTrakt:         trakt.Test,
 		TestLLM: func(ctx context.Context, c config.LLM) error {
+			c.Enabled = true // test the settings before the owner switches them on
 			_, err := llm.NewClient(llm.ClientOptions{Config: c, Logger: a.log}).Chat(ctx,
 				[]llm.Message{{Role: "user", Content: "Reply with the word ok."}}, false)
 			return err
+		},
+		LLMModels: func(ctx context.Context, c config.LLM) ([]admin.LLMModel, error) {
+			models, err := llm.NewClient(llm.ClientOptions{Config: c, Logger: a.log}).Models(ctx)
+			out := make([]admin.LLMModel, len(models))
+			for i, m := range models {
+				out[i] = admin.LLMModel{ID: m.ID, Label: m.Label}
+			}
+			return out, err
 		},
 		SessionsStatus:  func(context.Context) any { return (ownerPlayback{Playback: a.playback, app: a}).Sessions() },
 		CacheStatus:     a.cacheStatus,

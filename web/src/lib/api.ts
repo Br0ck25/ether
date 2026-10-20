@@ -35,6 +35,8 @@ import type {
   FieldError,
   CatalogEntry,
   Indexer,
+  LLMModel,
+  LLMProvider,
   LogEntry,
   SiteDefinition,
   SiteTestResult,
@@ -196,6 +198,11 @@ export const api = {
   testOpenSubtitles: (cfg: EtherConfig["openSubtitles"]) =>
     post<TestResult>("/test/opensubtitles", cfg),
   testLLM: (cfg: EtherConfig["llm"]) => post<TestResult>("/test/llm", cfg),
+  llmProviders: async () =>
+    (await apiFetch<{ providers: LLMProvider[] }>("/llm/providers")).providers,
+  /** Models for unsaved settings; a provider failure comes back as `error`. */
+  llmModels: (cfg: EtherConfig["llm"], signal?: AbortSignal) =>
+    post<{ models: LLMModel[]; error?: string }>("/llm/models", cfg, signal),
   testTrakt: (cfg: EtherConfig["trakt"]) => post<TestResult>("/test/trakt", cfg),
 
   // ---- Built-in indexer sites ------------------------------------------------------
