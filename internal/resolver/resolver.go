@@ -513,7 +513,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 
 	prepareStart := time.Now()
-	cands = s.prepareSources(ctx, cands, req.Title, &trace)
+	var checks candidateChecks
+	defer checks.close()
+	cands = s.prepareSources(ctx, cands, req.Title, &trace, &checks)
 	trace.SourcePreparationDuration = time.Since(prepareStart)
 	if rcfg.OptimisticStart && !preferTried {
 		nzb, err := s.indexer.FetchNZB(ctx, cands[0].rel)

@@ -15,7 +15,8 @@ type candidate struct {
 	rel       core.Release
 	trace     int
 	verified  bool
-	bandwidth int // fits client cap (+1), unknown (0), or exceeds it (-1)
+	bandwidth int             // fits client cap (+1), unknown (0), or exceeds it (-1)
+	prepared  *candidateCheck // validation overlapped with descriptor discovery
 }
 type validation struct {
 	index                         int
@@ -117,19 +118,13 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				checkCtx, cancelCheck := context.WithTimeout(workCtx, candidateBudget)
 				defer cancelCheck()
 				i := base + j
-				v := validation{index: i}
-				phase := time.Now()
-				v.nzb, v.err = s.indexer.FetchNZB(checkCtx, cands[i].rel)
-				v.fetchDuration = time.Since(phase)
-				if v.err == nil {
-					v.healthy = true
-					if s.health != nil {
-						v.healthChecked = true
-						phase = time.Now()
-						v.healthy, v.healthCached, v.err = s.checkHealthCached(checkCtx, cands[i].rel.ID, v.nzb)
-						v.healthDuration = time.Since(phase)
-					}
+				var v validation
+				if cands[i].prepared != nil {
+					v = cands[i].prepared.wait(checkCtx)
+				} else {
+					v = s.validateOne(checkCtx, cands[i].rel)
 				}
+				v.index = i
 				ordered[j] <- v
 				results <- v
 			}(j)
