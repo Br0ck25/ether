@@ -282,3 +282,42 @@ func TestEstimateVariantInfo(t *testing.T) {
 		t.Errorf("audio %+v", audio)
 	}
 }
+
+func TestVariantsDoNotWaitForInFlightPlaybackPreparation(t *testing.T) {
+	idx := &fakeIndexer{releases: movieReleases(), delay: time.Hour}
+	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	defer svc.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resolved := make(chan struct{})
+	defer func() {
+		cancel()
+		select {
+		case <-resolved:
+		case <-time.After(5 * time.Second):
+			t.Error("cancelled preparation did not end")
+		}
+	}()
+	go func() {
+		defer close(resolved)
+		_, _ = svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for idx.searches.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("playback preparation never started")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	started := time.Now()
+	vs, err := svc.Variants(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()}, 4)
+	if err != nil || len(vs) != 0 {
+		t.Fatalf("cold version picker: %+v %v", vs, err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("version picker waited for source resolution")
+	}
+	if idx.searches.Load() != 1 {
+		t.Fatal("rendering started another indexer search")
+	}
+}

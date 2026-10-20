@@ -16,10 +16,6 @@ var _ core.VariantResolver = (*Service)(nil)
 // (Auto plus up to three alternatives).
 const maxVariants = 4
 
-// variantSearchWait bounds how long Variants waits for an already
-// in-flight resolve of the same title to populate the search cache.
-const variantSearchWait = 2 * time.Second
-
 // Variants implements core.VariantResolver. It reads only the cached
 // search results — rendering a detail page never spends indexer budget.
 // When nothing is cached it returns (nil, nil) and the caller renders the
@@ -34,7 +30,7 @@ func (s *Service) Variants(ctx context.Context, req core.ResolveRequest, max int
 	}
 	profile := s.ProfileFor(req.Client, req.User)
 	sreq := searchRequestFor(req.Title)
-	results, ok := s.cachedSearchResults(ctx, req.Title.Key, sreq)
+	results, ok := s.peekSearchCache(searchCacheKey(sreq))
 	if !ok || len(results) == 0 {
 		return nil, nil
 	}
@@ -82,37 +78,6 @@ func relaxedVariantProfile(profile core.QualityProfile, caps core.ClientCaps) (c
 	p := profile
 	p.MaxHeight = clientMax
 	return p, true
-}
-
-// cachedSearchResults returns the cached search results for a title,
-// awaiting an already in-flight resolve of the same title briefly (its
-// search populates the cache). It never starts a search.
-func (s *Service) cachedSearchResults(ctx context.Context, key core.RatingKey, sreq core.SearchRequest) ([]core.Release, bool) {
-	ck := searchCacheKey(sreq)
-	if res, ok := s.peekSearchCache(ck); ok {
-		return res, true
-	}
-	prefix := fmt.Sprintf("%d|", int64(key))
-	s.flightMu.Lock()
-	var f *inflight
-	for k, fl := range s.flights {
-		if strings.HasPrefix(k, prefix) {
-			f = fl
-			break
-		}
-	}
-	s.flightMu.Unlock()
-	if f == nil {
-		return nil, false
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, variantSearchWait)
-	defer cancel()
-	select {
-	case <-f.done:
-	case <-waitCtx.Done():
-		return nil, false
-	}
-	return s.peekSearchCache(ck)
 }
 
 func (s *Service) peekSearchCache(key string) ([]core.Release, bool) {
