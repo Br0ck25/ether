@@ -469,6 +469,24 @@ func TestTouchKeepsSessionAlive(t *testing.T) {
 	}
 }
 
+func TestPlaylistPollingCannotPreserveAbandonedEncoder(t *testing.T) {
+	fr := newFakeRunner()
+	m := newTestManager(t, fr, config.Transcode{})
+	s := startSession(t, m, remuxRequest(t, "manifest-only", time.Hour))
+	p := fr.lastProc()
+	last := time.Now().Add(-3 * time.Minute)
+	s.lastAccess.Store(last.UnixNano())
+	rec := httptest.NewRecorder()
+	s.ServePlaylist(rec, httptest.NewRequest("GET", "/index.m3u8", nil))
+	if rec.Code != 200 {
+		t.Fatal(rec.Code)
+	}
+	m.reapIdle(time.Now())
+	if _, ok := m.Session(s.ID()); ok || !p.wasKilled() {
+		t.Fatal("manifest polling preserved abandoned encoder")
+	}
+}
+
 func TestStopAndClose(t *testing.T) {
 	fr := newFakeRunner()
 	m := newTestManager(t, fr, config.Transcode{})

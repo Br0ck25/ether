@@ -52,7 +52,7 @@ func defaultOptions() options {
 	return options{
 		runner:         ExecRunner{},
 		detectHW:       true,
-		idleTimeout:    10 * time.Minute,
+		idleTimeout:    2 * time.Minute,
 		segmentTimeout: 45 * time.Second,
 		restartAhead:   24 * time.Second,
 		maxAhead:       2 * time.Minute,
@@ -70,7 +70,7 @@ func WithRunner(r Runner) Option { return func(o *options) { o.runner = r } }
 // WithoutHWDetection skips the startup hardware probe and encodes on CPU.
 func WithoutHWDetection() Option { return func(o *options) { o.detectHW = false } }
 
-// WithIdleTimeout sets how long an unrequested session lives (default 10m).
+// WithIdleTimeout sets how long an unrequested session lives (default 2m).
 func WithIdleTimeout(d time.Duration) Option { return func(o *options) { o.idleTimeout = d } }
 
 // WithSegmentTimeout bounds how long ServeSegment waits for ffmpeg

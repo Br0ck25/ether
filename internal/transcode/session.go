@@ -214,7 +214,6 @@ func (s *Session) ServePlaylist(w http.ResponseWriter, r *http.Request) {
 		s.ServeManifest(w, r)
 		return
 	}
-	s.Touch()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -1167,7 +1166,6 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	if inputURL == "" {
 		return errors.New("transcode: SwapInput: empty input URL")
 	}
-	s.Touch()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {

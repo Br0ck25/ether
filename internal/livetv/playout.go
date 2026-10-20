@@ -34,6 +34,9 @@ type track struct {
 }
 type session struct {
 	consumed        bool
+	mediaStarted    bool
+	startupCancel   context.CancelFunc // immutable after publication; cancels I/O before locking
+	view            core.PlaySession   // immutable monitoring snapshot, including pending tunes
 	reserved        bool
 	ready           bool
 	nextSequence    int64
@@ -52,6 +55,9 @@ type session struct {
 }
 
 func (ss *session) close(s *Service) {
+	if ss.startupCancel != nil {
+		ss.startupCancel()
+	}
 	ss.mu.Lock()
 	if ss.closed {
 		ss.mu.Unlock()
@@ -116,7 +122,9 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 		var abandoned []*session
 		s.mu.Lock()
 		for id, old := range s.sessions {
-			old.mu.Lock()
+			if !old.mu.TryLock() {
+				continue
+			}
 			unused := old.ready && !old.consumed && old.info.UserID == u.ID && old.caps.ClientID == caps.ClientID
 			old.mu.Unlock()
 			if unused {
@@ -163,6 +171,22 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 			UserID: u.ID, Channel: c, Programme: p, StartedAt: s.o.Now(),
 		},
 		user: *u, caps: caps, last: s.o.Now(), resources: map[string]string{},
+	}
+	// Upstream retries and probing share one startup budget. A stalled public
+	// source must not occupy a viewer slot for three HTTP timeouts.
+	var cancel context.CancelFunc
+	if c.Kind == "iptv" {
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	defer cancel()
+	ss.startupCancel = cancel
+	ss.view = core.PlaySession{ID: ss.info.ID, PlaybackGroup: ss.info.ID, UserID: u.ID, Username: u.Username, ClientID: caps.ClientID, Client: caps, TitleName: c.Name, StartedAt: ss.info.StartedAt, Decision: core.DecisionRemux, DecisionReason: "Live channel playout"}
+	if p != nil {
+		ss.view.Key = p.Item.Key
+		ss.view.TitleName = p.Item.Title
+		ss.view.Info.Duration = p.End.Sub(p.Start)
 	}
 	s.sessions[ss.info.ID] = ss
 	s.mu.Unlock()
@@ -245,9 +269,18 @@ func (s *Service) getSession(ctx context.Context, id string, u *core.User) (*ses
 	if !ss.ready {
 		return nil, core.ErrNotAvailable
 	}
-	ss.last = s.o.Now()
 	ss.user = *u
 	return ss, nil
+}
+
+// Only media consumption renews the lease. Subscription/timeline polling and
+// a repeatedly requested manifest can otherwise preserve a failed tune forever.
+func (s *Service) touchMedia(ss *session) {
+	ss.mu.Lock()
+	ss.consumed = true
+	ss.mediaStarted = true
+	ss.last = s.o.Now()
+	ss.mu.Unlock()
 }
 func (s *Service) Session(ctx context.Context, id string, u *core.User) (SessionInfo, error) {
 	ss, err := s.getSession(ctx, id, u)
@@ -535,6 +568,7 @@ func (s *Service) ServeSegment(w http.ResponseWriter, r *http.Request, id string
 	}
 	hs := tr.hls
 	ss.mu.Unlock()
+	s.touchMedia(ss)
 	hs.ServeSegment(w, r, n)
 }
 
@@ -675,6 +709,7 @@ func (s *Service) ServeRelaySegment(w http.ResponseWriter, r *http.Request, id s
 		writeStreamError(w, core.ErrNotFound)
 		return
 	}
+	s.touchMedia(ss)
 	ss.relay.ServeSegment(w, r, n)
 }
 
@@ -692,24 +727,11 @@ func (s *Service) TranscodeFor(playbackID string) (core.HLSSession, bool) {
 // viewers that do not own an ffmpeg/source session.
 func (s *Service) ViewingSessions() []*core.PlaySession {
 	s.mu.Lock()
-	sessions := make([]*session, 0, len(s.sessions))
+	defer s.mu.Unlock()
+	out := make([]*core.PlaySession, 0, len(s.sessions))
 	for _, ss := range s.sessions {
-		sessions = append(sessions, ss)
-	}
-	s.mu.Unlock()
-	out := make([]*core.PlaySession, 0, len(sessions))
-	for _, ss := range sessions {
-		ss.mu.Lock()
-		if !ss.closed {
-			p := &core.PlaySession{ID: ss.info.ID, PlaybackGroup: ss.info.ID, UserID: ss.info.UserID, Username: ss.user.Username, ClientID: ss.caps.ClientID, Client: ss.caps, TitleName: ss.info.Channel.Name, StartedAt: ss.info.StartedAt, Decision: core.DecisionRemux, DecisionReason: "Live channel playout"}
-			if ss.info.Programme != nil {
-				p.Key = ss.info.Programme.Item.Key
-				p.TitleName = ss.info.Programme.Item.Title
-				p.Info.Duration = ss.info.Programme.End.Sub(ss.info.Programme.Start)
-			}
-			out = append(out, p)
-		}
-		ss.mu.Unlock()
+		p := ss.view
+		out = append(out, &p)
 	}
 	return out
 }

@@ -179,6 +179,9 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		}
 		return
 	}
+	if r.Method != http.MethodHead && len(body) > 0 {
+		s.touchMedia(ss)
+	}
 	for _, name := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
 		if v := res.Header.Get(name); v != "" {
 			w.Header().Set(name, v)

@@ -123,21 +123,7 @@ func (s *Service) maintain() {
 		case <-s.ctx.Done():
 			return
 		case <-t.C:
-			s.mu.Lock()
-			var stale []*session
-			for id, ss := range s.sessions {
-				ss.mu.Lock()
-				expired := s.o.Now().Sub(ss.last) > 2*time.Minute
-				ss.mu.Unlock()
-				if expired {
-					stale = append(stale, ss)
-					delete(s.sessions, id)
-				}
-			}
-			s.mu.Unlock()
-			for _, ss := range stale {
-				ss.close(s)
-			}
+			s.expireSessions()
 			if s.o.Warm != nil {
 				cs, err := s.Channels(s.ctx)
 				if err != nil {
@@ -167,6 +153,32 @@ func (s *Service) maintain() {
 				}
 			}
 		}
+	}
+}
+
+func (s *Service) expireSessions() {
+	s.mu.Lock()
+	var stale []*session
+	for id, ss := range s.sessions {
+		// A bounded startup or programme preparation may hold the session
+		// lock across I/O. Never let it block monitoring or other viewers.
+		if !ss.mu.TryLock() {
+			continue
+		}
+		ttl := 2 * time.Minute
+		if !ss.mediaStarted {
+			ttl = 30 * time.Second
+		}
+		expired := s.o.Now().Sub(ss.last) > ttl
+		ss.mu.Unlock()
+		if expired {
+			stale = append(stale, ss)
+			delete(s.sessions, id)
+		}
+	}
+	s.mu.Unlock()
+	for _, ss := range stale {
+		ss.close(s)
 	}
 }
 func (s *Service) Channels(ctx context.Context) ([]Channel, error) {

@@ -832,6 +832,22 @@ func (s *Server) handleTranscodeStop(w http.ResponseWriter, r *http.Request) {
 	id := sanitizeSessionID(r.URL.Query().Get("session"))
 	if id != "" {
 		if e, ok := s.transcodes.get(id); ok && e.userID == FromContext(r.Context()).User.ID {
+			// A seek may have opened a replacement transcode against the same
+			// source. Only release the source when its last consumer stops.
+			shared := false
+			if s.d.Transcoder != nil && e.playID != "" {
+				for _, other := range s.transcodes.byPlayID(e.playID) {
+					if other != id {
+						if _, active := s.d.Transcoder.Session(other); active {
+							shared = true
+							break
+						}
+					}
+				}
+			}
+			if !shared && e.playID != "" && s.d.Playback != nil {
+				s.d.Playback.Stop(e.playID)
+			}
 			if s.d.Transcoder != nil {
 				s.d.Transcoder.Stop(id)
 			}
