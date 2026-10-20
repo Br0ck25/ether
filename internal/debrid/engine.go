@@ -662,7 +662,6 @@ func (f *remoteFile) fetchRun(ctx context.Context, first int64, fls []*blockFlig
 			f.finish(first+int64(i), fls[i], nil, err, mode)
 		}
 	}
-	slots := f.conns
 	if slotHeld {
 		defer func() { <-f.raSlots }()
 	} else if mode == fetchReadAhead || mode == fetchPrefetch {
@@ -674,31 +673,57 @@ func (f *remoteFile) fetchRun(ctx context.Context, first int64, fls []*blockFlig
 			return
 		}
 	}
-	select {
-	case slots <- struct{}{}:
-		defer func() { <-slots }()
-	case <-ctx.Done():
-		fail(ctx.Err())
-		return
-	}
 	start := first * f.e.block
 	end := min((first+int64(len(fls)))*f.e.block, f.size) - 1
 	began := f.e.now()
 	body, tm, err := f.rangeGet(ctx, start, end, mode == fetchUrgent || mode == fetchDurable)
 	if err != nil {
+		if ctx.Err() == nil {
+			f.e.log.Warn("debrid range failed", "release", f.id, "offset", start, "err", sanitize(err))
+		}
 		fail(err)
 		return
 	}
-	defer body.Close()
+	defer func() {
+		if body != nil {
+			body.Close()
+		}
+	}()
 	var got int64
+	bodyRetries := 0
 	for ; i < len(fls); i++ {
 		idx := first + int64(i)
 		buf := make([]byte, f.blockLen(idx))
-		if _, err := io.ReadFull(body, buf); err != nil {
+		for {
+			_, err = io.ReadFull(body, buf)
+			if err == nil || ctx.Err() != nil || bodyRetries >= maxRangeAttempts-1 {
+				break
+			}
+			// Headers and the first byte can succeed before the CDN drops
+			// the body. Keep completed blocks; refetch the incomplete block
+			// from its exact offset instead of replacing the whole release.
+			body.Close()
+			bodyRetries++
+			f.e.log.Warn("debrid body interrupted; retrying same file", "release", f.id,
+				"offset", idx*f.e.block, "attempt", bodyRetries, "err", sanitize(err))
+			if bodyRetries == 1 {
+				_, gen := f.payload()
+				if _, _, refreshErr := f.link(ctx, true, gen); refreshErr != nil {
+					err = refreshErr
+					break
+				}
+			}
+			body, tm, err = f.rangeGet(ctx, idx*f.e.block, end, mode == fetchUrgent || mode == fetchDurable)
+			if err != nil {
+				break
+			}
+		}
+		if err != nil {
 			if ctx.Err() != nil {
 				err = ctx.Err()
 			} else {
-				err = fmt.Errorf("debrid: read %s: %w: %v", f.name(), core.ErrSourceUnavailable, err)
+				err = fmt.Errorf("debrid: read %s: %w: %v", f.name(), core.ErrSourceUnavailable, sanitize(err))
+				f.e.log.Warn("debrid range failed", "release", f.id, "offset", idx*f.e.block, "err", err)
 			}
 			fail(err)
 			break
@@ -812,7 +837,7 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 		if err != nil {
 			return nil, timing{}, err
 		}
-		resp, tm, err := f.e.get(ctx, u, start, end, urgent)
+		resp, tm, err := f.e.get(ctx, u, start, end, urgent, f.conns)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, tm, ctx.Err()
@@ -924,9 +949,42 @@ func checkContentRange(v string, start, size int64) error {
 // get issues one range request. Urgent requests are hedged: when the first
 // byte has not arrived within the hedge delay, a duplicate request goes out
 // on a separate connection pool and the first to deliver a byte wins.
-func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent bool) (*http.Response, timing, error) {
+func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent bool, slots chan struct{}) (*http.Response, timing, error) {
+	// Count actual requests through body close, including probes and hedges.
+	// A speculative duplicate may only use a spare slot; it must never
+	// block the primary or exceed the provider's media connection budget.
+	acquire := func(wait bool) bool {
+		if !wait {
+			select {
+			case slots <- struct{}{}:
+				return true
+			default:
+				return false
+			}
+		}
+		select {
+		case slots <- struct{}{}:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+	send := func(c context.Context, hc *http.Client) (*http.Response, timing, error) {
+		var once sync.Once
+		release := func() { once.Do(func() { <-slots }) }
+		resp, tm, err := e.send(c, hc, u, start, end)
+		if err != nil {
+			release()
+		} else {
+			resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: release}
+		}
+		return resp, tm, err
+	}
+	if !acquire(true) {
+		return nil, timing{}, ctx.Err()
+	}
 	if !urgent || e.delay < 0 {
-		return e.send(ctx, e.hc, u, start, end)
+		return send(ctx, e.hc)
 	}
 	type result struct {
 		resp   *http.Response
@@ -936,12 +994,13 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 		hedge  bool
 	}
 	results := make(chan result, 2)
+	var cancels []context.CancelFunc
 	launch := func(hc *http.Client, hedge bool) {
 		rctx, cancel := context.WithCancel(ctx)
+		cancels = append(cancels, cancel)
 		go func() {
-			resp, tm, err := e.send(rctx, hc, u, start, end)
+			resp, tm, err := send(rctx, hc)
 			if err == nil && resp.StatusCode/100 == 2 {
-				// Wait for the first body byte before declaring a winner.
 				br := newPeekBody(resp.Body)
 				if _, perr := br.peek(); perr != nil && perr != io.EOF {
 					resp.Body.Close()
@@ -958,20 +1017,38 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 	defer timer.Stop()
 	pending, hedged := 1, false
 	var firstErr *result
+	tryHedge := func() {
+		hedged = true
+		if ctx.Err() == nil && acquire(false) {
+			e.stats.hedges.Add(1)
+			launch(e.hedge, true)
+			pending++
+		}
+	}
+	cleanup := func(n int) {
+		go func() {
+			for ; n > 0; n-- {
+				l := <-results
+				if l.err == nil {
+					l.resp.Body.Close()
+				}
+				l.cancel()
+			}
+		}()
+	}
 	for pending > 0 {
 		select {
 		case r := <-results:
 			pending--
 			if r.err == nil {
-				if hedged && pending > 0 {
-					// Cancel and discard the loser in the background.
-					go func() {
-						l := <-results
-						if l.err == nil {
-							l.resp.Body.Close()
-						}
-						l.cancel()
-					}()
+				// Cancel the loser now, not after its stalled body returns.
+				for i, cancel := range cancels {
+					if (i == 1) != r.hedge {
+						cancel()
+					}
+				}
+				if pending > 0 {
+					cleanup(pending)
 				}
 				if r.hedge {
 					e.stats.hedgeWins.Add(1)
@@ -983,30 +1060,18 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 			if firstErr == nil {
 				firstErr = &r
 			}
-			if !hedged && ctx.Err() == nil {
-				// The primary failed before the hedge delay: hedge now.
-				hedged = true
-				e.stats.hedges.Add(1)
-				launch(e.hedge, true)
-				pending++
+			if !hedged {
+				tryHedge()
 			}
 		case <-timer.C:
 			if !hedged {
-				hedged = true
-				e.stats.hedges.Add(1)
-				launch(e.hedge, true)
-				pending++
+				tryHedge()
 			}
 		case <-ctx.Done():
-			go func(n int) {
-				for ; n > 0; n-- {
-					l := <-results
-					if l.err == nil {
-						l.resp.Body.Close()
-					}
-					l.cancel()
-				}
-			}(pending)
+			for _, cancel := range cancels {
+				cancel()
+			}
+			cleanup(pending)
 			return nil, timing{}, ctx.Err()
 		}
 	}
@@ -1107,6 +1172,10 @@ type httpSource struct {
 func (s *httpSource) Size() int64       { return s.f.size }
 func (s *httpSource) Name() string      { p, _ := s.f.payload(); return p.Name() }
 func (s *httpSource) ReleaseID() string { return s.f.id }
+
+// RetryDirectPlay keeps the file representation stable across a temporary CDN
+// failure: native clients retry the same Range URL without a new decision.
+func (s *httpSource) RetryDirectPlay() bool { return true }
 
 func (s *httpSource) Close() error {
 	s.mu.Lock()

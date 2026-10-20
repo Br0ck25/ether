@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 var (
@@ -103,6 +105,13 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			g = ng
 			continue
 		case recoverableSourceFailure(rerr) && ctx.Err() == nil:
+			if retry, ok := g.src.(interface{ RetryDirectPlay() bool }); ok && retry.RetryDirectPlay() && errors.Is(rerr, core.ErrSourceUnavailable) && !permanentSourceFailure(rerr) {
+				// Native players retry this part URL with its original byte
+				// coordinates. A temporary CDN error must not replace those
+				// bytes with a different encode or strand the client on 409.
+				m.log.Warn("temporary direct-play read failure; retaining source for range retry", "session", s.id, "release", g.releaseID(), "offset", srcpos, "err", rerr)
+				return rerr
+			}
 			g.noteReadFailure(rerr)
 			at = g.timeMapSnapshot().TimeAt(srcpos)
 			ng, err := m.failover(ctx, s, g, at, "source read failed during direct play")
