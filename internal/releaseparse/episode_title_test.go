@@ -13,6 +13,11 @@ func TestEpisodeTitleIdentity(t *testing.T) {
 		{"Space.Pilot.S02E02.REPACK.1080p.WEB.H264-GRP", "Stone and Sky", true},
 		{"Space.Pilot.S02E02.ENG.1080p.WEB.H264-GRP", "Stone and Sky", true},
 		{"Space.Pilot.S02E02.Light.1080p.WEB.H264-GRP", "Episode 2", true},
+		{"Space.Pilot.S02E02.Stone.and.Sky.Part.2.720p.WEB.H264-GRP", "Stone and Sky (2)", true},
+		{"Space.Pilot.S02E02.Stone.and.Sky.Pt02.720p.WEB.H264-GRP", "Stone and Sky (2)", true},
+		{"Space.Pilot.S02E02.Stone.and.Sky.2.720p.WEB.H264-GRP", "Stone and Sky Part 2", true},
+		{"Space.Pilot.S02E02.Stone.and.Sky.Part.1.720p.WEB.H264-GRP", "Stone and Sky (2)", false},
+		{"Space.Pilot.S02E02.A.Part.of.Me.720p.WEB.H264-GRP", "A Part of Me", true},
 	} {
 		if got := EpisodeTitleMatches(tc.name, tc.want); got != tc.ok {
 			t.Errorf("%q vs %q: %v", tc.name, tc.want, got)

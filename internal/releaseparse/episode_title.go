@@ -1,9 +1,10 @@
 package releaseparse
 
 import (
-	"github.com/braedonsaunders/ether/internal/core"
 	"strconv"
 	"strings"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // EpisodeTitleMatches rejects an explicitly different episode title between
@@ -59,12 +60,40 @@ func EpisodeTitleMatches(name, want string) bool {
 	if !boundary || len(words) == 0 {
 		return true
 	}
-	got := NormalizeTitle(strings.Join(words, " "))
-	expected := NormalizeTitle(want)
+	got := normalizeEpisodeTitle(strings.Join(words, " "))
+	expected := normalizeEpisodeTitle(want)
 	if got == "" || got == "the" || got == "a" || got == "an" {
 		return true
 	}
 	return got == expected || strings.HasPrefix(expected, got+" ")
+}
+
+// Catalogue and scene names express multipart suffixes differently:
+// "Stone and Sky (2)", "Stone and Sky Part 2" and "Stone and Sky Pt02".
+// Normalize the suffix without dropping its number, so different parts
+// remain different episodes. Ordinary uses of the word "part" are kept.
+func normalizeEpisodeTitle(title string) string {
+	words := strings.Fields(NormalizeTitle(title))
+	if len(words) == 0 {
+		return ""
+	}
+	last := len(words) - 1
+	if n, err := strconv.Atoi(words[last]); err == nil && n > 0 {
+		words[last] = strconv.Itoa(n)
+		if last > 0 && (words[last-1] == "part" || words[last-1] == "pt") {
+			words = append(words[:last-1], words[last])
+		}
+	} else {
+		for _, prefix := range []string{"part", "pt"} {
+			if suffix, ok := strings.CutPrefix(words[last], prefix); ok {
+				if n, err := strconv.Atoi(suffix); err == nil && n > 0 {
+					words[last] = strconv.Itoa(n)
+					break
+				}
+			}
+		}
+	}
+	return strings.Join(words, " ")
 }
 
 // EpisodeSeriesYear reads only the series portion of a TV name. A year in

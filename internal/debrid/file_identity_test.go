@@ -17,3 +17,20 @@ func TestChooseFileRejectsSameNumberedReboot(t *testing.T) {
 		t.Fatalf("identity mismatch accepted or permanently poisoned other series: %v", err)
 	}
 }
+
+func TestReportedSeriesIDsPermitAlternateEpisodeNamesButNotWrongFiles(t *testing.T) {
+	target := &core.ReleaseTarget{Season: 2, Episode: 2, ShowYear: 2005, EpisodeTitle: "Stone and Sky", ExpectedIDs: core.IDs{TMDB: 123}, ReportedIDs: core.IDs{TMDB: 123}}
+	files := []File{
+		{ID: "wrong-episode", Path: "Pilote.Spatial.S02E03.1080p.mkv", Size: 4000},
+		{ID: "wrong-year", Path: "Pilote.Spatial.2023.S02E02.1080p.mkv", Size: 3000},
+		{ID: "right", Path: "Pilote.Spatial.S02E02.Pierre.et.Ciel.1080p.mkv", Size: 2000},
+	}
+	got, err := ChooseFile(files, target)
+	if err != nil || got.ID != "right" {
+		t.Fatalf("alternate episode title: %+v %v", got, err)
+	}
+	target.ReportedIDs.TMDB = 456
+	if _, err := ChooseFile(files, target); err == nil {
+		t.Fatal("conflicting series ID was accepted")
+	}
+}

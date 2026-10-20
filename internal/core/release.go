@@ -54,6 +54,9 @@ type Release struct {
 	Category int         `json:"category,omitempty"`
 	Info     ReleaseInfo `json:"info"`
 	Score    float64     `json:"score"`
+	// TitleIDs are movie/series identifiers reported by the indexer. They
+	// must never be inferred from the search request's identifiers.
+	TitleIDs IDs `json:"titleIds,omitempty"`
 
 	// Torrent releases (additive). Protocol is "" for Usenet and
 	// ProtocolTorrent for Torznab results; torrents are streamed through

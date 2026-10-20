@@ -452,8 +452,12 @@ func fileIdentityMatches(f File, target *core.ReleaseTarget) bool {
 	if target == nil {
 		return true
 	}
+	idMatch, idConflict := releaseparse.CompareTitleIDs(target.ReportedIDs, target.ExpectedIDs)
+	if idConflict {
+		return false
+	}
 	full := strings.NewReplacer("/", " ", "\\", " ").Replace(f.Path)
 	info := releaseparse.Parse(full)
 	year := releaseparse.EpisodeSeriesYear(full, info.Year)
-	return releaseparse.SeriesYearMatches(year, target.ShowYear) && (year != 0 || releaseparse.EpisodeTitleMatches(path.Base(strings.ReplaceAll(f.Path, "\\", "/")), target.EpisodeTitle))
+	return releaseparse.SeriesYearMatches(year, target.ShowYear) && (year != 0 || idMatch || releaseparse.EpisodeTitleMatches(path.Base(strings.ReplaceAll(f.Path, "\\", "/")), target.EpisodeTitle))
 }

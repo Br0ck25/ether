@@ -767,26 +767,30 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		}
 	}
 	isEpisode := sreq.Type == core.TypeEpisode
+	idMatch, idConflict := releaseparse.CompareTitleIDs(rel.TitleIDs, sreq.IDs)
+	if idConflict {
+		return "indexer title identifier mismatch"
+	}
 	// Title / obfuscation.
 	wantTitle := sreq.Title
 	titleOK := releaseparse.TitleMatches(rel.Info, wantTitle) ||
-		(t.OriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.OriginalTitle))
-	if !titleOK {
-		strongID := sreq.IDs.IMDB != "" || sreq.IDs.TMDB > 0 || sreq.IDs.TVDB > 0
+		(!isEpisode && t.OriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.OriginalTitle))
+	if !titleOK && !idMatch {
 		obf := releaseparse.IsObfuscated(rel.Info.Title)
 		if obf && !releaseparse.HasUsableInfo(rel.Info) {
 			return "obfuscated, no usable info"
 		}
-		if !(strongID && obf && releaseparse.HasUsableInfo(rel.Info)) {
-			return "title mismatch"
-		}
+		// Querying by ID does not prove that the indexer honored it.
+		// Only identifiers actually reported on this result can establish
+		// an otherwise unreadable or alternate title's identity.
+		return "title mismatch"
 	}
 	if isEpisode {
 		releaseYear := releaseparse.EpisodeSeriesYear(rel.Name, rel.Info.Year)
 		if !releaseparse.SeriesYearMatches(releaseYear, sreq.Year) {
 			return "series year mismatch"
 		}
-		if releaseYear == 0 && !releaseparse.EpisodeTitleMatches(rel.Name, sreq.EpisodeTitle) {
+		if releaseYear == 0 && !idMatch && !releaseparse.EpisodeTitleMatches(rel.Name, sreq.EpisodeTitle) {
 			return "episode title mismatch"
 		}
 		if rel.Info.FullSeason {
@@ -862,10 +866,11 @@ func withTarget(rel core.Release, sreq core.SearchRequest) core.Release {
 	if rel.Target != nil {
 		target := *rel.Target
 		target.ShowYear, target.EpisodeTitle = sreq.Year, sreq.EpisodeTitle
+		target.ExpectedIDs, target.ReportedIDs = sreq.IDs, rel.TitleIDs
 		rel.Target = &target
 		return rel // enrich cached identities without deriving their ID again
 	}
-	target := core.ReleaseTarget{Season: sreq.Season, Episode: sreq.Episode, ShowYear: sreq.Year, EpisodeTitle: sreq.EpisodeTitle}
+	target := core.ReleaseTarget{Season: sreq.Season, Episode: sreq.Episode, ShowYear: sreq.Year, EpisodeTitle: sreq.EpisodeTitle, ExpectedIDs: sreq.IDs, ReportedIDs: rel.TitleIDs}
 	rel.Target = &target
 	if rel.Info.FullSeason {
 		rel.ID = core.TargetReleaseID(rel.ID, target)

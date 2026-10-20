@@ -54,3 +54,24 @@ func TestCachedTorrentRequiresCurrentEpisodeTarget(t *testing.T) {
 		t.Fatal("descriptor for another episode was reusable")
 	}
 }
+
+func TestCachedAndFallbackReleasesRecheckReportedIDs(t *testing.T) {
+	title := &core.Title{Key: core.EpisodeKey(123, 2, 2), Type: core.TypeEpisode, ShowYear: 2005, Title: "Stone and Sky"}
+	r := core.Release{Name: "Pilote.Spatial.S02E02.Pierre.et.Ciel.1080p.WEB", TitleIDs: core.IDs{TMDB: 123}}
+	if !releaseMatchesTitle(r, title) {
+		t.Fatal("canonical series ID did not support alternate episode name")
+	}
+	r.Name = "Space.Pilot.2005.S02E03.1080p.WEB"
+	if releaseMatchesTitle(r, title) {
+		t.Fatal("matching ID bypassed wrong cached episode")
+	}
+	r.Name = "Pilote.Spatial.S02E02.Pierre.et.Ciel.1080p.WEB"
+	r.TitleIDs.TMDB = 456
+	if releaseMatchesTitle(r, title) {
+		t.Fatal("conflicting series ID reached open")
+	}
+	title.Type, title.IDs = core.TypeMovie, core.IDs{TMDB: 123}
+	if releaseMatchesTitle(r, title) {
+		t.Fatal("conflicting movie ID reached open")
+	}
+}

@@ -19,6 +19,10 @@ type ReleaseTarget struct {
 	Episode      int    `json:"episode,omitempty"`
 	ShowYear     int    `json:"showYear,omitempty"`
 	EpisodeTitle string `json:"episodeTitle,omitempty"`
+	// ExpectedIDs identify the requested series; ReportedIDs are the
+	// release's indexer-reported series IDs, retained for file validation.
+	ExpectedIDs IDs `json:"expectedIds,omitempty"`
+	ReportedIDs IDs `json:"reportedIds,omitempty"`
 }
 
 // ErrNotCached reports that no debrid provider can serve a torrent release

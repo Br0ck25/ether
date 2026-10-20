@@ -201,6 +201,9 @@ func TestJSONTrackerWithHasFilter(t *testing.T) {
 	if len(rels) != 2 {
 		t.Fatalf("results = %+v", rels)
 	}
+	if rels[0].TitleIDs.IMDB != "tt1234567" || rels[0].TitleIDs.TMDB != 0 {
+		t.Fatalf("reported IDs lost or query ID invented: %+v", rels[0].TitleIDs)
+	}
 	if rels[0].InfoHash != strings.Repeat("a", 40) || rels[0].Size != 1073741824 || rels[0].Seeders != 10 || rels[0].Peers != 12 || rels[0].Category != 2000 {
 		t.Fatalf("first = %+v", rels[0])
 	}

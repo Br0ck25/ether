@@ -2,7 +2,7 @@ package debrid
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -43,7 +43,8 @@ func (x *Indexer) fetchTorrent(ctx context.Context, rel core.Release) ([]byte, e
 	}
 	key := payloadKey(rel) + "\x00" + strings.ToLower(rel.InfoHash) + "\x00" + rel.MagnetURL
 	if rel.Target != nil {
-		key += fmt.Sprintf("\x00%d|%s", rel.Target.ShowYear, rel.Target.EpisodeTitle)
+		target, _ := json.Marshal(rel.Target)
+		key += "\x00" + string(target)
 	}
 	for {
 		if err := ctx.Err(); err != nil {

@@ -51,6 +51,7 @@ type rawItem struct {
 	// Torznab
 	infoHash, magnet, encType string
 	seeders, peers            int
+	ids                       core.IDs
 }
 
 func (r rawItem) toRelease(indexer string) core.Release {
@@ -63,6 +64,7 @@ func (r rawItem) toRelease(indexer string) core.Release {
 	rel := core.Release{
 		GUID: r.guid, Indexer: indexer, Name: name, NZBURL: nzbURL,
 		Size: r.size, PubDate: pub, Grabs: r.grabs, Password: r.password, Category: r.category,
+		TitleIDs: r.ids,
 	}
 	rel.ID = releaseID(indexer, r.guid, nzbURL+name)
 	if name != "" {
@@ -199,6 +201,19 @@ func parseXMLFeed(body []byte, indexer string) ([]core.Release, error) {
 
 func applyAttr(r *rawItem, name, val string) {
 	switch name {
+	case "imdb", "imdbid":
+		v := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(val)), "tt")
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 && len(v) <= 10 {
+			r.ids.IMDB = fmt.Sprintf("tt%07d", n)
+		}
+	case "tmdb", "tmdbid":
+		if n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil && n > 0 {
+			r.ids.TMDB = n
+		}
+	case "tvdb", "tvdbid":
+		if n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil && n > 0 {
+			r.ids.TVDB = n
+		}
 	case "size":
 		if n, err := strconv.ParseInt(val, 10, 64); err == nil {
 			r.size = n
