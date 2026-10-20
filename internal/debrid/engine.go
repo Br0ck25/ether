@@ -943,15 +943,18 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 			return nil, tm, fmt.Errorf("debrid: %s is shorter than expected: %w", f.name(), core.ErrArticleCorrupt)
 		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 			ra := retryAfter(resp.Header.Get("Retry-After"))
-			drain(resp)
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			if resp.StatusCode == http.StatusTooManyRequests || ra > 0 {
+				// Error bodies can stall too. Headers establish the pause;
+				// do not wait to drain an unneeded body on the Play path.
+				resp.Body.Close()
 				// A rate-limited CDN cannot become a healthy candidate by
 				// retrying each block four times before Retry-After expires.
 				// Share its pause across this account's files, return promptly
 				// to source selection, and preserve transient classification.
 				return nil, tm, f.pauseMedia(payload.Provider, u, resp.StatusCode, ra)
 			}
+			drain(resp)
 		default:
 			drain(resp)
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)

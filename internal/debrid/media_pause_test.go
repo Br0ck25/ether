@@ -22,6 +22,10 @@ func TestCDNRateLimitFailsFastAndSharesRetryAfterAcrossFiles(t *testing.T) {
 		calls.Add(1)
 		w.Header().Set("Retry-After", "60")
 		w.WriteHeader(http.StatusTooManyRequests)
+		w.(http.Flusher).Flush()
+		// A rate-limited CDN may never finish its error body. Only the
+		// headers are needed; closing the body cancels this handler.
+		<-req.Context().Done()
 	}))
 	defer cdn.Close()
 	p, err := DecodePayload(r.pl)
@@ -39,6 +43,9 @@ func TestCDNRateLimitFailsFastAndSharesRetryAfterAcrossFiles(t *testing.T) {
 	_, _, err = f.rangeGet(ctx, 0, 100, false)
 	if !errors.Is(err, core.ErrSourceUnavailable) || !errors.Is(err, ErrRateLimited) || calls.Load() != 1 {
 		t.Fatalf("rate limit retried or misclassified: calls=%d err=%v", calls.Load(), err)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("reading the rate-limit body exhausted the caller's deadline")
 	}
 	if strings.Contains(err.Error(), "secret") {
 		t.Fatal("signed URL leaked into error")
