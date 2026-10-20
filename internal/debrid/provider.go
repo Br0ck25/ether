@@ -23,6 +23,7 @@ import (
 
 // Provider errors. Callers classify with errors.Is.
 var (
+	errDuplicateTorrent = errors.New("debrid: torrent already exists")
 	// ErrAuth is a rejected API key or an account that cannot use the API
 	// (expired premium). A configuration problem: never a release failure.
 	ErrAuth = errors.New("debrid: authentication failed")

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -34,13 +35,15 @@ const (
 )
 
 type torBox struct {
-	key  string
-	opts ProviderOptions
-	list listCache
+	key     string
+	opts    ProviderOptions
+	list    listCache
+	knownMu sync.Mutex
+	known   map[string]string // validated owned ids; no network lock on Play
 }
 
 func newTorBox(key string, opts ProviderOptions) *torBox {
-	return &torBox{key: key, opts: opts.withDefaults(torBoxBase)}
+	return &torBox{key: key, opts: opts.withDefaults(torBoxBase), known: make(map[string]string)}
 }
 
 func (p *torBox) Kind() string { return "torbox" }
@@ -88,6 +91,8 @@ func (p *torBox) classify(status int, env tbEnvelope) error {
 	}
 	code := strings.ToUpper(env.Error)
 	switch {
+	case code == "DUPLICATE_ITEM":
+		return errDuplicateTorrent
 	case strings.Contains(code, "AUTH") || strings.Contains(code, "TOKEN") || strings.Contains(code, "PLAN") || code == "NO_AUTH":
 		return fmt.Errorf("torbox: %s: %w", msg, ErrAuth)
 	case strings.Contains(code, "NOT_CACHED") || strings.Contains(strings.ToLower(msg), "not cached"):
@@ -128,6 +133,9 @@ func (p *torBox) CheckCached(ctx context.Context, hashes []string) (map[string]b
 }
 
 func (p *torBox) Find(ctx context.Context, hash string) (string, error) {
+	if id := p.findKnown(hash); id != "" {
+		return id, nil
+	}
 	return p.list.find(ctx, p.opts.Now(), hash, func(ctx context.Context) (map[string]string, error) {
 		data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/torrents/mylist", query: url.Values{"bypass_cache": {"true"}}})
 		if err != nil {
@@ -176,16 +184,29 @@ func (p *torBox) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, er
 		}
 		_ = mw.Close()
 		data, err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/createtorrent", body: &body, ctype: mw.FormDataContentType()})
-		if err != nil {
-			return nil, err
+		if errors.Is(err, errDuplicateTorrent) {
+			// The account may contain an item added by another app/node.
+			// Only this collision needs a fresh account-wide hash lookup;
+			// never identify it by a similar title or delete the existing item.
+			id, err = p.findFresh(ctx, req.InfoHash)
+			if err != nil {
+				return nil, err
+			}
+			if id == "" {
+				return nil, fmt.Errorf("torbox: duplicate torrent not listed: %w", core.ErrSourceUnavailable)
+			}
+		} else {
+			if err != nil {
+				return nil, err
+			}
+			var out struct {
+				TorrentID json.Number `json:"torrent_id"`
+			}
+			if err := json.Unmarshal(data, &out); err != nil || out.TorrentID.String() == "" {
+				return nil, errors.New("torbox: createtorrent returned no torrent id")
+			}
+			id, added = out.TorrentID.String(), true
 		}
-		var out struct {
-			TorrentID json.Number `json:"torrent_id"`
-		}
-		if err := json.Unmarshal(data, &out); err != nil || out.TorrentID.String() == "" {
-			return nil, errors.New("torbox: createtorrent returned no torrent id")
-		}
-		id, added = out.TorrentID.String(), true
 	}
 	cleanup := func() {
 		if added && req.RemoveUncached {
@@ -224,7 +245,7 @@ func (p *torBox) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, er
 	if err != nil {
 		return nil, err
 	}
-	p.list.remember(req.InfoHash, id)
+	p.rememberKnown(req.InfoHash, id)
 	return &Acquired{TorrentID: id, File: chosen, Added: added}, nil
 }
 
@@ -249,6 +270,13 @@ func (p *torBox) Remove(ctx context.Context, torrentID string) error {
 		return nil
 	}
 	p.list.forget(torrentID)
+	p.knownMu.Lock()
+	for hash, id := range p.known {
+		if id == torrentID {
+			delete(p.known, hash)
+		}
+	}
+	p.knownMu.Unlock()
 	n, err := strconv.ParseInt(torrentID, 10, 64)
 	var idv any = torrentID
 	if err == nil {
