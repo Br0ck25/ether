@@ -388,15 +388,9 @@ describe("health", () => {
     expect(cacheHealth(LIVE.cache).summary).toBe("925.4 MiB of 20.0 GiB");
     expect(worstLevel(h.map((x) => x.level))).toBe("warn");
   });
-  it("accepts debrid in place of Usenet and TorBox search in place of indexers", () => {
-    const debrid = { enabled: true, search: { enabled: true } };
-    expect(usenetHealth([], debrid).level).toBe("off");
-    expect(indexersHealth([], debrid)).toMatchObject({
-      level: "ok",
-      summary: "Searching through TorBox",
-    });
-    // Debrid without TorBox search still needs an indexer.
-    expect(indexersHealth([], { enabled: true, search: { enabled: false } }).level).toBe("error");
+  it("accepts debrid in place of Usenet", () => {
+    expect(usenetHealth([], { enabled: true }).level).toBe("off");
+    expect(usenetHealth([], { enabled: false }).level).toBe("error");
   });
   it("flags real problems", () => {
     expect(usenetHealth([]).level).toBe("error");

@@ -189,10 +189,6 @@ export function DebridSources() {
   const torrentIndexers = (cfg?.indexers ?? []).filter(
     (ix) => ix.protocol === "torrent" && ix.enabled,
   ).length;
-  const search = status.data?.search;
-  const searching = providers.some(
-    (p) => p.kind === "torbox" && p.enabled && p.apiKey && !p.disableSearch,
-  );
 
   const reloadAll = useCallback(async () => {
     await config.reload();
@@ -288,12 +284,12 @@ export function DebridSources() {
       <Alert variant="info">
         <AlertDescription>
           Ether ships no debrid providers: bring your own Real-Debrid, TorBox, AllDebrid or
-          Premiumize account and its API key. A TorBox account searches TorBox for torrents by
-          itself; other services need at least one torrent indexer under{" "}
+          Premiumize account and its API key. Debrid streams torrent releases, so it also needs at
+          least one torrent (Torznab) indexer under{" "}
           <Link to="/sources/indexers" className="font-medium underline underline-offset-2">
             Indexers
           </Link>
-          {torrentIndexers === 0 && !searching ? "; none is set up yet." : "."}
+          {torrentIndexers === 0 ? "; none is set up yet." : "."}
         </AlertDescription>
       </Alert>
 
@@ -356,17 +352,6 @@ export function DebridSources() {
             })}
           </ul>
         )}
-        {searching && search ? (
-          <p
-            aria-label="TorBox search"
-            className="border-t border-border px-5 py-3 text-xs text-fg-muted tabular-nums"
-          >
-            <span className="font-medium text-fg">TorBox search</span> ·{" "}
-            {search.searches === 0
-              ? "no searches yet"
-              : `${search.searches} ${search.searches === 1 ? "search" : "searches"}, ${search.results} results, ${Math.round(search.averageMs)} ms average${search.failures ? `, ${search.failures} failed` : ""}`}
-          </p>
-        ) : null}
         {engine ? (
           <p
             aria-label="Streaming engine"
@@ -452,14 +437,6 @@ export function DebridSources() {
               />
             </SettingsRow>
             <BoolRow label="Enabled" value={draft.enabled} onChange={(v) => set({ enabled: v })} />
-            {draft.kind === "torbox" ? (
-              <BoolRow
-                label="Search TorBox for torrents"
-                help="Finds torrents through TorBox itself, with each result's cache status, so no torrent indexer is needed."
-                value={!draft.disableSearch}
-                onChange={(v) => set({ disableSearch: !v })}
-              />
-            ) : null}
           </SettingsSection>
         ) : null}
       </RecordDrawer>

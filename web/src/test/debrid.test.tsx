@@ -13,30 +13,6 @@ async function choose(label: string, option: string) {
 }
 
 describe("Sources › Debrid", () => {
-  it("searches TorBox by default and can turn that off per account", async () => {
-    const { fake } = renderApp("/sources/debrid");
-    const list = await screen.findByRole("region", { name: "Debrid providers" }, WAIT);
-    expect(await within(list).findByLabelText("TorBox search", {}, WAIT)).toHaveTextContent(
-      "42 searches, 1310 results, 380 ms average, 1 failed",
-    );
-    fireEvent.click(within(list).getByRole("button", { name: "Edit TorBox backup" }));
-    const drawer = await screen.findByRole("dialog", { name: "TorBox backup" });
-    const toggle = within(drawer).getByRole("switch", { name: "Search TorBox for torrents" });
-    expect(toggle).toBeChecked();
-    fireEvent.click(toggle);
-    fireEvent.click(within(drawer).getByRole("button", { name: "Save provider" }));
-    await waitFor(() => expect(calls(fake, "PUT", "/config/debrid")).toHaveLength(1));
-    const body = calls(fake, "PUT", "/config/debrid")[0]!.body as DebridConfig;
-    expect(body.providers?.find((p) => p.id === "tb-1")).toMatchObject({ disableSearch: true });
-  });
-
-  it("offers no search switch for services without their own search", async () => {
-    renderApp("/sources/debrid");
-    fireEvent.click(await screen.findByRole("button", { name: "Edit Real-Debrid" }, WAIT));
-    const drawer = await screen.findByRole("dialog", { name: "Real-Debrid" });
-    expect(within(drawer).queryByRole("switch", { name: /Search TorBox/ })).toBeNull();
-  });
-
   it("is a Sources tab that search can find", async () => {
     expect(destinations().find((d) => d.href === "/sources/debrid")).toMatchObject({
       title: "Debrid",

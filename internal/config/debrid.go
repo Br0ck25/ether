@@ -41,9 +41,6 @@ type DebridProvider struct {
 	APIKey   string `json:"apiKey"`
 	Priority int    `json:"priority"` // lower is tried first
 	Enabled  bool   `json:"enabled"`
-	// DisableSearch turns off the provider's own torrent search (TorBox),
-	// which is otherwise used alongside configured indexers.
-	DisableSearch bool `json:"disableSearch,omitempty"`
 }
 
 // EnabledProviders reports whether any provider is enabled with a key.

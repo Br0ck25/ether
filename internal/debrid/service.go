@@ -58,8 +58,6 @@ type Options struct {
 	PayloadTTL  time.Duration // stored payload reuse, 0 = 7 days
 	CachedTTL   time.Duration // known-cached memory, 0 = 12h
 	UncachedTTL time.Duration // known-uncached memory, 0 = 30m
-	// TorBoxSearchURL overrides TorBox's search API base (tests).
-	TorBoxSearchURL string
 }
 
 // Service holds the configured debrid providers and applies priority,
@@ -76,9 +74,6 @@ type Service struct {
 
 	knownMu sync.Mutex
 	known   map[string]knownState // providerID|hash
-
-	searchMu sync.Mutex
-	search   SearchStats // TorBox search counters
 }
 
 type knownState struct {
@@ -148,7 +143,6 @@ type Status struct {
 	CachedOnly bool            `json:"cachedOnly"`
 	Providers  []ProviderStats `json:"providers"`
 	Engine     *EngineStats    `json:"engine,omitempty"`
-	Search     SearchStats     `json:"search"`
 }
 
 // NewService builds a Service from the debrid config section.
@@ -354,7 +348,7 @@ func (s *Service) Latencies() map[string]Latency {
 // caller when an Engine is wired).
 func (s *Service) Status() Status {
 	cfg := s.Config()
-	return Status{Enabled: s.Enabled(), CachedOnly: cfg.CachedOnly, Providers: s.Stats(), Search: s.SearchStatus()}
+	return Status{Enabled: s.Enabled(), CachedOnly: cfg.CachedOnly, Providers: s.Stats()}
 }
 
 func (s *Service) noteLatency(providerID string, fn func(*Latency)) {
