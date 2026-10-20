@@ -276,10 +276,14 @@ func (s *Service) Poster(ctx context.Context, u *core.User, t *core.Title, lang 
 	hash := sha256.Sum256(append(append([]byte(nil), data...), []byte(strings.Join(labels, "\x00"))...))
 	key := hex.EncodeToString(hash[:])
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if cached := s.cache[key]; cached != nil {
+	cached := s.cache[key]
+	s.mu.Unlock()
+	if cached != nil {
 		return cached, "image/jpeg", nil
 	}
+	// Decoding, scaling and encoding run outside the lock: it only guards
+	// the cache, so concurrent posters render in parallel. Two requests for
+	// one poster may both render it; the later store wins.
 	cfg, _, e := image.DecodeConfig(bytes.NewReader(data))
 	if e != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 20_000_000 {
 		return nil, "", errors.New("poster dimensions invalid")
@@ -319,12 +323,14 @@ func (s *Service) Poster(ctx context.Context, u *core.User, t *core.Title, lang 
 		return nil, "", e
 	}
 	generated := out.Bytes()
+	s.mu.Lock()
 	if s.cacheBytes+int64(len(generated)) > 16<<20 {
 		s.cache = map[string][]byte{}
 		s.cacheBytes = 0
 	}
 	s.cache[key] = generated
 	s.cacheBytes += int64(len(generated))
+	s.mu.Unlock()
 	return generated, "image/jpeg", nil
 }
 
