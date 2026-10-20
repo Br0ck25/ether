@@ -70,6 +70,17 @@ interface RankedPick {
   rowKind: string;
 }
 
+const PERSONAL_ROW_KINDS = new Set([
+  "top-10",
+  "because-you-watched",
+  "trending-in-your-taste",
+  "more-from-person",
+  "hidden-gems",
+  "short-on-time",
+  "finish-the-franchise",
+  "up-next",
+]);
+
 function extractTopPicks(preview: ViewerHome | null | undefined, limit = 10): RankedPick[] {
   if (!preview?.rows) return [];
   const seen = new Set<string>();
@@ -77,20 +88,50 @@ function extractTopPicks(preview: ViewerHome | null | undefined, limit = 10): Ra
   const rows = preview.rows.filter(
     (r) => !r.hidden && r.kind !== "continue-watching" && r.kind !== "playlists",
   );
-  // Lead with Top 10 for You / Top 10 Today so #1 and #2 are the highest-conviction picks.
-  const lead = rows.filter((r) => r.kind === "top-10" || r.kind === "top-10-today");
-  const rest = rows.filter((r) => r.kind !== "top-10" && r.kind !== "top-10-today");
-  for (const r of [...lead, ...rest]) {
-    for (const it of r.items) {
-      if (seen.has(it.key)) continue;
-      seen.add(it.key);
-      out.push({
-        item: it,
-        reason: r.itemReasons?.[it.key] || r.reason || r.title,
-        rowTitle: r.title,
-        rowKind: r.kind,
-      });
-      if (out.length >= limit) return out;
+  const addFrom = (r: ViewerHome["rows"][number], it: TitleCard) => {
+    if (seen.has(it.key) || out.length >= limit) return;
+    seen.add(it.key);
+    out.push({
+      item: it,
+      reason: r.itemReasons?.[it.key] || r.reason || r.title,
+      rowTitle: r.title,
+      rowKind: r.kind,
+    });
+  };
+
+  const top10 = rows.filter((r) => r.kind === "top-10");
+  const because = rows.filter((r) => r.kind === "because-you-watched");
+  const otherPersonal = rows.filter(
+    (r) =>
+      PERSONAL_ROW_KINDS.has(r.kind) && r.kind !== "top-10" && r.kind !== "because-you-watched",
+  );
+
+  // 1. Interleave the top items from "Top 10 for You" and each "Because You Watched…"
+  // row so #1 and #2 are always deeply personal to the viewer's actual watch history.
+  const personalLead = [...top10, ...because];
+  for (let round = 0; round < 4 && out.length < limit; round++) {
+    for (const r of personalLead) {
+      const it = r.items[round];
+      if (it) addFrom(r, it);
+    }
+  }
+
+  // 2. Fill remaining slots from the rest of their personal rows.
+  for (let round = 0; round < 6 && out.length < limit; round++) {
+    for (const r of [...personalLead, ...otherPersonal]) {
+      const it = r.items[round];
+      if (it) addFrom(r, it);
+    }
+  }
+
+  // 3. Only fall back to general discovery rows for brand-new cold-start viewers.
+  if (out.length < limit) {
+    for (const r of rows) {
+      if (PERSONAL_ROW_KINDS.has(r.kind)) continue;
+      for (const it of r.items) {
+        addFrom(r, it);
+        if (out.length >= limit) break;
+      }
     }
   }
   return out;

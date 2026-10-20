@@ -430,6 +430,15 @@ func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float
 	mult := editorialBoost(c.kind) * ctxMult(c.kind, a.hc) * a.typeMix(items) * (0.7 + 0.6*strength)
 	if a.newViewer() {
 		mult *= coldBoost(c.kind)
+	} else {
+		switch c.kind {
+		case KindTop10:
+			mult *= 1.35
+		case KindBecause:
+			mult *= 1.25
+		case KindTop10Today:
+			mult *= 0.72
+		}
 	}
 	scale := c.scale
 	if scale <= 0 {

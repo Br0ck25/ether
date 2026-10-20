@@ -190,13 +190,13 @@ func (b *builder) genTop10() []*candRow {
 	if !b.personal() || b.taste.Confidence < top10Confidence {
 		return nil // "Top 10 on <server> Today" leads instead
 	}
-	recentSeeds := b.seeds(3)
+	recentSeeds := b.seeds(6)
 	simSeed := map[core.RatingKey]string{}
 	simBoost := map[core.RatingKey]float64{}
 	for si, s := range recentSeeds {
 		w := b.seedRecencyWeight(s.At, si)
-		for idx, nb := range b.similar(s.Key, 20) {
-			score := (0.65 + 0.35*rankScore(idx, 20)) * w
+		for idx, nb := range b.similar(s.Key, 25) {
+			score := (0.70 + 0.30*rankScore(idx, 25)) * w
 			if score > simBoost[nb.Key] {
 				simBoost[nb.Key] = score
 				simSeed[nb.Key] = s.Title.Title
@@ -208,22 +208,28 @@ func (b *builder) genTop10() []*candRow {
 			why = "Highly rated and widely loved"
 		}
 		mom, momSeed := b.momentumScore(t, recentSeeds, simBoost[t.Key], simSeed[t.Key])
-		pct := int(math.Round(55 + 32*clamp(fit, 0, 1) + 12*clamp(mom, 0, 1)))
+		pct := int(math.Round(58 + 28*clamp(fit, 0, 1) + 13*clamp(mom, 0, 1)))
 		if pct < 65 {
 			pct = 65
 		} else if pct > 99 {
 			pct = 99
 		}
-		if momSeed != "" && mom >= 0.30 {
+		if simSeed[t.Key] != "" {
+			why = fmt.Sprintf("%d%% Match · Because you watched %s · %s", pct, simSeed[t.Key], why)
+		} else if momSeed != "" && mom >= 0.28 {
 			why = fmt.Sprintf("%d%% Match · Momentum from %s · %s", pct, momSeed, why)
 		} else {
 			why = fmt.Sprintf("%d%% Match · %s", pct, why)
 		}
-		return 0.44*fit + 0.24*mom + 0.22*quality(t) + 0.05*popularity(t) + 0.05*recency(t, b.now), why
+		return 0.48*fit + 0.30*mom + 0.14*quality(t) + 0.04*popularity(t) + 0.04*recency(t, b.now), why
 	})
 	kept := items[:0:0]
 	for _, it := range items {
-		if it.fit > 0 && weightedRating(&it.t) >= 6.8 {
+		minWR := 6.8
+		if simBoost[it.t.Key] > 0 || it.fit >= 0.22 {
+			minWR = 6.0
+		}
+		if it.fit > 0 && weightedRating(&it.t) >= minWR {
 			kept = append(kept, it)
 		}
 	}
