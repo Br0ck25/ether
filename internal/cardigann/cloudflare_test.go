@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -118,5 +120,19 @@ func TestIsChallenge(t *testing.T) {
 		if got := isChallenge(&tc.r); got != tc.want {
 			t.Errorf("isChallenge(%d %q) = %v", tc.r.status, tc.r.body, got)
 		}
+	}
+}
+
+// A huge requestDelay used to overflow the Duration conversion: on arm64 it
+// saturated, so every request after the first waited ~292 years.
+func TestRequestDelayIsBounded(t *testing.T) {
+	for _, d := range []float64{1e30, math.Inf(1)} {
+		s := newHTTPSession(&Definition{Name: "x", RequestDelay: d}, nil, nil, quietLog())
+		if s.delay != maxRequestDelay {
+			t.Fatalf("requestDelay %v: delay = %v", d, s.delay)
+		}
+	}
+	if s := newHTTPSession(&Definition{Name: "x", RequestDelay: 2.5}, nil, nil, quietLog()); s.delay != 2500*time.Millisecond {
+		t.Fatalf("delay = %v", s.delay)
 	}
 }

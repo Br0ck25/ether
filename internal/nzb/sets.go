@@ -14,8 +14,10 @@ type Set struct {
 	Name string
 	// NewStyle is true for .partNN.rar sets.
 	NewStyle bool
-	// Volumes in order. Volumes[i].Info.Volume is normalised so the first
-	// expected volume is 0; gaps are listed in Missing.
+	// Volumes in order; gaps are listed in Missing. The files' Info is left
+	// untouched (a part00/.000 set keeps numbering from -1), so grouping the
+	// same files again gives the same result and concurrent callers do not
+	// write shared files.
 	Volumes []*File
 	// Missing lists absent 0-based volume numbers below the highest present.
 	Missing []int
@@ -105,7 +107,6 @@ func buildSet(k setKey, files []*File) *Set {
 			s.Missing = append(s.Missing, v)
 			continue
 		}
-		f.Info.Volume = v
 		s.Volumes = append(s.Volumes, f)
 	}
 	return s

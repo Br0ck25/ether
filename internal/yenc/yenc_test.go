@@ -341,3 +341,50 @@ func TestUnderstatedSize(t *testing.T) {
 		t.Fatal("data mismatch")
 	}
 }
+
+// decodeLineScalar is the byte-at-a-time reference DecodeLine must match.
+func decodeLineScalar(src []byte, escaped bool) ([]byte, bool) {
+	var out []byte
+	for _, c := range src {
+		switch {
+		case escaped:
+			out = append(out, c-106)
+			escaped = false
+		case c == '=':
+			escaped = true
+		default:
+			out = append(out, c-42)
+		}
+	}
+	return out, escaped
+}
+
+func TestDecodeLineEveryByteAtEveryLane(t *testing.T) {
+	for lane := 0; lane < 9; lane++ {
+		for v := 0; v < 256; v++ {
+			src := bytes.Repeat([]byte{'a'}, 17)
+			src[lane] = byte(v)
+			for _, esc := range []bool{false, true} {
+				want, wantEsc := decodeLineScalar(src, esc)
+				dst := make([]byte, len(src))
+				n, gotEsc := DecodeLine(dst, src, esc)
+				if !bytes.Equal(dst[:n], want) || gotEsc != wantEsc {
+					t.Fatalf("lane %d byte %#x escaped %v: got %x/%v want %x/%v", lane, v, esc, dst[:n], gotEsc, want, wantEsc)
+				}
+			}
+		}
+	}
+}
+
+func FuzzDecodeLine(f *testing.F) {
+	f.Add([]byte("abc=}def"), false)
+	f.Add([]byte("=\x00\xff=="), true)
+	f.Fuzz(func(t *testing.T, src []byte, escaped bool) {
+		want, wantEsc := decodeLineScalar(src, escaped)
+		dst := make([]byte, len(src))
+		n, gotEsc := DecodeLine(dst, src, escaped)
+		if !bytes.Equal(dst[:n], want) || gotEsc != wantEsc {
+			t.Fatalf("got %x/%v want %x/%v", dst[:n], gotEsc, want, wantEsc)
+		}
+	})
+}

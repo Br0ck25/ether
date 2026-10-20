@@ -133,10 +133,12 @@ func (s *Service) definition(ctx context.Context, id string) (*parsedDef, error)
 	if id == "" {
 		return nil, fmt.Errorf("no definition selected: %w", ErrUnknownDefinition)
 	}
+	now := s.now()
 	s.mu.Lock()
 	p := s.parsed[id]
+	fresh := p != nil && now.Sub(p.checkedAt) < definitionRecheck
 	s.mu.Unlock()
-	if p != nil && s.now().Sub(p.checkedAt) < definitionRecheck {
+	if fresh {
 		return p, nil
 	}
 	stored, ok, err := s.defs.get(ctx, id)
