@@ -267,7 +267,7 @@ func TestProbeSourceFollowsSeekHeadPastAttachments(t *testing.T) {
 		v.DolbyVisionBLPresent == nil || !*v.DolbyVisionBLPresent || v.DolbyVisionELPresent == nil || *v.DolbyVisionELPresent || v.DolbyVisionVersion != "1.0" {
 		t.Errorf("dolby vision = %+v", v)
 	}
-	if a.Index != 2 || a.Codec != "eac3" || a.Channels != 8 || a.ChannelLayout != "7.1" || a.SampleRate != 48000 || a.Default || a.Language != "fr" {
+	if a.Index != 2 || a.Codec != "eac3" || a.Channels != 8 || a.ChannelLayout != "7.1" || a.SampleRate != 48000 || a.Default || a.Language != "fre" {
 		t.Errorf("audio = %+v", a)
 	}
 	if far := src.far.Load(); far != 2 {
@@ -384,4 +384,22 @@ func TestBitReaderRejectsTruncatedParameterSets(t *testing.T) {
 func closeTo(a, b int, frac float64) bool {
 	d := math.Abs(float64(a - b))
 	return d <= 1 || d <= frac*math.Max(float64(a), float64(b))
+}
+
+func TestMatroskaLanguageMatchesLibavformat(t *testing.T) {
+	for _, c := range []struct {
+		track mkvTrack
+		want  string
+	}{
+		{mkvTrack{language: "eng", hasLanguage: true, bcp47: "en-US"}, "eng"},
+		{mkvTrack{language: "eng", bcp47: "pt-BR"}, "por"},
+		{mkvTrack{language: "eng", bcp47: "x-klingon"}, "x"},
+		{mkvTrack{language: "und", hasLanguage: true}, ""},
+	} {
+		c.track.kind, c.track.codecID, c.track.channels, c.track.sampling = 2, "A_AC3", 2, 48000
+		si, ok, err := c.track.stream(1)
+		if err != nil || !ok || si.Language != c.want {
+			t.Errorf("%+v: language %q (ok %v, err %v), want %q", c.track, si.Language, ok, err, c.want)
+		}
+	}
 }

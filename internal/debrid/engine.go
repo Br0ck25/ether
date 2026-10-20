@@ -130,10 +130,18 @@ var (
 // keep-alive, HTTP/2 when offered, many idle connections per host and short
 // connect/TLS timeouts.
 func NewStreamingTransport() *http.Transport {
+	return newStreamingTransport(nil)
+}
+
+func newStreamingTransport(limit *connCap) *http.Transport {
 	d := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+	dial := d.DialContext
+	if limit != nil {
+		dial = limit.wrap(dial)
+	}
 	return &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           d.DialContext,
+		DialContext:           dial,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          64,
 		MaxIdleConnsPerHost:   16,
@@ -153,11 +161,24 @@ func NewEngine(svc *Service, opts EngineOptions) *Engine {
 	if e.inHC == nil {
 		e.inHC, _ = opts.Inner.(core.HealthChecker)
 	}
+	// The primary and hedge pools share one per-host connection cap: the
+	// CDN counts every open connection from this server.
+	limit := newConnCap(defaultHostConnections)
+	var owned []*http.Transport
 	if e.hc == nil {
-		e.hc = &http.Client{Transport: NewStreamingTransport()}
+		t := newStreamingTransport(limit)
+		owned = append(owned, t)
+		e.hc = &http.Client{Transport: t}
 	}
 	if e.hedge == nil {
-		e.hedge = &http.Client{Transport: NewStreamingTransport()}
+		t := newStreamingTransport(limit)
+		owned = append(owned, t)
+		e.hedge = &http.Client{Transport: t}
+	}
+	limit.closeIdle = func() {
+		for _, t := range owned {
+			t.CloseIdleConnections()
+		}
 	}
 	if e.log == nil {
 		e.log = slog.Default()

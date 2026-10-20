@@ -266,6 +266,7 @@ type mkvTrack struct {
 	name        string
 	language    string
 	bcp47       string
+	hasLanguage bool
 	flagDefault bool
 	forced      bool
 	defaultDur  uint64
@@ -616,7 +617,7 @@ func mkvTracksOf(b []byte) ([]mkvTrack, error) {
 			case mkvName:
 				t.name = ebmlString(f.body)
 			case mkvLanguage:
-				t.language = ebmlString(f.body)
+				t.language, t.hasLanguage = ebmlString(f.body), true
 			case mkvLanguageBCP:
 				t.bcp47 = ebmlString(f.body)
 			case mkvCodecID:
@@ -731,9 +732,15 @@ func (t mkvTrack) stream(index int) (core.StreamInfo, bool, error) {
 		return core.StreamInfo{}, true, nil
 	}
 	si := core.StreamInfo{Index: index, Title: t.name, Default: t.flagDefault, Forced: t.forced}
+	// libavformat reports the legacy ISO 639-2 Language element, which
+	// mkvmerge writes next to LanguageBCP47. A BCP 47 tag alone is mapped
+	// to the same three-letter form.
 	si.Language = normalizeLanguage(t.language)
-	if t.bcp47 != "" {
-		primary, _, _ := strings.Cut(t.bcp47, "-")
+	if !t.hasLanguage && t.bcp47 != "" {
+		primary, _, _ := strings.Cut(strings.ToLower(t.bcp47), "-")
+		if three, ok := iso6391to2[primary]; ok {
+			primary = three
+		}
 		si.Language = normalizeLanguage(primary)
 	}
 	var err error
@@ -1281,4 +1288,14 @@ func mkvTrackBitrates(b []byte) map[uint64]int {
 
 func incomplete(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{ErrProbeIncomplete}, args...)...)
+}
+
+// iso6391to2 maps ISO 639-1 codes to the ISO 639-2/B codes ffmpeg reports.
+var iso6391to2 = map[string]string{
+	"ar": "ara", "bg": "bul", "ca": "cat", "cs": "cze", "da": "dan", "de": "ger", "el": "gre", "en": "eng",
+	"es": "spa", "et": "est", "fa": "per", "fi": "fin", "fr": "fre", "he": "heb", "hi": "hin", "hr": "hrv",
+	"hu": "hun", "id": "ind", "is": "ice", "it": "ita", "ja": "jpn", "ko": "kor", "lt": "lit", "lv": "lav",
+	"ms": "may", "nb": "nob", "nl": "dut", "nn": "nno", "no": "nor", "pl": "pol", "pt": "por", "ro": "rum",
+	"ru": "rus", "sk": "slo", "sl": "slv", "sr": "srp", "sv": "swe", "ta": "tam", "te": "tel", "th": "tha",
+	"tr": "tur", "uk": "ukr", "vi": "vie", "zh": "chi",
 }
