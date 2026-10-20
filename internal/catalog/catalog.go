@@ -132,6 +132,9 @@ type Catalog struct {
 
 	staleAfter time.Duration
 	listTTL    time.Duration
+	// resumeSchedule: Run waits out the interval since the recorded last
+	// sync (WithResumeSchedule).
+	resumeSchedule bool
 
 	genreMu sync.Mutex
 	genres  map[string]map[int]string // mediaType -> id -> name
@@ -159,6 +162,13 @@ func WithStaleAfter(d time.Duration) Option {
 	return func(c *Catalog) { c.staleAfter = d }
 }
 func WithListTTL(d time.Duration) Option { return func(c *Catalog) { c.listTTL = d } }
+
+// WithResumeSchedule makes Run continue the refresh schedule recorded in
+// the database instead of syncing as soon as it starts: the first sync
+// waits until RefreshInterval has passed since the last successful sync
+// (by any node). A cluster uses it because Run restarts on every leader
+// handoff; with no recorded sync Run still syncs at once.
+func WithResumeSchedule() Option { return func(c *Catalog) { c.resumeSchedule = true } }
 
 // WithSyncYears bounds the year slices used when discover exceeds 500 pages.
 func WithSyncYears(from, to int) Option { return func(c *Catalog) { c.syncYears = [2]int{from, to} } }

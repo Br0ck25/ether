@@ -231,7 +231,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// Catalogue.
 	a.tmdb = tmdb.NewFromConfig(cfg.Catalog, log.With("component", "tmdb"))
 	a.closers = append(a.closers, a.tmdb.Close)
-	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog")); err != nil {
+	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog"), a.catalogOptions()...); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	if a.collections, err = collections.New(a.db, a.catalog, log.With("component", "collections"), a.collectionOptions(cfg)...); err != nil {
