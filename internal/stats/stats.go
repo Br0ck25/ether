@@ -175,6 +175,10 @@ func (s *Service) record(ctx context.Context, r playRecord) error {
 // ObserveState correlates timeline data only when exactly one active session
 // matches the user/title. Plex state events do not identify the client.
 func (s *Service) ObserveState(ev state.Event) {
+	// Imported history updates watch state, not the currently playing session.
+	if ev.Imported {
+		return
+	}
 	if ev.Kind != state.EventProgress && ev.Kind != state.EventCompleted && ev.Kind != state.EventScrobble {
 		return
 	}

@@ -2,6 +2,7 @@ package stats
 
 import (
 	"context"
+	"database/sql"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -159,5 +160,38 @@ func TestWeeklyNewsletterOptInAndDurableLedger(t *testing.T) {
 	s2 := New(db, Options{Now: func() time.Time { return now }, Newsletter: func(context.Context, string) error { calls++; return nil }})
 	if err := s2.MaybeNewsletter(ctx); err != nil || calls != 1 {
 		t.Fatalf("repeated after restart: %d %v", calls, err)
+	}
+}
+
+func TestHistoricalImportDoesNotChangeActivePlaybackStats(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	svc := New(db, Options{Now: func() time.Time { return now }})
+	key := core.MovieKey(99)
+	if err := svc.Record(ctx, &core.PlaySession{ID: "active", UserID: 7, Key: key, StartedAt: now}, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	svc.ObserveState(state.Event{Kind: state.EventProgress, UserID: 7, Key: key, At: now, State: "playing", Duration: time.Hour})
+	st := state.New(db, state.Options{Now: func() time.Time { return now }})
+	st.Subscribe(svc.ObserveState)
+	now = now.Add(15 * time.Second)
+	if err := st.ImportTransaction(ctx, func(*sql.Tx) (state.ImportBatch, error) {
+		return state.ImportBatch{Records: []state.ImportRecord{{UserID: 7, Key: key, Views: 1, ViewedAt: now.Add(-24 * time.Hour), Duration: 2 * time.Hour}}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(15 * time.Second)
+	svc.ObserveState(state.Event{Kind: state.EventProgress, UserID: 7, Key: key, At: now, State: "playing", Duration: time.Hour})
+	plays, err := svc.History(ctx, now.Add(-time.Hour), now.Add(time.Hour), 7, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plays) != 1 || plays[0].Completed || plays[0].WatchedMS != 30000 || plays[0].DurationMS != 3600000 {
+		t.Fatalf("historical import changed active play: %+v", plays)
 	}
 }
