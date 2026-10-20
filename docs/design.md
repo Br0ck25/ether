@@ -115,6 +115,13 @@ or write history. Health checks inspect archive headers, read the yEnc headers o
 mid-file article bodies as well as testing article existence, and stop as soon as
 one sampled article is confirmed missing on every provider.
 
+Source validation continues past missing top-ranked releases, within a bounded
+candidate count and time budget. Confirmed source failures are skipped briefly
+on retries, without permanently banning the release. An exhausted validation
+budget does not establish that untried releases are unavailable. Within a health
+sample, a confirmed missing article takes precedence over another sample's
+transient error; a timeout alone never proves absence.
+
 The media decision chooses direct play, copy-only remux, or transcoding. HLS and
 DASH use output containers appropriate to the selected codecs. Apple HLS includes
 codec and dynamic-range declarations, Dolby Vision signaling where applicable,

@@ -23,6 +23,13 @@ type validation struct {
 	fetchDuration, healthDuration time.Duration
 }
 
+const (
+	validationBudget = 25 * time.Second
+	candidateBudget  = 8 * time.Second
+)
+
+var errHealthBudget = errors.New("source validation limit reached; more releases remain to try")
+
 // Close cancels and joins optimistic checks. Owners should close before the DB.
 func (s *Service) Close() error {
 	s.bgMu.Lock()
@@ -79,6 +86,8 @@ func (s *Service) resolution(key core.RatingKey, cands []candidate, winner int, 
 // two checks together, but returns as soon as the preferred result succeeds.
 // Every worker is cancelled and joined before this function returns.
 func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr *Trace, race int) (int, []byte, error) {
+	ctx, cancelBudget := context.WithTimeout(ctx, validationBudget)
+	defer cancelBudget()
 	width := 2
 	if race > 0 {
 		width = min(max(race, 1), 4)
@@ -96,17 +105,19 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			wg.Add(1)
 			go func(j int) {
 				defer wg.Done()
+				checkCtx, cancelCheck := context.WithTimeout(workCtx, candidateBudget)
+				defer cancelCheck()
 				i := base + j
 				v := validation{index: i}
 				phase := time.Now()
-				v.nzb, v.err = s.indexer.FetchNZB(workCtx, cands[i].rel)
+				v.nzb, v.err = s.indexer.FetchNZB(checkCtx, cands[i].rel)
 				v.fetchDuration = time.Since(phase)
 				if v.err == nil {
 					v.healthy = true
 					if s.health != nil {
 						v.healthChecked = true
 						phase = time.Now()
-						v.healthy, v.err = s.checkHealth(workCtx, cands[i].rel.ID, v.nzb)
+						v.healthy, v.err = s.checkHealth(checkCtx, cands[i].rel.ID, v.nzb)
 						v.healthDuration = time.Since(phase)
 					}
 				}
@@ -148,6 +159,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			if v.err != nil && !permanentFailure(v.err) {
 				transient = errors.Join(transient, v.err)
 			} else {
+				s.noteFailedHealth(cands[v.index].rel.ID)
 				s.recordReputation(ctx, cands[v.index].rel.Indexer, false)
 			}
 		}
@@ -156,6 +168,9 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 		if winner >= 0 {
 			return winner, nzb, nil
 		}
+	}
+	if transient == nil && len(cands) > limit {
+		return -1, nil, errHealthBudget
 	}
 	return -1, nil, transient
 }

@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultMaxTraces      = 50
-	maxHealthAttempts     = 8
+	maxHealthAttempts     = 32
 	defaultSearchCacheTTL = 6 * time.Hour
 	defaultUnavailableTTL = 24 * time.Hour
 	defaultMaxCandidates  = 3
@@ -96,6 +96,7 @@ type Service struct {
 	searchCache   map[string]searchCacheEntry
 	retentionDays int
 	verified      map[string]time.Time // release id -> last passed health check
+	failedHealth  map[string]time.Time // confirmed source failures, briefly skipped on subsequent resolves
 	healthTTL     time.Duration
 
 	tracesMu  sync.Mutex
@@ -347,7 +348,8 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 
 	if len(cands) == 0 {
-		// Client/profile rejection is not proof that the title is unavailable for everyone.
+		// Client/profile restrictions and temporary source skips do not prove
+		// that the title is unavailable for everyone.
 		if !clientRejected && len(req.Exclude) == 0 {
 			s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
 		}
@@ -428,7 +430,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, optimisticErr
 	}
 	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts {
-		s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
+		s.setAvailability(ctx, int64(t.Key), false, min(s.cooloff(), failedHealthTTL))
 	}
 	trace.Err = "no healthy candidates"
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
@@ -487,7 +489,7 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 		if reason := s.rejectReason(rel, t, sreq, profile, rcfg, req.Client, exclude, preferred); reason != "" {
 			ct.Rejected = true
 			switch reason {
-			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile":
+			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later":
 				clientRejected = true
 			}
 			ct.Reason = reason
@@ -550,6 +552,9 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	}
 	if s.isBad(rel.ID) {
 		return "marked bad"
+	}
+	if s.recentlyFailedHealth(rel.ID) {
+		return "source recently failed health check; retrying later"
 	}
 	lowerName := strings.ToLower(rel.Name)
 	for _, term := range rcfg.BlockedTerms {
