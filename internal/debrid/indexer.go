@@ -42,7 +42,19 @@ func (x *Indexer) Name() string { return x.inner.Name() }
 // Search implements core.Indexer.
 func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
 	started := time.Now()
-	results, err := x.inner.Search(ctx, req)
+	early := x.earlyCacheChecks(ctx)
+	if early != nil {
+		defer early.cancel()
+	}
+	var results []core.Release
+	var err error
+	if streaming, ok := x.inner.(interface {
+		SearchWith(context.Context, core.SearchRequest, func([]core.Release)) ([]core.Release, error)
+	}); ok && early != nil {
+		results, err = streaming.SearchWith(ctx, req, early.add)
+	} else {
+		results, err = x.inner.Search(ctx, req)
+	}
 	searchDuration := time.Since(started)
 	var cacheDuration time.Duration
 	var hashCount int
@@ -77,11 +89,19 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	// known to be uncached everywhere are dropped (they would only burn
 	// health-check attempts), and known-cached torrents move ahead of
 	// unknown ones of equal rank.
-	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	cacheStart := time.Now()
-	cached, definitive := x.svc.CheckCached(cctx, torrents)
+	var cached map[string]bool
+	var definitive bool
+	if early != nil {
+		// Most hashes were checked while slower indexers were still
+		// searching; only stragglers are checked now.
+		cached, definitive = early.finish(ctx, torrents)
+	} else {
+		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		cached, definitive = x.svc.CheckCached(cctx, torrents)
+		cancel()
+	}
 	cacheDuration, hashCount = time.Since(cacheStart), len(torrents)
-	cancel()
 	kept := out[:0]
 	for _, r := range out {
 		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
@@ -141,4 +161,76 @@ func (x *Indexer) fetchTorrentOnce(ctx context.Context, r core.Release) (data []
 	data, err = x.svc.Acquire(ctx, r)
 	provider = time.Since(phase)
 	return data, err
+}
+
+// earlyChecks runs debrid cache checks per indexer as results arrive.
+type earlyChecks struct {
+	x      *Indexer
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	wg     sync.WaitGroup
+	asked  map[string]bool
+	cached map[string]bool
+	sure   bool // every check so far was definitive
+}
+
+func (x *Indexer) earlyCacheChecks(ctx context.Context) *earlyChecks {
+	if !x.svc.Enabled() {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	return &earlyChecks{x: x, ctx: cctx, cancel: cancel, asked: map[string]bool{}, cached: map[string]bool{}, sure: true}
+}
+
+// add starts a cache check for the torrent hashes in one indexer's results.
+func (e *earlyChecks) add(rs []core.Release) {
+	var hashes []string
+	e.mu.Lock()
+	for _, r := range rs {
+		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && !e.asked[r.InfoHash] {
+			e.asked[r.InfoHash] = true
+			hashes = append(hashes, r.InfoHash)
+		}
+	}
+	e.mu.Unlock()
+	if len(hashes) == 0 {
+		return
+	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		cached, definitive := e.x.svc.CheckCached(e.ctx, hashes)
+		e.mu.Lock()
+		for h, ok := range cached {
+			if ok {
+				e.cached[h] = true
+			}
+		}
+		e.sure = e.sure && definitive
+		e.mu.Unlock()
+	}()
+}
+
+// finish checks any hashes not yet asked about, waits for every check and
+// returns the merged availability.
+func (e *earlyChecks) finish(ctx context.Context, hashes []string) (map[string]bool, bool) {
+	defer e.cancel()
+	e.add(hashOnly(hashes))
+	e.wg.Wait()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make(map[string]bool, len(e.cached))
+	for h := range e.cached {
+		out[h] = true
+	}
+	return out, e.sure && ctx.Err() == nil
+}
+
+func hashOnly(hashes []string) []core.Release {
+	out := make([]core.Release, len(hashes))
+	for i, h := range hashes {
+		out[i] = core.Release{Protocol: core.ProtocolTorrent, InfoHash: h}
+	}
+	return out
 }

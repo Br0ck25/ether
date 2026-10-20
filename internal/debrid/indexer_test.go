@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -70,5 +71,55 @@ func TestIndexerFetchDispatch(t *testing.T) {
 	h.svc.UpdateConfig(config.Debrid{})
 	if _, err := x.FetchNZB(ctx, core.Release{ID: "t", Protocol: core.ProtocolTorrent, InfoHash: testHash}); !errors.Is(err, ErrNoProvider) {
 		t.Fatalf("no provider: %v", err)
+	}
+}
+
+// streamingInner answers one fast indexer at once and a slow one later.
+type streamingInner struct {
+	fakeInner
+	fast, slow []core.Release
+	release    chan struct{}
+	checksSeen chan int
+	h          *harness
+}
+
+func (s *streamingInner) SearchWith(ctx context.Context, _ core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
+	arrived(s.fast)
+	// Let the fast batch's cache check run while the slow indexer works.
+	deadline := time.After(2 * time.Second)
+	for s.h.provs["torbox-0"].callCount("check") == 0 {
+		select {
+		case <-deadline:
+			return nil, errors.New("no early cache check")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	arrived(s.slow)
+	return append(append([]core.Release(nil), s.fast...), s.slow...), nil
+}
+
+func TestIndexerChecksCacheAsIndexersAnswer(t *testing.T) {
+	h := newHarness(t, 1<<20, "torbox")
+	h.provs["torbox-0"].bulk = true
+	other := strings.Repeat("ab", 20)
+	h.provs["torbox-0"].cached[testHash] = true
+	inner := &streamingInner{h: h,
+		fast: []core.Release{{ID: "fast", Name: "Fast", Protocol: core.ProtocolTorrent, InfoHash: testHash}},
+		slow: []core.Release{{ID: "slow", Name: "Slow", Protocol: core.ProtocolTorrent, InfoHash: other}, {ID: "u", Name: "Usenet"}},
+	}
+	got, err := NewIndexer(inner, h.svc).Search(context.Background(), core.SearchRequest{Type: core.TypeMovie, Title: "Movie"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, r := range got {
+		ids = append(ids, r.ID)
+	}
+	// The uncached slow torrent is dropped, the cached fast one leads.
+	if strings.Join(ids, ",") != "fast,u" {
+		t.Fatalf("results %v", ids)
+	}
+	if n := h.provs["torbox-0"].callCount("check"); n != 2 {
+		t.Fatalf("cache checks = %d, want one per answering indexer", n)
 	}
 }

@@ -139,6 +139,14 @@ func (m *Manager) Remaining(ctx context.Context) ([]Remaining, error) {
 // (up to MaxParallel), letting each client check its cache before budgets, merges by priority order
 // and de-duplicates by normalised name + size.
 func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	return m.SearchWith(ctx, req, nil)
+}
+
+// SearchWith is Search, also handing each indexer's results to arrived as
+// soon as that indexer answers (concurrently, from its own goroutine), so
+// callers can start follow-up work, such as debrid cache checks, before
+// the slowest indexer is done.
+func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
 	clients := m.Clients()
 	type slot struct {
 		results  []core.Release
@@ -168,6 +176,9 @@ func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 			res, err := cl.Search(ctx, req)
 			slots[i].duration = time.Since(started)
 			slots[i].results, slots[i].err = res, err
+			if arrived != nil && err == nil && len(res) > 0 {
+				arrived(res)
+			}
 		}(i, cl)
 	}
 	wg.Wait()
