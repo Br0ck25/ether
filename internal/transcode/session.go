@@ -60,7 +60,13 @@ type Session struct {
 	runSeq      int
 	lastReq     int
 	mkvDelivery map[int]mkvDelivery // last response per track, including retries of a seek
-	endSeg      int                 // last segment of the input once a run hit EOF; -1 unknown
+	// reqSeq numbers segment requests as they arrive; movedBy is the number
+	// of the request that last moved the encoder. A request that arrived
+	// before that move is one the player abandoned by seeking: it must not
+	// drag the encoder back to its old position.
+	reqSeq      uint64
+	movedBy     uint64
+	endSeg      int // last segment of the input once a run hit EOF; -1 unknown
 	initFile    string
 	failures    int // consecutive runs that failed without output
 	failErr     error
@@ -543,6 +549,10 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 	timeout := time.NewTimer(s.m.opts.segmentTimeout)
 	defer timeout.Stop()
 	restarts := 0
+	s.mu.Lock()
+	s.reqSeq++
+	seq := s.reqSeq
+	s.mu.Unlock()
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -550,7 +560,10 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			http.Error(w, "session closed", http.StatusGone)
 			return
 		}
-		s.lastReq = n
+		stale := seq < s.movedBy
+		if !stale {
+			s.lastReq = n
+		}
 		s.throttleLocked()
 		done := s.done[t]
 		// HLS only: ffmpeg's segmenter may cut slivers past the playlist's
@@ -626,6 +639,15 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 		}
 		var dwell *time.Timer
 		if !waitTail && s.needsRestartLocked(n) {
+			if stale {
+				// Superseded by a seek: answer now instead of moving the
+				// encoder away from where the player went. A player that
+				// still wants this segment retries as a new request.
+				s.mu.Unlock()
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "superseded by a newer request", http.StatusServiceUnavailable)
+				return
+			}
 			if left := s.rungDwellLocked(); left > 0 {
 				// Another rung's run is inside its dwell: wait it out
 				// instead of restarting the encoder now.
@@ -640,6 +662,7 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 				}
 				restarts++
 				s.seekRampSeg = n
+				s.movedBy = seq
 				if err := s.startRunLocked(n, s.failures > 0); err != nil {
 					s.mu.Unlock()
 					s.log.Error("start ffmpeg", "segment", n, "err", err)

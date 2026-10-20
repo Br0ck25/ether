@@ -613,7 +613,9 @@ func TestDASHConcurrentRequests(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 4; i++ {
 				n := (g/2)*30 + i
-				if r := media(t, s, g%2, n); r.Code != 200 && r.Code != http.StatusBadGateway {
+				// One player cannot want three places at once: the newest
+				// request owns the encoder and older ones are told to retry.
+				if r := media(t, s, g%2, n); r.Code != 200 && r.Code != http.StatusBadGateway && r.Code != http.StatusServiceUnavailable {
 					errs <- fmt.Sprintf("rep %d segment %d: %d", g%2, n, r.Code)
 				}
 			}
@@ -637,5 +639,36 @@ func TestLiveMPDOnlyAdvertisesCompletedWindow(t *testing.T) {
 	}
 	if strings.Contains(b, "mediaPresentationDuration") {
 		t.Fatal("live stream has an invented end")
+	}
+}
+
+// A seek must not ping-pong the encoder: the request for the old position
+// the player abandoned gives way instead of restarting ffmpeg there.
+func TestDASHAbandonedRequestDoesNotPullEncoderBack(t *testing.T) {
+	fr := newFakeRunner()
+	fr.segDelay = 300 * time.Millisecond
+	m := newTestManager(t, fr, config.Transcode{})
+	s := startDASHSession(t, m, dashRequest(t, "seek", time.Hour))
+	old := make(chan int, 1)
+	go func() { old <- media(t, s, 0, 100).Code }()
+	time.Sleep(50 * time.Millisecond) // the old request moved the encoder to 100
+	before := fr.startCount()
+	if r := media(t, s, 0, 500); r.Code != 200 {
+		t.Fatalf("seek target: %d", r.Code)
+	}
+	select {
+	case code := <-old:
+		if code != http.StatusServiceUnavailable {
+			t.Fatalf("abandoned request: %d, want 503", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("abandoned request still waiting")
+	}
+	if n := fr.startCount() - before; n != 1 {
+		t.Fatalf("encoder started %d times for one seek", n)
+	}
+	// The same segment asked for again is a new request and is served.
+	if r := media(t, s, 0, 100); r.Code != 200 {
+		t.Fatalf("retried old segment: %d", r.Code)
 	}
 }

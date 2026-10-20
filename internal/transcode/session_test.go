@@ -617,7 +617,8 @@ func TestConcurrentSegmentRequests(t *testing.T) {
 			base := g * 37
 			for i := 0; i < 5; i++ {
 				n := base + i
-				if r := get(t, s, n); r.Code != 200 && r.Code != http.StatusBadGateway {
+				// Requests overtaken by a newer far request are told to retry.
+				if r := get(t, s, n); r.Code != 200 && r.Code != http.StatusBadGateway && r.Code != http.StatusServiceUnavailable {
 					errs <- fmt.Sprintf("segment %d: %d", n, r.Code)
 				}
 			}
