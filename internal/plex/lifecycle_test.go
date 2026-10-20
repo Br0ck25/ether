@@ -1,10 +1,38 @@
 package plex
 
 import (
+	"context"
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
+
+func TestOnlyPlayingOrPausedRequestingClientRenewsViewerLease(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	key := core.MovieKey(550)
+	for _, client := range []string{"client-1", "other-device"} {
+		if _, err := f.playback.Prepare(context.Background(), &ownerUser, key, core.ClientCaps{ClientID: client}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, state := range []string{"buffering", "playing", "paused"} {
+		res := f.get(t, "/:/timeline?ratingKey=1000000000000550&state="+state)
+		if res.Code != 200 {
+			t.Fatal(res.Code)
+		}
+		want := map[string]int{"buffering": 0, "playing": 1, "paused": 2}[state]
+		if len(f.playback.touched) != want {
+			t.Fatalf("%s touches = %v", state, f.playback.touched)
+		}
+	}
+	for _, id := range f.playback.touched {
+		ps, _ := f.playback.Session(id)
+		if ps.ClientID != "client-1" {
+			t.Fatal("another device renewed this viewer lease")
+		}
+	}
+}
 
 func TestTranscodeStopReleasesSourceUnlessReplacementIsActive(t *testing.T) {
 	for _, replacement := range []bool{false, true} {
