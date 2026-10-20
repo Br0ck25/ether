@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -133,11 +132,9 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				// Live session intent (#32): a single-item detail open.
 				s.recordDetailIntent(ctx, pr, t)
 			}
-			if len(keys) == 1 && s.d.PlexGUID != nil && (t.Type == core.TypeMovie || t.Type == core.TypeShow || (t.Type == core.TypeSeason && t.Season < 9000) || t.Type == core.TypeEpisode) {
-				matchCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				_, _ = s.d.PlexGUID.Resolve(matchCtx, t.Key)
-				cancel()
-			}
+			// renderTitles uses verified cached GUIDs and queues missing identities.
+			// Remote identity enrichment must not hold detail or Play requests.
+
 			md = s.detail(ctx, pr, t, q.Get("includeChildren") == "1", q.Get("includeOnDeck") == "1", q.Get("includeRelated") == "1", q.Get("includeExtras") == "1", q.Get("extraTypes"))
 			if mc == nil {
 				mc = s.itemContainer(t.Type)

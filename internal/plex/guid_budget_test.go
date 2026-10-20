@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type detailWarmer struct {
@@ -44,7 +45,7 @@ func TestBulkMetadataUsesCachedGUIDsWithoutNetwork(t *testing.T) {
 		t.Fatalf("bulk status=%d network=%d", rec.Code, calls.Load())
 	}
 	rec = f.get(t, "/library/metadata/"+fightClub.Key.String())
-	if rec.Code != 200 || (calls.Load() != 1 || warmer.calls != 1) {
+	if rec.Code != 200 || (calls.Load() != 0 || warmer.calls != 1) {
 		t.Fatalf("detail status=%d network=%d", rec.Code, calls.Load())
 	}
 }
@@ -104,7 +105,13 @@ func TestHubsWarmPlexGUIDsInBackgroundAndEpisodesRenderHierarchy(t *testing.T) {
 		t.Fatalf("expected %s in /hubs after background warm, got: %s", fcGUID, rec.Body.String())
 	}
 
-	// Single episode detail open resolves episode + parent season + grandparent show GUIDs.
+	// A detail open schedules episode + parent season + grandparent identities.
+	// Later renders use the verified cache, without making Play wait for it.
+	rec = f.get(t, "/library/metadata/"+bbE1.Key.String())
+	if rec.Code != 200 {
+		t.Fatalf("first detail status=%d", rec.Code)
+	}
+	pg.Wait()
 	rec = f.get(t, "/library/metadata/"+bbE1.Key.String())
 	body := rec.Body.String()
 	if rec.Code != 200 || !containsSubstr(body, ep1GUID) || !containsSubstr(body, seasonGUID) || !containsSubstr(body, showGUID) {
@@ -119,4 +126,48 @@ func containsSubstr(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestDetailDoesNotWaitForRemotePlexIdentity(t *testing.T) {
+	db, err := store.OpenMemory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		io.WriteString(w, `{"MediaContainer":{"Metadata":[]}}`)
+	}))
+	defer upstream.Close()
+	f := newFixture()
+	defer f.srv.Close()
+	pg := plexguid.New(db, plexguid.Options{BaseURL: upstream.URL, Token: func() string { return "fixture" }, Background: true})
+	defer pg.Close()
+	// Release the fake upstream before Close joins its worker even if this fails.
+	defer close(release)
+	f.srv.d.PlexGUID = pg
+	done := make(chan int, 1)
+	go func() { done <- f.get(t, "/library/metadata/"+fightClub.Key.String()).Code }()
+	select {
+	case code := <-done:
+		if code != 200 {
+			t.Fatalf("detail HTTP %d", code)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remote identity enrichment blocked the detail response")
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("identity was not scheduled in background")
+	}
 }
