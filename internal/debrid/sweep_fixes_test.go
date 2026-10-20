@@ -82,8 +82,8 @@ func TestStallBodyReportsStallAndFreesSlot(t *testing.T) {
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
 	ctx, cancel := context.WithCancel(context.Background())
-	b := &stallBody{rc: io.NopCloser(&stallingReader{r: bytes.NewReader(make([]byte, 10)), n: 4, ctx: ctx}),
-		d: 20 * time.Millisecond, stop: cancel, release: func() { <-slots }}
+	b := newStallBody(io.NopCloser(&stallingReader{r: bytes.NewReader(make([]byte, 10)), n: 4, ctx: ctx}),
+		20*time.Millisecond, cancel, func() { <-slots })
 	buf := make([]byte, 10)
 	if n, err := b.Read(buf); n != 4 || err != nil {
 		t.Fatalf("first read n=%d err=%v", n, err)
@@ -98,6 +98,31 @@ func TestStallBodyReportsStallAndFreesSlot(t *testing.T) {
 	b.Close()
 	if len(slots) != 0 {
 		t.Fatal("slot not released on close")
+	}
+}
+
+// Close may run while a Read is in progress (an abandoned request); neither
+// may race on the stall timer, and Close must leave it stopped.
+func TestStallBodyConcurrentReadAndClose(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		b := newStallBody(io.NopCloser(&stallingReader{r: bytes.NewReader(make([]byte, 10)), n: 4, ctx: ctx}),
+			time.Hour, cancel, func() {})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			buf := make([]byte, 2)
+			for {
+				if _, err := b.Read(buf); err != nil {
+					return
+				}
+			}
+		}()
+		_ = b.Close()
+		<-done
+		if b.fired.Load() {
+			t.Fatal("stall timer fired after Close")
+		}
 	}
 }
 
