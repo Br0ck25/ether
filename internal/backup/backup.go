@@ -21,6 +21,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -201,7 +202,18 @@ func listDir(dir string) ([]Snapshot, error) {
 	return out, nil
 }
 func validateDB(ctx context.Context, path string) error {
-	db, e := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro")
+	abs, e := filepath.Abs(path)
+	if e != nil {
+		return e
+	}
+	// A path is data, not a URI: escape literal ?, # and % before adding
+	// the read-only option. Keep drive-letter paths absolute on Windows.
+	uriPath := filepath.ToSlash(abs)
+	if !strings.HasPrefix(uriPath, "/") {
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath, RawQuery: "mode=ro"}
+	db, e := sql.Open("sqlite", u.String())
 	if e != nil {
 		return e
 	}
