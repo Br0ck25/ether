@@ -546,7 +546,14 @@ func TestDASHValidationAndLimits(t *testing.T) {
 func TestDASHPruneAndClose(t *testing.T) {
 	fr := newFakeRunner()
 	fr.segDelay = time.Millisecond
-	m := newTestManager(t, fr, config.Transcode{}, WithBuffering(24*time.Second, 0, 20*time.Second))
+	ahead := 24 * time.Second
+	if runtime.GOOS == "windows" {
+		// Windows cannot pause ffmpeg, so getting ahead stops it, and the
+		// fake runner does not model the restart; keep the encoder below
+		// that threshold until it has passed the segments checked here.
+		ahead = 10 * time.Minute
+	}
+	m := newTestManager(t, fr, config.Transcode{}, WithBuffering(ahead, 0, 20*time.Second))
 	s := startDASHSession(t, m, dashRequest(t, "prune", time.Hour))
 	if r := media(t, s, 0, 0); r.Code != 200 {
 		t.Fatal(r.Code)

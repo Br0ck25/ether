@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -99,7 +100,7 @@ func TestClusterBackupsSharedDirectory(t *testing.T) {
 	shared := t.TempDir()
 	// Settings are shared (one database): set on a, used by b.
 	w := httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/settings", strings.NewReader(`{"intervalHours":24,"retain":2,"sharedDir":"`+shared+`"}`)))
+	a.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/settings", strings.NewReader(`{"intervalHours":24,"retain":2,"sharedDir":`+strconv.Quote(shared)+`}`)))
 	if w.Code != 200 {
 		t.Fatalf("settings: %d %s", w.Code, w.Body.String())
 	}
