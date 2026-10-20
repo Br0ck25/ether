@@ -75,6 +75,9 @@ type Options struct {
 	Spike bool
 	// SpikeFiles are extra local files for spike mode.
 	SpikeFiles []string
+	// DBRetryMin / DBRetryMax bound the backoff while a clustered node
+	// waits at startup for an unreachable PostgreSQL server (1s / 30s).
+	DBRetryMin, DBRetryMax time.Duration
 }
 
 // App is a running Ether server.
@@ -193,9 +196,23 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	}
 	dbCfg := cfg.Database.Effective(os.Getenv)
 	var dialect store.Dialect
-	if a.db, dialect, err = store.OpenWith(ctx, store.Options{
+	// A clustered node whose PostgreSQL server is briefly unreachable at
+	// boot waits for it here (logging every attempt) rather than exiting
+	// and being restarted in a tight loop by the service manager. Nothing
+	// listens meanwhile — on purpose: a node that cannot reach the shared
+	// database must not answer Plex clients or GDM discovery, and it is out
+	// of the published connections because it is not heartbeating. The
+	// hang watchdog only starts in Run. Errors retrying cannot fix (bad
+	// password, missing database, invalid URL) still fail at once.
+	if a.db, dialect, err = store.OpenWithRetry(ctx, store.Options{
 		DataDir: opts.DataDir, Driver: dbCfg.Driver, URL: dbCfg.URL,
 		Logger: a.log.With("component", "store"),
+	}, store.RetryOptions{
+		MinBackoff: a.opts.DBRetryMin, MaxBackoff: a.opts.DBRetryMax,
+		OnRetry: func(attempt int, wait time.Duration, err error) {
+			a.log.Error("database: PostgreSQL is unreachable; waiting for it before starting",
+				"url", dbCfg.Redacted().URL, "attempt", attempt, "retry", wait, "err", err)
+		},
 	}); err != nil {
 		return nil, fmt.Errorf("database: %w", err)
 	}

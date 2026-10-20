@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -243,4 +244,50 @@ func AppliedMigrations(ctx context.Context, db *sql.DB) (map[string]int, error) 
 		out[c] = v
 	}
 	return out, rows.Err()
+}
+
+// RetryOptions configure OpenWithRetry. Zero durations take the defaults
+// in parentheses.
+type RetryOptions struct {
+	MinBackoff time.Duration // first wait (1s), doubling
+	MaxBackoff time.Duration // longest wait (30s)
+	// OnRetry is called before every wait with the failed attempt's error
+	// (attempt counts from 1).
+	OnRetry func(attempt int, wait time.Duration, err error)
+}
+
+// OpenWithRetry is OpenWith that keeps retrying a PostgreSQL database that
+// cannot be reached (refused, timed out, shutting down), with backoff,
+// until it opens or ctx ends. It gives up at once on errors retrying cannot
+// fix: an invalid URL, failed authentication, a database that does not
+// exist, an unsupported server or a failing migration. SQLite is opened
+// once, as by OpenWith.
+func OpenWithRetry(ctx context.Context, o Options, r RetryOptions) (*sql.DB, Dialect, error) {
+	if r.MinBackoff <= 0 {
+		r.MinBackoff = time.Second
+	}
+	if r.MaxBackoff < r.MinBackoff {
+		r.MaxBackoff = max(30*time.Second, r.MinBackoff)
+	}
+	wait := r.MinBackoff
+	for attempt := 1; ; attempt++ {
+		db, d, err := OpenWith(ctx, o)
+		if err == nil || d != Postgres || IsPermanent(err) || !IsUnavailable(err) {
+			return db, d, err
+		}
+		if ctx.Err() != nil {
+			return nil, d, err
+		}
+		if r.OnRetry != nil {
+			r.OnRetry(attempt, wait, err)
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, d, fmt.Errorf("%w (gave up waiting for the database: %v)", err, ctx.Err())
+		case <-t.C:
+		}
+		wait = min(wait*2, r.MaxBackoff)
+	}
 }
