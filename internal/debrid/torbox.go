@@ -110,8 +110,11 @@ func (p *torBox) classify(status int, env tbEnvelope) error {
 
 func (p *torBox) CheckCached(ctx context.Context, hashes []string) (map[string]bool, error) {
 	out := make(map[string]bool, len(hashes))
-	for start := 0; start < len(hashes); start += 50 {
-		batch := hashes[start:min(start+50, len(hashes))]
+	// TorBox documents approximately 100 hashes per GET (URL-size bound).
+	// V1 hashes are fixed 40-byte strings: this stays below a 4.2 KiB URL
+	// and avoids serial availability round trips for ordinary search sets.
+	for start := 0; start < len(hashes); start += 100 {
+		batch := hashes[start:min(start+100, len(hashes))]
 		q := url.Values{"hash": {strings.Join(batch, ",")}, "format": {"object"}, "list_files": {"false"}}
 		data, err := p.do(ctx, apiRequest{method: http.MethodGet, path: "/torrents/checkcached", query: q})
 		if err != nil {

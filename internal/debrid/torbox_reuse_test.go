@@ -2,6 +2,7 @@ package debrid
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -93,5 +94,36 @@ func TestTorBoxUnlistedDuplicateRemainsTransient(t *testing.T) {
 	_, err := p.Acquire(t.Context(), acquireReq(true))
 	if !errors.Is(err, core.ErrSourceUnavailable) || errors.Is(err, core.ErrArticleMissing) || errors.Is(err, core.ErrReleaseRejected) {
 		t.Fatalf("duplicate became permanent: %v", err)
+	}
+}
+
+func TestTorBoxCacheDiscoveryUsesFullDocumentedBatch(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		hashes := strings.Split(r.URL.Query().Get("hash"), ",")
+		if len(hashes) > 100 || len(r.URL.RequestURI()) > 4400 || r.URL.Query().Get("list_files") != "false" {
+			t.Errorf("unsafe availability batch: count=%d bytes=%d", len(hashes), len(r.URL.RequestURI()))
+		}
+		found := map[string]any{}
+		for _, hash := range hashes {
+			found[hash] = map[string]string{"hash": hash}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": found})
+	}))
+	defer srv.Close()
+	p := newTorBox(testKey, fastOpts(srv.URL))
+	hashes := make([]string, 130)
+	for i := range hashes {
+		hashes[i] = fmt.Sprintf("%040x", i+1)
+	}
+	got, err := p.CheckCached(t.Context(), hashes)
+	if err != nil || len(got) != 130 || calls != 2 {
+		t.Fatalf("cache batches: got=%d calls=%d err=%v", len(got), calls, err)
+	}
+	for _, h := range hashes {
+		if !got[h] {
+			t.Fatal("lost hash across batch boundary")
+		}
 	}
 }
