@@ -92,13 +92,15 @@ func main() {
 }
 
 // logLevelFor resolves the log level: the flag, else the config file,
-// else info.
+// else info. The config is only read (config.Read): opening it would
+// create, re-seal and rewrite config.json before the app's update startup
+// check, which must run before anything a bad release could break.
 func logLevelFor(flagLevel, dataDir string) slog.Level {
 	level := slog.LevelInfo
 	if flagLevel != "" {
 		_ = level.UnmarshalText([]byte(strings.ToUpper(flagLevel)))
-	} else if cfg, err := config.Open(dataDir); err == nil {
-		_ = level.UnmarshalText([]byte(strings.ToUpper(cfg.Get().Server.LogLevel)))
+	} else if cfg, err := config.Read(dataDir); err == nil {
+		_ = level.UnmarshalText([]byte(strings.ToUpper(cfg.Server.LogLevel)))
 	}
 	return level
 }

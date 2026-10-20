@@ -39,12 +39,14 @@ func (c *Client) DownloadArtifact(ctx context.Context, art *Artifact, dir string
 	}
 	name := art.Filename
 	if name == "" {
-		name = filepath.Base(strings.Split(art.URL, "?")[0])
-	}
-	if name == "" || name == "." || name == string(filepath.Separator) {
-		name = "ether-update"
+		name = strings.Split(art.URL, "?")[0]
 	}
 	name = filepath.Base(name) // never trust the feed with a path
+	if name == "." || name == ".." || name == string(filepath.Separator) {
+		// Base of "", "a/.." or "/" is no file name: joined with dir it
+		// would point at dir itself or its parent.
+		name = "ether-update"
+	}
 	dest := filepath.Join(dir, name)
 	part := dest + ".part"
 
@@ -319,20 +321,39 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	return os.Rename(tmp, dst)
 }
 
-func launchInstaller(ctx context.Context, path string) error {
-	var cmd *exec.Cmd
-	ext := strings.ToLower(filepath.Ext(path))
-	switch runtime.GOOS {
+// installerCommand picks the program that opens a downloaded installer.
+func installerCommand(goos, path string) (string, []string) {
+	switch goos {
 	case "darwin":
-		cmd = exec.CommandContext(ctx, "open", path) // .dmg / .pkg
+		return "open", []string{path} // .dmg / .pkg
 	case "windows":
-		if ext == ".msi" {
-			cmd = exec.CommandContext(ctx, "msiexec", "/i", path)
-		} else {
-			cmd = exec.CommandContext(ctx, path)
+		if strings.ToLower(filepath.Ext(path)) == ".msi" {
+			return "msiexec", []string{"/i", path}
 		}
+		return path, nil
 	default: // linux etc.: hand to the desktop; package installs need a terminal helper
-		cmd = exec.CommandContext(ctx, "xdg-open", path)
+		return "xdg-open", []string{path}
 	}
-	return cmd.Start()
+}
+
+func launchInstaller(ctx context.Context, path string) error {
+	name, args := installerCommand(runtime.GOOS, path)
+	return startDetached(ctx, name, args...)
+}
+
+// startDetached starts a program that must outlive ctx: the caller's
+// context typically ends as soon as Apply returns, and binding the process
+// to it would kill the installer (or `open`, before it hands the .dmg to
+// the desktop) right after launch. ctx only gates the start. The process
+// is reaped in the background.
+func startDetached(ctx context.Context, name string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

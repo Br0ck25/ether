@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -25,5 +29,30 @@ func TestParseInterleaved(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.wantPos) || *dir != tc.wantDir {
 			t.Errorf("%v: positional=%v dir=%q, want %v %q", tc.args, got, *dir, tc.wantPos, tc.wantDir)
 		}
+	}
+}
+
+func TestLogLevelForOnlyReadsConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	doc := []byte(`{"server":{"logLevel":"debug"}}`)
+	if err := os.WriteFile(path, doc, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := logLevelFor("", dir); got != slog.LevelDebug {
+		t.Fatalf("level = %v, want debug", got)
+	}
+	if b, _ := os.ReadFile(path); !bytes.Equal(b, doc) {
+		t.Fatalf("config.json rewritten while resolving the log level:\n%s", b)
+	}
+	if got := logLevelFor("warn", dir); got != slog.LevelWarn {
+		t.Fatalf("flag level = %v, want warn", got)
+	}
+	missing := filepath.Join(dir, "missing")
+	if got := logLevelFor("", missing); got != slog.LevelInfo {
+		t.Fatalf("default level = %v", got)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatal("data dir created while resolving the log level")
 	}
 }

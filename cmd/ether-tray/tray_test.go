@@ -149,6 +149,23 @@ func TestAutostartDarwinAndLinux(t *testing.T) {
 	}
 }
 
+// Exec paths with spaces or specials must be quoted per the XDG spec, or
+// the session splits "/home/me/My Apps/ether-tray" into two arguments.
+func TestDesktopEntryQuotesExec(t *testing.T) {
+	for path, want := range map[string]string{
+		"/opt/Ether/ether-tray":          "Exec=/opt/Ether/ether-tray\n",
+		"/home/me/My Apps/ether-tray":    `Exec="/home/me/My Apps/ether-tray"` + "\n",
+		`/home/me/a"b$c/ether-tray`:      `Exec="/home/me/a\\"b\\$c/ether-tray"` + "\n",
+		"/home/me/100%/ether-tray":       "Exec=/home/me/100%%/ether-tray\n",
+		`/home/me/back\slash/ether-tray`: `Exec="/home/me/back\\\\slash/ether-tray"` + "\n",
+	} {
+		got := (&Autostart{ExecPath: path}).DesktopEntry()
+		if !strings.Contains(got, want) {
+			t.Errorf("%q: entry\n%s\nwant line %q", path, got, want)
+		}
+	}
+}
+
 func TestAutostartWindowsCommands(t *testing.T) {
 	var calls [][]string
 	a := &Autostart{

@@ -454,6 +454,45 @@ func TestStartupConfirmAfterHealthPeriod(t *testing.T) {
 	}
 }
 
+// A newer release staged while the current update is still confirming must
+// survive the confirmation's cleanup of old downloads.
+func TestConfirmationKeepsNewerStagedRelease(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.m.UpdateNow(true); err != nil {
+		t.Fatal(err)
+	}
+	h.run(DefaultTick)
+	res := startup(t, h.dir, h.target, "2.0.0", h.clock.Now())
+	if res.Confirming == nil {
+		t.Fatalf("startup = %+v", res)
+	}
+	payload := []byte("new binary 3.0.0")
+	h.checker.upd, h.checker.payload = binUpdate("3.0.0", payload), payload
+	h.checker.downloads = 0
+	m2 := NewManager(ManagerOptions{
+		NewClient: func(config.Updates) (Checker, error) { return h.checker, nil },
+		Config:    func() config.Updates { return h.cfg }, CurrentVersion: "2.0.0",
+		Dir: h.dir, Target: h.target, SelfApply: true, Boot: res,
+		Now: h.clock.Now, Location: time.UTC, Logger: quietLog(),
+	})
+	m2.begin()
+	// The first check (5 min) stages 3.0.0 before the health period (10 min) ends.
+	for end := h.clock.Now().Add(DefaultHealthPeriod + time.Minute); h.clock.Now().Before(end); {
+		h.clock.Advance(DefaultTick)
+		m2.step(context.Background())
+	}
+	st := m2.Status()
+	if st.Confirming || st.Available == nil || !st.Available.Staged || h.checker.downloads != 1 {
+		t.Fatalf("status = %+v downloads=%d", st, h.checker.downloads)
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "ether-3.0.0")); err != nil {
+		t.Fatalf("staged 3.0.0 removed by confirmation cleanup: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.dir, "ether-2.0.0")); !os.IsNotExist(err) {
+		t.Fatal("confirmed update's download not cleaned")
+	}
+}
+
 func TestStartupRollsBackAfterCrashLoopAndSkipsVersion(t *testing.T) {
 	h := newHarness(t, nil)
 	if err := h.m.UpdateNow(true); err != nil {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -40,6 +41,9 @@ type tray struct {
 	loginItem  *systray.MenuItem
 	mu         sync.Mutex
 	pendingUpd *updater.Update
+	// updating is set while an update click (a feed check or an installer
+	// download) runs off the menu loop.
+	updating atomic.Bool
 }
 
 func newTray(a *app) *tray { return &tray{a: a} }
@@ -114,7 +118,14 @@ func (t *tray) onReady() {
 			case <-restartItem.ClickedCh:
 				t.doService("restart")
 			case <-t.updateItem.ClickedCh:
-				t.onUpdateClicked()
+				// A download can take minutes; keep the menu (Quit included)
+				// responsive meanwhile. Repeated clicks are ignored.
+				if t.updating.CompareAndSwap(false, true) {
+					go func() {
+						defer t.updating.Store(false)
+						t.onUpdateClicked()
+					}()
+				}
 			case <-t.loginItem.ClickedCh:
 				t.toggleLogin()
 			case <-quit.ClickedCh:

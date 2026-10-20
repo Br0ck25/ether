@@ -41,6 +41,11 @@ type FailedUpdate struct {
 	From    string    `json:"from"`
 	At      time.Time `json:"at"`
 	Reason  string    `json:"reason"`
+	// ReportPending is set by a rollback and cleared once a clustered node
+	// has told the other nodes to skip Version. A successful rollback
+	// restarts straight into the restored binary, so it is that process
+	// (with no update to confirm) that reports.
+	ReportPending bool `json:"reportPending,omitempty"`
 }
 
 // PendingPath / FailedPath locate the marker files inside dir.
@@ -208,10 +213,11 @@ func ConfirmStartup(opts StartupOptions) (StartupResult, error) {
 			return res, nil
 		}
 		failed := &FailedUpdate{
-			Version: p.To,
-			From:    p.From,
-			At:      opts.Now(),
-			Reason:  fmt.Sprintf("version %s failed to run healthily after %d starts", p.To, p.Attempts-1),
+			Version:       p.To,
+			From:          p.From,
+			At:            opts.Now(),
+			Reason:        fmt.Sprintf("version %s failed to run healthily after %d starts", p.To, p.Attempts-1),
+			ReportPending: true,
 		}
 		res.RolledBack = failed
 		if rbErr := opts.Rollback(target); rbErr != nil {

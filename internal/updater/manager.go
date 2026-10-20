@@ -291,6 +291,12 @@ func (m *Manager) begin() {
 			// Nothing to confirm: a lease this node still holds is left over
 			// (an update that did not take effect, or a crash) — free it.
 			m.releasePending = true
+			// The rollback process restarted before it could tell the
+			// cluster: report the restored-from release now, before the
+			// lease goes back to nodes that would install it next.
+			if m.failed != nil && m.failed.ReportPending {
+				m.reportFailed = m.failed.Version
+			}
 		}
 	}
 	if !m.requested { // "Update now" before Run keeps its immediate check
@@ -352,6 +358,9 @@ func (m *Manager) confirmIfHealthy(now time.Time) {
 	}
 	m.confirmed = true
 	p := m.opts.Boot.Confirming
+	// A newer release may already be staged (checks run while confirming);
+	// it must survive the cleanup of the confirmed update's download.
+	keep := m.staged
 	m.mu.Unlock()
 
 	if err := removeIfExists(PendingPath(m.opts.Dir)); err != nil {
@@ -362,7 +371,7 @@ func (m *Manager) confirmIfHealthy(now time.Time) {
 		target = m.opts.Target
 	}
 	cleanupLeftovers(target, m.opts.CleanupOld, m.log)
-	m.cleanDownloads("")
+	m.cleanDownloads(keep)
 	forgetFailedIfSuperseded(m.opts.Dir, m.opts.CurrentVersion, m.log)
 	m.mu.Lock()
 	if m.failed != nil && !Newer(m.failed.Version, m.opts.CurrentVersion) {
@@ -576,13 +585,19 @@ func (m *Manager) coordinate(ctx context.Context) {
 	m.mu.Unlock()
 	if failed != "" {
 		if err := c.ReportFailed(ctx, failed); err != nil {
+			// Keep any lease until the cluster knows: releasing it first
+			// would hand the bad release to the next node.
 			m.log.Debug("updater: report rolled-back release to the cluster", "err", err)
-		} else {
-			m.log.Warn("updater: told the other cluster nodes to skip the rolled-back release", "version", failed)
-			m.mu.Lock()
-			m.reportFailed = ""
-			m.mu.Unlock()
+			return
 		}
+		m.log.Warn("updater: told the other cluster nodes to skip the rolled-back release", "version", failed)
+		m.mu.Lock()
+		m.reportFailed = ""
+		if m.failed != nil && sameVersion(m.failed.Version, failed) {
+			m.failed.ReportPending = false
+		}
+		m.mu.Unlock()
+		m.markFailedReported(failed)
 	}
 	switch {
 	case confirming:
@@ -599,6 +614,19 @@ func (m *Manager) coordinate(ctx context.Context) {
 		m.mu.Lock()
 		m.releasePending = false
 		m.mu.Unlock()
+	}
+}
+
+// markFailedReported clears ReportPending in the failed-version record so
+// later starts do not report it again.
+func (m *Manager) markFailedReported(version string) {
+	var f FailedUpdate
+	if ok, err := readJSON(FailedPath(m.opts.Dir), &f); !ok || err != nil || !f.ReportPending || !sameVersion(f.Version, version) {
+		return
+	}
+	f.ReportPending = false
+	if err := writeJSONAtomic(FailedPath(m.opts.Dir), &f); err != nil {
+		m.log.Warn("updater: record that the rolled-back release was reported", "err", err)
 	}
 }
 
