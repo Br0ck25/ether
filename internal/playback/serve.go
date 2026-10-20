@@ -33,6 +33,14 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 	}
 	s.touch(m.now())
 	s.markDirectPlay()
+	if !s.directRangeCompatible() {
+		// The client still holds the original file's container headers and
+		// byte coordinates. A remux handoff needs a new playback decision;
+		// retrying this URL must never return bytes from a different file.
+		w.Header().Set("Cache-Control", "no-store")
+		http.Error(w, "source changed; restart playback", http.StatusConflict)
+		return
+	}
 	s.mu.Lock()
 	rep := representation{
 		size:        s.virtual.Size,
@@ -51,9 +59,12 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 
 // streamClient writes [vstart, vstart+length) of the session's virtual file.
 func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vstart, length int64) error {
+	g, compatible := s.directRangeGeneration()
+	if !compatible {
+		return errEndResponse
+	}
 	vend := vstart + length
 	vpos := vstart
-	g := s.current()
 	srcpos := s.toSource(g, vpos)
 	count := func(n int) {
 		now := m.now()
@@ -121,6 +132,20 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 		}
 	}
 	return nil
+}
+
+// directRangeCompatible keeps the original HTTP representation immutable even
+// after SetDecision clears RequiresRemux for a newly started HLS session.
+func (s *session) directRangeCompatible() bool {
+	_, ok := s.directRangeGeneration()
+	return ok
+}
+
+func (s *session) directRangeGeneration() (*generation, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cur, s.cur != nil && !s.requiresRemux &&
+		(spliceable(s.container, s.name) || s.cur.src.Size() == s.virtual.Size)
 }
 
 type chunk struct {

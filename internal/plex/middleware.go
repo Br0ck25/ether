@@ -113,6 +113,7 @@ func (s *Server) requestLog(next http.Handler) http.Handler {
 		pr := FromContext(r.Context())
 		s.log.Debug("request", "method", r.Method, "path", r.URL.Path, "status", sr.status,
 			"dur", time.Since(start).Round(time.Millisecond), "product", pr.Product, "client", pr.ClientID,
+			"range", r.Header.Get("Range"), "contentRange", sr.Header().Get("Content-Range"),
 			"pageStart", pr.Start, "pageSize", pr.Size, "paged", pr.HasPage, "format", pr.Format, "includeChildren", r.URL.Query().Get("includeChildren"),
 			"model", pr.Model, "device", pr.Device, "version", pr.Version, "platformVersion", pr.PlatformVersion, "peer", pr.RemoteIP.String())
 	})

@@ -592,6 +592,21 @@ func TestDirectPlayRejectsDifferentSizeReplacement(t *testing.T) {
 	if h.resolver.isBad("B") {
 		t.Fatal("healthy candidate marked bad")
 	}
+	// A native client can retry the old part URL without issuing another
+	// decision. Never map A's ranges into B or let them trigger more swaps.
+	for _, remuxStarted := range []bool{false, true} {
+		if remuxStarted {
+			h.m.SetDecision(ps.ID, core.Decision{Kind: core.DecisionRemux})
+		}
+		resp, body, err := get(t, srv.URL, map[string]string{"Range": "bytes=0-999"})
+		if err != nil || resp.StatusCode != http.StatusConflict || resp.Header.Get("Content-Range") != "" {
+			t.Fatalf("stale part after remux=%v: status=%d err=%v body=%q", remuxStarted, resp.StatusCode, err, body)
+		}
+		var out bytes.Buffer
+		if err := h.m.streamClient(t.Context(), &out, h.m.lookup(ps.ID), 0, 1000); !errors.Is(err, errEndResponse) || out.Len() != 0 {
+			t.Fatalf("stale stream copied replacement bytes: n=%d err=%v", out.Len(), err)
+		}
+	}
 }
 
 func TestFailoverMidResponseSplicesTS(t *testing.T) {
