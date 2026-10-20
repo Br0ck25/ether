@@ -144,7 +144,7 @@ func (p *plexAuth) StartPIN(ctx context.Context) (id, code, authURL string, err 
 	}
 	id = strconv.FormatInt(pin.ID, 10)
 	p.mu.Lock()
-	p.pins[id] = pin
+	rememberPIN(p.pins, id, pin)
 	p.mu.Unlock()
 	return id, pin.Code, p.client().AuthURL(pin, ""), nil
 }
@@ -152,6 +152,10 @@ func (p *plexAuth) StartPIN(ctx context.Context) (id, code, authURL string, err 
 func (p *plexAuth) PollPIN(ctx context.Context, id string) (bool, error) {
 	p.mu.Lock()
 	pin := p.pins[id]
+	if pin != nil && !pin.ExpiresAt.IsZero() && !time.Now().Before(pin.ExpiresAt) {
+		delete(p.pins, id)
+		pin = nil
+	}
 	p.mu.Unlock()
 	if pin == nil {
 		return false, errors.New("unknown sign-in request; start again")
@@ -168,6 +172,9 @@ func (p *plexAuth) PollPIN(ctx context.Context, id string) (bool, error) {
 		return false, fmt.Errorf("plex.tv account: %w", err)
 	}
 	if err := p.app.cfg.Update(func(c *config.Config) error {
+		if c.Plex.OwnerPlexID != 0 && c.Plex.OwnerPlexID != acct.ID {
+			return errors.New("this Plex account does not own the server; sign in as the existing owner")
+		}
 		c.Plex.Token = got.AuthToken
 		c.Plex.OwnerPlexID = acct.ID
 		c.Plex.OwnerUsername = acct.Username
@@ -211,12 +218,7 @@ func (p *plexSignIn) StartPIN(ctx context.Context, forwardURL string) (id, code,
 	}
 	id = strconv.FormatInt(pin.ID, 10)
 	p.mu.Lock()
-	for k, v := range p.pins {
-		if !v.ExpiresAt.IsZero() && time.Now().After(v.ExpiresAt) {
-			delete(p.pins, k)
-		}
-	}
-	p.pins[id] = pin
+	rememberPIN(p.pins, id, pin)
 	p.mu.Unlock()
 	return id, pin.Code, c.AuthURL(pin, forwardURL), nil
 }
@@ -246,4 +248,32 @@ func (p *plexSignIn) PINToken(ctx context.Context, id string) (string, error) {
 		p.mu.Unlock()
 	}
 	return got.AuthToken, nil
+}
+
+// rememberPIN bounds abandoned sign-ins even if the upstream omits an expiry.
+// The caller holds the map's mutex. Discard the oldest pending request when
+// the cap is reached; its browser can start a new sign-in.
+func rememberPIN(pins map[string]*plextv.PIN, id string, pin *plextv.PIN) {
+	now := time.Now()
+	deadline := now.Add(10 * time.Minute)
+	if pin.ExpiresAt.IsZero() || pin.ExpiresAt.After(deadline) {
+		pin.ExpiresAt = deadline
+	}
+	for k, v := range pins {
+		if v == nil || (!v.ExpiresAt.IsZero() && !now.Before(v.ExpiresAt)) {
+			delete(pins, k)
+		}
+	}
+	const maxPINs = 256
+	for len(pins) >= maxPINs {
+		oldest := ""
+		var at time.Time
+		for k, v := range pins {
+			if oldest == "" || v.ExpiresAt.Before(at) {
+				oldest, at = k, v.ExpiresAt
+			}
+		}
+		delete(pins, oldest)
+	}
+	pins[id] = pin
 }
