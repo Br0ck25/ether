@@ -356,7 +356,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.closers = append(a.closers, func() { a.engine.Close() })
 
 	// Indexers and resolver.
-	a.sites = cardigann.New(cardigann.Options{DB: a.db, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites})
+	siteOpts := cardigann.Options{DB: a.db, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites}
+	if a.clustered() {
+		siteOpts.LoginLock = a.clusterLoginLock // one login per site across nodes
+	}
+	a.sites = cardigann.New(siteOpts)
 	a.indexers = newznab.NewManager(a.db, cfg.Indexers, newznab.Options{
 		Logger:         log.With("component", "newznab"),
 		SearchCacheTTL: cfg.Resolver.SearchCacheTTL.D(),

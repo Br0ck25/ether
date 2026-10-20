@@ -69,3 +69,55 @@ func TestLockKeyNilTxAndHashStable(t *testing.T) {
 		t.Fatal("lock hash must be stable and key-specific")
 	}
 }
+
+// SessionLock excludes a second holder of the same key until unlock, and
+// is a no-op (nil, nil) on SQLite.
+func TestSessionLockExcludesUntilUnlock(t *testing.T) {
+	ctx := context.Background()
+	db := OpenTest(t)
+	unlock, err := SessionLock(ctx, db, "site:a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if DialectOf(db) != Postgres {
+		if unlock != nil {
+			t.Fatal("SQLite session lock should be nil")
+		}
+		return
+	}
+	acquired := make(chan func(), 1)
+	go func() {
+		u, err := SessionLock(ctx, db, "site:a")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		acquired <- u
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("second holder got the lock while the first held it")
+	case <-time.After(300 * time.Millisecond):
+	}
+	// A different key is independent.
+	other, err := SessionLock(ctx, db, "site:b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other()
+	unlock()
+	select {
+	case u := <-acquired:
+		u()
+	case <-time.After(5 * time.Second):
+		t.Fatal("second holder never got the lock after unlock")
+	}
+	// Waiting honours ctx.
+	unlock, _ = SessionLock(ctx, db, "site:a")
+	defer unlock()
+	cctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if _, err := SessionLock(cctx, db, "site:a"); err == nil {
+		t.Fatal("waiting past the deadline should fail")
+	}
+}

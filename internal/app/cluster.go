@@ -292,3 +292,16 @@ func (a *App) clusterHandler() http.Handler {
 	mux.Handle("/join-tokens/", settings)
 	return mux
 }
+
+// clusterLoginLock serialises indexer-site logins across nodes, so one
+// node logs in while the others wait and then reuse the shared session.
+func (a *App) clusterLoginLock(ctx context.Context, key string) (func(), error) {
+	unlock, err := store.SessionLock(ctx, a.db, "cardigann-login:"+key)
+	if err != nil {
+		return nil, err
+	}
+	if unlock == nil {
+		return func() {}, nil
+	}
+	return unlock, nil
+}
