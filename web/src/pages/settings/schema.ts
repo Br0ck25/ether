@@ -67,6 +67,41 @@ export const SERVER: FieldGroup[] = [
   },
 ];
 
+/** server.* keys each cluster node keeps for itself (internal/config/scope.go). */
+const NODE_LOCAL_SERVER_KEYS = new Set(["port", "bindAddress", "logLevel"]);
+
+/**
+ * General's server groups on a cluster node: settings shared by every node
+ * stay in their groups, and this node's own settings (listener, logging and
+ * its weight) gather under "This node".
+ */
+export function clusterServerGroups(): FieldGroup[] {
+  const shared = SERVER.map((g) => ({
+    ...g,
+    fields: g.fields.filter((f) => !NODE_LOCAL_SERVER_KEYS.has(f.key)),
+  }));
+  const local = SERVER.flatMap((g) => g.fields.filter((f) => NODE_LOCAL_SERVER_KEYS.has(f.key)));
+  return [
+    ...shared,
+    {
+      title: "This node",
+      description: "These apply only to this node; every other setting is shared by the cluster.",
+      fields: [
+        ...local,
+        {
+          key: "clusterWeight",
+          label: "Node weight",
+          kind: "number",
+          min: 0,
+          max: 100,
+          step: 1,
+          help: "This node's share of each provider's connections and request limits, relative to the other nodes. 2 gets twice the share of a node at 1; 0 means 1.",
+        },
+      ],
+    },
+  ];
+}
+
 export const PLEX: FieldGroup[] = [
   {
     title: "Remote access",
@@ -212,6 +247,22 @@ export const CACHE: FieldGroup[] = [
         label: "Keep in-progress titles warm",
         kind: "bool",
         help: "Keeps the resume point of unfinished titles cached.",
+      },
+      {
+        key: "inProgressPinMaxAge",
+        label: "Stop keeping a title warm after",
+        kind: "duration",
+        placeholder: "720h",
+        help: "An unfinished title nobody has watched for this long loses its cache pin. Empty uses 30 days.",
+      },
+      {
+        key: "inProgressPinPercent",
+        label: "Share of the cache for in-progress titles",
+        kind: "number",
+        min: 0,
+        max: 100,
+        step: 5,
+        help: "Percent of the disk budget unfinished titles may keep pinned; the least recently watched lose their pin first. 0 uses 50.",
       },
     ],
   },
@@ -416,7 +467,26 @@ export const UPDATES: FieldGroup[] = [
           { value: "beta", label: "Beta" },
         ],
       },
-      { key: "autoUpdate", label: "Install updates automatically", kind: "bool" },
+      {
+        key: "autoUpdate",
+        label: "Install updates automatically",
+        kind: "bool",
+        help: "Installs during the maintenance window, once nobody is watching.",
+      },
+      {
+        key: "maintenanceStart",
+        label: "Maintenance window starts",
+        kind: "text",
+        placeholder: "03:00",
+        help: "24-hour local time.",
+      },
+      {
+        key: "maintenanceEnd",
+        label: "Maintenance window ends",
+        kind: "text",
+        placeholder: "06:00",
+        help: "May wrap past midnight.",
+      },
       {
         key: "feedUrl",
         label: "Update feed",

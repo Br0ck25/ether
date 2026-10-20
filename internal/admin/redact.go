@@ -23,6 +23,7 @@ func RedactConfig(cfg config.Config) config.Config {
 	out.OpenSubtitles.APIKey = redact(out.OpenSubtitles.APIKey)
 	out.OpenSubtitles.Password = redact(out.OpenSubtitles.Password)
 	out.LLM.APIKey = redact(out.LLM.APIKey)
+	out.Database = out.Database.Redacted()
 	if cfg.Usenet.Providers != nil {
 		out.Usenet.Providers = make([]config.UsenetProvider, len(cfg.Usenet.Providers))
 		for i, p := range cfg.Usenet.Providers {

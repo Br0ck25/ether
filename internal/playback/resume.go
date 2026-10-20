@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -78,6 +80,68 @@ type resumeRecord struct {
 type resumeStore struct {
 	db  *sql.DB
 	dir string
+	// held keeps resume records (and their keyframe indexes) through a
+	// database outage on a clustered node; nil writes synchronously.
+	held *store.Outbox[resumeKey, resumeWrite]
+}
+
+type resumeKey struct {
+	user int64
+	key  core.RatingKey
+}
+
+// resumeWrite is one resume record whose NZB is already on disk.
+type resumeWrite struct {
+	rec    resumeRecord
+	hash   string
+	points []core.KeyframePoint
+}
+
+// maxHeldResumes bounds resume records held through an outage (each may
+// carry a keyframe index).
+const maxHeldResumes = 1000
+
+// hold makes record writes survive a database outage.
+func (s *resumeStore) hold(avail *store.Availability, log *slog.Logger) {
+	s.held = store.NewOutbox(store.OutboxOptions[resumeKey, resumeWrite]{
+		Name: "playback resume", Availability: avail, Logger: log, Cap: maxHeldResumes,
+		Timeout: 3 * time.Second,
+		Apply: func(ctx context.Context, _ resumeKey, w resumeWrite) error {
+			if err := s.saveRow(ctx, w.rec, w.hash); err != nil {
+				return err
+			}
+			return s.saveIndex(ctx, w.rec.userID, w.rec.key, w.rec.release.ID, w.points)
+		},
+	})
+}
+
+// close writes held records (bounded by ctx).
+func (s *resumeStore) close(ctx context.Context) error {
+	if s.held == nil {
+		return nil
+	}
+	return s.held.Close(ctx)
+}
+
+// put stores a record and its keyframe index: at once, or — on a clustered
+// node that cannot reach the database — when the database is back. The
+// NZB is written to local disk first either way.
+func (s *resumeStore) put(ctx context.Context, rec resumeRecord, nzb []byte, points []core.KeyframePoint) error {
+	if len(nzb) == 0 {
+		return errors.New("playback: empty nzb")
+	}
+	hash, err := s.writeNZB(nzb)
+	if err != nil {
+		return fmt.Errorf("playback: store nzb: %w", err)
+	}
+	if s.held != nil {
+		_, err := s.held.Write(ctx, resumeKey{rec.userID, rec.key}, resumeWrite{rec: rec, hash: hash, points: points})
+		return err
+	}
+	if err := s.saveRow(ctx, rec, hash); err != nil {
+		return err
+	}
+	return s.saveIndex(ctx, rec.userID, rec.key, rec.release.ID, points)
 }
 
 func newResumeStore(db *sql.DB, dataDir string) (*resumeStore, error) {
@@ -85,7 +149,44 @@ func newResumeStore(db *sql.DB, dataDir string) (*resumeStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("playback: nzb dir: %w", err)
 	}
-	return &resumeStore{db: db, dir: dir}, nil
+	s := &resumeStore{db: db, dir: dir}
+	s.sweep(context.Background())
+	return s, nil
+}
+
+// sweepMinAge keeps the startup sweep away from files a concurrent save may
+// still be writing or about to reference.
+const sweepMinAge = time.Hour
+
+// sweep removes temp files left by a crash mid-write and NZB files no
+// resume record references (e.g. the process died between writing the
+// file and inserting its row). It runs once at startup.
+func (s *resumeStore) sweep(ctx context.Context) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-sweepMinAge)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(name, "nzb-") && strings.HasSuffix(name, ".tmp"):
+			_ = os.Remove(filepath.Join(s.dir, name))
+		case strings.HasSuffix(name, ".nzb"):
+			hash := strings.TrimSuffix(name, ".nzb")
+			var n int
+			if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM playback_resume WHERE nzb_hash=?`, hash).Scan(&n); err == nil && n == 0 {
+				_ = os.Remove(filepath.Join(s.dir, name))
+			}
+		}
+	}
 }
 
 func nzbHash(b []byte) string {
@@ -141,6 +242,11 @@ func (s *resumeStore) save(ctx context.Context, rec resumeRecord, nzb []byte) er
 	if err != nil {
 		return fmt.Errorf("playback: store nzb: %w", err)
 	}
+	return s.saveRow(ctx, rec, hash)
+}
+
+// saveRow upserts the record for an NZB already on disk.
+func (s *resumeStore) saveRow(ctx context.Context, rec resumeRecord, hash string) error {
 	rel, err := json.Marshal(rec.release)
 	if err != nil {
 		return err

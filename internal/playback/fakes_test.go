@@ -2,6 +2,7 @@ package playback
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -432,16 +434,40 @@ func (c *fakeCatalog) Get(ctx context.Context, key core.RatingKey) (*core.Title,
 }
 
 type fakeCache struct {
-	mu   sync.Mutex
-	pins map[string]map[string]bool
-	log  []string
+	mu     sync.Mutex
+	pins   map[string]map[string]bool
+	log    []string
+	budget int64
+	bytes  map[string]int64
 }
 
-func newFakeCache() *fakeCache { return &fakeCache{pins: map[string]map[string]bool{}} }
+func newFakeCache() *fakeCache {
+	return &fakeCache{pins: map[string]map[string]bool{}, bytes: map[string]int64{}}
+}
 
 func (c *fakeCache) Get(releaseID string, segment int) ([]byte, bool)     { return nil, false }
 func (c *fakeCache) Put(releaseID string, segment int, data []byte) error { return nil }
-func (c *fakeCache) Usage() (int64, int64)                                { return 0, 0 }
+func (c *fakeCache) Usage() (int64, int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return 0, c.budget
+}
+func (c *fakeCache) ReleaseBytes(releaseID string) int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bytes[releaseID]
+}
+func (c *fakeCache) Pins() map[string][]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string][]string{}
+	for id, set := range c.pins {
+		for r := range set {
+			out[id] = append(out[id], r)
+		}
+	}
+	return out
+}
 func (c *fakeCache) Pin(releaseID, reason string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -480,6 +506,12 @@ func (s *fakeState) set(user int64, key core.RatingKey, offset time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.statuses[[2]int64{user, int64(key)}] = core.WatchStatus{Key: key, ViewOffset: offset}
+}
+
+func (s *fakeState) setStatus(user int64, st core.WatchStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.statuses[[2]int64{user, int64(st.Key)}] = st
 }
 
 func (s *fakeState) Get(ctx context.Context, userID int64, key core.RatingKey) (core.WatchStatus, error) {
@@ -530,6 +562,10 @@ type harness struct {
 	clock    *fakeClock
 	cfg      config.Config
 	dataDir  string
+	noCache  bool            // build the Manager without a segment cache
+	db       *sql.DB         // shared database (two-node tests); nil opens a fresh one
+	node     clusterbus.Node // cluster membership; nil = standalone
+	avail    *store.Availability
 }
 
 var (
@@ -572,18 +608,26 @@ func newHarness(t *testing.T, rels []*fakeRelease, ids []string, opts ...harness
 	for _, f := range opts {
 		f(h, &o)
 	}
-	db, err := store.OpenMemory(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	db := h.db
+	if db == nil {
+		var err error
+		db, err = store.OpenMemory(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
 	}
-	t.Cleanup(func() { db.Close() })
 	quality := config.DefaultQuality()
+	var cache core.SegmentCache = h.cache
+	if h.noCache {
+		cache = nil
+	}
 	m, err := New(Deps{
 		Resolver:   h.resolver,
 		Engine:     h.engine,
 		Transcoder: h.tr,
 		Catalog:    h.catalog,
-		Cache:      h.cache,
+		Cache:      cache,
 		State:      h.state,
 		SelectProfile: func(caps core.ClientCaps, user *core.User) core.QualityProfile {
 			if caps.MaxHeight >= 2160 {
@@ -591,7 +635,9 @@ func newHarness(t *testing.T, rels []*fakeRelease, ids []string, opts ...harness
 			}
 			return quality.Profiles[1]
 		},
-		DB: db,
+		DB:           db,
+		Cluster:      h.node,
+		Availability: h.avail,
 	}, h.cfg, o)
 	if err != nil {
 		t.Fatal(err)

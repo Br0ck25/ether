@@ -139,7 +139,7 @@ func (s *Service) infrastructure(w http.ResponseWriter, r *http.Request) {
 	}
 	usage := []Usage{}
 	month := s.opts.Now().UTC().Format("2006-01") + "-01"
-	rows, err := s.db.QueryContext(r.Context(), `SELECT provider,SUM(bytes),SUM(articles),SUM(misses),SUM(errors),SUM(backfill_saves),SUM(body_misses),SUM(body_takedowns) FROM stats_provider_days WHERE day>=? GROUP BY provider`, month)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT provider,CAST(SUM(bytes) AS BIGINT),CAST(SUM(articles) AS BIGINT),CAST(SUM(misses) AS BIGINT),CAST(SUM(errors) AS BIGINT),CAST(SUM(backfill_saves) AS BIGINT),CAST(SUM(body_misses) AS BIGINT),CAST(SUM(body_takedowns) AS BIGINT) FROM stats_provider_days WHERE day>=? GROUP BY provider`, month)
 	if err != nil {
 		fail(w, 500, "Usage unavailable")
 		return

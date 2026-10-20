@@ -317,6 +317,10 @@ func TestVariantIDRegistryStablePersisted(t *testing.T) {
 	if r1.idFor(fightClub.Key, "rel-4k") != id {
 		t.Fatal("id not stable within registry")
 	}
+	var rows int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM variants_ids WHERE media_id=?`, id).Scan(&rows); err != nil || rows != 1 {
+		t.Fatalf("persisted rows = %d (err %v), want 1", rows, err)
+	}
 	// A fresh registry over the same DB (restart) resolves the same id.
 	r2 := newVariantIDRegistry(db)
 	if got := r2.idFor(fightClub.Key, "rel-4k"); got != id {

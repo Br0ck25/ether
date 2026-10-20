@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/releaseparse"
@@ -109,7 +110,7 @@ type Service struct {
 	scorerErr error
 
 	mu            sync.RWMutex
-	bad           map[string]string
+	bad           map[string]badMark // release id -> blocklist mark
 	reps          map[string]reputation
 	avail         map[int64]availEntry
 	searchCache   map[string]searchCacheEntry
@@ -134,6 +135,9 @@ type Service struct {
 	route routingState // source routing: startup measurements and signals
 
 	con consoleState // pins, release memory, health results, history (console.go)
+
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
 }
 
 var _ core.Resolver = (*Service)(nil)
@@ -144,7 +148,7 @@ var _ core.Resolver = (*Service)(nil)
 func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config.Config, opts Options) *Service {
 	s := &Service{
 		indexer: indexer, health: health, db: db,
-		bad: map[string]string{}, reps: map[string]reputation{},
+		bad: map[string]badMark{}, reps: map[string]reputation{},
 		avail: map[int64]availEntry{}, searchCache: map[string]searchCacheEntry{},
 		flights:       map[string]*inflight{},
 		retentionDays: opts.RetentionDays,
@@ -230,7 +234,13 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 		return fmt.Errorf("resolver: empty release id")
 	}
 	s.mu.Lock()
-	s.bad[releaseID] = reason
+	m := badMark{reason: reason, at: s.now()}
+	if prev, ok := s.bad[releaseID]; ok && prev.manual {
+		// An automatic mark never downgrades an owner block (persistBad
+		// keeps the owner's reason too); it only refreshes the clock.
+		m.reason, m.manual = prev.reason, true
+	}
+	s.bad[releaseID] = m
 	s.mu.Unlock()
 	s.forgetVerified(ctx, releaseID)
 	s.notePinsBlocked(ctx, releaseID, reason)
@@ -240,8 +250,31 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 func (s *Service) isBad(id string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	_, ok := s.bad[id]
-	return ok
+	m, ok := s.bad[id]
+	return ok && m.live(s.now())
+}
+
+// badMark is one in-memory blocklist mark. Automatic marks expire
+// badRetention after they were last marked; owner (manual) blocks never do.
+type badMark struct {
+	reason string
+	at     time.Time // when it was (last) marked
+	manual bool
+}
+
+func (m badMark) live(now time.Time) bool {
+	return m.manual || now.Sub(m.at) < badRetention
+}
+
+// badReason reports whether a release is on the live blocklist and why.
+func (s *Service) badReason(id string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.bad[id]
+	if !ok || !m.live(s.now()) {
+		return "", false
+	}
+	return m.reason, true
 }
 
 // Traces returns the most recent resolution traces, newest first.
@@ -554,6 +587,8 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 		results[i] = withTarget(results[i], req)
 	}
 	s.mu.Lock()
+	now := s.now()
+	boundMap(s.searchCache, maxSearchCache, func(e searchCacheEntry) bool { return !now.Before(e.expires) })
 	s.searchCache[key] = searchCacheEntry{results: append([]core.Release(nil), results...), expires: s.now().Add(s.searchTTL())}
 	s.mu.Unlock()
 	return results, false, nil

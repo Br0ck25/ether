@@ -23,6 +23,9 @@ import type {
 } from "./contract";
 import type {
   Bootstrap,
+  ClusterSettings,
+  ClusterStatus,
+  CreatedJoinToken,
   DashboardData,
   DebridProvider,
   DebridStatus,
@@ -40,6 +43,7 @@ import type {
   SetupStatus,
   SourceStartup,
   TestResult,
+  UpdateStatus,
   UsenetProvider,
 } from "./types";
 
@@ -233,6 +237,19 @@ export const api = {
   logs: (params: { limit?: number; level?: string; q?: string }) =>
     apiFetch<{ entries: LogEntry[]; total: number }>(`/logs${qs(params)}`),
   clearLogs: () => apiFetch<{ ok: boolean }>("/logs", { method: "DELETE" }),
+
+  // ---- Updates -----------------------------------------------------------------
+  updateStatus: () => apiFetch<UpdateStatus>("/updates/"),
+  updateNow: (force = false) => post<UpdateStatus>("/updates/apply", { force }),
+
+  // ---- Cluster ---------------------------------------------------------------------
+  clusterStatus: (signal?: AbortSignal) => apiFetch<ClusterStatus>("/cluster/", { signal }),
+  clusterSettings: (signal?: AbortSignal) =>
+    apiFetch<ClusterSettings>("/cluster/settings", { signal }),
+  createJoinToken: (ttlMinutes: number) =>
+    post<CreatedJoinToken>("/cluster/join-tokens", { ttlMinutes }),
+  revokeJoinToken: (id: string) =>
+    apiFetch<null>(`/cluster/join-tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // ---- Users (limits) ----------------------------------------------------------
   users: async () => (await apiFetch<{ users: EtherUser[] | null }>("/users")).users ?? [],

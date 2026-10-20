@@ -136,8 +136,13 @@ func TestUnknownEndpoint(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
 	rec := f.get(t, "/some/unknown/endpoint")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<MediaContainer size=\"0\">\n</MediaContainer>") {
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "<h1>404 Not Found</h1>") || rec.Header().Get("Content-Type") != "text/html" {
 		t.Fatalf("unknown: %d %s", rec.Code, rec.Body.String())
+	}
+	// Endpoints Ether knowingly stubs still answer an empty container.
+	rec = f.get(t, "/video/:/transcode/universal/subtitles")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<MediaContainer size=\"0\">\n</MediaContainer>") {
+		t.Fatalf("stubbed: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

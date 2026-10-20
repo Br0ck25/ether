@@ -535,3 +535,67 @@ func TestValidateConfigDirect(t *testing.T) {
 		t.Fatalf("expected >=2 errors, got %v", errs)
 	}
 }
+
+func TestValidateClusterWeight(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	for _, w := range []int{0, 1, 100} {
+		cfg.Server.ClusterWeight = w
+		if errs := admin.ValidateConfig(cfg); len(errs) != 0 {
+			t.Errorf("weight %d rejected: %v", w, errs)
+		}
+	}
+	for _, w := range []int{-1, 101} {
+		cfg.Server.ClusterWeight = w
+		errs := admin.ValidateConfig(cfg)
+		if len(errs) != 1 || errs[0].Field != "server.clusterWeight" {
+			t.Errorf("weight %d: errs=%v", w, errs)
+		}
+	}
+}
+
+func TestValidateMaintenanceWindow(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	cfg.Updates.MaintenanceStart = "23:30"
+	cfg.Updates.MaintenanceEnd = "" // empty falls back to the default
+	if errs := admin.ValidateConfig(cfg); len(errs) != 0 {
+		t.Fatalf("valid window rejected: %v", errs)
+	}
+	for _, bad := range []string{"3am", "24:00", "3:00", "03:60"} {
+		cfg.Updates.MaintenanceEnd = bad
+		errs := admin.ValidateConfig(cfg)
+		if len(errs) != 1 || errs[0].Field != "updates.maintenanceEnd" {
+			t.Errorf("%q: errs=%v", bad, errs)
+		}
+	}
+}
+
+func TestDatabaseSettingsRedactedAndNotEditable(t *testing.T) {
+	const dbURL = "postgres://ether:db-secret@db.invalid:5432/ether"
+	store := newStore(t, func(c *config.Config) {
+		seededConfig(c)
+		c.SetupComplete = true
+		c.Database = config.Database{Driver: config.DatabasePostgres, URL: dbURL}
+	})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+	r := req(http.MethodGet, "/ether/api/config", "")
+	r.Header.Set("X-Plex-Token", ownerToken)
+	rec := serve(h, r)
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "db-secret") {
+		t.Fatalf("GET config leaked the database password: %d %s", rec.Code, rec.Body)
+	}
+	// A client that drops or rewrites the database section changes nothing.
+	var env struct {
+		Config config.Config `json:"config"`
+	}
+	decode(t, rec, &env)
+	env.Config.Database = config.Database{Driver: config.DatabaseSQLite}
+	raw, _ := json.Marshal(env)
+	r2 := req(http.MethodPut, "/ether/api/config", string(raw))
+	r2.Header.Set("X-Plex-Token", ownerToken)
+	if rec2 := serve(h, r2); rec2.Code != http.StatusOK {
+		t.Fatalf("PUT config: %d %s", rec2.Code, rec2.Body)
+	}
+	if got := store.Get().Database; got.Driver != config.DatabasePostgres || got.URL != dbURL {
+		t.Fatalf("database settings changed through the admin API: %+v", got.Redacted())
+	}
+}

@@ -196,9 +196,19 @@ func (s *Service) rowByKey(ctx context.Context, key core.RatingKey) (*specRow, e
 	return s.rowByID(ctx, strconv.FormatInt(key.TMDB(), 10))
 }
 
-func (s *Service) nextID(ctx context.Context, tx *sql.Tx) (int64, error) {
+func (s *Service) nextID(ctx context.Context, tx *sql.Tx) (int64, error) { return nextSpecID(ctx, tx) }
+
+// nextSpecID allocates an owner collection id. Touching the counter row
+// before reading it takes its row lock, so creators on different nodes
+// allocate one at a time and never hand out the same id.
+func nextSpecID(ctx context.Context, tx *sql.Tx) (int64, error) {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_meta(k,v) VALUES('next_id','0') ON CONFLICT(k) DO NOTHING`); err != nil {
+		return 0, err
+	}
 	var v string
-	_ = tx.QueryRowContext(ctx, `SELECT v FROM collections_meta WHERE k='next_id'`).Scan(&v)
+	if err := tx.QueryRowContext(ctx, `UPDATE collections_meta SET v=v WHERE k='next_id' RETURNING v`).Scan(&v); err != nil {
+		return 0, err
+	}
 	next, _ := strconv.ParseInt(v, 10, 64)
 	var maxID int64
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0) FROM collections_specs WHERE id<?`, builtinBase).Scan(&maxID); err != nil {
@@ -210,8 +220,7 @@ func (s *Service) nextID(ctx context.Context, tx *sql.Tx) (int64, error) {
 	if next >= builtinBase {
 		return 0, fmt.Errorf("collections: id space exhausted")
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_meta(k,v) VALUES('next_id',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`,
-		strconv.FormatInt(next+1, 10)); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE collections_meta SET v=? WHERE k='next_id'`, strconv.FormatInt(next+1, 10)); err != nil {
 		return 0, err
 	}
 	return next, nil

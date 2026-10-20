@@ -98,6 +98,11 @@ function activity(s: DebridProviderStatus): string[] {
   if (s.failures) out.push(plural(Number(s.failures), "failure"));
   if (s.reused) out.push(`${Number(s.reused)} reused`);
   if (s.linksRefreshed) out.push(`${plural(Number(s.linksRefreshed), "link")} refreshed`);
+  // In a cluster the account's concurrent API calls are divided among nodes.
+  const slots = Number(s.slots ?? 0);
+  const account = Number(s.accountSlots ?? 0);
+  if (account > 0 && slots !== account)
+    out.push(`this node: ${slots} of ${account} API connections`);
   if (s.lastSuccess) out.push(`last worked ${relativeTime(s.lastSuccess)}`);
   return out;
 }

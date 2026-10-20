@@ -15,6 +15,7 @@ import (
 	_ "time/tzdata" // Owner time policies work on hosts without a zoneinfo database.
 
 	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -39,29 +40,63 @@ type Service struct {
 	db       *sql.DB
 	mu       sync.RWMutex
 	policies map[int64]Policy
+
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
 }
 
 func New(ctx context.Context, db *sql.DB) (*Service, error) {
 	s := &Service{db: db, policies: map[int64]Policy{}}
-	rows, err := db.QueryContext(ctx, `SELECT user_id,policy FROM safety_policies`)
-	if err != nil {
+	if err := s.reload(ctx); err != nil {
 		return nil, err
 	}
+	return s, nil
+}
+
+// reload replaces the cached policies with the stored ones.
+func (s *Service) reload(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id,policy FROM safety_policies`)
+	if err != nil {
+		return err
+	}
 	defer rows.Close()
+	policies := map[int64]Policy{}
 	for rows.Next() {
 		var id int64
 		var raw string
 		if err := rows.Scan(&id, &raw); err != nil {
-			return nil, err
+			return err
 		}
 		var p Policy
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
-			return nil, err
+			return err
 		}
-		s.policies[id] = p
+		policies[id] = p
 	}
-	return s, rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.policies = policies
+	s.mu.Unlock()
+	return nil
 }
+
+// SetBus connects the cluster bus (nil disconnects): policy changes made on
+// this node reach the others' caches and vice versa.
+func (s *Service) SetBus(bus clusterbus.Bus) {
+	iv := clusterbus.NewInvalidator(bus, "safety", nil, func(ctx context.Context, _ []string, _ bool) {
+		_ = s.reload(ctx) // on error keep the last policies; the next change retries
+	})
+	s.invalMu.Lock()
+	old := s.inval
+	s.inval = iv
+	s.invalMu.Unlock()
+	old.Close()
+}
+
+// Close disconnects the cluster bus.
+func (s *Service) Close() { s.SetBus(nil) }
 func (s *Service) Get(id int64) Policy {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -98,6 +133,10 @@ func (s *Service) Put(ctx context.Context, id int64, p Policy) error {
 	s.mu.Lock()
 	s.policies[id] = p
 	s.mu.Unlock()
+	s.invalMu.Lock()
+	iv := s.inval
+	s.invalMu.Unlock()
+	iv.Notify(strconv.FormatInt(id, 10))
 	return nil
 }
 func (s *Service) Allowed(u *core.User, t *core.Title) bool {

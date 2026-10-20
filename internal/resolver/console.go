@@ -387,9 +387,7 @@ func (s *Service) SearchReleases(ctx context.Context, t *core.Title, opts Search
 			}
 		}
 		cr.Release.Score = cr.Score
-		s.mu.RLock()
-		reason, bad := s.bad[rel.ID]
-		s.mu.RUnlock()
+		reason, bad := s.badReason(rel.ID)
 		cr.Blocked, cr.BlockReason = bad, reason
 		if h, ok := s.lastHealth(ctx, rel.ID); ok {
 			cr.Health = &h
@@ -435,9 +433,7 @@ func (s *Service) lastHealth(ctx context.Context, id string) (HealthResult, bool
 	if ok {
 		return h, true
 	}
-	s.mu.RLock()
-	reason, bad := s.bad[id]
-	s.mu.RUnlock()
+	reason, bad := s.badReason(id)
 	if bad {
 		return HealthResult{ReleaseID: id, Reason: reason, Source: "blocked"}, true
 	}
@@ -486,7 +482,7 @@ func (s *Service) CheckRelease(ctx context.Context, releaseID string, titleKey c
 		res.Healthy = true
 		res.Reason = "no health checker configured"
 	default:
-		healthy, herr := s.health.Check(ctx, nzb)
+		healthy, herr := core.CheckReleaseHealth(ctx, s.health, releaseID, nzb)
 		switch {
 		case healthy && herr == nil:
 			res.Healthy = true

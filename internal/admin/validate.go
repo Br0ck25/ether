@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 )
@@ -50,6 +51,16 @@ func (v *validator) oneOf(field, s string, allowed ...string) {
 	v.add(field, "must be one of: %s", strings.Join(allowed, ", "))
 }
 
+// clock accepts an empty value (default) or a 24-hour "HH:MM" time.
+func (v *validator) clock(field, s string) {
+	if s == "" {
+		return
+	}
+	if _, err := time.Parse("15:04", s); err != nil || len(s) != 5 {
+		v.add(field, "must be a 24-hour time like 03:00")
+	}
+}
+
 // ValidateConfig checks a candidate config for the problems the owner can
 // fix in the UI. It is intentionally permissive about empty optional
 // sections (an unconfigured install must remain saveable mid-wizard) and
@@ -69,6 +80,9 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	}
 	if cfg.Server.MaxStreams < 0 {
 		v.add("server.maxStreams", "must be >= 0")
+	}
+	if cfg.Server.ClusterWeight < 0 || cfg.Server.ClusterWeight > 100 {
+		v.add("server.clusterWeight", "must be between 0 and 100")
 	}
 
 	v.port("plex.publicPort", cfg.Plex.PublicPort, true)
@@ -242,6 +256,11 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	}
 	if cfg.Updates.FeedURL != "" {
 		v.httpURL("updates.feedUrl", cfg.Updates.FeedURL, false)
+	}
+	v.clock("updates.maintenanceStart", cfg.Updates.MaintenanceStart)
+	v.clock("updates.maintenanceEnd", cfg.Updates.MaintenanceEnd)
+	if cfg.Updates.MaxDrain < 0 {
+		v.add("updates.maxDrain", "must not be negative")
 	}
 	return v.errs
 }

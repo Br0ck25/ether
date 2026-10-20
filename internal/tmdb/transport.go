@@ -9,60 +9,93 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// rateLimiter is a token bucket.
+// rateLimiter is a token bucket whose rate can change at run time (a
+// cluster divides TMDB's per-key budget among live nodes). Callers reserve
+// a token and sleep until it is due, so concurrent waiters are served in
+// order without polling.
 type rateLimiter struct {
-	tokens chan struct{}
+	mu     sync.Mutex
+	rate   float64 // tokens per second
+	burst  float64
+	tokens float64 // may go negative: tokens reserved by waiters
+	last   time.Time
 	stop   chan struct{}
 }
 
 func newRateLimiter(perSec float64, burst int) *rateLimiter {
+	perSec, b := limiterParams(perSec, burst)
+	return &rateLimiter{rate: perSec, burst: b, tokens: b, last: time.Now(), stop: make(chan struct{})}
+}
+
+func limiterParams(perSec float64, burst int) (float64, float64) {
 	if burst <= 0 {
 		burst = 1
 	}
 	if perSec <= 0 {
 		perSec = 40
 	}
-	r := &rateLimiter{tokens: make(chan struct{}, burst), stop: make(chan struct{})}
-	for i := 0; i < burst; i++ {
-		r.tokens <- struct{}{}
+	return perSec, float64(burst)
+}
+
+// refillLocked adds the tokens earned since the last refill.
+func (r *rateLimiter) refillLocked(now time.Time) {
+	if el := now.Sub(r.last).Seconds(); el > 0 {
+		r.tokens = min(r.burst, r.tokens+el*r.rate)
 	}
-	interval := time.Duration(float64(time.Second) / perSec)
-	if interval < time.Millisecond {
-		interval = time.Millisecond
-	}
-	go func() {
-		t := time.NewTicker(interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-r.stop:
-				return
-			case <-t.C:
-				select {
-				case r.tokens <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}()
-	return r
+	r.last = now
+}
+
+// setRate changes the rate and burst; tokens earned so far are kept (up
+// to the new burst).
+func (r *rateLimiter) setRate(perSec float64, burst int) {
+	perSec, b := limiterParams(perSec, burst)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refillLocked(time.Now())
+	r.rate, r.burst = perSec, b
+	r.tokens = min(r.tokens, b)
+}
+
+func (r *rateLimiter) current() (float64, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rate, int(r.burst)
 }
 
 func (r *rateLimiter) wait(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.refillLocked(time.Now())
+	r.tokens--
+	if r.tokens >= 0 {
+		r.mu.Unlock()
+		return nil
+	}
+	delay := time.Duration(-r.tokens / r.rate * float64(time.Second))
+	r.mu.Unlock()
+	t := time.NewTimer(delay)
+	defer t.Stop()
 	select {
 	case <-ctx.Done():
+		r.mu.Lock()
+		r.tokens++ // give the reservation back
+		r.mu.Unlock()
 		return ctx.Err()
-	case <-r.tokens:
+	case <-t.C:
 		return nil
 	}
 }
 
-// Close stops the rate limiter goroutine.
+// Close releases the client (the rate limiter has no goroutine; Close is
+// kept for callers that own the client).
 func (c *Client) Close() {
 	if c.lim != nil {
 		select {
@@ -114,7 +147,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 	cacheKey := strconv.FormatUint(cfg.generation, 10) + ":" + full
 	// Cache hit (fresh).
 	c.mu.Lock()
-	if e, ok := c.cache[cacheKey]; ok && time.Now().Before(e.expires) {
+	if e, ok := c.cache.get(cacheKey); ok && time.Now().Before(e.expires) {
 		body := append([]byte(nil), e.body...)
 		c.mu.Unlock()
 		return body, nil
@@ -133,9 +166,13 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 	}
 	f := &flight{done: make(chan struct{})}
 	c.flights[cacheKey] = f
+	// Keep the stale body with its ETag: the entry may be evicted while the
+	// revalidation is in flight, and a 304 must still have a body to serve.
+	// Cached bodies are never mutated, so sharing the slice is safe.
 	var etag string
-	if e, ok := c.cache[cacheKey]; ok {
-		etag = e.etag
+	var staleBody []byte
+	if e, ok := c.cache.get(cacheKey); ok {
+		etag, staleBody = e.etag, e.body
 	}
 	c.mu.Unlock()
 
@@ -143,15 +180,14 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 
 	c.mu.Lock()
 	delete(c.flights, cacheKey)
+	if err == nil && notModified {
+		body = staleBody
+	}
 	if err == nil && c.generation == cfg.generation {
 		if notModified {
-			if e, ok := c.cache[cacheKey]; ok {
-				body = e.body
-				e.expires = time.Now().Add(c.opts.cacheTTL)
-				c.cache[cacheKey] = e
-			}
+			c.cache.put(cacheKey, cacheEntry{body: staleBody, etag: etag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
 		} else {
-			c.cache[cacheKey] = cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}
+			c.cache.put(cacheKey, cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
 		}
 	}
 	f.body, f.err = body, err

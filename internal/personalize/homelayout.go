@@ -238,6 +238,7 @@ func (e *Engine) SetHomeLayout(ctx context.Context, d core.HomeLayout) (core.Hom
 	e.homeLayout = cloneLayout(d)
 	e.layoutVer++
 	e.mu.Unlock()
+	e.notify("layout")
 	return cloneLayout(d), nil
 }
 func pageFor(ps []core.LayoutPage, section string) *core.LayoutPage {

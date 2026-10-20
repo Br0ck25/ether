@@ -44,6 +44,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/recommend"
 	"github.com/braedonsaunders/ether/internal/state"
@@ -217,6 +218,9 @@ type Engine struct {
 	statsMu sync.Mutex
 	stats   *statsSnapshot
 
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
+
 	actMu  sync.Mutex
 	actAt  time.Time
 	actRes *activityResult
@@ -305,6 +309,7 @@ func (e *Engine) Close() {
 		t.Stop()
 	}
 	e.mu.Unlock()
+	e.SetBus(nil)
 	if e.unsub != nil {
 		e.unsub()
 	}

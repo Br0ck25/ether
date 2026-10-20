@@ -16,6 +16,12 @@ import (
 
 func (a *App) buildAdoption() {
 	a.backups = backup.New(a.db, a.cfg.Path(), filepath.Join(a.opts.DataDir, "backups"), 7)
+	if a.clustered() {
+		// Record which node holds each bundle (and allow a shared backup
+		// directory): scheduled backups run on whichever node leads.
+		self := a.cluster.Self()
+		a.backups.SetCluster(backup.Node{ID: self.ID, Name: self.Name})
+	}
 	a.migration = migrate.New(a.db, a.catalog, migrate.Options{State: a.state})
 }
 

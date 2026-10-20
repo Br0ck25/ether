@@ -29,6 +29,7 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 | Module | Used for | Licence |
 | --- | --- | --- |
 | `modernc.org/sqlite` (+ its modernc.org support modules) | Pure-Go SQLite store | BSD-3-Clause (module); SQLite itself is public domain |
+| `github.com/jackc/pgx/v5` (+ `github.com/jackc/pgpassfile`, `github.com/jackc/pgservicefile`, `github.com/jackc/puddle/v2`) | Pure-Go PostgreSQL driver (database/sql adapter) for clustered mode, `internal/store` | MIT (© Jack Christensen) |
 | `github.com/kardianos/service` | OS service (systemd/launchd/Windows SCM), `internal/service` | Zlib-style (“as-is”, © Daniel Theophanes) |
 | `github.com/ulikunitz/xz` | 7z header LZMA decoding, `internal/archive` | BSD-3-Clause |
 | `golang.org/x/text` | Legacy subtitle code pages, `internal/subtitles`; language names, `internal/collections` | BSD-3-Clause |
@@ -45,6 +46,7 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 | `github.com/google/uuid` | IDs (via modernc / components) | BSD-3-Clause |
 | `github.com/dustin/go-humanize` | Human-readable sizes (indirect) | MIT |
 | `github.com/mattn/go-isatty`, `github.com/ncruces/go-strftime`, `github.com/remyoudompheng/bigfft`, `github.com/hashicorp/golang-lru/v2` | modernc/sqlite internals (indirect) | MIT / MIT / BSD-3-Clause / MPL-2.0 respectively |
+| `golang.org/x/sync` | pgx internals (indirect) | BSD-3-Clause |
 | `golang.org/x/sys` (and other `golang.org/x/*` in the build graph) | Platform primitives (indirect) | BSD-3-Clause |
 
 Regenerate the ground truth any time with `go list -m all` and each module's `LICENSE` file.

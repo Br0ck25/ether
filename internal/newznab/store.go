@@ -100,10 +100,10 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 	} else {
 		limit = cfg.DailyGrabs
 	}
-	c.budgetMu.Lock()
-	defer c.budgetMu.Unlock()
 	day := c.today()
 	if c.db == nil {
+		c.budgetMu.Lock()
+		defer c.budgetMu.Unlock()
 		if c.mem.day != day {
 			c.mem = memBudget{day: day}
 		}
@@ -125,29 +125,31 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 	if kind == "grab" {
 		col = "grabs"
 	}
-	tx, err := c.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx,
+	if _, err := c.db.ExecContext(ctx,
 		`INSERT INTO newznab_budget(indexer_id, day) VALUES (?,?) ON CONFLICT(indexer_id, day) DO NOTHING`,
 		c.indexerID(), day); err != nil {
 		return err
 	}
-	var used int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT `+col+` FROM newznab_budget WHERE indexer_id=? AND day=?`, c.indexerID(), day).Scan(&used); err != nil {
+	// One conditional increment checks and reserves atomically, so nodes
+	// sharing the database can never overspend the budget together.
+	q := `UPDATE newznab_budget SET ` + col + `=` + col + `+1 WHERE indexer_id=? AND day=?`
+	args := []any{c.indexerID(), day}
+	if limit > 0 {
+		q += ` AND ` + col + `<?`
+		args = append(args, limit)
+	}
+	res, err := c.db.ExecContext(ctx, q, args...)
+	if err != nil {
 		return err
 	}
-	if limit > 0 && used >= limit {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return fmt.Errorf("indexer %q %s budget: %w", c.Name(), kind, core.ErrBudgetExhausted)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE newznab_budget SET `+col+`=`+col+`+1 WHERE indexer_id=? AND day=?`, c.indexerID(), day); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 // Remaining returns today's budget state.

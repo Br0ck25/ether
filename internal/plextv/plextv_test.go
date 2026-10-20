@@ -12,11 +12,13 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -958,6 +960,92 @@ func TestRegistrarPublishBackoff(t *testing.T) {
 	r.runDue(ctx)
 	if f.count("PUT /devices/") == puts {
 		t.Fatal("no retry after back-off")
+	}
+}
+
+func TestRegistrarPublishesClusterUnion(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	cfg := testConfig()
+	cfg.Plex.Token = "server-token-42"
+	cfg.Plex.Claimed = true
+	cfg.Plex.RemoteAccess = true
+	var mu sync.Mutex
+	peers := []string{"http://192.168.1.6:32400", "http://198.51.100.1:32400", "http://192.168.1.5:32400"}
+	lanCalls := 0
+	now := time.Now()
+	r, err := NewRegistrar(RegistrarOptions{
+		Config: &memConfig{cfg: cfg}, Client: newServerClient(t, f), WAN: &fakeWAN{ip: "198.51.100.1"}, Mapper: &fakeMapper{},
+		LAN: func() ([]net.IP, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			lanCalls++
+			return []net.IP{net.ParseIP("192.168.1.5")}, nil
+		},
+		PeerURIs: func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(peers) },
+		Now:      func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+		Tick:     10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// A node that is not running the loop still reports its own URIs,
+	// refreshing addresses only when stale.
+	own := r.NodeURIs(ctx)
+	if strings.Join(own, ",") != "http://192.168.1.5:32400,http://198.51.100.1:32400" {
+		t.Fatalf("node URIs %v", own)
+	}
+	r.NodeURIs(ctx)
+	if lanCalls != 1 {
+		t.Fatalf("fresh addresses re-enumerated: %d", lanCalls)
+	}
+	mu.Lock()
+	now = now.Add(31 * time.Second)
+	mu.Unlock()
+	r.NodeURIs(ctx)
+	if lanCalls != 2 {
+		t.Fatalf("stale addresses not refreshed: %d", lanCalls)
+	}
+
+	// The leader publishes its own URIs first, then the peers', deduplicated.
+	if err := r.PublishNow(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := "http://192.168.1.5:32400,http://198.51.100.1:32400,http://192.168.1.6:32400"
+	f.mu.Lock()
+	got := strings.Join(f.published, ",")
+	f.mu.Unlock()
+	if got != want {
+		t.Fatalf("published %s, want %s", got, want)
+	}
+	if got = strings.Join(r.Status().PublishedURIs, ","); got != want {
+		t.Fatalf("status %s", got)
+	}
+
+	// Leadership can be lost and regained: the loop restarts and a
+	// membership change republishes through RequestPublish.
+	for i := 0; i < 2; i++ {
+		if err := r.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		peers = []string{fmt.Sprintf("http://192.168.1.%d:32400", 20+i)}
+		mu.Unlock()
+		r.RequestPublish()
+		wantPeer := fmt.Sprintf("192.168.1.%d", 20+i)
+		deadline := time.Now().Add(3 * time.Second)
+		for !strings.Contains(strings.Join(r.Status().PublishedURIs, ","), wantPeer) {
+			if time.Now().After(deadline) {
+				t.Fatalf("no republish for membership change: %v", r.Status().PublishedURIs)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		r.Stop()
+		if r.Status().Presence.Connected {
+			t.Fatal("presence still connected after stop")
+		}
 	}
 }
 

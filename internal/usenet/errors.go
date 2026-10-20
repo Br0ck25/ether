@@ -39,8 +39,9 @@ var (
 	// ErrProviderBackoff means a provider is temporarily skipped after
 	// repeated connection failures.
 	ErrProviderBackoff = fmt.Errorf("usenet: provider backing off after connection failures: %w", core.ErrSourceUnavailable)
-	// ErrProviderDisabled means a provider is disabled until its settings
-	// change, after an authentication failure.
+	// ErrProviderDisabled means a provider is disabled after an
+	// authentication failure, until a background login probe succeeds or
+	// its settings change.
 	ErrProviderDisabled = fmt.Errorf("usenet: provider disabled after authentication failure: %w", core.ErrSourceUnavailable)
 	// ErrPoolClosed means the provider was removed or the fetcher closed.
 	ErrPoolClosed = errors.New("usenet: connection pool closed")
@@ -101,6 +102,16 @@ func isNetworkError(err error) bool {
 	}
 	var ne net.Error
 	return errors.As(err, &ne)
+}
+
+// isTimeoutError reports a deadline or inactivity timeout: the connection
+// it happened on is unusable, but it says nothing about its idle siblings.
+func isTimeoutError(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // ctxErr is ctx.Err(), but also reports DeadlineExceeded as soon as the

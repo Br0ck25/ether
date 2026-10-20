@@ -21,8 +21,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // Deps are the components playback orchestrates. Resolver, Engine,
@@ -54,6 +56,18 @@ type Deps struct {
 	// DB holds the playback_resume table; nil disables resume records.
 	DB     *sql.DB
 	Logger *slog.Logger
+	// Cluster, when set (clustered nodes only; requires DB), mirrors this
+	// node's sessions into playback_live_sessions and applies stream limits
+	// across the cluster. Nil keeps everything in this process.
+	Cluster clusterbus.Node
+	// DescribeGroup optionally describes a live TV viewing unit reserved
+	// with BeginChannel for other nodes' status pages.
+	DescribeGroup func(group string) *core.PlaySession
+	// Availability, when set (clustered nodes), is the node's view of
+	// database reachability: resume records the database cannot take are
+	// held and written later, and admission skips the cluster-wide check
+	// while the database is down (failing open) instead of waiting on it.
+	Availability *store.Availability
 }
 
 // Options tune the manager. Zero values take the defaults noted.
@@ -62,6 +76,11 @@ type Options struct {
 	DataDir string
 	// IdleTimeout ends sessions without viewer activity (default 2m).
 	IdleTimeout time.Duration
+	// WriteStallTimeout fails a direct-play write that makes no progress
+	// for this long, so a client that stopped reading releases its source
+	// (default IdleTimeout: a paused player is not cut off before its
+	// session would be reaped anyway).
+	WriteStallTimeout time.Duration
 	// StoppedGrace ends a session this long after a "stopped" timeline (default 1m).
 	StoppedGrace time.Duration
 	// PrepareTimeout bounds resolve+open+probe (default 90s).
@@ -102,6 +121,11 @@ type Options struct {
 	MaxDownFailovers   int
 	// LoopbackAddr is the source server's listen address (default 127.0.0.1:0).
 	LoopbackAddr string
+	// SessionHeartbeat is how often a clustered node refreshes its shared
+	// session rows (default 10s); SessionTTL is how long a row counts
+	// without a refresh (default 45s).
+	SessionHeartbeat time.Duration
+	SessionTTL       time.Duration
 	// Now is the clock (tests).
 	Now func() time.Time
 }
@@ -113,6 +137,7 @@ func (o *Options) defaults() {
 		}
 	}
 	def(&o.IdleTimeout, 2*time.Minute)
+	def(&o.WriteStallTimeout, o.IdleTimeout)
 	def(&o.StoppedGrace, time.Minute)
 	def(&o.PrepareTimeout, 90*time.Second)
 	def(&o.ProbeTimeout, 30*time.Second)
@@ -131,6 +156,8 @@ func (o *Options) defaults() {
 	if o.MaxDownFailovers == 0 {
 		o.MaxDownFailovers = 2
 	}
+	def(&o.SessionHeartbeat, 10*time.Second)
+	def(&o.SessionTTL, 45*time.Second)
 	if o.ConnectionsPerStream <= 0 {
 		o.ConnectionsPerStream = 8
 	}
@@ -162,12 +189,16 @@ type Manager struct {
 	log    *slog.Logger
 	now    func() time.Time
 	resume *resumeStore
-	bufs   sync.Pool
+	reg    *registry // nil on a standalone server
+	// titleInval broadcasts title invalidations (nil standalone).
+	titleInval *clusterbus.Invalidator
+	bufs       sync.Pool
 
 	cfgMu sync.RWMutex
 	cfg   config.Config
 
 	mu             sync.Mutex
+	draining       bool // SetDraining: refuse new sessions
 	closed         bool
 	sessions       map[string]*session
 	byIdent        map[identity]*session
@@ -291,7 +322,17 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 		if err != nil {
 			return nil, err
 		}
+		if deps.Availability != nil {
+			rs.hold(deps.Availability, m.log)
+		}
 		m.resume = rs
+	}
+	if deps.Cluster != nil {
+		if deps.DB == nil {
+			return nil, errors.New("playback: Cluster requires DB")
+		}
+		m.reg = newRegistry(m, deps.DB, deps.Cluster)
+		m.startTitleInvalidation(deps.Cluster)
 	}
 
 	ln, err := net.Listen("tcp", opts.LoopbackAddr)
@@ -320,6 +361,9 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 	go func() { defer m.wg.Done(); m.janitor() }()
 	go func() { defer m.wg.Done(); m.pinLoop() }()
 	go func() { defer m.wg.Done(); m.speedLoop() }()
+	if m.reg != nil {
+		m.reg.start()
+	}
 	m.log.Info("loopback source server listening", "addr", ln.Addr().String())
 	return m, nil
 }
@@ -351,8 +395,57 @@ func (m *Manager) Close() error {
 	m.cancel()
 	err := m.srv.Close()
 	m.wg.Wait()
+	if m.reg != nil {
+		m.reg.close()
+	}
+	m.titleInval.Close()
+	if m.resume != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if herr := m.resume.close(ctx); herr != nil {
+			m.log.Warn("playback: resume records lost at shutdown", "err", herr)
+		}
+		cancel()
+	}
 	return err
 }
+
+// SetDraining stops (true) or resumes (false) admitting new playback
+// sessions on this node. A draining node — about to restart for an update
+// — keeps serving its existing sessions and their seeks, but a new Prepare
+// or live TV tune fails with core.ErrStreamLimit so the client retries,
+// reaching another node through another published connection.
+func (m *Manager) SetDraining(draining bool) {
+	m.mu.Lock()
+	changed := m.draining != draining
+	m.draining = draining
+	m.mu.Unlock()
+	if changed {
+		if draining {
+			m.log.Info("playback: draining: no new sessions on this node")
+		} else {
+			m.log.Info("playback: no longer draining")
+		}
+	}
+}
+
+// Draining reports whether SetDraining(true) is in effect.
+func (m *Manager) Draining() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.draining
+}
+
+// ResumeOutboxStatus reports resume records held through a database
+// outage; ok is false when records are written synchronously.
+func (m *Manager) ResumeOutboxStatus() (st store.OutboxStatus, ok bool) {
+	if m.resume == nil || m.resume.held == nil {
+		return st, false
+	}
+	return m.resume.held.Status(), true
+}
+
+// errDraining is returned for new sessions while the node drains.
+var errDraining = fmt.Errorf("%w: this server is restarting for an update; try again", core.ErrStreamLimit)
 
 // SetConfig applies a new config snapshot (stream limits).
 func (m *Manager) SetConfig(cfg config.Config) {
@@ -411,24 +504,33 @@ func ServerStreamLimit(cfg config.Config, connsPerStream int) int {
 
 // reserve claims a stream slot for a Prepare, enforcing per-user and
 // server-wide limits. Sessions of the same user and client count as
-// replaceable: a client plays one thing at a time.
-func (m *Manager) reserve(user *core.User, id identity) error {
+// replaceable: a client plays one thing at a time. A clustered node then
+// checks the same limits against the whole cluster (see registry.admit).
+func (m *Manager) reserve(ctx context.Context, user *core.User, id identity) error {
 	cfg := m.config()
 	userLimit := UserStreamLimit(cfg, user)
 	serverLimit := ServerStreamLimit(cfg, m.opts.ConnectionsPerStream)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return errors.New("playback: shutting down")
 	}
+	if m.draining {
+		m.mu.Unlock()
+		return errDraining
+	}
 	userN, total, children := m.reservationCountsLocked(id)
-	if m.channelGroups[id] != "" && children >= 3 {
+	group := m.channelGroups[id]
+	if group != "" && children >= 3 {
+		m.mu.Unlock()
 		return fmt.Errorf("%w: channel source overlap limit", core.ErrStreamLimit)
 	}
 	if userLimit > 0 && userN >= userLimit {
+		m.mu.Unlock()
 		return fmt.Errorf("%w: %s is using %d of %d streams", core.ErrStreamLimit, userLabel(user), userN, userLimit)
 	}
 	if serverLimit > 0 && total >= serverLimit {
+		m.mu.Unlock()
 		return fmt.Errorf("%w: server is at its limit of %d streams", core.ErrStreamLimit, serverLimit)
 	}
 	if m.reservations == nil {
@@ -437,6 +539,23 @@ func (m *Manager) reserve(user *core.User, id identity) error {
 	m.reservations[id] = struct{}{}
 	m.pending[user.ID]++
 	m.pendingN++
+	m.mu.Unlock()
+	if m.reg == nil {
+		return nil
+	}
+	// A source joining this node's own channel group adds no unit.
+	if group != "" && children > 0 {
+		m.reg.poke()
+		return nil
+	}
+	claim := unitRow{id: pendingID(m.reg.self, id), user: id.userID, client: id.clientID, grp: group, kind: unitPending}
+	if err := m.reg.admit(ctx, user, id, claim, userN, total, userLimit, serverLimit); err != nil {
+		m.mu.Lock()
+		m.unreserveLocked(id)
+		m.mu.Unlock()
+		m.reg.poke()
+		return err
+	}
 	return nil
 }
 
@@ -540,7 +659,7 @@ func (m *Manager) runFlight(ctx context.Context, f *flight, fk flightKey, user *
 
 func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, caps core.ClientCaps, prefer string) (*session, error) {
 	log := m.log.With("user", userLabel(user), "client", caps.ClientID, "key", id.key)
-	if err := m.reserve(user, id); err != nil {
+	if err := m.reserve(ctx, user, id); err != nil {
 		log.Info("stream limit", "err", err)
 		return nil, err
 	}
@@ -550,6 +669,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 			m.mu.Lock()
 			m.unreserveLocked(id)
 			m.mu.Unlock()
+			m.reg.poke()
 		}
 	}()
 
@@ -608,6 +728,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		log.Debug("client switched titles; replacing session", "old", old)
 		m.Stop(old)
 	}
+	m.reg.poke()
 	m.pinLive(g.releaseID())
 	m.saveResume(ctx, s, g)
 	ginfo := g.infoSnapshot()
@@ -695,6 +816,7 @@ func (m *Manager) Stop(id string) {
 	if hls, ok := m.deps.HLSLookup(id); ok && hls != nil {
 		m.deps.Transcoder.Stop(hls.ID())
 	}
+	m.reg.poke()
 	m.emitEvent("stop", s, nil)
 	m.kickPins()
 	m.log.Info("playback session ended", "session", id, "key", s.ident.key, "bytes", s.bytes.Load())

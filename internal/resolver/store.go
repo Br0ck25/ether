@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/store"
@@ -43,14 +44,18 @@ func (s *Service) loadPersisted(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT release_id, reason FROM resolver_bad`)
+	// Owner blocks (manual) never expire; automatic marks are loaded only
+	// while inside badRetention of when they were last marked.
+	rows, err := s.db.QueryContext(ctx, `SELECT release_id, reason, updated_at, manual FROM resolver_bad WHERE manual=1 OR updated_at>=?`, s.now().Add(-badRetention).Unix())
 	if err == nil {
 		defer rows.Close()
 		s.mu.Lock()
 		for rows.Next() {
 			var id, reason string
-			if rows.Scan(&id, &reason) == nil {
-				s.bad[id] = reason
+			var at int64
+			var manual int
+			if rows.Scan(&id, &reason, &at, &manual) == nil {
+				s.bad[id] = badMark{reason: reason, at: time.Unix(at, 0), manual: manual == 1}
 			}
 		}
 		s.mu.Unlock()
@@ -92,6 +97,9 @@ func (s *Service) persistBad(ctx context.Context, e BlockEntry) error {
 		   manual=CASE WHEN excluded.manual=1 THEN 1 ELSE resolver_bad.manual END,
 		   updated_at=excluded.updated_at`,
 		e.ReleaseID, e.Reason, now, e.Name, e.Indexer, int64(e.TitleKey), e.TitleName, e.Source, boolInt(e.Manual), now)
+	if err == nil {
+		s.notify("bad:" + e.ReleaseID)
+	}
 	return err
 }
 
@@ -120,9 +128,11 @@ func (s *Service) recordReputation(ctx context.Context, indexer string, success 
 		if success {
 			col = "successes"
 		}
-		_, _ = s.db.ExecContext(ctx,
+		if _, err := s.db.ExecContext(ctx,
 			`INSERT INTO resolver_reputation(indexer, `+col+`) VALUES (?,1)
-			 ON CONFLICT(indexer) DO UPDATE SET `+col+`=`+col+`+1`, indexer)
+			 ON CONFLICT(indexer) DO UPDATE SET `+col+`=resolver_reputation.`+col+`+1`, indexer); err == nil {
+			s.notify("reps")
+		}
 	}
 }
 
@@ -132,8 +142,10 @@ type availEntry struct {
 }
 
 func (s *Service) setAvailability(ctx context.Context, key int64, available bool, ttl time.Duration) {
-	exp := s.now().Add(ttl)
+	now := s.now()
+	exp := now.Add(ttl)
 	s.mu.Lock()
+	boundMap(s.avail, maxAvailEntries, func(e availEntry) bool { return now.After(e.expires) })
 	s.avail[key] = availEntry{available: available, expires: exp}
 	s.mu.Unlock()
 	if s.db != nil {
@@ -141,10 +153,12 @@ func (s *Service) setAvailability(ctx context.Context, key int64, available bool
 		if available {
 			v = 1
 		}
-		_, _ = s.db.ExecContext(ctx,
+		if _, err := s.db.ExecContext(ctx,
 			`INSERT INTO resolver_availability(rating_key, available, checked_at, expires_at) VALUES (?,?,?,?)
 			 ON CONFLICT(rating_key) DO UPDATE SET available=excluded.available, checked_at=excluded.checked_at, expires_at=excluded.expires_at`,
-			key, v, s.now().Unix(), exp.Unix())
+			key, v, s.now().Unix(), exp.Unix()); err == nil {
+			s.notify("avail:" + strconv.FormatInt(key, 10))
+		}
 	}
 }
 
@@ -168,7 +182,9 @@ func (s *Service) getAvailability(ctx context.Context, key int64) (availEntry, b
 			if s.now().After(e.expires) {
 				return availEntry{}, false
 			}
+			now := s.now()
 			s.mu.Lock()
+			boundMap(s.avail, maxAvailEntries, func(e availEntry) bool { return now.After(e.expires) })
 			s.avail[key] = e
 			s.mu.Unlock()
 			return e, true

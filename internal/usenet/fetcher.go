@@ -40,6 +40,8 @@ const (
 	DefaultBackoffMax       = 2 * time.Minute
 	DefaultFailThreshold    = 2
 	DefaultLimitCooloff     = 5 * time.Minute
+	DefaultAuthRetryMin     = 15 * time.Minute
+	DefaultAuthRetryMax     = 6 * time.Hour
 )
 
 // Options tune the fetcher. Zero values take the defaults above.
@@ -77,6 +79,11 @@ type Options struct {
 	BackoffMin    time.Duration
 	BackoffMax    time.Duration
 	FailThreshold int
+	// AuthRetryMin/Max: a provider that rejected the credentials (481/482)
+	// is re-probed with one login after AuthRetryMin, doubling per failed
+	// probe up to AuthRetryMax, so transient auth outages self-heal.
+	AuthRetryMin time.Duration
+	AuthRetryMax time.Duration
 	// LimitCooloff: when a server refuses connections beyond some number
 	// while others work, the pool shrinks to that number for this long.
 	LimitCooloff time.Duration
@@ -139,6 +146,12 @@ func (o *Options) withDefaults() {
 	if o.LimitCooloff <= 0 {
 		o.LimitCooloff = DefaultLimitCooloff
 	}
+	if o.AuthRetryMin <= 0 {
+		o.AuthRetryMin = DefaultAuthRetryMin
+	}
+	if o.AuthRetryMax < o.AuthRetryMin {
+		o.AuthRetryMax = max(DefaultAuthRetryMax, o.AuthRetryMin)
+	}
 	if o.MaxArticleSize <= 0 {
 		o.MaxArticleSize = yenc.DefaultMaxSize
 	}
@@ -159,8 +172,11 @@ type Fetcher struct {
 	pools  []*pool   // every enabled provider, in config order
 	tiers  [][]*pool // try order
 	closed bool
-	gen    atomic.Uint64
-	rr     atomic.Uint64
+	// share maps a provider's configured connections to this node's part
+	// of them (clustered); nil uses every configured connection.
+	share func(configured int) int
+	gen   atomic.Uint64
+	rr    atomic.Uint64
 	// minIdle is the fetcher-wide warm floor (already defaulted);
 	// UpdateConfig changes it live.
 	minIdle atomic.Int32
@@ -236,6 +252,7 @@ func (f *Fetcher) Update(providers []config.UsenetProvider) {
 		if p == nil {
 			key := cmp.Or(cfg.ID, cfg.Host) + "#" + strconv.FormatUint(f.gen.Add(1), 10)
 			p = newPool(key, cfg, &f.o, f.log, int(f.minIdle.Load()))
+			p.setShare(shareFor(f.share, p.size))
 		}
 		reused[p] = true
 		next = append(next, p)
@@ -423,7 +440,7 @@ func (f *Fetcher) StatStream(ctx context.Context, messageIDs []string, fn func(i
 				ids = append(ids, id)
 			}
 		}
-		workers := max(1, min(4, p.size, len(ids)))
+		workers := max(1, min(4, p.target(), len(ids)))
 		chunks := make([][]string, workers)
 		for i, id := range ids {
 			chunks[i%workers] = append(chunks[i%workers], id)
@@ -685,18 +702,47 @@ func (f *Fetcher) Stats() []ProviderStats {
 	return out
 }
 
-// MaxConnections is the sum of all enabled providers' connection limits
-// (used to derive a server-wide stream cap).
+// MaxConnections is the sum of all enabled primary providers' connection
+// limits on this node: the configured counts, or this node's shares of
+// them when SetConnectionShare divides them among cluster nodes.
 func (f *Fetcher) MaxConnections() int {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	n := 0
 	for _, p := range f.pools {
 		if !p.cfg.Backfill {
-			n += p.size
+			n += p.target()
 		}
 	}
 	return n
+}
+
+// SetConnectionShare divides provider connection limits among cluster
+// nodes: share receives a provider's configured connection count (the
+// account-wide limit) and returns this node's part of it, clamped to
+// 1..configured. Nil restores the configured counts (a standalone server).
+// Pools resize in place and gracefully (see pool.setShare); providers
+// added later by Update get their share as they are created. Call it again
+// whenever membership changes.
+func (f *Fetcher) SetConnectionShare(share func(configured int) int) {
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return
+	}
+	f.share = share
+	pools := slices.Clone(f.pools)
+	f.mu.Unlock()
+	for _, p := range pools {
+		p.setShare(shareFor(share, p.size))
+	}
+}
+
+func shareFor(share func(int) int, configured int) int {
+	if share == nil {
+		return 0
+	}
+	return min(max(share(configured), 1), configured)
 }
 
 // Close closes every pool. Further requests fail with ErrNoProviders.

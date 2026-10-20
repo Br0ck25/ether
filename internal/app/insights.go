@@ -2,16 +2,33 @@ package app
 
 import (
 	"context"
+	"time"
+
 	"github.com/braedonsaunders/ether/internal/notify"
+	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/stats"
 )
 
 func (a *App) buildInsights() {
-	a.notifications = notify.New(a.db, notify.Options{Providers: a.fetcher.Stats, CacheUsage: a.cache.Usage, Logger: a.log.With("component", "notifications")})
-	a.stats = stats.New(a.db, stats.Options{Playback: a.playback, SessionExists: func(id string) bool { _, ok := (ownerPlayback{Playback: a.playback, app: a}).Session(id); return ok }, Providers: a.fetcher.Stats, Indexers: a.indexers.Remaining, Logger: a.log.With("component", "stats"), StopSession: a.stopOwnerSession, Newsletter: func(ctx context.Context, html string) error {
+	a.notifications = notify.New(a.db, notify.Options{Providers: a.fetcher.Stats, CacheUsage: a.cache.Usage, NodeID: a.clusterNodeID(), Logger: a.log.With("component", "notifications")})
+	a.stats = stats.New(a.db, stats.Options{NodeID: a.clusterNodeID(), Availability: a.dbAvail, Playback: a.playback, SessionExists: func(id string) bool { _, ok := (ownerPlayback{Playback: a.playback, app: a}).Session(id); return ok }, Providers: a.fetcher.Stats, Indexers: a.indexers.Remaining, Logger: a.log.With("component", "stats"), StopSession: a.stopOwnerSession, Newsletter: func(ctx context.Context, html string) error {
 		return a.notifications.Emit(ctx, notify.Event{Kind: "newsletter.weekly", Title: "Your week on Ether", Message: "Weekly viewing summary", HTML: html})
 	}})
-	a.closers = append(a.closers, a.playback.Subscribe(a.stats.ObservePlayback), a.playback.Subscribe(a.notifications.ObservePlayback), a.state.Subscribe(a.stats.ObserveState), a.indexers.Subscribe(a.stats.ObserveIndexer), a.indexers.Subscribe(a.notifications.ObserveIndexer))
+	a.closers = append(a.closers, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := a.stats.Close(ctx); err != nil {
+			a.log.Warn("stats: play records lost at shutdown", "err", err)
+		}
+	})
+	notifyPlayback := a.notifications.ObservePlayback
+	if a.clustered() {
+		// Playback events fire on the stream's own path (start, failover,
+		// stop); queueing a notification in the shared database must not
+		// stall a failover while the database is unreachable.
+		notifyPlayback = func(ev playback.Event) { go a.notifications.ObservePlayback(ev) }
+	}
+	a.closers = append(a.closers, a.playback.Subscribe(a.stats.ObservePlayback), a.playback.Subscribe(notifyPlayback), a.state.Subscribe(a.stats.ObserveState), a.indexers.Subscribe(a.stats.ObserveIndexer), a.indexers.Subscribe(a.notifications.ObserveIndexer))
 }
 
 func (a *App) widgetStatus(context.Context) any {

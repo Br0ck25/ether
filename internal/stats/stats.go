@@ -30,6 +30,10 @@ CREATE TABLE stats_provider_days (provider TEXT NOT NULL,day TEXT NOT NULL,bytes
 CREATE TABLE stats_snapshots (kind TEXT PRIMARY KEY,payload TEXT NOT NULL,at INTEGER NOT NULL);
 CREATE TABLE stats_costs (kind TEXT NOT NULL,id TEXT NOT NULL,monthly REAL NOT NULL,currency TEXT NOT NULL,PRIMARY KEY(kind,id));
 `)
+	// node_id records which node observed a play so a starting node closes
+	// only its own interrupted sessions, never another live node's.
+	store.Register("stats", 6, `ALTER TABLE stats_plays ADD COLUMN node_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX stats_plays_open ON stats_plays(node_id) WHERE ended=0;`)
 }
 
 type Options struct {
@@ -41,12 +45,43 @@ type Options struct {
 	Indexers      func(context.Context) ([]newznab.Remaining, error)
 	Logger        *slog.Logger
 	Now           func() time.Time
+	// NodeID identifies this node in a cluster. Plays are tagged with it and
+	// New closes only this node's unfinished plays. Empty for a standalone
+	// server, which therefore closes every unfinished play as before.
+	NodeID string
+	// Availability, when set (clustered nodes), holds play records the
+	// database cannot take through an outage (the latest per play) and
+	// skips periodic provider snapshots while the database is down; their
+	// counters are cumulative, so nothing is lost. Nil writes synchronously.
+	Availability *store.Availability
 }
 type Service struct {
 	db       *sql.DB
 	opts     Options
 	mu       sync.Mutex
 	previous map[string]usenet.ProviderStats
+	// plays holds play records through a database outage (clustered).
+	plays *store.Outbox[string, playRecord]
+}
+
+// playRecord is one observation of a play, captured when it was made.
+type playRecord struct {
+	p       core.PlaySession
+	at      time.Time
+	ended   bool
+	problem string
+}
+
+// mergePlay keeps the newest observation but never forgets that the play
+// ended or failed.
+func mergePlay(old, nw playRecord) playRecord {
+	if old.ended && !nw.ended {
+		nw.ended, nw.at = true, old.at
+	}
+	if nw.problem == "" {
+		nw.problem = old.problem
+	}
+	return nw
 }
 
 func New(db *sql.DB, opts Options) *Service {
@@ -57,7 +92,13 @@ func New(db *sql.DB, opts Options) *Service {
 		opts.Now = time.Now
 	}
 	svc := &Service{db: db, opts: opts, previous: map[string]usenet.ProviderStats{}}
-	if _, err := db.Exec(`UPDATE stats_plays SET ended=updated WHERE ended=0`); err != nil {
+	if opts.Availability != nil {
+		svc.plays = store.NewOutbox(store.OutboxOptions[string, playRecord]{
+			Name: "playback stats", Availability: opts.Availability, Logger: opts.Logger, Merge: mergePlay,
+			Apply: func(ctx context.Context, _ string, r playRecord) error { return svc.record(ctx, r) },
+		})
+	}
+	if _, err := db.Exec(`UPDATE stats_plays SET ended=updated WHERE ended=0 AND node_id=?`, opts.NodeID); err != nil {
 		opts.Logger.Warn("close prior playback stats", "err", err)
 	}
 	return svc
@@ -74,11 +115,42 @@ func (s *Service) ObservePlayback(ev playback.Event) {
 		s.opts.Logger.Warn("record playback stats", "err", err)
 	}
 }
+
+// Record upserts a play. On a clustered node a record the database cannot
+// take is held and written when it is back.
 func (s *Service) Record(ctx context.Context, p *core.PlaySession, ended bool, problem string) error {
 	if p == nil || p.ID == "" {
 		return nil
 	}
-	now := s.opts.Now().UTC()
+	r := playRecord{p: *p, at: s.opts.Now().UTC(), ended: ended, problem: problem}
+	r.p.Source, r.p.Resolution = nil, nil
+	if s.plays != nil {
+		_, err := s.plays.Write(ctx, p.ID, r)
+		return err
+	}
+	return s.record(ctx, r)
+}
+
+// Close writes play records still held from a database outage (bounded by
+// ctx); a no-op on a standalone server.
+func (s *Service) Close(ctx context.Context) error {
+	if s.plays == nil {
+		return nil
+	}
+	return s.plays.Close(ctx)
+}
+
+// OutboxStatus reports play records held through a database outage; ok is
+// false on a standalone server.
+func (s *Service) OutboxStatus() (st store.OutboxStatus, ok bool) {
+	if s.plays == nil {
+		return st, false
+	}
+	return s.plays.Status(), true
+}
+
+func (s *Service) record(ctx context.Context, r playRecord) error {
+	p, now, ended, problem := &r.p, r.at, r.ended, r.problem
 	start := p.StartedAt
 	if start.IsZero() {
 		start = now
@@ -91,7 +163,12 @@ func (s *Service) Record(ctx context.Context, p *core.PlaySession, ended bool, p
 	if device == "" {
 		device = p.Client.Device
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_plays(id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,duration_ms,failovers,error) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,ended=MAX(stats_plays.ended,excluded.ended),bytes=MAX(stats_plays.bytes,excluded.bytes),duration_ms=MAX(stats_plays.duration_ms,excluded.duration_ms),failovers=excluded.failovers,error=CASE WHEN excluded.error='' THEN stats_plays.error ELSE excluded.error END`, p.ID, p.UserID, int64(p.Key), p.Username, p.TitleName, p.Client.Platform, device, string(p.Decision), start.Unix(), now.Unix(), end, p.BytesServed, p.Info.Duration.Milliseconds(), p.Failovers, problem)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_plays(id,user_id,rating_key,username,title,platform,device,decision,started,updated,ended,bytes,duration_ms,failovers,error,node_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,title=excluded.title,platform=excluded.platform,device=excluded.device,decision=excluded.decision,updated=excluded.updated,`+
+		`ended=CASE WHEN excluded.ended>stats_plays.ended THEN excluded.ended ELSE stats_plays.ended END,`+
+		`bytes=CASE WHEN excluded.bytes>stats_plays.bytes THEN excluded.bytes ELSE stats_plays.bytes END,`+
+		`duration_ms=CASE WHEN excluded.duration_ms>stats_plays.duration_ms THEN excluded.duration_ms ELSE stats_plays.duration_ms END,`+
+		`failovers=excluded.failovers,error=CASE WHEN excluded.error='' THEN stats_plays.error ELSE excluded.error END,node_id=excluded.node_id`,
+		p.ID, p.UserID, int64(p.Key), p.Username, p.TitleName, p.Client.Platform, device, string(p.Decision), start.Unix(), now.Unix(), end, p.BytesServed, p.Info.Duration.Milliseconds(), p.Failovers, problem, s.opts.NodeID)
 	return err
 }
 
@@ -112,7 +189,8 @@ func (s *Service) ObserveState(ev state.Event) {
 	if ev.Completed {
 		completed = 1
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE stats_plays SET watched_ms=watched_ms+CASE WHEN ?='progress' AND timeline_state='playing' AND timeline>0 AND ?>timeline AND ?-timeline<=60000 THEN ?-timeline ELSE 0 END,timeline=?,timeline_state=?,duration_ms=MAX(duration_ms,?),completed=MAX(completed,?) WHERE id=(SELECT id FROM stats_plays WHERE user_id=? AND rating_key=? AND ended=0) AND (SELECT COUNT(*) FROM stats_plays WHERE user_id=? AND rating_key=? AND ended=0)=1`, string(ev.Kind), t, t, t, t, ev.State, ev.Duration.Milliseconds(), completed, ev.UserID, int64(ev.Key), ev.UserID, int64(ev.Key))
+	_, err := s.db.ExecContext(ctx, `UPDATE stats_plays SET watched_ms=watched_ms+CASE WHEN CAST(? AS TEXT)='progress' AND timeline_state='playing' AND timeline>0 AND CAST(? AS BIGINT)>timeline AND CAST(? AS BIGINT)-timeline<=60000 THEN CAST(? AS BIGINT)-timeline ELSE 0 END,`+
+		`timeline=?,timeline_state=?,duration_ms=CASE WHEN CAST(? AS BIGINT)>duration_ms THEN CAST(? AS BIGINT) ELSE duration_ms END,completed=CASE WHEN CAST(? AS BIGINT)>completed THEN CAST(? AS BIGINT) ELSE completed END WHERE id=(SELECT id FROM stats_plays WHERE user_id=? AND rating_key=? AND ended=0) AND (SELECT COUNT(*) FROM stats_plays WHERE user_id=? AND rating_key=? AND ended=0)=1`, string(ev.Kind), t, t, t, t, ev.State, ev.Duration.Milliseconds(), ev.Duration.Milliseconds(), completed, completed, ev.UserID, int64(ev.Key), ev.UserID, int64(ev.Key))
 	if err != nil {
 		s.opts.Logger.Warn("record timeline stats", "err", err)
 	}
@@ -133,6 +211,16 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 func (s *Service) Sample(ctx context.Context) {
+	if s.opts.Availability.Down() {
+		// Plays are held by Record; cumulative provider counters and
+		// snapshots simply wait for the next sample after the outage.
+		if s.opts.Playback != nil {
+			for _, p := range s.opts.Playback.Sessions() {
+				_ = s.Record(ctx, p, false, "")
+			}
+		}
+		return
+	}
 	if err := s.MaybeNewsletter(ctx); err != nil {
 		s.opts.Logger.Warn("weekly newsletter queue failed")
 	}
@@ -178,7 +266,7 @@ func (s *Service) SnapshotProviders(ctx context.Context, ps []usenet.ProviderSta
 			id = p.Host
 		}
 		old := s.previous[id]
-		_, err := s.db.ExecContext(ctx, `INSERT INTO stats_provider_days(provider,day,bytes,articles,misses,errors,backfill_saves,body_misses,body_takedowns) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,day) DO UPDATE SET bytes=bytes+excluded.bytes,articles=articles+excluded.articles,misses=misses+excluded.misses,errors=errors+excluded.errors,backfill_saves=backfill_saves+excluded.backfill_saves,body_misses=body_misses+excluded.body_misses,body_takedowns=body_takedowns+excluded.body_takedowns`, id, day, delta(p.Bytes, old.Bytes), delta(p.Articles, old.Articles), delta(p.Misses, old.Misses), delta(p.Errors, old.Errors), delta(p.BackfillSaves, old.BackfillSaves), delta(p.BodyMisses, old.BodyMisses), delta(p.BodyTakedowns, old.BodyTakedowns))
+		_, err := s.db.ExecContext(ctx, `INSERT INTO stats_provider_days(provider,day,bytes,articles,misses,errors,backfill_saves,body_misses,body_takedowns) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(provider,day) DO UPDATE SET bytes=stats_provider_days.bytes+excluded.bytes,articles=stats_provider_days.articles+excluded.articles,misses=stats_provider_days.misses+excluded.misses,errors=stats_provider_days.errors+excluded.errors,backfill_saves=stats_provider_days.backfill_saves+excluded.backfill_saves,body_misses=stats_provider_days.body_misses+excluded.body_misses,body_takedowns=stats_provider_days.body_takedowns+excluded.body_takedowns`, id, day, delta(p.Bytes, old.Bytes), delta(p.Articles, old.Articles), delta(p.Misses, old.Misses), delta(p.Errors, old.Errors), delta(p.BackfillSaves, old.BackfillSaves), delta(p.BodyMisses, old.BodyMisses), delta(p.BodyTakedowns, old.BodyTakedowns))
 		if err != nil {
 			return err
 		}
@@ -251,26 +339,39 @@ func (s *Service) Summary(ctx context.Context, since, until time.Time, user int6
 	out := Summary{Since: since, Until: until}
 	where := ` FROM stats_plays WHERE started>=? AND started<? AND (?=0 OR user_id=?)`
 	args := []any{since.Unix(), until.Unix(), user, user}
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(watched_ms),0),COALESCE(SUM(bytes),0),COALESCE(SUM(completed),0)`+where, args...).Scan(&out.Plays, &out.WatchedMS, &out.Bytes, &out.Completed)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),CAST(COALESCE(SUM(watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(bytes),0) AS BIGINT),CAST(COALESCE(SUM(completed),0) AS BIGINT)`+where, args...).Scan(&out.Plays, &out.WatchedMS, &out.Bytes, &out.Completed)
 	if err != nil {
 		return out, err
 	}
+	// Day and hour buckets group on integer arithmetic (portable across
+	// SQLite and PostgreSQL) and are labelled here, in UTC.
+	day := func(n int64) string { return time.Unix(n*86400, 0).UTC().Format("2006-01-02") }
+	hour := func(n int64) string { return fmt.Sprintf("%02d", n) }
 	groups := []struct {
 		expr  string
 		dst   *[]Bucket
 		order string
-	}{{`strftime('%Y-%m-%d',started,'unixepoch')`, &out.Daily, "1"}, {`strftime('%H',started,'unixepoch')`, &out.Hourly, "1"}, {`platform`, &out.Platforms, "2 DESC"}, {`title`, &out.Titles, "2 DESC"}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC"}}
+		label func(int64) string // set when expr is numeric
+	}{{`started/86400`, &out.Daily, "1", day}, {`(started/3600)%24`, &out.Hourly, "1", hour}, {`platform`, &out.Platforms, "2 DESC", nil}, {`title`, &out.Titles, "2 DESC", nil}, {`username || ' (' || user_id || ')'`, &out.Users, "2 DESC", nil}}
 	for _, g := range groups {
 		*g.dst = []Bucket{}
-		rows, err := s.db.QueryContext(ctx, `SELECT `+g.expr+`,COUNT(*),COALESCE(SUM(watched_ms),0),COALESCE(SUM(bytes),0)`+where+` GROUP BY 1 ORDER BY `+g.order+` LIMIT 366`, args...)
+		rows, err := s.db.QueryContext(ctx, `SELECT `+g.expr+`,COUNT(*),CAST(COALESCE(SUM(watched_ms),0) AS BIGINT),CAST(COALESCE(SUM(bytes),0) AS BIGINT)`+where+` GROUP BY 1 ORDER BY `+g.order+` LIMIT 366`, args...)
 		if err != nil {
 			return out, err
 		}
 		for rows.Next() {
 			var b Bucket
-			if err := rows.Scan(&b.Label, &b.Plays, &b.WatchedMS, &b.Bytes); err != nil {
+			var n int64
+			var dst any = &b.Label
+			if g.label != nil {
+				dst = &n
+			}
+			if err := rows.Scan(dst, &b.Plays, &b.WatchedMS, &b.Bytes); err != nil {
 				rows.Close()
 				return out, err
+			}
+			if g.label != nil {
+				b.Label = g.label(n)
 			}
 			*g.dst = append(*g.dst, b)
 		}

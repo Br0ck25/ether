@@ -36,8 +36,10 @@ type Config struct {
 	Personalize   Personalize   `json:"personalize"`
 	Extras        Extras        `json:"extras"`
 	Debrid        Debrid        `json:"debrid"`
-	IndexerSites  IndexerSites  `json:"indexerSites"`
-	SetupComplete bool          `json:"setupComplete"`
+	// Database is node-local storage selection (SQLite or PostgreSQL).
+	Database      Database     `json:"database"`
+	IndexerSites  IndexerSites `json:"indexerSites"`
+	SetupComplete bool         `json:"setupComplete"`
 }
 
 type Server struct {
@@ -51,6 +53,11 @@ type Server struct {
 	// DefaultStreamLimit applies to users without their own limit.
 	DefaultStreamLimit int `json:"defaultStreamLimit"`
 	MaxStreams         int `json:"maxStreams"` // server-wide cap, 0 = derived from Usenet connections
+	// ClusterWeight is this node's weight when a cluster divides
+	// account-wide budgets (Usenet provider connections) among live nodes;
+	// a node with weight 2 gets twice the share of a node with weight 1.
+	// 0 means 1. Node-local; ignored on a standalone server.
+	ClusterWeight int `json:"clusterWeight,omitempty"`
 }
 
 type Plex struct {
@@ -155,6 +162,13 @@ type Cache struct {
 	PrefetchBytes       int64   `json:"prefetchBytes"` // opening bytes pulled ahead
 	KeepInProgressWarm  bool    `json:"keepInProgressWarm"`
 	NextEpisodeAt       float64 `json:"nextEpisodeAt"` // fraction of current episode, e.g. 0.8
+	// InProgressPinMaxAge: an in-progress title nobody has watched for this
+	// long stops pinning its release in the cache (0 = default 30 days).
+	InProgressPinMaxAge Duration `json:"inProgressPinMaxAge,omitempty"`
+	// InProgressPinPercent caps the share of BudgetBytes that in-progress
+	// pins may hold; the least recently watched titles lose their pin first
+	// (0 = default 50, max 100).
+	InProgressPinPercent int `json:"inProgressPinPercent,omitempty"`
 }
 
 type Catalog struct {
@@ -280,6 +294,16 @@ type Updates struct {
 	Channel    string `json:"channel"` // "stable", "beta"
 	AutoUpdate bool   `json:"autoUpdate"`
 	FeedURL    string `json:"feedUrl"`
+	// MaintenanceStart/End bound the local-time window ("HH:MM") in which
+	// a downloaded update may be installed automatically. The window may
+	// wrap midnight; equal values mean "any time".
+	MaintenanceStart string `json:"maintenanceStart"`
+	MaintenanceEnd   string `json:"maintenanceEnd"`
+	// MaxDrain bounds how long a clustered node about to install an update
+	// waits for its own playback sessions to end (it admits no new ones
+	// meanwhile) before installing anyway inside the window. 0 means 30
+	// minutes. Ignored on a standalone server, which waits for idle.
+	MaxDrain Duration `json:"maxDrain,omitempty"`
 }
 
 // Spike serves local files as a library so the Plex front end can be
@@ -312,30 +336,40 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 }
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
-// DefaultDataDir is where Ether keeps config, database and cache.
+// DefaultDataDir is where Ether keeps config, database and cache. On
+// Windows that is %ProgramData%\Ether: the server runs as a LocalSystem
+// service, so a per-user directory would depend on who installed it.
 func DefaultDataDir() string {
-	if v := os.Getenv("ETHER_DATA_DIR"); v != "" {
+	return defaultDataDir(runtime.GOOS, os.Getenv, os.UserHomeDir, os.Geteuid)
+}
+
+func defaultDataDir(goos string, getenv func(string) string, home func() (string, error), euid func() int) string {
+	if v := getenv("ETHER_DATA_DIR"); v != "" {
 		return v
 	}
-	switch runtime.GOOS {
+	switch goos {
 	case "windows":
-		if v := os.Getenv("LOCALAPPDATA"); v != "" {
-			return filepath.Join(v, "Ether")
+		base := getenv("PROGRAMDATA")
+		if base == "" {
+			base = `C:\ProgramData`
 		}
+		// Join with a backslash explicitly so the result is right even
+		// when computed (in tests) on a non-Windows host.
+		return strings.TrimRight(base, `\/`) + `\Ether`
 	case "darwin":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "Ether")
+		if h, err := home(); err == nil {
+			return filepath.Join(h, "Library", "Application Support", "Ether")
 		}
 	case "linux":
-		if os.Geteuid() == 0 {
+		if euid() == 0 {
 			return "/var/lib/ether"
 		}
-		if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+		if v := getenv("XDG_DATA_HOME"); v != "" {
 			return filepath.Join(v, "ether")
 		}
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "ether")
+	h, _ := home()
+	return filepath.Join(h, ".local", "share", "ether")
 }
 
 // Store loads, saves and broadcasts the config.
@@ -345,13 +379,25 @@ type Store struct {
 	mu            sync.RWMutex
 	cfg           Config
 	subs          []func(Config)
+
+	// Cluster mode (see shared.go). shared is nil on a standalone server,
+	// where config.json is the only source. writeMu sequences cluster-mode
+	// writers (Update, refresh) so mu is never held across database calls.
+	writeMu    sync.Mutex
+	shared     SharedBackend
+	sharedVer  int64
+	sharedOpts SharedOptions
+	notifier   Notifier
+	unsubs     []func()
+	kick       chan struct{}
+	stopWatch  func()
 }
 
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
-	s := &Store{path: filepath.Join(dataDir, "config.json"), cfg: Defaults(dataDir)}
+	s := &Store{path: filepath.Join(dataDir, "config.json"), cfg: Defaults(dataDir), kick: make(chan struct{}, 1)}
 	b, err := os.ReadFile(s.path)
 	readErr := err
 	key, keyErr := credentialKey(dataDir, b)
@@ -393,7 +439,14 @@ func (s *Store) Get() Config {
 }
 
 // Update applies fn to a copy of the config, saves it and notifies subscribers.
+//
+// On a cluster node the shared part is written to the database with an
+// optimistic version check; when another node changed it first, fn is
+// applied again to the fresh settings, so fn must only mutate its argument.
 func (s *Store) Update(fn func(*Config) error) error {
+	if s.Clustered() {
+		return s.updateClustered(fn)
+	}
 	s.mu.Lock()
 	next := clone(s.cfg)
 	if err := fn(&next); err != nil {
@@ -430,9 +483,5 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return writeFileAtomic(s.path, b, 0o600)
 }

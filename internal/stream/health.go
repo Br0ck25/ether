@@ -30,6 +30,15 @@ import (
 // The index built here is kept, so an Open of the same NZB right after a
 // successful Check does not repeat the header fetches.
 func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err error) {
+	return e.CheckRelease(ctx, "", nzbData)
+}
+
+// CheckRelease is Check for a known release ID: the PAR2 index and the
+// archive heads it reads are kept in the segment cache under that ID, so
+// the Open that follows a passed check finds them there as well as in the
+// hot buffer. Implements core.ReleaseHealthChecker.
+func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []byte) (healthy bool, err error) {
+	fo := fetchOpts{cacheID: releaseID}
 	defer func() {
 		if err != nil && IsRejection(err) {
 			err = fmt.Errorf("%w: %w", core.ErrReleaseRejected, err)
@@ -83,7 +92,7 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 	if idx := rel.par2IndexFile(); idx != nil {
 		go func() {
 			defer close(par2Done)
-			rel.loadPar2(sctx, core.PriorityLive, fetchOpts{}, idx)
+			rel.loadPar2(sctx, core.PriorityLive, fo, idx)
 		}()
 	} else {
 		close(par2Done)
@@ -97,7 +106,7 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 	planCh := make(chan planned, 1)
 	go func() {
 		started := time.Now()
-		p, err := rel.ensurePlan(sctx, core.PriorityLive, "")
+		p, err := rel.ensurePlan(sctx, core.PriorityLive, releaseID)
 		planCh <- planned{p, err, time.Since(started)}
 	}()
 	var ready planned
@@ -142,7 +151,7 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 			}
 			// Beside the STAT/BODY probes still running: the first
 			// volume's head (fetched by the plan) against PAR2.
-			if err := rel.verifyPar2(ctx, ready.p, core.PriorityLive, fetchOpts{}, true); err != nil {
+			if err := rel.verifyPar2(ctx, ready.p, core.PriorityLive, fo, true); err != nil {
 				par2Fail(err)
 				return false, err
 			}

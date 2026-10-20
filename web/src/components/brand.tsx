@@ -130,7 +130,7 @@ export function BrandSplash({ ready }: { ready: boolean }) {
     >
       <div className="ether-splash-center">
         <EtherLogo motion="intro" className="w-full" />
-        <p>Your Plex. Beyond your library.</p>
+        <p>Your Plex. Beyond the static library.</p>
         <div className="ether-splash-progress" />
       </div>
     </div>

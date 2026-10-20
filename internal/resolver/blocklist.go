@@ -111,7 +111,7 @@ func (s *Service) Block(ctx context.Context, req BlockRequest, reason string) (B
 		}
 	}
 	s.mu.Lock()
-	s.bad[req.ReleaseID] = reason
+	s.bad[req.ReleaseID] = badMark{reason: reason, at: s.now(), manual: true}
 	s.mu.Unlock()
 	s.forgetVerified(ctx, req.ReleaseID)
 	s.notePinsBlocked(ctx, req.ReleaseID, reason)
@@ -155,7 +155,8 @@ func (s *Service) blockEntry(ctx context.Context, id string) (BlockEntry, error)
 // removed entry, or core.ErrNotFound.
 func (s *Service) Unblock(ctx context.Context, releaseID string) (BlockEntry, error) {
 	s.mu.Lock()
-	reason, had := s.bad[releaseID]
+	mark, had := s.bad[releaseID]
+	reason := mark.reason
 	delete(s.bad, releaseID)
 	s.mu.Unlock()
 	s.forgetVerified(ctx, releaseID)
@@ -171,6 +172,7 @@ func (s *Service) Unblock(ctx context.Context, releaseID string) (BlockEntry, er
 		switch {
 		case err == nil:
 			e, inMem = got, true
+			s.notify("bad:" + releaseID)
 		case !errors.Is(err, sql.ErrNoRows):
 			return BlockEntry{}, err
 		}
@@ -267,9 +269,12 @@ func (s *Service) Blocklist(ctx context.Context, f BlockFilter) ([]BlockEntry, i
 
 func (s *Service) memBlocklistAll(f BlockFilter) []BlockEntry {
 	s.mu.RLock()
+	now := s.now()
 	ids := make(map[string]string, len(s.bad))
-	for id, r := range s.bad {
-		ids[id] = r
+	for id, m := range s.bad {
+		if m.live(now) {
+			ids[id] = m.reason
+		}
 	}
 	s.mu.RUnlock()
 	s.con.mu.Lock()

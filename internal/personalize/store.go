@@ -157,10 +157,13 @@ func (s *sqlStore) writeImpressions(ctx context.Context, rows []rowAgg, items []
 		(user_id, day, hub_id, kind, title, serves, best_position, first_at, last_at, device, daypart, weekend)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(user_id, day, hub_id) DO UPDATE SET
-		  serves = serves + excluded.serves,
-		  best_position = min(best_position, excluded.best_position),
-		  first_at = min(first_at, excluded.first_at),
-		  last_at = max(last_at, excluded.last_at),
+		  serves = personalize_row_impressions.serves + excluded.serves,
+		  best_position = CASE WHEN excluded.best_position < personalize_row_impressions.best_position
+		    THEN excluded.best_position ELSE personalize_row_impressions.best_position END,
+		  first_at = CASE WHEN excluded.first_at < personalize_row_impressions.first_at
+		    THEN excluded.first_at ELSE personalize_row_impressions.first_at END,
+		  last_at = CASE WHEN excluded.last_at > personalize_row_impressions.last_at
+		    THEN excluded.last_at ELSE personalize_row_impressions.last_at END,
 		  kind = excluded.kind, title = excluded.title,
 		  device = excluded.device, daypart = excluded.daypart, weekend = excluded.weekend`)
 	if err != nil {
@@ -177,10 +180,13 @@ func (s *sqlStore) writeImpressions(ctx context.Context, rows []rowAgg, items []
 		(user_id, day, item_key, hub_id, kind, shows, best_rank, first_at, last_at)
 		VALUES (?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(user_id, day, item_key, hub_id) DO UPDATE SET
-		  shows = shows + excluded.shows,
-		  best_rank = min(best_rank, excluded.best_rank),
-		  first_at = min(first_at, excluded.first_at),
-		  last_at = max(last_at, excluded.last_at)`)
+		  shows = personalize_item_impressions.shows + excluded.shows,
+		  best_rank = CASE WHEN excluded.best_rank < personalize_item_impressions.best_rank
+		    THEN excluded.best_rank ELSE personalize_item_impressions.best_rank END,
+		  first_at = CASE WHEN excluded.first_at < personalize_item_impressions.first_at
+		    THEN excluded.first_at ELSE personalize_item_impressions.first_at END,
+		  last_at = CASE WHEN excluded.last_at > personalize_item_impressions.last_at
+		    THEN excluded.last_at ELSE personalize_item_impressions.last_at END`)
 	if err != nil {
 		return err
 	}
@@ -415,16 +421,11 @@ func (p playRecord) reward() float64 {
 }
 
 func (s *sqlStore) insertPlay(ctx context.Context, p *playRecord) error {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO personalize_plays
+	return s.db.QueryRowContext(ctx, `INSERT INTO personalize_plays
 		(user_id, item_key, taste_key, hub_id, kind, started_at, updated_at, duration_ms, start_fraction, max_fraction, completed, abandoned, device, daypart, weekend)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`,
 		p.userID, int64(p.key), int64(p.tasteKey), p.hubID, p.kind, ms(p.started), ms(p.updated), p.duration.Milliseconds(),
-		p.startFraction, p.maxFraction, b2i(p.completed), b2i(p.abandoned), p.device, p.daypart, b2i(p.weekend))
-	if err != nil {
-		return err
-	}
-	p.id, err = res.LastInsertId()
-	return err
+		p.startFraction, p.maxFraction, b2i(p.completed), b2i(p.abandoned), p.device, p.daypart, b2i(p.weekend)).Scan(&p.id)
 }
 
 func (s *sqlStore) updatePlay(ctx context.Context, p *playRecord) error {

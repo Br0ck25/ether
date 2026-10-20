@@ -170,6 +170,12 @@ export const PAGES: PageDef[] = [
     keywords: "settings integrations",
   },
   {
+    href: "/cluster",
+    title: "Cluster",
+    sections: [],
+    keywords: "high availability ha nodes failover postgres postgresql join token weight leader",
+  },
+  {
     href: "/backups",
     title: "Backups & import",
     sections: [
@@ -177,7 +183,12 @@ export const PAGES: PageDef[] = [
       { key: "import", title: "Import & export", keywords: "migrate plex csv letterboxd trakt" },
     ],
   },
-  { href: "/updates", title: "Updates", sections: [], keywords: "version channel beta" },
+  {
+    href: "/updates",
+    title: "Updates",
+    sections: [],
+    keywords: "version channel beta maintenance window update now install",
+  },
   {
     href: "/troubleshooting",
     title: "Troubleshooting",

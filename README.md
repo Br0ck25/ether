@@ -41,7 +41,7 @@ Standard media servers show the same static shelves to every account. Ether runs
 - **Play Version picker:** Detail pages expose distinct release tiers—*Automatic*, *4K Dolby Vision / HDR10*, *1080p High Compatibility*, or *Director's / Extended Cut*—right inside the client's native **Play Version** menu.
 - **Descriptive & natural search:** Search *"90s thrillers under 100 mins"* or *"cozy rainy-day sci-fi"* inside the native search bar; Ether returns matching titles plus an instant generated collection you can save by rating it.
 - **Adaptive HLS & MPEG-DASH transcoding:** Hardware-accelerated encoding (`VideoToolbox`, `NVENC`, `QuickSync`, `VAAPI`), on-demand ABR ladders, goodput-steered VBV reservoirs, and a VBR spike governor for copy streams.
-- **Skip Intro, Skip Credits & Trickplay:** Container chapters, TheIntroDB lookup, pure-Go Goertzel acoustic intro matching, piecewise subtitle auto-sync, and progressive `.bif` scrubbing thumbnails generated on the fly.
+- **Skip Intro, Skip Credits & Trickplay:** Container chapters, TheIntroDB lookup, piecewise subtitle auto-sync, and progressive `.bif` scrubbing thumbnails generated on the fly.
 - **Cinema Trailers & pre-warming:** While a trailer plays—or as an episode nears its credits—Ether resolves and pre-warms the feature or next episode in the background so playback starts in sub-second time.
 - **Live TV & Virtual Channels:** Assemble 24/7 virtual broadcast channels from your collections and genres, or proxy M3U playlists and XMLTV guides directly into the native Live TV grid.
 

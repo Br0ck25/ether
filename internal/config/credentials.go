@@ -4,7 +4,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +64,12 @@ func secretField(k string) bool {
 	}
 	return false
 }
+
+// secretChild covers secrets whose key is only sensitive in context, such as
+// the database connection URL (which embeds a password).
+func secretChild(parent, k string) bool {
+	return strings.EqualFold(parent, "database") && strings.EqualFold(k, "url")
+}
 func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 	var root any
 	if err := json.Unmarshal(data, &root); err != nil {
@@ -75,8 +83,8 @@ func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var walk func(any) error
-	walk = func(v any) error {
+	var walk func(any, string) error
+	walk = func(v any, parent string) error {
 		switch x := v.(type) {
 		case map[string]any:
 			for k, value := range x {
@@ -87,7 +95,7 @@ func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 					}
 					continue
 				}
-				if text, ok := value.(string); ok && text != "" && secretField(k) {
+				if text, ok := value.(string); ok && text != "" && (secretField(k) || secretChild(parent, k)) {
 					if seal {
 						nonce := make([]byte, aead.NonceSize())
 						if _, err := rand.Read(nonce); err != nil {
@@ -106,20 +114,20 @@ func transformCredentials(data, key []byte, seal bool) ([]byte, error) {
 						}
 						x[k] = string(plain)
 					}
-				} else if err := walk(value); err != nil {
+				} else if err := walk(value, k); err != nil {
 					return err
 				}
 			}
 		case []any:
 			for _, value := range x {
-				if err := walk(value); err != nil {
+				if err := walk(value, parent); err != nil {
 					return err
 				}
 			}
 		}
 		return nil
 	}
-	if err := walk(root); err != nil {
+	if err := walk(root, ""); err != nil {
 		return nil, err
 	}
 	return json.MarshalIndent(root, "", "  ")
@@ -161,4 +169,83 @@ func clone(c Config) Config {
 	var out Config
 	_ = json.Unmarshal(b, &out)
 	return out
+}
+
+// KeyFingerprint identifies a credential key without revealing it. Cluster
+// nodes compare fingerprints to prove they hold the same key.
+func KeyFingerprint(key []byte) string {
+	h := sha256.New()
+	h.Write([]byte("ether-credential-key-fingerprint:v1\x00"))
+	h.Write(key)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// sealBytes encrypts plain with key, binding it to aad (a name that must
+// match when opening). The result is printable.
+func sealBytes(key []byte, aad string, plain []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	return sealedPrefix + base64.RawStdEncoding.EncodeToString(aead.Seal(nonce, nonce, plain, []byte(aad))), nil
+}
+
+func openBytes(key []byte, aad, sealed string) ([]byte, error) {
+	if !strings.HasPrefix(sealed, sealedPrefix) {
+		return nil, errors.New("config: value is not sealed")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(sealed, sealedPrefix))
+	if err != nil || len(payload) < aead.NonceSize() {
+		return nil, errors.New("config: invalid sealed value")
+	}
+	plain, err := aead.Open(nil, payload[:aead.NonceSize()], payload[aead.NonceSize():], []byte(aad))
+	if err != nil {
+		return nil, fmt.Errorf("config: decrypt %s: key mismatch or damaged value", aad)
+	}
+	return plain, nil
+}
+
+// InstallCredentialKey writes key as dir's credential key. It refuses to
+// replace an existing key file: a node joining a cluster moves its old
+// configuration aside first.
+func InstallCredentialKey(dir string, key []byte) error {
+	if len(key) != 32 {
+		return errors.New("config: credential key must be 32 bytes")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, CredentialKeyFile)
+	if _, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("config: %s already exists", path)
+	}
+	return writeFileAtomic(path, key, 0o600)
+}
+
+// ReadCredentialKey returns dir's credential key, or os.ErrNotExist.
+func ReadCredentialKey(dir string) ([]byte, error) {
+	key, err := os.ReadFile(filepath.Join(dir, CredentialKeyFile))
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != 32 {
+		return nil, errors.New("invalid credential key")
+	}
+	return key, nil
 }

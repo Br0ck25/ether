@@ -16,10 +16,12 @@ import (
 	"github.com/braedonsaunders/ether/internal/yenc"
 )
 
-// pool holds the connections of one provider. At most cfg.Connections
-// connections exist at any time: every connection is either idle or held by
-// the request that owns one of the priority semaphore's slots, and new
-// connections are only dialled by a slot holder when no idle one is left.
+// pool holds the connections of one provider. At most target() connections
+// exist at any time (cfg.Connections, or this node's share of them in a
+// cluster): every connection is either idle or held by the request that
+// owns one of the priority semaphore's slots, and new connections are only
+// dialled by a slot holder when no idle one is left. After the target
+// shrinks, connections above it close as they are returned.
 type pool struct {
 	key string // unique per pool instance (provider id + generation)
 	cfg config.UsenetProvider
@@ -43,6 +45,9 @@ type pool struct {
 	warmActive bool
 	warmFails  int
 	warmNext   time.Time
+	// share, when positive, is this node's part of size in a cluster (the
+	// account's connection limit is divided among live nodes).
+	share int
 
 	// minIdle is this pool's effective warm floor setting (per-provider
 	// override or the fetcher-wide value); negative disables the floor.
@@ -117,6 +122,12 @@ func newPool(key string, cfg config.UsenetProvider, o *Options, log *slog.Logger
 		ctx:    ctx,
 		cancel: cancel,
 		stop:   make(chan struct{}),
+	}
+	if o.AuthRetryMin > 0 {
+		p.brk.authMin = o.AuthRetryMin
+	}
+	if o.AuthRetryMax > 0 {
+		p.brk.authMax = max(o.AuthRetryMax, p.brk.authMin)
 	}
 	p.minIdle.Store(int32(effectiveMinIdle(cfg, globalMinIdle)))
 	p.wg.Add(1)
@@ -214,7 +225,7 @@ func (p *pool) shrinkTo(n int) {
 	p.limitedUntil = time.Now().Add(p.o.LimitCooloff)
 	p.mu.Unlock()
 	if p.sem.setSize(n, p.o.PrefetchFraction) {
-		p.log.Info("usenet: server allows fewer connections than configured; adapting", "configured", p.size, "using", n, "retry_after", p.o.LimitCooloff)
+		p.log.Info("usenet: server allows fewer connections than configured; adapting", "configured", p.target(), "using", n, "retry_after", p.o.LimitCooloff)
 	}
 }
 
@@ -270,8 +281,8 @@ func (p *pool) dialNew(ctx context.Context) (*Conn, error) {
 			return nil, ctxErr(ctx)
 		case errors.Is(err, ErrAuthFailed):
 			p.errs.Add(1)
-			p.brk.authFailure(err)
-			p.log.Error("usenet: provider rejected credentials; disabled until its settings change", "err", err)
+			d := p.brk.authFailure(err)
+			p.log.Error("usenet: provider rejected credentials; disabled until a login probe succeeds or its settings change", "err", err, "retry_in", d)
 		case errors.Is(err, ErrServiceUnavailable) && p.liveCount() > 0:
 			// The server is up and serving our other connections; the
 			// account is just at its real connection limit. Shrink to it
@@ -311,7 +322,8 @@ func (p *pool) put(c *Conn, prio core.Priority) {
 		p.discard(c)
 	} else {
 		p.mu.Lock()
-		if p.closed {
+		if p.closed || p.live > p.targetLocked() {
+			// Closed, or above a target that shrank while c was in use.
 			p.live--
 			p.mu.Unlock()
 			go c.Quit()
@@ -373,15 +385,20 @@ func (p *pool) janitor() {
 }
 
 func (p *pool) sweep() {
+	if p.brk.authProbeDue() {
+		p.wg.Add(1) // janitor holds a count, so this cannot race close's Wait
+		go p.authProbe()
+	}
 	now := time.Now()
 	p.mu.Lock()
 	restore := !p.limitedUntil.IsZero() && now.After(p.limitedUntil)
 	if restore {
 		p.limitedUntil = time.Time{}
 	}
+	target := p.targetLocked()
 	p.mu.Unlock()
-	if restore && p.sem.setSize(p.size, p.o.PrefetchFraction) {
-		p.log.Info("usenet: trying the configured connection count again", "connections", p.size)
+	if restore && p.sem.setSize(target, p.o.PrefetchFraction) {
+		p.log.Info("usenet: trying the configured connection count again", "connections", target)
 	}
 	floor := p.idleFloor()
 	var expired []*Conn
@@ -668,13 +685,46 @@ func (p *pool) statMany(ctx context.Context, ids []string) (map[string]bool, err
 	return result, nil
 }
 
+// authProbe tries one login on a provider disabled by an authentication
+// failure. Success re-enables it; another rejection doubles the delay to
+// the next probe; any other error retries after the minimum delay.
+func (p *pool) authProbe() {
+	defer p.wg.Done()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-p.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	c, err := Dial(ctx, p.dialOptions())
+	switch {
+	case err == nil:
+		p.dials.Add(1)
+		p.brk.authRecovered()
+		p.log.Info("usenet: provider accepted credentials again; re-enabled")
+		go c.Quit()
+	case ctx.Err() != nil:
+		p.brk.authProbeInconclusive(err)
+	case errors.Is(err, ErrAuthFailed):
+		p.errs.Add(1)
+		d := p.brk.authFailure(err)
+		p.log.Warn("usenet: provider still rejects credentials", "err", err, "retry_in", d)
+	default:
+		p.brk.authProbeInconclusive(err)
+		p.log.Debug("usenet: auth probe could not reach provider", "err", err)
+	}
+}
+
 // warm opens and authenticates one connection and returns it to the idle pool.
 func (p *pool) warm(ctx context.Context, n int) error {
 	// Multiple concurrent health checks may all request a warm pool. Serialize
 	// each provider's warming pass so they share the same bounded idle set.
 	p.warmMu.Lock()
 	defer p.warmMu.Unlock()
-	n = min(n, 4, p.size)
+	n = min(n, 4, p.target())
 	if n <= 0 {
 		return nil
 	}
@@ -725,7 +775,12 @@ func (p *pool) failed(err error, reused bool, ctx context.Context) error {
 		} else {
 			p.brk.noteError(err)
 		}
-		if reused && isNetworkError(err) {
+		// EOF or a reset on a connection that had been idle means the
+		// server dropped it, and very likely its idle siblings with it. A
+		// timeout is one slow or stalled command: the siblings are still
+		// good, and closing them on a flaky link would redial on every
+		// stall and trip the breaker.
+		if reused && isNetworkError(err) && !isTimeoutError(err) {
 			p.log.Debug("usenet: idle connection was dropped by the server; discarding idle connections", "err", err)
 			p.discardIdle()
 		}
@@ -767,6 +822,9 @@ type ProviderStats struct {
 	WaitingLive         int   `json:"waitingLive"`
 	WaitingReadahead    int   `json:"waitingReadahead"`
 	WaitingPrefetch     int   `json:"waitingPrefetch"`
+	// NodeShare is this node's part of ConfiguredConnections when the
+	// account's connections are divided among cluster nodes (0 otherwise).
+	NodeShare int `json:"nodeShare,omitempty"`
 
 	Bytes         int64 `json:"bytes"` // received off the wire
 	Articles      int64 `json:"articles"`
@@ -810,6 +868,9 @@ func (p *pool) stats() ProviderStats {
 	st.WaitingPrefetch = ss.Waiting[core.PriorityPrefetch]
 	st.MinIdle = p.idleFloor()
 	p.mu.Lock()
+	if p.share > 0 {
+		st.NodeShare = p.targetLocked()
+	}
 	st.LiveConnections = p.live
 	st.IdleConnections = len(p.idle)
 	if p.closed {
@@ -849,5 +910,60 @@ func (p *pool) idleFloor() int {
 	if p.cfg.Backfill || m < 0 || p.o.KeepAlive <= 0 {
 		return 0
 	}
-	return min(p.size, p.sem.stats().Size, m)
+	return min(p.target(), p.sem.stats().Size, m)
+}
+
+// targetLocked is the connection count this pool aims for: the configured
+// size, or this node's share of it in a cluster. p.mu must be held.
+func (p *pool) targetLocked() int {
+	if p.share > 0 && p.share < p.size {
+		return p.share
+	}
+	return p.size
+}
+
+func (p *pool) target() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.targetLocked()
+}
+
+// setShare sets this node's share of the configured connections (0 = all
+// of them). Shrinking is graceful: requests holding connections finish
+// (their connections close when returned while the pool is above its new
+// target) and idle connections beyond the target close now. Growing lets
+// waiting requests take the new slots at once. It reports whether the
+// target changed.
+func (p *pool) setShare(n int) bool {
+	n = max(n, 0)
+	p.mu.Lock()
+	if p.closed || p.share == n {
+		p.mu.Unlock()
+		return false
+	}
+	before := p.targetLocked()
+	p.share = n
+	target := p.targetLocked()
+	limited := !p.limitedUntil.IsZero()
+	var drop []*Conn
+	for p.live > target && len(p.idle) > 0 {
+		drop = append(drop, p.idle[0]) // least recently used first
+		p.idle[0] = nil
+		p.idle = p.idle[1:]
+		p.live--
+	}
+	p.mu.Unlock()
+	for _, c := range drop {
+		go c.Quit()
+	}
+	if before == target {
+		return false
+	}
+	// While the server limits us below the configured count, keep the
+	// smaller of the two; the cool-off restore uses the new target.
+	if !limited || p.sem.stats().Size > target {
+		p.sem.setSize(target, p.o.PrefetchFraction)
+	}
+	p.log.Info("usenet: connection share changed", "configured", p.size, "from", before, "to", target, "closed_idle", len(drop))
+	return true
 }

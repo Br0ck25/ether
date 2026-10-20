@@ -227,7 +227,8 @@ func replaceGuideChannels(ctx context.Context, tx *sql.Tx, sourceID string, g XM
 		if name == "" {
 			name = id
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT OR REPLACE INTO livetv_guide_channels(source_id,guide_id,name,logo,names) VALUES(?,?,?,?,?)`, sourceID, id, name, c.Logo, string(b)); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO livetv_guide_channels(source_id,guide_id,name,logo,names) VALUES(?,?,?,?,?)
+			ON CONFLICT(source_id,guide_id) DO UPDATE SET name=excluded.name, logo=excluded.logo, names=excluded.names`, sourceID, id, name, c.Logo, string(b)); err != nil {
 			return err
 		}
 	}
@@ -237,7 +238,7 @@ func replaceGuideChannels(ctx context.Context, tx *sql.Tx, sourceID string, g XM
 			continue
 		}
 		seen[p.ChannelID] = true
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO livetv_guide_channels(source_id,guide_id,name) VALUES(?,?,?)`, sourceID, p.ChannelID, p.ChannelID); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO livetv_guide_channels(source_id,guide_id,name) VALUES(?,?,?) ON CONFLICT DO NOTHING`, sourceID, p.ChannelID, p.ChannelID); err != nil {
 			return err
 		}
 	}
@@ -262,7 +263,7 @@ func changedStreams(old map[string]Channel, cs []Channel) []string {
 }
 
 func (s *Service) sourceNames(ctx context.Context) (map[string]string, error) {
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, COALESCE(json_extract(data,'$.name'),'') FROM livetv_sources`)
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, COALESCE(`+store.JSONText(store.DialectOf(s.o.DB), "data", "name")+`,'') FROM livetv_sources`)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +304,7 @@ func (s *Service) fillSourceStats(ctx context.Context, srcs []Source) error {
 		}
 		return rows.Err()
 	}
-	if err := scan(`SELECT COALESCE(json_extract(data,'$.sourceId'),''), COUNT(*) FROM livetv_channels GROUP BY 1`, func(r *sql.Rows) error {
+	if err := scan(`SELECT COALESCE(`+store.JSONText(store.DialectOf(s.o.DB), "data", "sourceId")+`,''), COUNT(*) FROM livetv_channels GROUP BY 1`, func(r *sql.Rows) error {
 		var id string
 		var n int
 		err := r.Scan(&id, &n)
@@ -358,11 +359,12 @@ func (s *Service) GuideChannels(ctx context.Context, q, source string, limit int
 		return nil, err
 	}
 	now := s.o.Now().UnixMilli()
+	d := store.DialectOf(s.o.DB)
 	rows, err := s.o.DB.QueryContext(ctx, guideChannelsCTE+`SELECT g.source_id, g.guide_id, g.name, g.logo,
 		(SELECT COUNT(*) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id AND p.end_ms>?1),
 		(SELECT MAX(end_ms) FROM livetv_programmes p WHERE p.source_id=g.source_id AND p.channel_id=g.guide_id)
 		FROM gc g
-		WHERE (?2='' OR g.source_id=?2) AND (?3='' OR instr(lower(g.name),?3)>0 OR instr(lower(g.guide_id),?3)>0 OR instr(lower(g.names),?3)>0)
+		WHERE (?2='' OR g.source_id=?2) AND (?3='' OR `+store.Contains(d, "lower(g.name)", "?3")+` OR `+store.Contains(d, "lower(g.guide_id)", "?3")+` OR `+store.Contains(d, "lower(g.names)", "?3")+`)
 		ORDER BY (lower(g.guide_id)=?3 OR lower(g.name)=?3) DESC, lower(g.name), g.source_id, g.guide_id LIMIT ?4`, now, source, q, limit)
 	if err != nil {
 		return nil, err
@@ -750,7 +752,12 @@ func (s *Service) RefreshSource(ctx context.Context, id string) (Source, error) 
 		if len(msg) > 500 {
 			msg = msg[:500]
 		}
-		if _, e := s.o.DB.ExecContext(context.WithoutCancel(ctx), `UPDATE livetv_sources SET data=json_set(data,'$.lastError',?,'$.lastErrorAt',?,'$.refreshFailures',COALESCE(json_extract(data,'$.refreshFailures'),0)+1) WHERE id=?`, msg, at, id); e != nil {
+		q := `UPDATE livetv_sources SET data=json_set(data,'$.lastError',?,'$.lastErrorAt',?,'$.refreshFailures',COALESCE(json_extract(data,'$.refreshFailures'),0)+1) WHERE id=?`
+		if store.DialectOf(s.o.DB) == store.Postgres {
+			q = `UPDATE livetv_sources SET data=(data::jsonb || jsonb_build_object('lastError', CAST(? AS TEXT), 'lastErrorAt', CAST(? AS TEXT),
+				'refreshFailures', COALESCE(CAST(data::jsonb->>'refreshFailures' AS BIGINT),0)+1))::text WHERE id=?`
+		}
+		if _, e := s.o.DB.ExecContext(context.WithoutCancel(ctx), q, msg, at, id); e != nil {
 			return v, errors.Join(err, e)
 		}
 	}
@@ -761,7 +768,8 @@ func (s *Service) RefreshSource(ctx context.Context, id string) (Source, error) 
 // returns the ids it attempted.
 func (s *Service) refreshDueSources(ctx context.Context) []string {
 	// Only scheduling fields are read; inline uploads can be large.
-	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, json_extract(data,'$.playlistUrl'), json_extract(data,'$.guideUrl'), json_extract(data,'$.refreshHours'), json_extract(data,'$.updatedAt'), json_extract(data,'$.lastErrorAt'), json_extract(data,'$.refreshFailures') FROM livetv_sources ORDER BY id`)
+	d := store.DialectOf(s.o.DB)
+	rows, err := s.o.DB.QueryContext(ctx, `SELECT id, `+store.JSONText(d, "data", "playlistUrl")+`, `+store.JSONText(d, "data", "guideUrl")+`, `+store.JSONInt(d, "data", "refreshHours")+`, `+store.JSONText(d, "data", "updatedAt")+`, `+store.JSONText(d, "data", "lastErrorAt")+`, `+store.JSONInt(d, "data", "refreshFailures")+` FROM livetv_sources ORDER BY id`)
 	if err != nil {
 		return nil
 	}

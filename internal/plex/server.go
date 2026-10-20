@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/episodeorder"
@@ -117,6 +118,13 @@ type Deps struct {
 	// DisableEnrichment turns off the background title-detail and
 	// UltraBlurColors work (the spike test library has nothing to fetch).
 	DisableEnrichment bool
+	// Cluster, when set (clustered nodes only; requires DB), shares play
+	// sessions, play queues, terminations and notifications with the other
+	// nodes. Nil keeps everything in this process.
+	Cluster clusterbus.Node
+	// SessionHeartbeat is how often a clustered node refreshes its shared
+	// play sessions (default 10s).
+	SessionHeartbeat time.Duration
 	// Now is the clock (tests).
 	Now func() time.Time
 }
@@ -142,6 +150,7 @@ type Server struct {
 	selections       *selectionStore
 	notifier         *notifier
 	facets           *facetCache
+	cl               *clusterState // nil on a standalone server
 
 	// Background enrichment (nil when disabled).
 	titles    *titleCache
@@ -199,6 +208,11 @@ func NewServer(d Deps) *Server {
 		cancel:           cancel,
 	}
 	s.sections = s.buildSections()
+	s.queues.now = d.Now
+	if d.Cluster != nil && d.DB != nil {
+		s.cl = newClusterState(s, d.DB, d.Cluster)
+		s.queues.cl = s.cl
+	}
 	if !d.DisableEnrichment && d.Catalog != nil {
 		s.titleJobs = newBGQueue(ctx, &s.wg, titleFetchWorkers, titleFetchQueueLen)
 		s.blurJobs = newBGQueue(ctx, &s.wg, ultraBlurWorkers, ultraBlurQueueLen)
@@ -208,6 +222,9 @@ func NewServer(d Deps) *Server {
 	s.router = s.routes()
 	s.wg.Add(1)
 	go s.janitor()
+	if s.cl != nil {
+		s.cl.start()
+	}
 	return s
 }
 
@@ -224,6 +241,9 @@ func (s *Server) Close() error {
 		}
 		s.notifier.close()
 		s.wg.Wait()
+		if s.cl != nil {
+			s.cl.close()
+		}
 	})
 	return nil
 }
@@ -359,8 +379,12 @@ func (s *Server) janitor() {
 			s.renderedVariants.expire(now, renderedVariantsTTL)
 			s.transcodes.expire(now, 2*time.Hour)
 			s.extraPlay.expire(now, 2*time.Hour)
-			for _, e := range s.sessions.expire(now, 2*time.Minute) {
+			expired := s.sessions.expire(now, 2*time.Minute)
+			for _, e := range expired {
 				s.notifyPlaying(e, "stopped")
+			}
+			if len(expired) > 0 {
+				s.cl.poke()
 			}
 		}
 	}

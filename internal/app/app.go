@@ -26,6 +26,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/backup"
 	"github.com/braedonsaunders/ether/internal/cardigann"
 	"github.com/braedonsaunders/ether/internal/catalog"
+	"github.com/braedonsaunders/ether/internal/cluster"
 	"github.com/braedonsaunders/ether/internal/collections"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -75,6 +76,9 @@ type Options struct {
 	Spike bool
 	// SpikeFiles are extra local files for spike mode.
 	SpikeFiles []string
+	// DBRetryMin / DBRetryMax bound the backoff while a clustered node
+	// waits at startup for an unreachable PostgreSQL server (1s / 30s).
+	DBRetryMin, DBRetryMax time.Duration
 }
 
 // App is a running Ether server.
@@ -84,6 +88,25 @@ type App struct {
 	logs *admin.LogBuffer
 	cfg  *config.Store
 	db   *sql.DB
+	// databaseURL is the cluster database, placed in join tokens
+	// (cluster_settings.go); empty on a standalone server.
+	databaseURL string
+
+	// cluster is Solo on SQLite and Postgres on a shared database; peers
+	// caches the other nodes' URIs for the plex.tv publisher.
+	cluster cluster.Cluster
+	peers   *peerSet
+	egress  *egressIP // this node's public address, heartbeated when clustered
+	// clusterFatal receives the error that ended this node's cluster
+	// membership (a duplicate node identity); nil on a standalone server.
+	clusterFatal chan error
+	// dbAvail is this node's view of shared-database reachability: the
+	// heartbeat and the outboxes that hold progress, resume and play
+	// records through an outage report to it. Nil on a standalone server.
+	dbAvail *store.Availability
+	// draining is set while this node drains before installing an update
+	// (heartbeated; see rolling.go).
+	draining atomic.Bool
 
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
@@ -135,6 +158,7 @@ type App struct {
 	migration         *migrate.Service
 	invites           *invites.Service
 	safety            *safety.Service
+	updates           *updateState
 	plexServer        *plex.Server
 	handler           http.Handler
 	closers           []func()
@@ -156,6 +180,9 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	}
 	a.log = slog.New(admin.TeeHandler(base.Handler(), a.logs))
 	slog.SetDefault(a.log)
+	if err := a.confirmUpdateStartup(); err != nil {
+		return nil, err
+	}
 
 	var err error
 	if a.cfg, err = config.Open(opts.DataDir); err != nil {
@@ -177,14 +204,69 @@ func New(ctx context.Context, opts Options) (*App, error) {
 			}
 		}
 	}
-	if a.db, err = store.Open(ctx, opts.DataDir); err != nil {
+	dbCfg := cfg.Database.Effective(os.Getenv)
+	var dialect store.Dialect
+	// A clustered node whose PostgreSQL server is briefly unreachable at
+	// boot waits for it here (logging every attempt) rather than exiting
+	// and being restarted in a tight loop by the service manager. Nothing
+	// listens meanwhile — on purpose: a node that cannot reach the shared
+	// database must not answer Plex clients or GDM discovery, and it is out
+	// of the published connections because it is not heartbeating. The
+	// hang watchdog only starts in Run. Errors retrying cannot fix (bad
+	// password, missing database, invalid URL) still fail at once.
+	var gate store.MigrationGate
+	if dbCfg.IsPostgres() && cfg.Database.DeferMigrations {
+		id, err := cluster.LoadIdentity(opts.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("cluster: %w", err)
+		}
+		gate = olderNodesGate(id.NodeID, clusterLiveAfter, time.Now)
+	}
+	if a.db, dialect, err = store.OpenWithRetry(ctx, store.Options{
+		DataDir: opts.DataDir, Driver: dbCfg.Driver, URL: dbCfg.URL,
+		Logger: a.log.With("component", "store"), MigrationGate: gate,
+	}, store.RetryOptions{
+		MinBackoff: a.opts.DBRetryMin, MaxBackoff: a.opts.DBRetryMax,
+		OnRetry: func(attempt int, wait time.Duration, err error) {
+			if errors.Is(err, store.ErrMigrationDeferred) {
+				a.log.Warn("database: waiting before migrating the shared schema", "attempt", attempt, "retry", wait, "reason", err)
+				return
+			}
+			a.log.Error("database: PostgreSQL is unreachable; waiting for it before starting",
+				"url", dbCfg.Redacted().URL, "attempt", attempt, "retry", wait, "err", err)
+		},
+	}); err != nil {
 		return nil, fmt.Errorf("database: %w", err)
 	}
+	if dialect == store.Postgres {
+		a.log.Info("database: using PostgreSQL", "url", dbCfg.Redacted().URL)
+		a.warnNewerSchema(ctx)
+	}
 	a.closers = append(a.closers, func() { a.db.Close() })
+	if err := a.buildCluster(dialect); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("cluster: %w", err)
+	}
+	// A restored PostgreSQL-style bundle leaves a logical dump to import.
+	if imported, err := backup.ImportPending(ctx, a.db, opts.DataDir); err != nil {
+		a.Close()
+		return nil, fmt.Errorf("database: %w", err)
+	} else if imported {
+		a.log.Info("database: imported restored backup")
+	}
+	if dialect == store.Postgres {
+		if err := a.attachCluster(ctx, dbCfg.URL); err != nil {
+			a.Close()
+			return nil, err
+		}
+		cfg = a.cfg.Get()
+	}
 	if err := a.build(ctx, cfg); err != nil {
 		a.Close()
 		return nil, err
 	}
+	a.connectClusterHooks()
+	a.initUpdates()
 	return a, nil
 }
 
@@ -199,7 +281,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// Catalogue.
 	a.tmdb = tmdb.NewFromConfig(cfg.Catalog, log.With("component", "tmdb"))
 	a.closers = append(a.closers, a.tmdb.Close)
-	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog")); err != nil {
+	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog"), a.catalogOptions()...); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	if a.collections, err = collections.New(a.db, a.catalog, log.With("component", "collections"), a.collectionOptions(cfg)...); err != nil {
@@ -207,8 +289,15 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 
 	// Watch state and recommendations.
-	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state")})
-	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, Logger: log.With("component", "trakt")})
+	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state"), Availability: a.dbAvail})
+	a.closers = append(a.closers, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := a.state.Close(ctx); err != nil {
+			a.log.Warn("state: watch progress lost at shutdown", "err", err)
+		}
+	})
+	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
 	a.trakt.SubscribeTo(a.state)
 	a.collections.SetState(a.state)
 	a.closers = append(a.closers, a.trakt.Close)
@@ -267,7 +356,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.closers = append(a.closers, func() { a.engine.Close() })
 
 	// Indexers and resolver.
-	a.sites = cardigann.New(cardigann.Options{DB: a.db, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites})
+	siteOpts := cardigann.Options{DB: a.db, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites}
+	if a.clustered() {
+		siteOpts.LoginLock = a.clusterLoginLock // one login per site across nodes
+	}
+	a.sites = cardigann.New(siteOpts)
 	a.indexers = newznab.NewManager(a.db, cfg.Indexers, newznab.Options{
 		Logger:         log.With("component", "newznab"),
 		SearchCacheTTL: cfg.Resolver.SearchCacheTTL.D(),
@@ -335,8 +428,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 			}
 			return nil, false
 		},
-		DB:     a.db,
-		Logger: log,
+		DB:            a.db,
+		Logger:        log,
+		Cluster:       a.clusterNode(),
+		DescribeGroup: a.describeLiveGroup,
+		Availability:  a.dbAvail,
 	}, cfg, playback.Options{DataDir: dataDir})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)
@@ -366,17 +462,23 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Client:         a.plextv,
 		CustomCertFile: cfg.Plex.CertFile,
 		CustomKeyFile:  cfg.Plex.KeyFile,
+		Shared:         a.sharedCerts(),
 		Logger:         log.With("component", "certs"),
 	}); err != nil {
 		return fmt.Errorf("certificates: %w", err)
 	}
-	if a.registrar, err = plextv.NewRegistrar(plextv.RegistrarOptions{
+	ropts := plextv.RegistrarOptions{
 		Config: a.cfg,
 		Client: a.plextv,
 		Users:  a.users,
 		Certs:  a.certs,
 		Logger: log.With("component", "registrar"),
-	}); err != nil {
+	}
+	if a.clustered() {
+		ropts.PeerURIs = a.peers.get // publish the union of every live node
+		ropts.NodeMapping = true     // every node maps its own port (runRegistrarAsLeader)
+	}
+	if a.registrar, err = plextv.NewRegistrar(ropts); err != nil {
 		return fmt.Errorf("registrar: %w", err)
 	}
 	if cfg.Plex.Token != "" {
@@ -488,25 +590,52 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 	cfg := a.cfg.Get()
 
-	go a.catalog.Run(ctx)
-	go a.collections.Run(ctx)
+	// Leave the cluster last, after background work has stopped.
+	defer a.cluster.Close()
+	if err := a.cluster.Start(ctx); err != nil {
+		if errors.Is(err, cluster.ErrDuplicateNode) {
+			return err
+		}
+		a.log.Warn("cluster", "err", err)
+	}
+	var background backgroundGroup
+	defer background.Wait()
+	defer cancel()
+
+	// Singleton work runs only on the cluster leader (always, standalone).
+	// trakt.Start stays on every node: it delivers this node's own
+	// scrobbles, and its import queue is claimed per row.
+	go a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run)
+	go a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run)
 	go a.trakt.Start(ctx)
-	if err := a.registrar.Start(ctx); err != nil {
+	if a.clustered() {
+		background.start(func() { a.runRegistrarAsLeader(ctx) })
+		background.start(func() { a.registrar.RunPortMapping(ctx) })
+	} else if err := a.registrar.Start(ctx); err != nil {
 		a.log.Warn("plex.tv registrar", "err", err)
 	}
 	if err := a.gdm.Start(ctx); err != nil {
 		a.log.Warn("GDM discovery responder", "err", err)
 	}
-	var background backgroundGroup
-	defer background.Wait()
-	defer cancel()
 	background.start(func() { a.housekeeping(ctx) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "database maintenance", a.maintainDB) })
 	background.start(func() { a.stats.Run(ctx) })
-	background.start(func() { a.notifications.Run(ctx) })
-	background.start(func() { a.watchlist.Run(ctx) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "notification delivery", a.notifications.Run) })
+	if a.clustered() {
+		background.start(func() { a.sampleHealth(ctx) })
+	}
+	background.start(func() { a.cluster.RunAsLeader(ctx, "watchlist sync", a.watchlist.Run) })
 	background.start(func() { a.ratings.Run(ctx) })
 	background.start(func() { a.plexDiscovery.Run(ctx) })
-	background.start(func() { a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) }) })
+	background.start(func() {
+		a.cluster.RunAsLeader(ctx, "scheduled backups", func(ctx context.Context) {
+			a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) })
+		})
+	})
+	background.start(func() { a.runUpdates(ctx, cancel) })
+	background.start(func() { a.runClusterSync(ctx) })
+	background.start(func() { a.runBudgets(ctx) })
+	background.start(func() { a.runEgress(ctx) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)
@@ -525,26 +654,42 @@ func (a *App) Run(ctx context.Context) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(dl) }()
+	// Hang watchdog: restart via the supervisor if we stop answering.
+	watchdogErr := make(chan error, 1)
+	go func() { watchdogErr <- newWatchdog(probeURL(ln.Addr()), a.log.With("component", "watchdog")).run(ctx) }()
+	var runErr error
 	select {
 	case <-ctx.Done():
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
+	case runErr = <-watchdogErr:
+	case runErr = <-a.clusterFatal: // nil channel (never ready) when standalone
 	}
+	// Hand leadership over first: another node takes over singleton work
+	// and plex.tv publication while this one finishes shutting down.
+	a.stepDownForShutdown()
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	_ = srv.Shutdown(shutdown)
 	a.registrar.Stop()
 	a.gdm.Stop()
-	return nil
+	if runErr != nil {
+		return runErr
+	}
+	return a.runResult()
 }
 
 func (a *App) housekeeping(ctx context.Context) {
 	pins := time.NewTicker(5 * time.Minute)
 	defer pins.Stop()
+	// The PMS release check is cluster-wide: leader only. Pins and
+	// seen-token flushes are this node's own.
 	lastCompat := time.Now()
-	a.refreshCompatibility(ctx)
+	if a.cluster.IsLeader() {
+		a.refreshCompatibility(ctx)
+	}
 	_ = a.playback.ReconcilePins(ctx)
 	for {
 		select {
@@ -552,7 +697,7 @@ func (a *App) housekeeping(ctx context.Context) {
 			_ = a.users.FlushSeen(context.Background())
 			return
 		case <-pins.C:
-			if time.Since(lastCompat) > 6*time.Hour {
+			if a.cluster.IsLeader() && time.Since(lastCompat) > 6*time.Hour {
 				lastCompat = time.Now()
 				a.refreshCompatibility(ctx)
 			}

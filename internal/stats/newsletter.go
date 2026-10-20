@@ -43,7 +43,7 @@ func (s *Service) SaveNewsletter(ctx context.Context, v NewsletterSettings) erro
 	if !due.After(now) {
 		due = due.AddDate(0, 0, 7)
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE stats_newsletter_settings SET enabled=?,weekday=?,hour=?,user_id=?,next_due=? WHERE id=1`, v.Enabled, v.Weekday, v.Hour, v.UserID, due.Unix())
+	_, err := s.db.ExecContext(ctx, `UPDATE stats_newsletter_settings SET enabled=?,weekday=?,hour=?,user_id=?,next_due=? WHERE id=1`, b2i(v.Enabled), v.Weekday, v.Hour, v.UserID, due.Unix())
 	return err
 }
 func (s *Service) RenderNewsletter(ctx context.Context, userID int64) (string, error) {
@@ -104,4 +104,11 @@ func (s *Service) MaybeNewsletter(ctx context.Context) error {
 		return saveErr
 	}
 	return err
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

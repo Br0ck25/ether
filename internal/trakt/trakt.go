@@ -11,7 +11,9 @@ package trakt
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -95,6 +97,9 @@ type Options struct {
 	// QueueSize bounds the event queue; the oldest events are dropped when
 	// Trakt is unreachable for long (default 1000).
 	QueueSize int
+	// NodeID names this node on import-queue rows it claims; a random id is
+	// used when empty.
+	NodeID string
 }
 
 // ErrRevoked is returned when Trakt rejects a user's refresh token; the
@@ -137,6 +142,7 @@ type Client struct {
 	lastScro map[scrobbleKey]scrobbleState
 
 	pollUnit time.Duration // device poll interval unit (tests shrink it)
+	claimID  string        // this node's name on claimed import-queue rows
 }
 
 type cacheEntry struct {
@@ -175,12 +181,17 @@ func New(opts Options) *Client {
 	if opts.QueueSize <= 0 {
 		opts.QueueSize = 1000
 	}
+	if opts.NodeID == "" {
+		var b [8]byte
+		_, _ = rand.Read(b[:])
+		opts.NodeID = hex.EncodeToString(b[:])
+	}
 	return &Client{
 		cfg: opts.Config, db: opts.DB, catalog: opts.Catalog, base: strings.TrimSuffix(opts.BaseURL, "/"),
 		http: opts.HTTPClient, log: opts.Logger, now: opts.Now, maxWait: opts.MaxRetryAfter,
 		notify: make(chan struct{}, 1), done: make(chan struct{}), qsize: opts.QueueSize,
 		minPost: opts.MinPostInterval, cache: map[string]*cacheEntry{}, ttl: opts.CacheTTL,
-		lastScro: map[scrobbleKey]scrobbleState{}, pollUnit: time.Second,
+		lastScro: map[scrobbleKey]scrobbleState{}, pollUnit: time.Second, claimID: opts.NodeID,
 	}
 }
 

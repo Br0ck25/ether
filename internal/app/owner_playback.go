@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"time"
+
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -27,7 +29,14 @@ func (p ownerPlayback) Sessions() []*core.PlaySession {
 			out = append(out, s)
 		}
 	}
-	return append(out, live...)
+	out = append(out, live...)
+	// Other cluster nodes' streams (nil on a standalone server).
+	if p.app != nil && p.app.playback != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		out = append(out, p.app.playback.RemoteSessions(ctx)...)
+		cancel()
+	}
+	return out
 }
 func (p ownerPlayback) Session(id string) (*core.PlaySession, bool) {
 	for _, s := range p.Sessions() {

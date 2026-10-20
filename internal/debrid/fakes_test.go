@@ -119,6 +119,8 @@ type fakeProvider struct {
 	tokens    int
 	removed   int
 	lastAdded string
+	adds      int           // torrents added to the account
+	acqDelay  time.Duration // Acquire latency before touching the account
 }
 
 func newFakeProvider(kind string, media *mediaServer, files []File) *fakeProvider {
@@ -173,6 +175,9 @@ func (p *fakeProvider) Find(_ context.Context, hash string) (string, error) {
 
 func (p *fakeProvider) Acquire(_ context.Context, req AcquireRequest) (*Acquired, error) {
 	p.count("acquire")
+	if p.acqDelay > 0 {
+		time.Sleep(p.acqDelay)
+	}
 	p.mu.Lock()
 	if p.authFail {
 		p.mu.Unlock()
@@ -188,6 +193,7 @@ func (p *fakeProvider) Acquire(_ context.Context, req AcquireRequest) (*Acquired
 		id = fmt.Sprintf("T%d", len(p.torrents)+p.removed+1)
 		p.torrents[req.InfoHash] = id
 		added = true
+		p.adds++
 		p.lastAdded = id
 	}
 	p.gone = false

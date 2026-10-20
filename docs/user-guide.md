@@ -49,7 +49,7 @@ start › Source for equal-quality releases**:
 - **Prefer Usenet** or **Prefer debrid:** always try that source first.
 
 The best release from the other source is checked at the same time, and both
-remain available for failover. **Releases › Search** and **History** show when
+remain available for failover. **Releases › Pinned** (when you find a title) and **History** show when
 routing moved a release, and why.
 
 The debrid integrations were built from each service's public API
@@ -171,15 +171,17 @@ progresses.
 
 **Releases** explains and overrides which release plays for each title.
 
-- **Search** finds a movie, or a show then a season and episode, and lists
-  every release the indexers return. Each one shows its score, custom formats,
-  size, age, indexer and Ether's verdict for the chosen quality profile, ranked
-  exactly as playback ranks them, with the release that would play first marked.
-  Choose **No profile limits** to see releases a profile would reject, or
-  **Offline download** for the download profile. **Search again** forgets the
-  cached results and any "unavailable" cool-off for the title. Each release's
-  menu can pin it, block it with a reason, or check its health now.
-- **Pinned** lists releases you pinned. A pin plays first for its title on
+- **Pinned** starts with **Find a release**: find a movie, or a show then a
+  season and episode, to list every release the indexers return. Each one
+  shows its score, custom formats, size, age, indexer and Ether's verdict for
+  the chosen quality profile, ranked exactly as playback ranks them, with the
+  release that would play first marked. Choose **No profile limits** to see
+  releases a profile would reject, or **Offline download** for the download
+  profile. **Search again** forgets the cached results and any "unavailable"
+  cool-off for the title. Each release's menu can pin it, block it with a
+  reason, or check its health now.
+
+  Below the search are the releases you pinned. A pin plays first for its title on
   every app, overriding quality-profile limits and title matching. Ether still
   skips a pin that is blocklisted, passworded, already tried during the current
   playback, a season pack for an episode, in a video codec the app cannot
@@ -190,7 +192,9 @@ progresses.
 - **Blocklist** lists releases Ether will not pick: ones that failed health
   checks or broke during playback, and ones you blocked. Filter by title or
   source; unblocking a release has it checked again the next time it is a
-  candidate.
+  candidate. Automatic entries expire 90 days after they last failed (a
+  release still broken then fails one more check); releases you blocked stay
+  blocked until you unblock them.
 - **History** records each release decision: the winner, failovers, pin use
   and, for every candidate, why it won or lost. It keeps the newest 5,000
   decisions for up to 60 days.
@@ -223,6 +227,29 @@ Programme guides can come from separate XMLTV sources, including compressed
 `.xml.gz` feeds. Map each channel to its matching guide. URL sources refresh
 automatically and retain existing listings if a refresh fails; uploaded files
 remain snapshots. Guide coverage shows channels that need a mapping or new data.
+
+## Cluster
+
+**Server › Cluster** shows how this server stores its data. A standalone
+server uses its own SQLite database; the page explains how to turn it into the
+first node of a cluster (see [Running a cluster](install.md#running-a-cluster)).
+
+On a cluster node the page lists every node with its version, whether it leads
+the cluster, whether it is online (or when it was last seen), its active
+streams, hardware transcoding, node weight and public IP. A banner warns about
+conditions to fix, such as nodes reaching the internet from different public
+addresses, or this node losing touch with the database. The page also shows
+the shared settings version and the credential key fingerprint, which match on
+every node, and refreshes every 10 seconds.
+
+To add a node, choose **Create join token**. The drawer shows the token and
+the `ether cluster join` command once; copy them before closing it, and keep
+the token secret. Revoke tokens you no longer need from the list.
+
+Elsewhere, **Backups & import** shows which node holds each backup and offers
+a shared backup folder, the Usenet and Debrid pages show this node's share of
+each account's connections, and **General** holds this node's own settings,
+including its node weight.
 
 ## Monitor and troubleshoot
 

@@ -69,7 +69,7 @@ func (c *Client) recordRateLimit(ctx context.Context, retryAfter string, cause e
 	c.rate.loaded, c.rate.until = true, until
 	if c.db != nil {
 		_, err := c.db.ExecContext(ctx, `INSERT INTO newznab_rate_limit(indexer_id, retry_at) VALUES (?,?)
-ON CONFLICT(indexer_id) DO UPDATE SET retry_at=MAX(newznab_rate_limit.retry_at, excluded.retry_at)`, c.indexerID(), until.Unix())
+ON CONFLICT(indexer_id) DO UPDATE SET retry_at=CASE WHEN excluded.retry_at > newznab_rate_limit.retry_at THEN excluded.retry_at ELSE newznab_rate_limit.retry_at END`, c.indexerID(), until.Unix())
 		if err != nil {
 			c.log.Warn("could not persist indexer pause", "indexer", c.Name(), "err", err)
 		}

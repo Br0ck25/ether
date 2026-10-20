@@ -26,7 +26,7 @@ import (
 //   - The spike governor may re-plan segments the player has not requested
 //     yet (copy -> clamped transcode). That is only visible to clients that
 //     reload the media playlist, so governed sessions serve an EVENT
-//     playlist instead of VOD; see governor.go.
+//     playlist instead of VOD; see Session.maybeGovernLocked.
 
 // SegMode is how one segment is produced.
 type SegMode uint8

@@ -18,9 +18,10 @@ func randomID(n int) string {
 // Defaults returns a fresh config for a new install.
 func Defaults(dataDir string) Config {
 	return Config{
-		Usenet:  Usenet{MinIdle: 2},
-		Debrid:  Debrid{CachedOnly: true, RemoveUncached: true},
-		Markers: Markers{TheIntroDB: true},
+		Usenet:   Usenet{MinIdle: 2},
+		Debrid:   Debrid{CachedOnly: true, RemoveUncached: true},
+		Markers:  Markers{TheIntroDB: true},
+		Database: Database{Driver: DatabaseSQLite},
 		Personalize: Personalize{
 			PostPlay: true, PostPlayPrebuffer: true, MicroReasons: true, SessionIntent: true,
 		},
@@ -39,12 +40,14 @@ func Defaults(dataDir string) Config {
 			SecureConnections: "preferred",
 		},
 		Cache: Cache{
-			Dir:                 filepath.Join(dataDir, "cache"),
-			BudgetBytes:         50 << 30,
-			PrefetchNextEpisode: true,
-			PrefetchBytes:       64 << 20,
-			KeepInProgressWarm:  true,
-			NextEpisodeAt:       0.8,
+			Dir:                  filepath.Join(dataDir, "cache"),
+			BudgetBytes:          50 << 30,
+			PrefetchNextEpisode:  true,
+			PrefetchBytes:        64 << 20,
+			KeepInProgressWarm:   true,
+			NextEpisodeAt:        0.8,
+			InProgressPinMaxAge:  Duration(30 * 24 * time.Hour),
+			InProgressPinPercent: 50,
 		},
 		Catalog: Catalog{
 			Language:        "en-US",
@@ -83,7 +86,7 @@ func Defaults(dataDir string) Config {
 			Expiry:               Duration(24 * time.Hour),
 			MaxHeight:            1080,
 		},
-		Updates: Updates{Channel: "stable", AutoUpdate: false},
+		Updates: Updates{Channel: "stable", AutoUpdate: false, MaintenanceStart: "03:00", MaintenanceEnd: "06:00"},
 	}
 }
 

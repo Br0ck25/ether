@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -68,7 +69,7 @@ func (s *Service) checkHealthCached(ctx context.Context, releaseID string, nzb [
 	if s.recentlyVerified(ctx, releaseID) {
 		return true, true, nil
 	}
-	ok, err = s.health.Check(ctx, nzb)
+	ok, err = core.CheckReleaseHealth(ctx, s.health, releaseID, nzb)
 	if ok && err == nil {
 		s.markVerified(ctx, releaseID)
 	}
@@ -82,6 +83,7 @@ func (s *Service) markVerified(ctx context.Context, releaseID string) {
 	}
 	now := s.now()
 	s.mu.Lock()
+	s.boundVerifiedLocked(now)
 	s.verified[releaseID] = now
 	s.mu.Unlock()
 	if s.db != nil {
@@ -102,6 +104,7 @@ func (s *Service) recentlyVerified(ctx context.Context, releaseID string) bool {
 		if err := s.db.QueryRowContext(ctx, `SELECT checked_at FROM resolver_verified WHERE release_id=?`, releaseID).Scan(&unix); err == nil {
 			at, ok = time.Unix(unix, 0), true
 			s.mu.Lock()
+			s.boundVerifiedLocked(s.now())
 			s.verified[releaseID] = at
 			s.mu.Unlock()
 		}
@@ -116,4 +119,12 @@ func (s *Service) forgetVerified(ctx context.Context, releaseID string) {
 	if s.db != nil {
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM resolver_verified WHERE release_id=?`, releaseID)
 	}
+}
+
+// boundVerifiedLocked keeps the in-memory verified map below its cap; the
+// table remains the source of truth, so evicted entries are re-read on
+// demand. Callers hold s.mu.
+func (s *Service) boundVerifiedLocked(now time.Time) {
+	ttl := s.healthTTL
+	boundMap(s.verified, maxVerifiedEntries, func(at time.Time) bool { return ttl <= 0 || now.Sub(at) >= ttl })
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -34,14 +35,34 @@ func newDualListener(l net.Listener, tlsConfig func() *tls.Config) *dualListener
 	return d
 }
 
+// Accept backoff bounds for temporary errors (EMFILE and friends).
+const (
+	acceptBackoffMin = 5 * time.Millisecond
+	acceptBackoffMax = time.Second
+)
+
+// acceptLoop must survive transient Accept failures: http.Server treats
+// them as temporary and calls our Accept again, so if this loop exited the
+// server would block on d.conns forever while the process stayed up.
 func (d *dualListener) acceptLoop() {
+	var backoff time.Duration
 	for {
 		c, err := d.Listener.Accept()
 		if err != nil {
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
-				time.Sleep(10 * time.Millisecond)
-				continue
+			if isTemporaryAcceptErr(err) {
+				if backoff == 0 {
+					backoff = acceptBackoffMin
+				} else if backoff *= 2; backoff > acceptBackoffMax {
+					backoff = acceptBackoffMax
+				}
+				t := time.NewTimer(backoff)
+				select {
+				case <-t.C:
+					continue
+				case <-d.done:
+					t.Stop()
+					return
+				}
 			}
 			select {
 			case d.errs <- err:
@@ -49,9 +70,31 @@ func (d *dualListener) acceptLoop() {
 			}
 			return
 		}
+		backoff = 0
 		// Sniff off the accept loop so a slow client can't stall others.
 		go d.sniff(c)
 	}
+}
+
+// isTemporaryAcceptErr reports whether Accept may succeed if retried.
+func isTemporaryAcceptErr(err error) bool {
+	if errors.Is(err, net.ErrClosed) {
+		return false
+	}
+	var te interface{ Temporary() bool }
+	if errors.As(err, &te) && te.Temporary() {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	for _, errno := range []error{syscall.EMFILE, syscall.ENFILE, syscall.ECONNABORTED, syscall.ECONNRESET} {
+		if errors.Is(err, errno) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *dualListener) sniff(c net.Conn) {

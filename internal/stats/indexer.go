@@ -40,7 +40,7 @@ func (s *Service) RecordIndexer(ctx context.Context, e newznab.Event) error {
 	if e.AverageAge > 0 {
 		ageSamples = 1
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_indexer_days(indexer,day,searches,successes,grabs,grab_success,budgets,latency_ms,age_seconds,age_samples) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(indexer,day) DO UPDATE SET searches=searches+excluded.searches,successes=successes+excluded.successes,grabs=grabs+excluded.grabs,grab_success=grab_success+excluded.grab_success,budgets=budgets+excluded.budgets,latency_ms=latency_ms+excluded.latency_ms,age_seconds=age_seconds+excluded.age_seconds,age_samples=age_samples+excluded.age_samples`, e.Indexer, e.At.UTC().Format("2006-01-02"), search, success, grab, grabSuccess, budget, e.Duration.Milliseconds(), int64(e.AverageAge.Seconds()), ageSamples)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO stats_indexer_days(indexer,day,searches,successes,grabs,grab_success,budgets,latency_ms,age_seconds,age_samples) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(indexer,day) DO UPDATE SET searches=stats_indexer_days.searches+excluded.searches,successes=stats_indexer_days.successes+excluded.successes,grabs=stats_indexer_days.grabs+excluded.grabs,grab_success=stats_indexer_days.grab_success+excluded.grab_success,budgets=stats_indexer_days.budgets+excluded.budgets,latency_ms=stats_indexer_days.latency_ms+excluded.latency_ms,age_seconds=stats_indexer_days.age_seconds+excluded.age_seconds,age_samples=stats_indexer_days.age_samples+excluded.age_samples`, e.Indexer, e.At.UTC().Format("2006-01-02"), search, success, grab, grabSuccess, budget, e.Duration.Milliseconds(), int64(e.AverageAge.Seconds()), ageSamples)
 	return err
 }
 
@@ -58,7 +58,7 @@ type IndexerUsage struct {
 
 func (s *Service) IndexerMonth(ctx context.Context) ([]IndexerUsage, error) {
 	out := []IndexerUsage{}
-	rows, err := s.db.QueryContext(ctx, `SELECT indexer,SUM(searches),SUM(successes),SUM(grabs),SUM(grab_success),SUM(budgets),SUM(latency_ms),SUM(age_seconds),SUM(age_samples) FROM stats_indexer_days WHERE day>=? GROUP BY indexer`, s.opts.Now().UTC().Format("2006-01")+"-01")
+	rows, err := s.db.QueryContext(ctx, `SELECT indexer,CAST(SUM(searches) AS BIGINT),CAST(SUM(successes) AS BIGINT),CAST(SUM(grabs) AS BIGINT),CAST(SUM(grab_success) AS BIGINT),CAST(SUM(budgets) AS BIGINT),CAST(SUM(latency_ms) AS BIGINT),CAST(SUM(age_seconds) AS BIGINT),CAST(SUM(age_samples) AS BIGINT) FROM stats_indexer_days WHERE day>=? GROUP BY indexer`, s.opts.Now().UTC().Format("2006-01")+"-01")
 	if err != nil {
 		return nil, err
 	}

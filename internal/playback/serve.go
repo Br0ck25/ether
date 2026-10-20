@@ -43,6 +43,7 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 		http.Error(w, "source changed; restart playback", http.StatusConflict)
 		return
 	}
+	w = newStallWriter(w, m.opts.WriteStallTimeout)
 	s.mu.Lock()
 	rep := representation{
 		size:        s.virtual.Size,

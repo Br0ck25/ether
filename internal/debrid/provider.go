@@ -70,6 +70,15 @@ type AcquireRequest struct {
 	Choose         func([]File) (File, error)
 	CachedOnly     bool
 	RemoveUncached bool
+	// MayRemove, when set, is asked before a torrent this call added is
+	// removed again (RemoveUncached); false keeps it on the account because
+	// a cluster node is streaming from it.
+	MayRemove func(ctx context.Context, torrentID string) bool
+}
+
+// mayRemove reports whether a torrent added by this request may be removed.
+func (r AcquireRequest) mayRemove(ctx context.Context, torrentID string) bool {
+	return r.MayRemove == nil || r.MayRemove(ctx, torrentID)
 }
 
 // Acquired is a torrent made available by a provider.

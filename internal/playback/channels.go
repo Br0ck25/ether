@@ -3,8 +3,10 @@ package playback
 import (
 	"context"
 	"fmt"
-	"github.com/braedonsaunders/ether/internal/core"
 	"strings"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // PrepareChannel is an internal playout operation. One viewing session may
@@ -93,12 +95,19 @@ func (m *Manager) BeginChannel(u *core.User, caps core.ClientCaps, group string)
 		return fmt.Errorf("invalid channel group")
 	}
 	cfg := m.config()
+	userLimit := UserStreamLimit(cfg, u)
+	serverLimit := ServerStreamLimit(cfg, m.opts.ConnectionsPerStream)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return fmt.Errorf("playback is closing")
 	}
+	if _, ok := m.externalGroups[group]; !ok && m.draining {
+		m.mu.Unlock()
+		return errDraining
+	}
 	if slot, ok := m.externalGroups[group]; ok {
+		m.mu.Unlock()
 		if slot.user.ID == u.ID {
 			return nil
 		}
@@ -106,20 +115,38 @@ func (m *Manager) BeginChannel(u *core.User, caps core.ClientCaps, group string)
 	}
 	id := identity{userID: u.ID, clientID: "external/" + group}
 	userN, total, _ := m.reservationCountsLocked(id)
-	if n := UserStreamLimit(cfg, u); n > 0 && userN >= n {
+	if n := userLimit; n > 0 && userN >= n {
+		m.mu.Unlock()
 		return core.ErrStreamLimit
 	}
-	if n := ServerStreamLimit(cfg, m.opts.ConnectionsPerStream); n > 0 && total >= n {
+	if n := serverLimit; n > 0 && total >= n {
+		m.mu.Unlock()
 		return core.ErrStreamLimit
 	}
 	if m.externalGroups == nil {
 		m.externalGroups = map[string]externalGroup{}
 	}
 	m.externalGroups[group] = externalGroup{user: *u, caps: caps}
+	m.mu.Unlock()
+	if m.reg == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	claim := unitRow{id: groupID(group), user: u.ID, client: caps.ClientID, grp: group, kind: unitGroup,
+		started: m.now().UnixMilli()}
+	if err := m.reg.admit(ctx, u, id, claim, userN, total, userLimit, serverLimit); err != nil {
+		m.mu.Lock()
+		delete(m.externalGroups, group)
+		m.mu.Unlock()
+		m.reg.poke()
+		return core.ErrStreamLimit
+	}
 	return nil
 }
 func (m *Manager) EndChannel(group string) {
 	m.mu.Lock()
 	delete(m.externalGroups, group)
 	m.mu.Unlock()
+	m.reg.poke()
 }

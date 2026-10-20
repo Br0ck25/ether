@@ -2,6 +2,7 @@ package plex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"net/http"
@@ -18,8 +19,13 @@ import (
 
 // Play queues are what every Plex app plays from: the app POSTs
 // /playQueues with a content URI, then plays the selected item and walks
-// the queue for "next". They are per-device and short-lived, so Ether keeps
-// them in memory.
+// the queue for "next". They are per-device and short-lived, so a
+// standalone server keeps them in memory. A clustered node stores them in
+// plex_playqueues (read-through/write-through, with this map as a hot
+// cache) so a client that moves to another node keeps its queue: IDs come
+// from the table's identity column and the plex_counters row, edits are
+// optimistic (a row revision, retried on conflict) and other nodes drop
+// their cached copy when told over the bus.
 
 type pqItem struct {
 	id  int64
@@ -40,19 +46,32 @@ type playQueue struct {
 	version       int
 	updatedAt     time.Time
 	liveSession   string // live queues resolve through LiveTV, never the catalogue
+
+	rev      int64     // clustered: stored row revision
+	loadedAt time.Time // clustered: when the cached copy was read or written
 }
 
 type playQueueStore struct {
 	mu     sync.Mutex
 	nextID int64
 	nextIt int64
-	queues map[int64]*playQueue
+	queues map[int64]*playQueue // standalone: the queues; clustered: a cache
+	cl     *clusterState        // nil on a standalone server
+	now    func() time.Time
 }
 
 const maxQueues = 2000
 
+// queueCacheTTL bounds how long a clustered node trusts its cached copy of
+// a queue without re-reading it (bus invalidations normally refresh it
+// sooner).
+const queueCacheTTL = 30 * time.Second
+
+// maxQueueAttempts bounds optimistic retries of one clustered edit.
+const maxQueueAttempts = 6
+
 func newPlayQueueStore() *playQueueStore {
-	return &playQueueStore{nextID: 1, nextIt: 1, queues: map[int64]*playQueue{}}
+	return &playQueueStore{nextID: 1, nextIt: 1, queues: map[int64]*playQueue{}, now: time.Now}
 }
 
 func (s *playQueueStore) newItemsLocked(keys []core.RatingKey) []pqItem {
@@ -64,27 +83,62 @@ func (s *playQueueStore) newItemsLocked(keys []core.RatingKey) []pqItem {
 	return out
 }
 
-func (s *playQueueStore) create(userID int64, clientID string, keys []core.RatingKey, now time.Time) *playQueue {
+// preallocate reserves item IDs for keys before an edit on a clustered
+// node (nil on a standalone server, which numbers items inside the edit).
+func (s *playQueueStore) preallocate(keys []core.RatingKey) ([]pqItem, error) {
+	if s.cl == nil || len(keys) == 0 {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	defer cancel()
+	first, err := s.cl.counter(ctx, "playqueue_item", len(keys))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]pqItem, len(keys))
+	for i, k := range keys {
+		out[i] = pqItem{id: first + int64(i), key: k}
+	}
+	return out, nil
+}
+
+// createWith creates a queue of keys for the user's client, applies fn to it
+// and returns a snapshot.
+func (s *playQueueStore) createWith(userID int64, clientID string, keys []core.RatingKey, now time.Time, fn func(q *playQueue)) (playQueue, error) {
+	if s.cl != nil {
+		return s.createShared(userID, clientID, keys, now, fn)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.queues) >= maxQueues {
-		// Drop the oldest.
-		var oldest *playQueue
-		for _, q := range s.queues {
-			if oldest == nil || q.updatedAt.Before(oldest.updatedAt) {
-				oldest = q
-			}
-		}
-		delete(s.queues, oldest.id)
+		s.evictOldestLocked()
 	}
 	q := &playQueue{id: s.nextID, userID: userID, clientID: clientID, items: s.newItemsLocked(keys), version: 1, updatedAt: now}
 	s.nextID++
 	s.queues[q.id] = q
-	return q
+	if fn != nil {
+		fn(q)
+	}
+	return q.snapshot(), nil
 }
 
-// with runs fn on the queue under the store lock and returns a snapshot.
+func (s *playQueueStore) evictOldestLocked() {
+	var oldest *playQueue
+	for _, q := range s.queues {
+		if oldest == nil || q.updatedAt.Before(oldest.updatedAt) {
+			oldest = q
+		}
+	}
+	if oldest != nil {
+		delete(s.queues, oldest.id)
+	}
+}
+
+// with runs fn on the queue and returns a snapshot (fn nil: read only).
 func (s *playQueueStore) with(id, userID int64, now time.Time, fn func(q *playQueue)) (playQueue, bool) {
+	if s.cl != nil {
+		return s.withShared(id, userID, now, fn)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	q, ok := s.queues[id]
@@ -111,6 +165,10 @@ func (s *playQueueStore) get(id, userID int64) (playQueue, bool) {
 
 // selectItem marks the item a client reports playing (timeline).
 func (s *playQueueStore) selectItem(userID, itemID int64) {
+	if s.cl != nil {
+		s.selectShared(userID, itemID)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, q := range s.queues {
@@ -128,18 +186,33 @@ func (s *playQueueStore) selectItem(userID, itemID int64) {
 
 func (s *playQueueStore) expire(now time.Time, ttl time.Duration) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for id, q := range s.queues {
 		if now.Sub(q.updatedAt) > ttl {
 			delete(s.queues, id)
 		}
 	}
+	s.mu.Unlock()
+	if s.cl != nil {
+		// Idempotent on every node; no leader needed.
+		ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+		defer cancel()
+		if _, err := s.cl.db.ExecContext(ctx, `DELETE FROM plex_playqueues WHERE updated_at<?`, now.Add(-ttl).UnixMilli()); err != nil {
+			s.cl.expireFail.Fail(err)
+		} else {
+			s.cl.expireFail.OK()
+		}
+	}
 }
 
-// addLocked appends (or inserts after the selected item); the caller holds
-// s.mu (it runs inside with).
-func (s *playQueueStore) addLocked(q *playQueue, keys []core.RatingKey, next bool) {
-	items := s.newItemsLocked(keys)
+// addItems appends items for keys (or inserts them after the selected
+// item). pre holds IDs preallocated on a clustered node; otherwise the
+// caller holds s.mu (it runs inside with) and IDs are numbered here.
+func (s *playQueueStore) addItems(q *playQueue, keys []core.RatingKey, pre []pqItem, next bool) {
+	items := pre
+	if items == nil {
+		items = s.newItemsLocked(keys)
+	}
+	items = append([]pqItem(nil), items...)
 	if next && len(q.items) > 0 {
 		at := q.selected + 1
 		q.items = append(q.items[:at], append(items, q.items[at:]...)...)
@@ -150,6 +223,249 @@ func (s *playQueueStore) addLocked(q *playQueue, keys []core.RatingKey, next boo
 		q.original = append(q.original, items...)
 	}
 	q.version++
+}
+
+// forget drops a cached queue another node changed.
+func (s *playQueueStore) forget(id int64) {
+	s.mu.Lock()
+	delete(s.queues, id)
+	s.mu.Unlock()
+}
+
+// dropCache forgets every cached queue (bus resync).
+func (s *playQueueStore) dropCache() {
+	if s.cl == nil {
+		return
+	}
+	s.mu.Lock()
+	s.queues = map[int64]*playQueue{}
+	s.mu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
+// Clustered storage
+
+type storedItem struct {
+	ID  int64          `json:"i"`
+	Key core.RatingKey `json:"k"`
+}
+
+type storedQueue struct {
+	ClientID      string         `json:"clientID,omitempty"`
+	Items         []storedItem   `json:"items"`
+	Original      []storedItem   `json:"original,omitempty"`
+	Selected      int            `json:"selected"`
+	Shuffled      bool           `json:"shuffled,omitempty"`
+	SourceURI     string         `json:"sourceURI,omitempty"`
+	PlaylistID    core.RatingKey `json:"playlistID,omitempty"`
+	PlaylistTitle string         `json:"playlistTitle,omitempty"`
+	Version       int            `json:"version"`
+	LiveSession   string         `json:"liveSession,omitempty"`
+}
+
+func toStored(items []pqItem) []storedItem {
+	out := make([]storedItem, len(items))
+	for i, it := range items {
+		out[i] = storedItem{ID: it.id, Key: it.key}
+	}
+	return out
+}
+
+func fromStored(items []storedItem) []pqItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]pqItem, len(items))
+	for i, it := range items {
+		out[i] = pqItem{id: it.ID, key: it.Key}
+	}
+	return out
+}
+
+func encodeQueue(q *playQueue) (string, error) {
+	b, err := json.Marshal(storedQueue{ClientID: q.clientID, Items: toStored(q.items), Original: toStored(q.original),
+		Selected: q.selected, Shuffled: q.shuffled, SourceURI: q.sourceURI, PlaylistID: q.playlistID,
+		PlaylistTitle: q.playlistTitle, Version: q.version, LiveSession: q.liveSession})
+	return string(b), err
+}
+
+func decodeQueue(id, userID, rev, updated int64, data string) (*playQueue, error) {
+	var sq storedQueue
+	if err := json.Unmarshal([]byte(data), &sq); err != nil {
+		return nil, err
+	}
+	return &playQueue{id: id, userID: userID, clientID: sq.ClientID, items: fromStored(sq.Items),
+		original: fromStored(sq.Original), selected: sq.Selected, shuffled: sq.Shuffled, sourceURI: sq.SourceURI,
+		playlistID: sq.PlaylistID, playlistTitle: sq.PlaylistTitle, version: sq.Version, liveSession: sq.LiveSession,
+		updatedAt: time.UnixMilli(updated), rev: rev}, nil
+}
+
+func (s *playQueueStore) cache(q *playQueue) {
+	cp := q.snapshot()
+	cp.loadedAt = s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.queues[cp.id]; !ok && len(s.queues) >= maxQueues {
+		s.evictOldestLocked()
+	}
+	s.queues[cp.id] = &cp
+}
+
+func (s *playQueueStore) cached(id int64) (*playQueue, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	q, ok := s.queues[id]
+	if !ok || s.now().Sub(q.loadedAt) > queueCacheTTL {
+		return nil, false
+	}
+	cp := q.snapshot()
+	return &cp, true
+}
+
+func (s *playQueueStore) load(ctx context.Context, id int64) (*playQueue, error) {
+	var userID, rev, updated int64
+	var data string
+	if err := s.cl.db.QueryRowContext(ctx, `SELECT user_id, rev, data, updated_at FROM plex_playqueues WHERE id=?`, id).
+		Scan(&userID, &rev, &data, &updated); err != nil {
+		return nil, queueRowError(err)
+	}
+	q, err := decodeQueue(id, userID, rev, updated, data)
+	if err != nil {
+		return nil, err
+	}
+	s.cache(q)
+	return q, nil
+}
+
+func (s *playQueueStore) createShared(userID int64, clientID string, keys []core.RatingKey, now time.Time, fn func(q *playQueue)) (playQueue, error) {
+	items, err := s.preallocate(keys)
+	if err != nil {
+		return playQueue{}, err
+	}
+	q := &playQueue{userID: userID, clientID: clientID, items: items, version: 1, updatedAt: now, rev: 1}
+	if fn != nil {
+		fn(q)
+	}
+	data, err := encodeQueue(q)
+	if err != nil {
+		return playQueue{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	defer cancel()
+	if err := s.cl.db.QueryRowContext(ctx, `INSERT INTO plex_playqueues(user_id, rev, data, updated_at) VALUES (?, ?, ?, ?) RETURNING id`,
+		userID, q.rev, data, now.UnixMilli()).Scan(&q.id); err != nil {
+		return playQueue{}, err
+	}
+	s.cache(q)
+	return q.snapshot(), nil
+}
+
+func (s *playQueueStore) withShared(id, userID int64, now time.Time, fn func(q *playQueue)) (playQueue, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*dbTimeout)
+	defer cancel()
+	for attempt := 0; attempt < maxQueueAttempts; attempt++ {
+		q, ok := s.cached(id)
+		if !ok || attempt > 0 {
+			var err error
+			if q, err = s.load(ctx, id); err != nil {
+				if !errors.Is(err, core.ErrNotFound) {
+					s.cl.warn("read play queue", err)
+				}
+				return playQueue{}, false
+			}
+		}
+		if q.userID != userID {
+			return playQueue{}, false
+		}
+		if fn == nil {
+			return q.snapshot(), true
+		}
+		fn(q)
+		q.updatedAt = now
+		data, err := encodeQueue(q)
+		if err != nil {
+			return playQueue{}, false
+		}
+		res, err := s.cl.db.ExecContext(ctx, `UPDATE plex_playqueues SET data=?, rev=?, updated_at=? WHERE id=? AND rev=?`,
+			data, q.rev+1, now.UnixMilli(), id, q.rev)
+		if err != nil {
+			s.cl.warn("save play queue", err)
+			return playQueue{}, false
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			s.forget(id) // another node edited it (or it expired): re-read and retry
+			continue
+		}
+		q.rev++
+		s.cache(q)
+		s.cl.publish("invalidate:playqueue", queueEvent{ID: id})
+		return q.snapshot(), true
+	}
+	s.cl.warn("save play queue", errQueueConflict)
+	return playQueue{}, false
+}
+
+// selectShared records the playing item, writing only when it changed.
+func (s *playQueueStore) selectShared(userID, itemID int64) {
+	if itemID <= 0 {
+		return
+	}
+	find := func(q *playQueue) int {
+		if q.userID != userID {
+			return -1
+		}
+		return indexOfItem(q.items, itemID)
+	}
+	var qid int64
+	s.mu.Lock()
+	for _, q := range s.queues {
+		if i := find(q); i >= 0 {
+			if q.selected == i && s.now().Sub(q.loadedAt) <= queueCacheTTL {
+				s.mu.Unlock()
+				return
+			}
+			qid = q.id
+			break
+		}
+	}
+	s.mu.Unlock()
+	if qid == 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+		rows, err := s.cl.db.QueryContext(ctx, `SELECT id, rev, data, updated_at FROM plex_playqueues WHERE user_id=? ORDER BY updated_at DESC LIMIT 50`, userID)
+		if err != nil {
+			cancel()
+			s.cl.warn("find play queue item", err)
+			return
+		}
+		for rows.Next() {
+			var id, rev, updated int64
+			var data string
+			if rows.Scan(&id, &rev, &data, &updated) != nil {
+				continue
+			}
+			q, err := decodeQueue(id, userID, rev, updated, data)
+			if err != nil {
+				continue
+			}
+			if i := find(q); i >= 0 {
+				s.cache(q)
+				if q.selected != i {
+					qid = id
+				}
+				break
+			}
+		}
+		rows.Close()
+		cancel()
+		if qid == 0 {
+			return
+		}
+	}
+	s.withShared(qid, userID, s.now(), func(q *playQueue) {
+		if i := indexOfItem(q.items, itemID); i >= 0 {
+			q.selected = i
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -231,8 +547,7 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	pq := s.queues.create(pr.User.ID, pr.ClientID, keys, s.now())
-	snap, _ := s.queues.with(pq.id, pr.User.ID, s.now(), func(p *playQueue) {
+	snap, err := s.queues.createWith(pr.User.ID, pr.ClientID, keys, s.now(), func(p *playQueue) {
 		p.sourceURI = uri
 		p.playlistID, p.playlistTitle = plKey, plTitle
 		if start := keyFromPath(q.Get("key")); start != 0 {
@@ -250,6 +565,10 @@ func (s *Server) handlePlayQueueCreate(w http.ResponseWriter, r *http.Request) {
 			shuffleQueue(p)
 		}
 	})
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
 	s.writePlayQueue(w, r, snap)
 }
 
@@ -387,12 +706,18 @@ func (s *Server) handlePlayQueueMutate(op string) http.HandlerFunc {
 				return
 			}
 		}
+		pre, err := s.queues.preallocate(addKeys)
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
 		itemID, _ := strconv.ParseInt(chi.URLParam(r, "item"), 10, 64)
 		var bad bool
 		snap, ok := s.queues.with(id, u.ID, s.now(), func(p *playQueue) {
+			bad = false // a clustered edit may run again after a conflict
 			switch op {
 			case "add":
-				s.queues.addLocked(p, addKeys, q.Get("next") == "1")
+				s.queues.addItems(p, addKeys, pre, q.Get("next") == "1")
 			case "shuffle":
 				shuffleQueue(p)
 			case "unshuffle":

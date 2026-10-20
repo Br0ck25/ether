@@ -1,5 +1,5 @@
 /**
- * Fake notification, backup, connection-check and discovery endpoints for the
+ * Fake notification, connection-check and discovery endpoints for the
  * mock backend, so the server and maintenance pages render with real content.
  */
 
@@ -47,15 +47,6 @@ export function createMaintenance() {
     created: Math.floor((now - i * 3.7 * 3_600_000) / 1000),
     status: i === 3 ? "failed: timeout" : "sent",
   }));
-  const backups = {
-    snapshots: Array.from({ length: 5 }, (_, i) => ({
-      name: `ether-backup-${new Date(now - i * day).toISOString().slice(0, 10)}.tar.gz`,
-      size: 48_000_000 + i * 1_200_000,
-      created: new Date(now - i * day).toISOString(),
-    })),
-    settings: { intervalHours: 24, retain: 7 },
-    warning: "",
-  };
   let newsletter = {
     enabled: true,
     weekday: 1,
@@ -117,11 +108,6 @@ export function createMaintenance() {
       case "PUT /stats/newsletter/settings":
         newsletter = { ...newsletter, ...(body as object) };
         return { status: 200, body: newsletter };
-      case "GET /adoption/backups":
-        return { status: 200, body: backups };
-      case "POST /adoption/backups/settings":
-        backups.settings = body as typeof backups.settings;
-        return { status: 200, body: backups.settings };
       case "GET /safety/diagnostics":
         return { status: 200, body: diagnostics };
       case "POST /safety/diagnostics/refresh":

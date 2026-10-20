@@ -29,8 +29,10 @@ type ImportBatch struct{ Records, History []ImportRecord }
 func (s *State) ImportTransaction(ctx context.Context, prepare func(*sql.Tx) (ImportBatch, error)) error {
 	var events []Event
 	err := func() error {
-		s.wmu.Lock()
-		defer s.wmu.Unlock()
+		if err := s.lockWrites(ctx); err != nil {
+			return err
+		}
+		defer s.unlockWrites()
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -64,7 +66,7 @@ func (s *State) importTx(ctx context.Context, tx *sql.Tx, b ImportBatch) ([]Even
 		if !r.ViewedAt.IsZero() {
 			at = r.ViewedAt.UnixNano()
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO state_history(user_id,rating_key,viewed_at,completed) SELECT ?,?,?,1 WHERE NOT EXISTS(SELECT 1 FROM state_history WHERE user_id=? AND rating_key=? AND viewed_at=?)`, r.UserID, r.Key, at, r.UserID, r.Key, at)
+		res, err := tx.ExecContext(ctx, `INSERT INTO state_history(user_id,rating_key,viewed_at,completed,imported) SELECT CAST(? AS BIGINT),CAST(? AS BIGINT),CAST(? AS BIGINT),1,1 WHERE NOT EXISTS(SELECT 1 FROM state_history WHERE user_id=? AND rating_key=? AND viewed_at=?) ON CONFLICT DO NOTHING`, r.UserID, r.Key, at, r.UserID, r.Key, at)
 		if err != nil {
 			return err
 		}
@@ -86,7 +88,7 @@ func (s *State) importTx(ctx context.Context, tx *sql.Tx, b ImportBatch) ([]Even
 			return nil, err
 		}
 		if r.RatingsOnly {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO state_watch(user_id,rating_key,user_rating,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id,rating_key) DO UPDATE SET user_rating=excluded.user_rating,updated_at=excluded.updated_at`, r.UserID, r.Key, r.Rating, now); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO state_watch(user_id,rating_key,user_rating,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id,rating_key) DO UPDATE SET user_rating=excluded.user_rating,updated_at=excluded.updated_at,version=state_watch.version+1`, r.UserID, r.Key, r.Rating, now); err != nil {
 				return nil, err
 			}
 		} else {
@@ -110,7 +112,7 @@ func (s *State) importTx(ctx context.Context, tx *sql.Tx, b ImportBatch) ([]Even
 			if old > viewed && old > 0 && viewed > 0 {
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO state_watch(user_id,rating_key,view_offset_ns,duration_ns,view_count,counted,last_viewed_at,user_rating,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,rating_key) DO UPDATE SET view_offset_ns=excluded.view_offset_ns,duration_ns=excluded.duration_ns,view_count=MAX(state_watch.view_count,excluded.view_count),last_viewed_at=MAX(state_watch.last_viewed_at,excluded.last_viewed_at),user_rating=CASE WHEN excluded.user_rating>0 THEN excluded.user_rating ELSE state_watch.user_rating END,updated_at=excluded.updated_at`, r.UserID, r.Key, int64(r.Offset), int64(r.Duration), r.Views, r.Views > 0, viewed, r.Rating, now); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO state_watch(user_id,rating_key,view_offset_ns,duration_ns,view_count,counted,last_viewed_at,user_rating,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,rating_key) DO UPDATE SET view_offset_ns=excluded.view_offset_ns,duration_ns=excluded.duration_ns,view_count=CASE WHEN excluded.view_count>state_watch.view_count THEN excluded.view_count ELSE state_watch.view_count END,last_viewed_at=CASE WHEN excluded.last_viewed_at>state_watch.last_viewed_at THEN excluded.last_viewed_at ELSE state_watch.last_viewed_at END,user_rating=CASE WHEN excluded.user_rating>0 THEN excluded.user_rating ELSE state_watch.user_rating END,updated_at=excluded.updated_at,version=state_watch.version+1`, r.UserID, r.Key, int64(r.Offset), int64(r.Duration), r.Views, b2i(r.Views > 0), viewed, r.Rating, now); err != nil {
 				return nil, err
 			}
 			events = append(events, Event{Kind: EventProgress, UserID: r.UserID, Key: r.Key, Offset: r.Offset, Duration: r.Duration, State: "stopped", At: s.now()})
@@ -136,12 +138,7 @@ func ImportPlaylistTx(ctx context.Context, tx *sql.Tx, id, userID int64, title s
 		return 0, errors.New("invalid imported playlist")
 	}
 	if id == 0 {
-		res, err := tx.ExecContext(ctx, `INSERT INTO state_playlists(user_id,title,updated_at) VALUES(?,?,?)`, userID, title, now)
-		if err != nil {
-			return 0, err
-		}
-		id, err = res.LastInsertId()
-		if err != nil {
+		if err := tx.QueryRowContext(ctx, `INSERT INTO state_playlists(user_id,title,updated_at) VALUES(?,?,?) RETURNING id`, userID, title, now).Scan(&id); err != nil {
 			return 0, err
 		}
 	} else {
@@ -201,4 +198,11 @@ func (s *State) ExportEntries(ctx context.Context, userID int64, ratings bool) (
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

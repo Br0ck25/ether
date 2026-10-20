@@ -707,3 +707,37 @@ func TestNewStaleCleanupAndNoFFmpeg(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// The transcode cap counts encoders, not decisions: a copy session whose
+// run encodes (a fast-start ramp or a lower rung) holds a slot, and a copy
+// session started at the cap plays plainly rather than encoding past it.
+func TestMaxTranscodesCountsEncodingCopySessions(t *testing.T) {
+	fr := newFakeRunner()
+	cfg := fastStartConfig()
+	cfg.MaxTranscodes, cfg.ABRLadder = 1, true
+	m := newTestManager(t, fr, cfg)
+	startSession(t, m, transcodeRequest(t, "t1"))
+	// At the cap the copy session still starts, without the encoded ramp
+	// or lower rungs.
+	s := startSession(t, m, remuxRequest(t, "r1", 10*time.Minute))
+	mustContain(t, fr.lastStart(), "-c:v copy")
+	if n := len(s.Rungs()); n != 1 {
+		t.Errorf("rungs at the cap = %d, want the primary only", n)
+	}
+
+	fr2 := newFakeRunner()
+	m2 := newTestManager(t, fr2, config.Transcode{MaxTranscodes: 1, ABRLadder: true})
+	s2 := startSession(t, m2, remuxRequest(t, "r2", 10*time.Minute))
+	if _, err := m2.StartHLS(context.Background(), transcodeRequest(t, "t2")); err != nil {
+		t.Fatalf("copy session blocked a transcode: %v", err)
+	}
+	m2.Stop("t2")
+	rec := httptest.NewRecorder()
+	s2.ServeRungSegment(rec, httptest.NewRequest(http.MethodGet, "/720p4m/00001.ts", nil), "720p4m", 1)
+	if rec.Code != 200 {
+		t.Fatalf("rung segment: %d", rec.Code)
+	}
+	if _, err := m2.StartHLS(context.Background(), transcodeRequest(t, "t3")); !errors.Is(err, ErrTooManyTranscodes) {
+		t.Fatalf("a copy session encoding a lower rung did not count: err = %v", err)
+	}
+}

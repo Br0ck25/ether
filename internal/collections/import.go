@@ -16,7 +16,8 @@ func ImportTitlesTx(ctx context.Context, tx *sql.Tx, id, userID int64, name stri
 		return 0, errors.New("invalid imported collection")
 	}
 	if id == 0 {
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id),0)+1 FROM collections_specs WHERE id<?`, builtinBase).Scan(&id); err != nil {
+		var err error
+		if id, err = nextSpecID(ctx, tx); err != nil {
 			return 0, err
 		}
 	} else {

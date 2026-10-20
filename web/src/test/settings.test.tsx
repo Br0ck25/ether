@@ -111,12 +111,13 @@ describe("Settings", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     await screen.findByRole("region", { name: "Essentials" }, WAIT);
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
-    expect(await screen.findByText("looks malformed", {}, WAIT)).toBeInTheDocument();
     await waitFor(
       () =>
         expect(screen.getByRole("tab", { name: "Trakt" })).toHaveAttribute("aria-selected", "true"),
       WAIT,
     );
+    expect(await screen.findByLabelText("Client ID", {}, WAIT)).toHaveValue("bad id");
+    expect(screen.getAllByText("looks malformed").length).toBeGreaterThan(0);
   });
 
   it("shows server validation errors next to the field", async () => {

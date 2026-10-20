@@ -55,7 +55,7 @@ use consistent content margins, and show recent log entries first.
 Home Designer stores one canonical layout document with global pages and viewer
 overrides. Row policies support eligibility, required rows, hidden rows, positions,
 priorities, schedules, and page limits. Previewing a draft does not change the
-saved layout. Previously saved rules migrate without losing viewer policies.
+saved layout.
 
 Owners configure quality profiles, audio and subtitle preferences, local folders,
 providers, indexers, caching, sharing restrictions and integrations. Changes to
@@ -155,7 +155,9 @@ HLS and DASH sessions advertise lower renditions sharing one segment timeline;
 a lower rendition is encoded only when the client switches to it. Copy sessions
 may open with short, quickly decoded segments and continue as stream copy after a
 discontinuity. Bitrate-capped transcodes use constant-quality encoding bounded by
-a VBV buffer steered by measured delivery goodput. An optional governor can clamp
+a VBV buffer sized from the delivery goodput measured when an encoder run
+starts (at the opening, a seek, a rendition switch or a failover); a running
+encoder is not re-steered. An optional governor can clamp
 upcoming copy segments whose bitrate exceeds the client's measured goodput.
 
 Offline downloads use the Plex download queue. A compact, mobile-compatible SDR
@@ -230,16 +232,84 @@ atomically. After commit, ordinary state events update recommendations and
 optional Trakt history synchronization. Imports do not simulate active playback
 sessions. Repeating a completed import does not duplicate history events.
 
+## Clustering and high availability
+
+A standalone server stores its state in SQLite and needs nothing else. An owner
+may instead run two or more Ether nodes on one network against an
+owner-supplied PostgreSQL database. Ether ships no database and does not manage
+PostgreSQL availability; a highly available PostgreSQL deployment is the owner's
+responsibility.
+
+Every node shares one server identity: machine identifier, plex.tv
+registration, plex.direct certificate and credential key. Plex apps see a
+single server whose published connections are the union of the healthy nodes'
+addresses. A node joins with a one-time token issued from an existing node; the
+credential key travels in that token and is never stored in the database in the
+clear. Node-specific settings such as bind address, port, cache location and
+size, and hardware transcoding stay in that node's local configuration; all
+other settings are shared.
+
+PostgreSQL is the single source of shared state. Any node serves any request,
+and every node streams, caches segments and transcodes locally. Shared state
+includes accounts, tokens, watch state and history, playlists, play queues,
+collections, invites, policies, settings, live TV configuration, the indexer
+result cache and active playback sessions. Segment caches, transcode output and
+local scan state remain on the node. Writes that check and then modify shared
+state are atomic across nodes; an in-process lock never guards a shared
+invariant.
+
+At most one node at a time holds leadership, through a PostgreSQL session lock.
+Only the leader runs singleton work: plex.tv publication and certificate
+renewal, catalogue synchronization, collection refresh, Trakt and watchlist
+synchronization, scheduled backups and newsletters. Leadership passes to another
+node within seconds of the holder losing its database session; the new leader
+continues periodic work from its last recorded run. Queued work such
+as notifications and imports is claimed with row locks and delivered once. A
+node never closes or alters another live node's sessions at startup.
+
+Nodes publish heartbeats with their addresses, capabilities and load. Session
+lists, stream limits and termination apply across the cluster. Cache
+invalidations, timeline updates and termination requests reach every node
+promptly. Usenet connection limits, debrid provider concurrency and API
+budgets, and indexer and metadata request budgets are account-wide, so the
+cluster divides them among live nodes, in proportion to an optional per-node
+weight, and redistributes a departed node's share. A rate-limit or
+authentication back-off observed by one node applies to all. Adding a torrent to
+a debrid account is claimed by one node, and a torrent is removed from the
+account only when no node is streaming from it. Owners are warned when nodes
+reach a provider from different public addresses. A node whose identity is in
+use by another running node, such as a cloned machine, refuses to join. Each
+node maps its own port forward. Every backup is recorded with the node that
+holds it, and the owner may choose a backup directory that all nodes reach.
+
+When a node fails, clients reconnect through another published connection.
+Playback resumes from the last reported position; an interrupted response is
+not spliced. Brief database outages do not end active streams; progress reports
+are retained in memory and written once the database returns, and the owner's
+status shows the database as unreachable meanwhile. A node that cannot reach
+the database at startup waits for it. Nodes update one at a time under a
+cluster-wide update lease: the updating node first drains — it leaves the
+published connections, hands over leadership and admits no new sessions — and
+installs once its own sessions end or a configurable drain time passes; the
+next node follows after the new version has confirmed its health, and a release
+that rolled back on one node is skipped by the others. A node joins the rotation
+only after its schema migrations, applied under a cluster-wide lock, are
+compatible with the running cluster: migrations are additive, so nodes still on
+the previous release keep working, and an owner may instead have a node wait
+until older nodes have updated.
+
 ## Component contracts and delivery
 
-Ether runs as one Go process with an embedded browser UI and SQLite storage.
+Ether runs as one Go process with an embedded browser UI and SQLite storage, or
+PostgreSQL storage in a cluster.
 Domain interfaces are defined in `internal/core`. Components own their schemas,
 migrations and query APIs; orchestration wires dependencies without querying
 another component's tables. Catalogue readers support batched local snapshots
 and hydrated title reads without triggering remote requests.
 
 The backend supports pure Go builds with `CGO_ENABLED=0`. Package tests run
-offline using local fixtures and fake services. Owners supply their own TMDB
+offline using local fixtures and fake services; the same database tests can also
+run against an owner-provided PostgreSQL instance when one is configured. Owners supply their own TMDB
 API key in configuration (`catalog.tmdbKey`); an optional build-time fallback
 symbol (`tmdb.BundledKey`) exists for private builds and is verified by a
 linker smoke test, while public releases ship with no embedded third-party API

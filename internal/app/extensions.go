@@ -27,11 +27,14 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 	m["markers"] = a.markers.Handler()
 	m["subtitle-sync"] = a.subtitles.SyncHandler()
 	m["metadata"] = a.episodeorder.Router()
+	m["updates"] = a.updatesHandler()
+	m["cluster"] = a.clusterHandler()
 	m["releases"] = a.resolver.ConsoleHandler(resolver.ConsoleDeps{
 		Catalog: a.catalog,
 		Invalidate: func(key core.RatingKey) {
 			if a.playback != nil {
-				a.playback.InvalidateTitle(key)
+				// Every node drops its warm entries for the title.
+				a.playback.InvalidateTitleEverywhere(key)
 			}
 		},
 		Logger: a.log.With("component", "release-console"),

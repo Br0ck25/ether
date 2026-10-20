@@ -283,6 +283,7 @@ func (e *Engine) SetTasteOverrides(ctx context.Context, user *core.User, os []co
 	if err := e.store.setOverrides(ctx, user.ID, clean, e.now()); err != nil {
 		return nil, err
 	}
+	e.notify("overrides:" + strconv.FormatInt(user.ID, 10))
 	if err := e.Rebuild(ctx, user); err != nil {
 		return nil, err
 	}

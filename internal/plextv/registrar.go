@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -104,6 +105,19 @@ type RegistrarOptions struct {
 	CertInterval         time.Duration // certificate expiry check (1w, observed when not near expiry)
 	ReachabilityInterval time.Duration // remote self-test (1h, observed)
 
+	// PeerURIs, when set (clustered servers), returns the other live
+	// nodes' connection URIs in publication order. PublishNow appends them,
+	// de-duplicated, after this node's own URIs so plex.tv lists the union.
+	// It is called on every publish and must not block on the network.
+	PeerURIs func() []string
+
+	// NodeMapping moves port mapping out of the publishing loop: the owner
+	// runs RunPortMapping on every node (each cluster node is reached
+	// through its own port forward, plex.publicPort being node-local), and
+	// Stop leaves the mapping in place. Off, the loop maps the port and
+	// Stop removes the mapping (a standalone server).
+	NodeMapping bool
+
 	// PublishPlexDirect also publishes the https plex.direct URIs. Off by
 	// default: PMS publishes plain http URIs and plex.tv synthesises the
 	// plex.direct https variants for clients asking with includeHttps=1.
@@ -120,11 +134,15 @@ type Registrar struct {
 	client *Client
 	log    *slog.Logger
 
-	wake chan struct{}
+	wake    chan struct{}
+	mapWake chan struct{} // RunPortMapping
 
 	runMu  sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	addrMu      sync.Mutex // serialises address refreshes
+	addrRefresh time.Time  // last refreshAddresses
 
 	mu        sync.Mutex
 	st        Status
@@ -195,11 +213,12 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 		o.Reach = remote.NewReachabilityChecker(nil)
 	}
 	r := &Registrar{
-		o:      o,
-		client: client,
-		log:    o.Logger.With("component", "registrar"),
-		wake:   make(chan struct{}, 1),
-		next:   map[string]time.Time{},
+		o:       o,
+		client:  client,
+		log:     o.Logger.With("component", "registrar"),
+		wake:    make(chan struct{}, 1),
+		mapWake: make(chan struct{}, 1),
+		next:    map[string]time.Time{},
 	}
 	r.presence = NewPresence(PresenceOptions{
 		Client: client,
@@ -253,6 +272,12 @@ func (r *Registrar) Stop() {
 	}
 	cancel()
 	<-done
+	if !r.o.NodeMapping {
+		r.closeMapping()
+	}
+}
+
+func (r *Registrar) closeMapping() {
 	ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 	defer c()
 	r.o.Mapper.Close(ctx)
@@ -262,6 +287,34 @@ func (r *Registrar) Stop() {
 	r.mu.Unlock()
 }
 
+// RunPortMapping keeps this node's port mapping (UPnP IGD or NAT-PMP)
+// alive until ctx ends, then removes it. Used with NodeMapping, on every
+// cluster node whether or not it leads.
+func (r *Registrar) RunPortMapping(ctx context.Context) {
+	t := time.NewTicker(r.o.Tick)
+	defer t.Stop()
+	for {
+		if r.due(taskMapping, r.o.MappingInterval) {
+			prev := r.o.Mapper.Status()
+			r.ensureMapping(ctx, r.o.Config.Get())
+			if cur := r.o.Mapper.Status(); cur.Active != prev.Active || cur.ExternalPort != prev.ExternalPort || cur.ExternalIP != prev.ExternalIP {
+				// The WAN URI this node heartbeats may have changed:
+				// refresh addresses on the next NodeURIs.
+				r.addrMu.Lock()
+				r.addrRefresh = time.Time{}
+				r.addrMu.Unlock()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			r.closeMapping()
+			return
+		case <-t.C:
+		case <-r.mapWake:
+		}
+	}
+}
+
 // Trigger asks the loop to re-check addresses and re-publish now (e.g. after
 // a config change).
 func (r *Registrar) Trigger() {
@@ -269,6 +322,22 @@ func (r *Registrar) Trigger() {
 	r.forcePub = true
 	r.next[taskAddress] = time.Time{}
 	r.next[taskMapping] = time.Time{}
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+	select {
+	case r.mapWake <- struct{}{}:
+	default:
+	}
+}
+
+// RequestPublish asks the running loop to publish connections now without
+// re-checking addresses (e.g. after cluster membership changed).
+func (r *Registrar) RequestPublish() {
+	r.mu.Lock()
+	r.forcePub = true
 	r.mu.Unlock()
 	select {
 	case r.wake <- struct{}{}:
@@ -338,7 +407,7 @@ func (r *Registrar) schedule(task string, at time.Time) {
 func (r *Registrar) runDue(ctx context.Context) {
 	cfg := r.o.Config.Get()
 	r.refreshConfigStatus(cfg)
-	if r.due(taskMapping, r.o.MappingInterval) {
+	if !r.o.NodeMapping && r.due(taskMapping, r.o.MappingInterval) {
 		r.ensureMapping(ctx, cfg)
 	}
 	if r.due(taskAddress, r.o.AddressInterval) {
@@ -422,6 +491,9 @@ func publicPort(cfg config.Config) int {
 }
 
 func (r *Registrar) refreshAddresses(ctx context.Context, cfg config.Config) {
+	r.addrMu.Lock()
+	defer r.addrMu.Unlock()
+	r.addrRefresh = r.o.Now()
 	var lan []string
 	if ips, err := r.o.LAN(); err == nil {
 		for _, ip := range ips {
@@ -522,6 +594,78 @@ func publishable(cs []remote.Connection, includePlexDirect bool) []string {
 	return out
 }
 
+// publishSet is this node's connections and the URIs it publishes from
+// them.
+func (r *Registrar) publishSet(cfg config.Config) ([]remote.Connection, []string) {
+	conns := r.connections(cfg)
+	uris := publishable(conns, r.o.PublishPlexDirect)
+	if !cfg.Plex.RemoteAccess {
+		// Only LAN and custom URLs when remote access is off.
+		var lanOnly []string
+		for _, c := range conns {
+			if (c.Local || c.Custom) && slices.Contains(uris, c.URI) {
+				lanOnly = append(lanOnly, c.URI)
+			}
+		}
+		uris = lanOnly
+	}
+	return conns, uris
+}
+
+// NodeURIs returns the URIs this node would publish for itself, refreshing
+// its LAN/WAN addresses first when they are older than AddressInterval
+// (the loop keeps them fresh while it runs). A clustered node heartbeats
+// these so the leader can publish the union.
+func (r *Registrar) NodeURIs(ctx context.Context) []string {
+	cfg := r.o.Config.Get()
+	r.addrMu.Lock()
+	stale := r.addrRefresh.IsZero() || r.o.Now().Sub(r.addrRefresh) >= r.o.AddressInterval
+	r.addrMu.Unlock()
+	if stale {
+		r.refreshAddresses(ctx, cfg)
+	}
+	_, uris := r.publishSet(cfg)
+	return uris
+}
+
+// peerLANAddrs is the LAN IP addresses in the other cluster nodes' URIs
+// (PeerURIs), for servers.xml's localAddresses: plex.tv then knows every
+// node's LAN address, not only the leader's.
+func (r *Registrar) peerLANAddrs() []string {
+	if r.o.PeerURIs == nil {
+		return nil
+	}
+	var out []string
+	for _, raw := range r.o.PeerURIs() {
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(u.Hostname())
+		if ip == nil {
+			ip, _, _ = remote.ParsePlexDirectHost(u.Hostname())
+		}
+		if ip == nil || !remote.UsableLANIP(ip) || remote.IsPublicIP(ip) {
+			continue
+		}
+		if s := ip.String(); !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// mergeURIs appends extra to own, skipping duplicates.
+func mergeURIs(own, extra []string) []string {
+	out := slices.Clone(own)
+	for _, u := range extra {
+		if u != "" && !slices.Contains(out, u) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 // PublishNow publishes the current connections to plex.tv and verifies the
 // server appears in the resources list.
 func (r *Registrar) PublishNow(ctx context.Context) error {
@@ -535,17 +679,9 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	if !haveAddrs {
 		r.refreshAddresses(ctx, cfg)
 	}
-	conns := r.connections(cfg)
-	uris := publishable(conns, r.o.PublishPlexDirect)
-	if !cfg.Plex.RemoteAccess {
-		// Only LAN and custom URLs when remote access is off.
-		var lanOnly []string
-		for _, c := range conns {
-			if (c.Local || c.Custom) && slices.Contains(uris, c.URI) {
-				lanOnly = append(lanOnly, c.URI)
-			}
-		}
-		uris = lanOnly
+	conns, uris := r.publishSet(cfg)
+	if r.o.PeerURIs != nil {
+		uris = mergeURIs(uris, r.o.PeerURIs())
 	}
 	now := r.o.Now()
 	flags := &PublishFlags{HTTPSRequired: cfg.Plex.SecureConnections == "required"}
@@ -592,7 +728,7 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 		mapping = "unmapped"
 	}
 	reg := ServerRegistration{
-		Name: cfg.Server.FriendlyName, Version: r.o.Version, LocalAddresses: lan, MappingState: mapping,
+		Name: cfg.Server.FriendlyName, Version: r.o.Version, LocalAddresses: mergeURIs(lan, r.peerLANAddrs()), MappingState: mapping,
 		PrivatePort: serverPort(cfg),
 	}
 	if len(lan) > 0 {

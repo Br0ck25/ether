@@ -87,7 +87,8 @@ func TestFetchPostedFileTLSAuth(t *testing.T) {
 	if st.Articles != int64(len(segs)) || st.Bytes < int64(len(file)) || st.State != StateOK || st.Dials != 1 {
 		t.Fatalf("stats %+v", st)
 	}
-	if st.AvgLatency <= 0 || st.AvgFetchTime <= 0 || st.LiveConnections != 1 || st.IdleConnections != 1 {
+	// A loopback round trip can measure as zero on a coarse clock (Windows).
+	if st.AvgLatency < 0 || st.AvgFetchTime <= 0 || st.LiveConnections != 1 || st.IdleConnections != 1 {
 		t.Fatalf("stats %+v", st)
 	}
 	// Body is BodyPart without the header.

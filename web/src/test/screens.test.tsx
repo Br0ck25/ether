@@ -1,6 +1,6 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { renderApp } from "./harness";
+import { calls, renderApp } from "./harness";
 
 const WAIT = { timeout: 4000 };
 
@@ -47,5 +47,18 @@ describe("Overview", () => {
       "href",
       "/sources/usenet",
     );
+  });
+});
+
+describe("Updates settings", () => {
+  it("shows update status and asks the server to install", async () => {
+    const { fake } = renderApp("/updates");
+    expect(await screen.findByText(/Version 0\.3\.0/, {}, WAIT)).toBeInTheDocument();
+    expect(screen.getByText(/03:00–06:00 local time/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
+    expect(
+      await screen.findByRole("button", { name: "Install now anyway" }, WAIT),
+    ).toBeInTheDocument();
+    expect(calls(fake, "POST", "/updates/apply").length).toBe(1);
   });
 });

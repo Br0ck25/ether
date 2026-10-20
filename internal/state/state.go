@@ -59,6 +59,16 @@ CREATE TABLE state_playlist_items (
   rating_key INTEGER NOT NULL,
   PRIMARY KEY (playlist_id, position)
 );`)
+	// version lets update() detect a concurrent writer on another node
+	// (optimistic concurrency) instead of relying on an in-process lock.
+	// Imported history rows are unique per (user, item, time) so two nodes
+	// importing the same history cannot both insert it; live history keeps
+	// every event. Rows written before this migration are all imported=0,
+	// so no existing data needs deduplicating.
+	store.Register("state", 2, `
+ALTER TABLE state_watch ADD COLUMN version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE state_history ADD COLUMN imported INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX state_history_imported ON state_history(user_id, rating_key, viewed_at) WHERE imported=1;`)
 }
 
 // WatchedThreshold and StartedThreshold are the fractions of duration at
@@ -99,6 +109,13 @@ type Event struct {
 type Options struct {
 	Logger *slog.Logger
 	Now    func() time.Time
+	// Availability, when set (a clustered node on a shared PostgreSQL
+	// database), makes timeline progress survive a database outage: a
+	// Progress the database cannot take is held in memory (the latest per
+	// user and title) and written when the database answers again, so
+	// players are never blocked or failed by the outage. Nil (standalone)
+	// writes progress synchronously as before.
+	Availability *store.Availability
 }
 
 // State implements core.State and core.Playlists.
@@ -107,14 +124,21 @@ type State struct {
 	log *slog.Logger
 	now func() time.Time
 
-	// wmu serialises read-modify-write updates of watch rows so concurrent
-	// timeline updates (several clients, or a client racing a scrobble)
-	// cannot lose view counts. Writes are tiny; contention is negligible.
-	wmu sync.Mutex
+	// wmu serialises this process's read-modify-write updates of watch rows
+	// so they do not retry against each other. Correctness across processes
+	// comes from the row version check in saveTx.
+	// It is a one-slot channel so waiting for it honours the caller's
+	// context (a write stuck on an unreachable database must not hold up
+	// a bounded progress write beyond its timeout).
+	wmu chan struct{}
 
 	mu   sync.RWMutex
 	subs map[int]func(Event)
 	next int
+
+	// progress holds timeline writes through a database outage (nil when
+	// Options.Availability is nil).
+	progress *store.Outbox[progressKey, progressWrite]
 }
 
 // State implements core.State; State.Playlists() returns the core.Playlists
@@ -129,7 +153,74 @@ func New(db *sql.DB, opts Options) *State {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &State{db: db, log: opts.Logger, now: opts.Now, subs: map[int]func(Event){}}
+	s := &State{db: db, log: opts.Logger, now: opts.Now, subs: map[int]func(Event){}, wmu: make(chan struct{}, 1)}
+	if opts.Availability != nil {
+		s.progress = store.NewOutbox(store.OutboxOptions[progressKey, progressWrite]{
+			Name: "watch progress", Availability: opts.Availability, Logger: opts.Logger,
+			Merge: mergeProgress,
+			Apply: func(ctx context.Context, k progressKey, w progressWrite) error {
+				if w.before != nil {
+					if err := s.progressAt(ctx, k.user, k.key, *w.before); err != nil {
+						return err
+					}
+				}
+				return s.progressAt(ctx, k.user, k.key, w)
+			},
+		})
+	}
+	return s
+}
+
+// Close writes progress still held from a database outage (bounded by
+// ctx). It is a no-op on a standalone server.
+func (s *State) Close(ctx context.Context) error {
+	if s.progress == nil {
+		return nil
+	}
+	return s.progress.Close(ctx)
+}
+
+// OutboxStatus reports timeline writes held through a database outage;
+// ok is false when progress is written synchronously (standalone).
+func (s *State) OutboxStatus() (st store.OutboxStatus, ok bool) {
+	if s.progress == nil {
+		return st, false
+	}
+	return s.progress.Status(), true
+}
+
+type progressKey struct {
+	user int64
+	key  core.RatingKey
+}
+
+// progressWrite is one held timeline update. before carries an earlier
+// held update that crossed the watched threshold when a later one (a
+// rewind, a restart from the top) replaced it, so the completion is not
+// lost by keeping only the newest position.
+type progressWrite struct {
+	offset, duration time.Duration
+	state            string
+	at               time.Time
+	before           *progressWrite
+}
+
+func (w progressWrite) completes() bool {
+	return w.duration > 0 && float64(w.offset) >= WatchedThreshold*float64(w.duration)
+}
+
+func mergeProgress(old, w progressWrite) progressWrite {
+	carry := old.before
+	if old.completes() {
+		c := old
+		c.before = nil
+		carry = &c
+	}
+	if w.completes() {
+		carry = nil // the newer update completes the viewing itself
+	}
+	w.before = carry
+	return w
 }
 
 // Subscribe registers fn for state events (scrobbles, progress, ratings) so
@@ -185,8 +276,18 @@ func Fraction(ws core.WatchStatus) float64 {
 type row struct {
 	ws      core.WatchStatus
 	counted bool
+	exists  bool  // a stored row was loaded
+	version int64 // stored version when loaded
 }
 
+// errConflict means another writer changed the row since it was loaded.
+var errConflict = errors.New("state: concurrent watch update")
+
+// maxUpdateAttempts bounds optimistic retries of one update.
+const maxUpdateAttempts = 10
+
+// saveTx writes r only if the stored row is still the one loaded (same
+// version, or still absent); otherwise it returns errConflict.
 func saveTx(ctx context.Context, tx *sql.Tx, userID int64, r row) error {
 	var last int64
 	if !r.ws.LastViewedAt.IsZero() {
@@ -196,13 +297,30 @@ func saveTx(ctx context.Context, tx *sql.Tx, userID int64, r row) error {
 	if r.counted {
 		counted = 1
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO state_watch(user_id, rating_key, view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(user_id, rating_key) DO UPDATE SET view_offset_ns=excluded.view_offset_ns, duration_ns=excluded.duration_ns,
-		  view_count=excluded.view_count, counted=excluded.counted, last_viewed_at=excluded.last_viewed_at,
-		  user_rating=excluded.user_rating, updated_at=excluded.updated_at`,
-		userID, int64(r.ws.Key), int64(r.ws.ViewOffset), int64(r.ws.Duration), r.ws.ViewCount, counted, last, r.ws.UserRating, r.ws.UpdatedAt.UnixNano())
-	return err
+	var res sql.Result
+	var err error
+	if r.exists {
+		res, err = tx.ExecContext(ctx, `UPDATE state_watch SET view_offset_ns=?, duration_ns=?, view_count=?, counted=?,
+		  last_viewed_at=?, user_rating=?, updated_at=?, version=version+1
+		  WHERE user_id=? AND rating_key=? AND version=?`,
+			int64(r.ws.ViewOffset), int64(r.ws.Duration), r.ws.ViewCount, counted, last, r.ws.UserRating, r.ws.UpdatedAt.UnixNano(),
+			userID, int64(r.ws.Key), r.version)
+	} else {
+		res, err = tx.ExecContext(ctx, `INSERT INTO state_watch(user_id, rating_key, view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id, rating_key) DO NOTHING`,
+			userID, int64(r.ws.Key), int64(r.ws.ViewOffset), int64(r.ws.Duration), r.ws.ViewCount, counted, last, r.ws.UserRating, r.ws.UpdatedAt.UnixNano())
+	}
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return errConflict
+	}
+	return nil
 }
 
 func addHistoryTx(ctx context.Context, tx *sql.Tx, userID int64, key core.RatingKey, at time.Time, completed bool) error {
@@ -280,40 +398,36 @@ func (s *State) GetMany(ctx context.Context, userID int64, keys []core.RatingKey
 	return out, nil
 }
 
-// update runs one locked read-modify-write of a watch row: fn mutates the
-// loaded row and reports whether to log history (and whether that history
-// entry is a completion). The row and history are written in one
-// transaction. Events are returned so the caller emits them after the lock
-// is released (subscribers may call back into State).
+// update runs one read-modify-write of watch rows: fn mutates the loaded
+// row and reports whether to log history (and whether that history entry is
+// a completion). The rows and history are written in one transaction. When
+// another node changed a row in between, the transaction is discarded and
+// re-run from fresh reads, so fn must be safe to call again. Events are
+// returned so the caller emits them after the lock is released (subscribers
+// may call back into State).
 func (s *State) update(ctx context.Context, userID int64, keys []core.RatingKey, fn func(cur *row, now time.Time) (logHistory, completed bool, evs []Event)) error {
-	s.wmu.Lock()
-	now := s.now().UTC()
+	return s.updateAt(ctx, userID, keys, time.Time{}, fn)
+}
+
+// updateAt is update at a given time (zero: now); held progress replays
+// with the time it was reported.
+func (s *State) updateAt(ctx context.Context, userID int64, keys []core.RatingKey, at time.Time, fn func(cur *row, now time.Time) (logHistory, completed bool, evs []Event)) error {
+	if err := s.lockWrites(ctx); err != nil {
+		return err
+	}
+	now := at.UTC()
+	if at.IsZero() {
+		now = s.now().UTC()
+	}
 	var events []Event
-	err := func() error {
-		defer s.wmu.Unlock()
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
+	var err error
+	for attempt := 0; attempt < maxUpdateAttempts; attempt++ {
+		events, err = s.updateTx(ctx, userID, keys, now, fn)
+		if !errors.Is(err, errConflict) {
+			break
 		}
-		defer tx.Rollback()
-		for _, key := range keys {
-			cur, err := loadTx(ctx, tx, userID, key)
-			if err != nil {
-				return err
-			}
-			logHistory, completed, evs := fn(&cur, now)
-			if err := saveTx(ctx, tx, userID, cur); err != nil {
-				return err
-			}
-			if logHistory {
-				if err := addHistoryTx(ctx, tx, userID, key, now, completed); err != nil {
-					return err
-				}
-			}
-			events = append(events, evs...)
-		}
-		return tx.Commit()
-	}()
+	}
+	s.unlockWrites()
 	if err != nil {
 		return err
 	}
@@ -323,19 +437,57 @@ func (s *State) update(ctx context.Context, userID int64, keys []core.RatingKey,
 	return nil
 }
 
+func (s *State) lockWrites(ctx context.Context) error {
+	select {
+	case s.wmu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *State) unlockWrites() { <-s.wmu }
+
+func (s *State) updateTx(ctx context.Context, userID int64, keys []core.RatingKey, now time.Time, fn func(cur *row, now time.Time) (bool, bool, []Event)) ([]Event, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var events []Event
+	for _, key := range keys {
+		cur, err := loadTx(ctx, tx, userID, key)
+		if err != nil {
+			return nil, err
+		}
+		logHistory, completed, evs := fn(&cur, now)
+		if err := saveTx(ctx, tx, userID, cur); err != nil {
+			return nil, err
+		}
+		if logHistory {
+			if err := addHistoryTx(ctx, tx, userID, key, now, completed); err != nil {
+				return nil, err
+			}
+		}
+		events = append(events, evs...)
+	}
+	return events, tx.Commit()
+}
+
 func loadTx(ctx context.Context, tx *sql.Tx, userID int64, key core.RatingKey) (row, error) {
 	r := row{ws: core.WatchStatus{Key: key}}
 	var off, dur, last, upd int64
 	var counted int
-	err := tx.QueryRowContext(ctx, `SELECT view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at
+	err := tx.QueryRowContext(ctx, `SELECT view_offset_ns, duration_ns, view_count, counted, last_viewed_at, user_rating, updated_at, version
 		FROM state_watch WHERE user_id=? AND rating_key=?`, userID, int64(key)).
-		Scan(&off, &dur, &r.ws.ViewCount, &counted, &last, &r.ws.UserRating, &upd)
+		Scan(&off, &dur, &r.ws.ViewCount, &counted, &last, &r.ws.UserRating, &upd, &r.version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, nil
 	}
 	if err != nil {
 		return r, err
 	}
+	r.exists = true
 	r.ws.ViewOffset = time.Duration(off)
 	r.ws.Duration = time.Duration(dur)
 	r.counted = counted != 0
@@ -353,11 +505,28 @@ func loadTx(ctx context.Context, tx *sql.Tx, userID int64, key core.RatingKey) (
 // 5%/90% rules. A duration of 0 keeps the previously known duration; with no
 // known duration the offset is kept as a resume point and nothing is ever
 // marked watched by progress alone.
+//
+// On a clustered node a Progress the database cannot take within a short
+// timeout is held and written later (see Options.Availability); it then
+// returns nil.
 func (s *State) Progress(ctx context.Context, userID int64, key core.RatingKey, offset, duration time.Duration, state string) error {
 	if offset < 0 {
 		offset = 0
 	}
-	return s.update(ctx, userID, []core.RatingKey{key}, func(cur *row, now time.Time) (bool, bool, []Event) {
+	w := progressWrite{offset: offset, duration: duration, state: state}
+	if s.progress == nil {
+		return s.progressAt(ctx, userID, key, w)
+	}
+	w.at = s.now()
+	_, err := s.progress.Write(ctx, progressKey{userID, key}, w)
+	return err
+}
+
+// progressAt applies one timeline update (at zero: now).
+func (s *State) progressAt(ctx context.Context, userID int64, key core.RatingKey, w progressWrite) error {
+	reported, duration, state := w.offset, w.duration, w.state
+	return s.updateAt(ctx, userID, []core.RatingKey{key}, w.at, func(cur *row, now time.Time) (bool, bool, []Event) {
+		offset := reported // fn may be re-run after a conflict
 		if duration > 0 {
 			cur.ws.Duration = duration
 		}

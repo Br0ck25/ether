@@ -1,4 +1,4 @@
-import { SettingsSection, toast } from "@braedonsaunders/appkit-ui";
+import { toast } from "@braedonsaunders/appkit-ui";
 import { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../app-context";
@@ -6,15 +6,15 @@ import { ConfigSection } from "../../components/ConfigSection";
 import { ErrorPanel } from "../../components/feedback";
 import { DomainPage, useRouteTab } from "../../components/layout";
 import { RemoteDiagnostics } from "../../components/RemoteDiagnostics";
-import { SettingsRow } from "../../components/SettingsRow";
 import { api } from "../../lib/api";
 import { humanizeKey, isPlainObject } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { BackupsAndImport } from "./Backups";
+import { ClusterOverview, useClustered } from "./Cluster";
 import { ConnectedServices } from "./ConnectedServices";
 import { inferField, type FieldGroup } from "./SchemaForm";
 import * as S from "./schema";
-import { PlexStatus } from "./sections";
+import { PlexStatus, UpdatesStatus } from "./sections";
 
 /**
  * config.json sections with a home somewhere in the UI. Any other object the
@@ -41,6 +41,9 @@ const KNOWN_KEYS = new Set([
   "downloads",
   "personalize",
   "extras",
+  // Node-local storage, chosen at startup; the admin API shows it redacted
+  // and never edits it, so it gets no generic form on General.
+  "database",
   "setupComplete",
 ]);
 
@@ -74,6 +77,7 @@ const GENERAL_SECTIONS = [
  */
 export function GeneralPage() {
   const { reloadBoot } = useApp();
+  const clustered = useClustered();
   const config = useAsync(() => api.getConfig(), []);
   const cfg = config.data as Obj | null | undefined;
   const extras = useMemo(
@@ -98,7 +102,9 @@ export function GeneralPage() {
       <ConfigSection
         configKey="server"
         endpoint="server"
-        groups={S.SERVER}
+        groups={clustered ? S.clusterServerGroups() : S.SERVER}
+        // Node weight only matters in a cluster.
+        omit={clustered ? undefined : ["clusterWeight"]}
         label="General"
         hidden={tab !== "server"}
         onFieldErrors={toServer}
@@ -256,11 +262,10 @@ export function BackupsPage() {
 }
 
 export function UpdatesPage() {
-  const { boot } = useApp();
   return (
     <DomainPage
       title="Updates"
-      description="Release channel and automatic updates."
+      description="Release channel, maintenance window and automatic updates."
       base="/updates"
     >
       <ConfigSection
@@ -268,19 +273,20 @@ export function UpdatesPage() {
         endpoint="updates"
         groups={S.UPDATES}
         label="Updates"
-        before={() => (
-          <SettingsSection title="This server">
-            <SettingsRow
-              title="Installed version"
-              control={
-                <code className="rounded bg-bg-subtle px-2 py-1 text-xs text-fg-muted">
-                  {boot.version || "—"}
-                </code>
-              }
-            />
-          </SettingsSection>
-        )}
+        before={() => <UpdatesStatus />}
       />
+    </DomainPage>
+  );
+}
+
+export function ClusterPage() {
+  return (
+    <DomainPage
+      title="Cluster"
+      description="Ether servers sharing one database and appearing in Plex as one server."
+      base="/cluster"
+    >
+      <ClusterOverview />
     </DomainPage>
   );
 }

@@ -233,7 +233,9 @@ func (p *allDebrid) Acquire(ctx context.Context, req AcquireRequest) (*Acquired,
 	cleanup := func() {
 		if added && req.RemoveUncached {
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			_ = p.Remove(rctx, id)
+			if req.mayRemove(rctx, id) {
+				_ = p.Remove(rctx, id)
+			}
 			cancel()
 		}
 	}

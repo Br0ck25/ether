@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/tmdb"
 )
 
@@ -67,8 +68,9 @@ func (c *Catalog) Search(ctx context.Context, query string, types []core.MediaTy
 		}
 	}
 	// Local first (instant, works offline).
+	like := store.Like(store.DialectOf(c.db))
 	local, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type IN ('movie','show')
-		AND (title LIKE ? ESCAPE '\' OR original_title LIKE ? ESCAPE '\') ORDER BY popularity DESC LIMIT ?`,
+		AND (title `+like+` ? ESCAPE '\' OR original_title `+like+` ? ESCAPE '\') ORDER BY popularity DESC LIMIT ?`,
 		"%"+escapeLike(query)+"%", "%"+escapeLike(query)+"%", limit*2)
 	if err == nil {
 		var filtered []core.Title

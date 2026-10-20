@@ -46,6 +46,9 @@ type options struct {
 	dashURLs       DASHURLs
 	manifestWait   time.Duration
 	onFailure      func(sessionID string, at time.Duration, err error)
+	// rungDwell is how long a run keeps producing its rung before a
+	// request on another rung may replace it (see Session.rungDwellLocked).
+	rungDwell time.Duration
 }
 
 func defaultOptions() options {
@@ -61,6 +64,7 @@ func defaultOptions() options {
 		segmentURI:     SegmentName,
 		dashURLs:       PlexDASHURLs,
 		manifestWait:   15 * time.Second,
+		rungDwell:      8 * time.Second,
 	}
 }
 
@@ -76,6 +80,11 @@ func WithIdleTimeout(d time.Duration) Option { return func(o *options) { o.idleT
 // WithSegmentTimeout bounds how long ServeSegment waits for ffmpeg
 // (default 45s).
 func WithSegmentTimeout(d time.Duration) Option { return func(o *options) { o.segmentTimeout = d } }
+
+// withRungDwell sets how long one rung's run keeps the shared encoder
+// before a request on another rung may restart it (default 8s; 0 = switch
+// at once). Tests use it; the default suits real players.
+func withRungDwell(d time.Duration) Option { return func(o *options) { o.rungDwell = d } }
 
 // WithBuffering tunes seeking and disk use: a request more than
 // restartAhead past the encoder restarts ffmpeg there (default 24s); ffmpeg
@@ -294,6 +303,19 @@ func randomHex(n int) string {
 // StartHLS implements core.Transcoder: it starts an HLS session, or a DASH
 // session when req.Protocol is core.ProtocolDASH. A session with the same
 // ID is replaced (Plex reuses session IDs when it restarts a transcode).
+// encodingLocked counts the sessions other than except that are running an
+// encoder: transcodes, and copy sessions while their fast-start ramp, a
+// governor clamp or a lower rung is being encoded. Caller holds m.mu.
+func (m *Manager) encodingLocked(except string) int {
+	n := 0
+	for sid, s := range m.sessions {
+		if sid != except && s.encoding() {
+			n++
+		}
+	}
+	return n
+}
+
 func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSession, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -368,7 +390,15 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	}
 	m.mu.Lock()
 	adapt := adaptiveFromConfig(m.cfg)
+	atCap := m.cfg.MaxTranscodes > 0 && m.encodingLocked(req.SessionID) >= m.cfg.MaxTranscodes
 	m.mu.Unlock()
+	if atCap && d.VideoCopy {
+		// The encoder cap is reached. A copy session still plays, but
+		// plainly: no encoded fast-start ramp, no governor clamps and no
+		// lower rungs, each of which would run an encoder past the cap.
+		adapt.FastStart, adapt.Governor, adapt.Ladder = false, false, false
+		m.log.Debug("transcode cap reached: copy session without encoded ramp, governor or ladder", "session", req.SessionID)
+	}
 	rungs := buildRungs(req.Info, d, adapt)
 	if proto == core.ProtocolHLS && d.Container == ContainerMatroska && len(rungs) > 1 {
 		// Plex's native player probes every rendition's initialization and
@@ -436,13 +466,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	}
 	old := m.sessions[id]
 	if !d.VideoCopy && m.cfg.MaxTranscodes > 0 {
-		n := 0
-		for sid, s := range m.sessions {
-			if sid != id && !s.Decision().VideoCopy {
-				n++
-			}
-		}
-		if n >= m.cfg.MaxTranscodes {
+		if n := m.encodingLocked(id); n >= m.cfg.MaxTranscodes {
 			m.mu.Unlock()
 			return nil, fmt.Errorf("%w (%d running)", ErrTooManyTranscodes, n)
 		}
