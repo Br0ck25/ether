@@ -55,7 +55,7 @@ use consistent content margins, and show recent log entries first.
 Home Designer stores one canonical layout document with global pages and viewer
 overrides. Row policies support eligibility, required rows, hidden rows, positions,
 priorities, schedules, and page limits. Previewing a draft does not change the
-saved layout. Previously saved rules migrate without losing viewer policies.
+saved layout.
 
 Owners configure quality profiles, audio and subtitle preferences, local folders,
 providers, indexers, caching, sharing restrictions and integrations. Changes to
@@ -155,7 +155,9 @@ HLS and DASH sessions advertise lower renditions sharing one segment timeline;
 a lower rendition is encoded only when the client switches to it. Copy sessions
 may open with short, quickly decoded segments and continue as stream copy after a
 discontinuity. Bitrate-capped transcodes use constant-quality encoding bounded by
-a VBV buffer steered by measured delivery goodput. An optional governor can clamp
+a VBV buffer sized from the delivery goodput measured when an encoder run
+starts (at the opening, a seek, a rendition switch or a failover); a running
+encoder is not re-steered. An optional governor can clamp
 upcoming copy segments whose bitrate exceeds the client's measured goodput.
 
 Offline downloads use the Plex download queue. A compact, mobile-compatible SDR
