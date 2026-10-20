@@ -116,11 +116,15 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 	for attempt := 0; attempt < 3; attempt++ {
 		res, err = s.upstream(r.Context(), raw, r)
 		if err != nil {
+			s.recordStreamFailure(ss, r.Context(), err)
 			writeStreamError(w, err)
 			return
 		}
 		if res.StatusCode != 200 && res.StatusCode != 206 {
 			res.Body.Close()
+			if res.StatusCode >= 500 || res.StatusCode == 401 || res.StatusCode == 403 || res.StatusCode == 404 || res.StatusCode == 410 || res.StatusCode == 429 {
+				s.recordStreamFailure(ss, r.Context(), core.ErrNotAvailable)
+			}
 			http.Error(w, "upstream stream unavailable", res.StatusCode)
 			return
 		}
@@ -139,11 +143,14 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		}
 	}
 	if err != nil {
+		s.recordStreamFailure(ss, r.Context(), err)
 		writeStreamError(w, err)
 		return
 	}
 	content := res.Header.Get("Content-Type")
-	manifest := strings.Contains(strings.ToLower(content), "mpegurl") || bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U"))
+	// Some providers label their binary AES keys as application/vnd.apple.mpegurl.
+	// The bytes identify a playlist; the MIME type alone cannot do so.
+	manifest := bytes.HasPrefix(bytes.TrimSpace(body), []byte("#EXTM3U"))
 	if manifest {
 		b := body
 		if len(b) > 4<<20 {
@@ -187,6 +194,9 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 		if v := res.Header.Get(name); v != "" {
 			w.Header().Set(name, v)
 		}
+	}
+	if strings.Contains(strings.ToLower(content), "mpegurl") {
+		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	w.Header().Set("Cache-Control", "private, max-age=10")
 	armWriteDeadline(w)

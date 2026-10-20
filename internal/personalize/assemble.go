@@ -386,6 +386,9 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 			} else {
 				adj -= 0.1 * share
 			}
+		case c.kind == KindTop10:
+			adj += 0.08 * fitR
+			adj -= 0.04 * a.model.fatigue[t.Key]
 		case a.hc.Device == core.DeviceMobile || (!a.hc.Weekend && a.hc.Daypart == core.DaypartLate):
 			adj += 0.05 * fitR
 		}

@@ -33,6 +33,8 @@ type track struct {
 	count      int
 }
 type session struct {
+	inputURL        string // selected upstream, immutable once the tune is ready
+	inputSource     StreamSource
 	consumed        bool
 	mediaStarted    bool
 	startupCancel   context.CancelFunc // immutable after publication; cancels I/O before locking
@@ -234,6 +236,7 @@ func (s *Service) TuneWithSession(ctx context.Context, u *core.User, channelID s
 	}
 	ss.mu.Unlock()
 	info.Channel.StreamURL = ""
+	info.Channel.StreamSources = nil
 	return info, nil
 }
 func (s *Service) getSession(ctx context.Context, id string, u *core.User) (*session, error) {
@@ -281,6 +284,7 @@ func (s *Service) touchMedia(ss *session) {
 	ss.mediaStarted = true
 	ss.last = s.o.Now()
 	ss.mu.Unlock()
+	s.recordSourceHealth(ss.info.Channel.ID, ss.inputSource, nil, true)
 }
 func (s *Service) Session(ctx context.Context, id string, u *core.User) (SessionInfo, error) {
 	ss, err := s.getSession(ctx, id, u)
@@ -294,6 +298,7 @@ func (s *Service) Session(ctx context.Context, id string, u *core.User) (Session
 		info.MediaInfo = ss.relayInfo
 	}
 	info.Channel.StreamURL = ""
+	info.Channel.StreamSources = nil
 	ps, err := s.programmes(ctx, ss.info.Channel, s.o.Now(), s.o.Now().Add(time.Second))
 	if err == nil && len(ps) > 0 {
 		info.Programme = &ps[0]
@@ -597,11 +602,12 @@ func (s *Service) Failover(ctx context.Context, id string, u *core.User) error {
 // startIPTV recognizes HLS without assuming URL suffixes (many owners use
 // signed extensionless URLs). Other HTTP streams are remuxed through ffmpeg,
 // whose existing input layer reconnects on network errors with bounded delay.
-func (s *Service) startIPTV(ctx context.Context, ss *session) error {
+func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if ss.closed {
 		return core.ErrNotFound
 	}
 	c := ss.info.Channel
+	c.StreamURL = ss.inputURL
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.StreamURL, nil)
 	res, err := s.upstream(ctx, c.StreamURL, req)
 	if err != nil {

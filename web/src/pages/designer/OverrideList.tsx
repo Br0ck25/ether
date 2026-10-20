@@ -1,4 +1,5 @@
-import { Avatar, Button } from "@braedonsaunders/appkit-ui";
+import { Avatar, Button, Input } from "@braedonsaunders/appkit-ui";
+import { useState } from "react";
 import { ChevronRight, RotateCcw } from "lucide-react";
 import { viewerName } from "../../components/pickers";
 import type { HomeLayout, LayoutSection, Viewer } from "../../lib/contract";
@@ -35,19 +36,40 @@ export function OverrideList({
   viewers: Viewer[];
   onOpenLayer: (l: LayerKey) => void;
 }) {
+  const [q, setQ] = useState("");
   const sectionLabel = SECTIONS.find((s) => s.value === section)?.label ?? section;
   if (layer === "global") {
-    const withOverrides = viewers.filter((v) => overrideCount(draft, v.id) > 0);
+    const all = viewers.filter((v) => overrideCount(draft, v.id) > 0);
+    const needle = q.trim().toLowerCase();
+    const withOverrides = needle
+      ? all.filter((v) => `${viewerName(v)} ${v.username}`.toLowerCase().includes(needle))
+      : all;
     return (
       <section className="space-y-2" aria-label="Per-viewer overrides">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-          Per-viewer overrides
-        </h2>
-        {withOverrides.length === 0 ? (
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
+            Per-viewer overrides
+          </h2>
+          {all.length ? (
+            <span className="text-xs text-fg-muted">{plural(all.length, "viewer")}</span>
+          ) : null}
+        </div>
+        {all.length > 6 ? (
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.currentTarget.value)}
+            placeholder="Find a viewer…"
+            aria-label="Find a viewer with overrides"
+            className="h-8 text-sm"
+          />
+        ) : null}
+        {all.length === 0 ? (
           <p className="text-xs text-fg-muted">
-            Nobody overrides the Global Home. Pick a viewer above to pin, hide or add rows just for
-            them.
+            Nobody overrides the Global Home. Switch the editing layer at the top to a viewer to
+            pin, hide or add rows just for them.
           </p>
+        ) : withOverrides.length === 0 ? (
+          <p className="text-xs text-fg-muted">No viewer with overrides matches “{q}”.</p>
         ) : (
           <ul className="space-y-1">
             {withOverrides.map((v) => (

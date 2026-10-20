@@ -72,3 +72,66 @@ func TestMixedHomeRowKeepsItemIdentityAndViewerRestrictions(t *testing.T) {
 		}
 	}
 }
+
+type fakeForYouRec struct {
+	fakeRecommender
+	feed []core.Title
+}
+
+func (r *fakeForYouRec) SectionHubs(_ interface{}, _ *core.User, t core.MediaType, _ int) ([]core.Hub, error) {
+	if t == "" {
+		return r.home, nil
+	}
+	return r.section[t], nil
+}
+
+func (r *fakeForYouRec) ForYouFeed(_ interface{}, _ *core.User, _ core.HubContext, _ int) ([]core.Title, error) {
+	return r.feed, nil
+}
+
+func TestForYouPseudoLibrarySectionMixesMoviesAndShows(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Sections = []Section{
+		{ID: 3, Type: core.TypeMovie, Title: "For You", Mixed: true},
+		{ID: 1, Type: core.TypeMovie, Title: "Movies"},
+		{ID: 2, Type: core.TypeShow, Title: "TV Shows"},
+	}
+	f.srv.sections = f.srv.buildSections()
+	f.srv.d.Recommender = &fakeRecommender{
+		home: []core.Hub{{
+			ID: "home.top10", Title: "Top 10 for You", Promoted: true,
+			Items: []core.Title{fightClub, breakingBad},
+		}},
+		section: map[core.MediaType][]core.Hub{
+			"": {{
+				ID: "home.top10", Title: "Top 10 for You", Promoted: true,
+				Items: []core.Title{fightClub, breakingBad},
+			}},
+		},
+	}
+
+	headers := map[string]string{"Accept": "application/json", "X-Plex-Product": "Plex for Apple TV"}
+	rec := f.request(t, http.MethodGet, "/hubs/sections/3", headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("section 3 hubs status=%d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct{ MediaContainer model.MediaContainer }
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	var top *model.Hub
+	for _, h := range body.MediaContainer.Hub {
+		if h.HubIdentifier == "home.top10" {
+			top = &h
+			break
+		}
+	}
+	if top == nil || top.Type != "mixed" || len(top.Metadata) != 2 {
+		t.Fatalf("expected mixed Top 10 for You row in section 3, got %+v", body.MediaContainer.Hub)
+	}
+	if top.Metadata[0].Type != "movie" || top.Metadata[0].LibrarySectionID != 1 ||
+		top.Metadata[1].Type != "show" || top.Metadata[1].LibrarySectionID != 2 {
+		t.Fatalf("expected canonical section IDs on mixed items, got %+v", top.Metadata)
+	}
+}

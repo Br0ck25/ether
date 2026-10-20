@@ -20,6 +20,10 @@ func (s *Service) Handler() http.Handler {
 	r := chi.NewRouter()
 	owner := &core.User{IsOwner: true}
 	r.Get("/channels", func(w http.ResponseWriter, r *http.Request) { v, e := s.Channels(r.Context()); ownerResult(w, v, e) })
+	r.Get("/channels/{id}/sources/status", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.StreamSourceStatuses(r.Context(), chi.URLParam(r, "id"))
+		ownerResult(w, v, e)
+	})
 	save := func(w http.ResponseWriter, r *http.Request) {
 		var c Channel
 		if !ownerBody(w, r, &c) {
@@ -51,17 +55,7 @@ func (s *Service) Handler() http.Handler {
 	r.Post("/sources", importSource)
 	r.Put("/sources/{id}", importSource)
 	r.Post("/sources/{id}/refresh", func(w http.ResponseWriter, r *http.Request) {
-		var src Source
-		var b []byte
-		err := s.o.DB.QueryRowContext(r.Context(), `SELECT data FROM livetv_sources WHERE id=?`, chi.URLParam(r, "id")).Scan(&b)
-		if err == nil {
-			err = json.Unmarshal(b, &src)
-		}
-		if err != nil {
-			ownerResult(w, nil, core.ErrNotFound)
-			return
-		}
-		v, e := s.ImportSource(r.Context(), src)
+		v, e := s.RefreshSource(r.Context(), chi.URLParam(r, "id"))
 		ownerResult(w, v, e)
 	})
 	r.Delete("/sources/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +70,7 @@ func (s *Service) Handler() http.Handler {
 		v, e := s.Guide(r.Context(), owner, from, until)
 		ownerResult(w, v, e)
 	})
+	s.guideRoutes(r)
 	r.Get("/guide.xml", func(w http.ResponseWriter, r *http.Request) { s.ServeXMLTV(w, r, owner) })
 	r.Get("/policies/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, e := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)

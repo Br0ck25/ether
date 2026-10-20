@@ -95,6 +95,7 @@ func ParseM3U(r io.Reader, sourceID string) ([]Channel, error) {
 			}
 		}
 		seen[pending.ID] = true
+		pending.StreamSources = []StreamSource{{ID: stableID(pending.ID, "playlist"), Name: "Imported stream", URL: line, Enabled: true}}
 		if pending.Name == "" {
 			pending.Name = pending.GuideID
 		}
@@ -145,6 +146,8 @@ type xmlProgramme struct {
 type XMLGuide struct {
 	Channels   map[string]Channel
 	Programmes []Programme
+	// Names holds every display-name of each XMLTV channel, in order.
+	Names map[string][]string
 }
 
 func xmlTime(s string) (time.Time, error) {
@@ -156,7 +159,7 @@ func xmlTime(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid XMLTV timestamp %q", s)
 }
 func ParseXMLTV(r io.Reader) (XMLGuide, error) {
-	g := XMLGuide{Channels: map[string]Channel{}}
+	g := XMLGuide{Channels: map[string]Channel{}, Names: map[string][]string{}}
 	d := xml.NewDecoder(io.LimitReader(r, 64<<20))
 	root := false
 	for {
@@ -189,6 +192,9 @@ func ParseXMLTV(r io.Reader) (XMLGuide, error) {
 				name = c.Name[0].Value
 			}
 			g.Channels[c.ID] = Channel{GuideID: c.ID, Name: name, Logo: c.Icon.Src}
+			for _, n := range c.Name {
+				g.Names[c.ID] = append(g.Names[c.ID], strings.TrimSpace(n.Value))
+			}
 		case "programme":
 			var p xmlProgramme
 			if err := d.DecodeElement(&p, &el); err != nil {

@@ -50,7 +50,7 @@ export const PAGES: PageDef[] = [
   },
   {
     href: "/home-screens",
-    title: "Home screens",
+    title: "HomeScreen",
     sections: [],
     keywords: "designer rows layout overrides plex home",
   },
