@@ -182,8 +182,9 @@ func (b *builder) hydrate(items []core.Title, need func(*core.Title) bool) []cor
 	return out
 }
 
-// hydrateBudget bounds catalogue detail fetches per build.
-const hydrateBudget = 80
+// hydrateBudget bounds catalogue detail fetches per build (Short on Time
+// and the TV lenses, which need runtimes, statuses and season counts).
+const hydrateBudget = 140
 
 // Runtime and commitment limits for "Short on Time".
 const (
