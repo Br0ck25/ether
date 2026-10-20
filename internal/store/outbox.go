@@ -254,7 +254,12 @@ func (ob *Outbox[K, V]) flush(ctx context.Context) (outage bool) {
 		actx, cancel := context.WithTimeout(ctx, ob.o.Timeout)
 		err := ob.o.Apply(actx, key, val)
 		cancel()
-		if err != nil && IsUnavailable(err) {
+		if err != nil && ctx.Err() != nil {
+			// Stopped mid-write (shutdown): keep the write for Close's
+			// final attempt rather than dropping it as rejected.
+			return false
+		}
+		if err != nil && (IsUnavailable(err) || errors.Is(err, context.DeadlineExceeded)) {
 			if ctx.Err() == nil {
 				ob.avail.Fail(err)
 			}
