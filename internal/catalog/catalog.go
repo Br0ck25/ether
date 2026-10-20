@@ -132,6 +132,7 @@ type Catalog struct {
 
 	staleAfter time.Duration
 	listTTL    time.Duration
+	crowdTTL   time.Duration // co-engagement lists (crowd.go)
 
 	genreMu sync.Mutex
 	genres  map[string]map[int]string // mediaType -> id -> name

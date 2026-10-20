@@ -584,9 +584,14 @@ func (c *Client) invalidateUser(userID int64) {
 // cachedCall serves a fresh cache entry, or a stale one while refreshing it
 // in the background, or fetches synchronously on a miss.
 func cachedCall[T any](c *Client, ctx context.Context, key string, fetch func(context.Context) (T, error)) (T, error) {
+	return cachedCallTTL(c, ctx, key, c.ttl, fetch)
+}
+
+// cachedCallTTL is cachedCall with its own freshness window.
+func cachedCallTTL[T any](c *Client, ctx context.Context, key string, ttl time.Duration, fetch func(context.Context) (T, error)) (T, error) {
 	c.cmu.Lock()
 	e, ok := c.cache[key]
-	if ok && c.now().Sub(e.at) < c.ttl {
+	if ok && c.now().Sub(e.at) < ttl {
 		c.cmu.Unlock()
 		return e.val.(T), nil
 	}
