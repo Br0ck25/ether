@@ -526,17 +526,6 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			return
 		}
 		s.lastReq = n
-		// The encoder follows the most recently requested encode track
-		// (HLS rung, or DASH video representation; an audio request never
-		// switches the video rung).
-		if s.isDASH() {
-			if t != s.audioTrackLocked() {
-				s.wantTrack = t
-				s.videoRequested = true
-			}
-		} else {
-			s.wantTrack = t
-		}
 		s.throttleLocked()
 		done := s.done[t]
 		// HLS only: ffmpeg's segmenter may cut slivers past the playlist's
@@ -575,6 +564,17 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			s.mu.Unlock()
 			http.NotFound(w, r)
 			return
+		}
+		// Cached media requires no encoder work. A delayed request for an
+		// old representation must not switch the current video encoder.
+		// Audio shares the active video run and never chooses its rung.
+		if !waitTail {
+			if !s.isDASH() || t != s.audioTrackLocked() {
+				s.wantTrack = t
+				if s.isDASH() {
+					s.videoRequested = true
+				}
+			}
 		}
 		var dwell *time.Timer
 		if !waitTail && s.needsRestartLocked(n) {
@@ -660,6 +660,14 @@ func (s *Session) needsRestartLocked(n int) bool {
 func (s *Session) rungDwellLocked() time.Duration {
 	r := s.cur
 	if r == nil || r.finished || r.stopped || r.err != nil || r.track == s.wantTrack || s.m.opts.rungDwell <= 0 {
+		return 0
+	}
+	// DASH players use measured segment delivery to change quality very
+	// early. Once the active run has produced two complete video+audio
+	// segments, it has a startup buffer to protect: withholding a real
+	// switch for the rest of a fixed dwell only drains that buffer. Keep
+	// the dwell for initialization probes and runs that made no progress.
+	if s.isDASH() && r.produced >= 2 {
 		return 0
 	}
 	if left := s.m.opts.rungDwell - time.Since(r.started); left > 0 {
