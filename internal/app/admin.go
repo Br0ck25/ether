@@ -83,6 +83,7 @@ func (a *App) buildAdmin() http.Handler {
 			"prefetch": func(context.Context) any { return a.prefetch.Stats() },
 			"debrid":   a.debridStatus,
 			"sources":  func(context.Context) any { return map[string]any{"startup": a.resolver.SourceStartups()} },
+			"database": a.databaseStatus,
 		},
 		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
 		Users:           a.users,

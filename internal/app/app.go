@@ -99,6 +99,10 @@ type App struct {
 	// clusterFatal receives the error that ended this node's cluster
 	// membership (a duplicate node identity); nil on a standalone server.
 	clusterFatal chan error
+	// dbAvail is this node's view of shared-database reachability: the
+	// heartbeat and the outboxes that hold progress, resume and play
+	// records through an outage report to it. Nil on a standalone server.
+	dbAvail *store.Availability
 
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
@@ -266,7 +270,14 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 
 	// Watch state and recommendations.
-	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state")})
+	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state"), Availability: a.dbAvail})
+	a.closers = append(a.closers, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := a.state.Close(ctx); err != nil {
+			a.log.Warn("state: watch progress lost at shutdown", "err", err)
+		}
+	})
 	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
 	a.trakt.SubscribeTo(a.state)
 	a.collections.SetState(a.state)
@@ -402,6 +413,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger:        log,
 		Cluster:       a.clusterNode(),
 		DescribeGroup: a.describeLiveGroup,
+		Availability:  a.dbAvail,
 	}, cfg, playback.Options{DataDir: dataDir})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)

@@ -102,6 +102,10 @@ func (m *Manager) BeginChannel(u *core.User, caps core.ClientCaps, group string)
 		m.mu.Unlock()
 		return fmt.Errorf("playback is closing")
 	}
+	if _, ok := m.externalGroups[group]; !ok && m.draining {
+		m.mu.Unlock()
+		return errDraining
+	}
 	if slot, ok := m.externalGroups[group]; ok {
 		m.mu.Unlock()
 		if slot.user.ID == u.ID {

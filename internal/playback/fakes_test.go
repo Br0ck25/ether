@@ -547,6 +547,7 @@ type harness struct {
 	noCache  bool            // build the Manager without a segment cache
 	db       *sql.DB         // shared database (two-node tests); nil opens a fresh one
 	node     clusterbus.Node // cluster membership; nil = standalone
+	avail    *store.Availability
 }
 
 var (
@@ -616,8 +617,9 @@ func newHarness(t *testing.T, rels []*fakeRelease, ids []string, opts ...harness
 			}
 			return quality.Profiles[1]
 		},
-		DB:      db,
-		Cluster: h.node,
+		DB:           db,
+		Cluster:      h.node,
+		Availability: h.avail,
 	}, h.cfg, o)
 	if err != nil {
 		t.Fatal(err)

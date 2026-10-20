@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/faillog"
+	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -64,6 +65,12 @@ type Options struct {
 
 	LockKey int32  // DefaultLockKey
 	Channel string // derived from the schema when empty
+
+	// Availability, when set, receives every heartbeat's outcome: the
+	// node's shared view of database reachability, which lets deferrable
+	// writes queue at once during an outage and replay as soon as a
+	// heartbeat succeeds again.
+	Availability *store.Availability
 
 	// OnFatal is called once, from a runtime goroutine, when this node
 	// must stop serving as a cluster member: another live process
@@ -422,8 +429,10 @@ func (p *Postgres) heartbeatLoop(ctx context.Context) {
 		case ctx.Err() != nil:
 		case err != nil:
 			p.beatFail.Fail(err)
+			p.o.Availability.Report(err)
 		default:
 			p.beatFail.OK()
+			p.o.Availability.OK()
 		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // errSourceBroken marks a release whose articles went missing while it was
@@ -257,7 +258,13 @@ func (m *Manager) startIndexFill(g *generation) {
 		if m.resume != nil {
 			ctx, cancel := context.WithTimeout(m.ctx, 5*time.Second)
 			if err := m.resume.saveIndex(ctx, s.ident.userID, s.ident.key, g.releaseID(), keyframesOf(points)); err != nil {
-				m.log.Warn("save resume keyframe index failed", "key", s.ident.key, "err", err)
+				if store.IsUnavailable(err) {
+					// Only an optimisation for later resumes; the stream
+					// itself never needs it.
+					m.log.Debug("save resume keyframe index skipped: database unreachable", "key", s.ident.key, "err", err)
+				} else {
+					m.log.Warn("save resume keyframe index failed", "key", s.ident.key, "err", err)
+				}
 			}
 			cancel()
 		}
@@ -622,8 +629,8 @@ func containerFromName(name string) string {
 // resumeResolution rebuilds a Resolution from the stored resume record when
 // it was resolved for the same quality profile.
 func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.RatingKey, profile string) *core.Resolution {
-	if m.resume == nil {
-		return nil
+	if m.resume == nil || m.deps.Availability.Down() {
+		return nil // no stored release while the database is unreachable
 	}
 	rec, err := m.resume.get(ctx, userID, key)
 	if err != nil {
@@ -649,23 +656,20 @@ func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
+	info := g.infoSnapshot()
 	rec := resumeRecord{
 		userID:    s.ident.userID,
 		key:       s.ident.key,
 		release:   g.res.Release,
 		profile:   s.profile,
 		size:      g.src.Size(),
-		duration:  g.infoSnapshot().Duration,
+		duration:  info.Duration,
 		updatedAt: m.now(),
 	}
-	if err := m.resume.save(ctx, rec, g.res.NZB); err != nil {
-		m.log.Warn("save resume record failed", "err", err)
-		return
-	}
-	if points := g.infoSnapshot().Keyframes; len(points) > 0 {
-		if err := m.resume.saveIndex(ctx, s.ident.userID, s.ident.key, g.releaseID(), points); err != nil {
-			m.log.Warn("save resume keyframe index failed", "key", s.ident.key, "err", err)
-		}
+	// A clustered node holds the record through a database outage (put
+	// returns at once), so a start or failover never waits on it.
+	if err := m.resume.put(ctx, rec, g.res.NZB, info.Keyframes); err != nil {
+		m.log.Warn("save resume record failed", "key", s.ident.key, "err", err)
 	}
 }
 

@@ -74,6 +74,10 @@ const admitLockKey = "playback:admit"
 // staleRowAge is when any node may delete another node's forgotten rows.
 const staleRowAge = 10 * time.Minute
 
+// admitTimeout bounds the cluster-wide admission check; past it the
+// stream is admitted (fail open) so a database outage never stalls a play.
+const admitTimeout = 3 * time.Second
+
 // liveNodesTTL caches the cluster's liveness view between reads.
 const liveNodesTTL = 2 * time.Second
 
@@ -374,6 +378,14 @@ func (r *registry) admit(ctx context.Context, user *core.User, id identity, clai
 		r.poke()
 		return nil
 	}
+	if r.m.deps.Availability.Down() {
+		// Known outage: fail open at once rather than wait on the database.
+		r.warn("cluster-wide stream limit check skipped (database unreachable); admitting", errors.New("database unreachable"))
+		r.poke()
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, admitTimeout)
+	defer cancel()
 	live := r.liveNodes(ctx)
 	err := func() error {
 		tx, err := r.db.BeginTx(ctx, nil)
@@ -405,6 +417,7 @@ func (r *registry) admit(ctx context.Context, user *core.User, id identity, clai
 	}
 	if err != nil {
 		// Fail open: a database outage must not stop people watching.
+		r.m.deps.Availability.Report(err)
 		r.warn("cluster-wide stream limit check failed; admitting", err)
 	}
 	return nil

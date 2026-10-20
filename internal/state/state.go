@@ -109,6 +109,13 @@ type Event struct {
 type Options struct {
 	Logger *slog.Logger
 	Now    func() time.Time
+	// Availability, when set (a clustered node on a shared PostgreSQL
+	// database), makes timeline progress survive a database outage: a
+	// Progress the database cannot take is held in memory (the latest per
+	// user and title) and written when the database answers again, so
+	// players are never blocked or failed by the outage. Nil (standalone)
+	// writes progress synchronously as before.
+	Availability *store.Availability
 }
 
 // State implements core.State and core.Playlists.
@@ -120,11 +127,18 @@ type State struct {
 	// wmu serialises this process's read-modify-write updates of watch rows
 	// so they do not retry against each other. Correctness across processes
 	// comes from the row version check in saveTx.
-	wmu sync.Mutex
+	// It is a one-slot channel so waiting for it honours the caller's
+	// context (a write stuck on an unreachable database must not hold up
+	// a bounded progress write beyond its timeout).
+	wmu chan struct{}
 
 	mu   sync.RWMutex
 	subs map[int]func(Event)
 	next int
+
+	// progress holds timeline writes through a database outage (nil when
+	// Options.Availability is nil).
+	progress *store.Outbox[progressKey, progressWrite]
 }
 
 // State implements core.State; State.Playlists() returns the core.Playlists
@@ -139,7 +153,74 @@ func New(db *sql.DB, opts Options) *State {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &State{db: db, log: opts.Logger, now: opts.Now, subs: map[int]func(Event){}}
+	s := &State{db: db, log: opts.Logger, now: opts.Now, subs: map[int]func(Event){}, wmu: make(chan struct{}, 1)}
+	if opts.Availability != nil {
+		s.progress = store.NewOutbox(store.OutboxOptions[progressKey, progressWrite]{
+			Name: "watch progress", Availability: opts.Availability, Logger: opts.Logger,
+			Merge: mergeProgress,
+			Apply: func(ctx context.Context, k progressKey, w progressWrite) error {
+				if w.before != nil {
+					if err := s.progressAt(ctx, k.user, k.key, *w.before); err != nil {
+						return err
+					}
+				}
+				return s.progressAt(ctx, k.user, k.key, w)
+			},
+		})
+	}
+	return s
+}
+
+// Close writes progress still held from a database outage (bounded by
+// ctx). It is a no-op on a standalone server.
+func (s *State) Close(ctx context.Context) error {
+	if s.progress == nil {
+		return nil
+	}
+	return s.progress.Close(ctx)
+}
+
+// OutboxStatus reports timeline writes held through a database outage;
+// ok is false when progress is written synchronously (standalone).
+func (s *State) OutboxStatus() (st store.OutboxStatus, ok bool) {
+	if s.progress == nil {
+		return st, false
+	}
+	return s.progress.Status(), true
+}
+
+type progressKey struct {
+	user int64
+	key  core.RatingKey
+}
+
+// progressWrite is one held timeline update. before carries an earlier
+// held update that crossed the watched threshold when a later one (a
+// rewind, a restart from the top) replaced it, so the completion is not
+// lost by keeping only the newest position.
+type progressWrite struct {
+	offset, duration time.Duration
+	state            string
+	at               time.Time
+	before           *progressWrite
+}
+
+func (w progressWrite) completes() bool {
+	return w.duration > 0 && float64(w.offset) >= WatchedThreshold*float64(w.duration)
+}
+
+func mergeProgress(old, w progressWrite) progressWrite {
+	carry := old.before
+	if old.completes() {
+		c := old
+		c.before = nil
+		carry = &c
+	}
+	if w.completes() {
+		carry = nil // the newer update completes the viewing itself
+	}
+	w.before = carry
+	return w
 }
 
 // Subscribe registers fn for state events (scrobbles, progress, ratings) so
@@ -325,8 +406,19 @@ func (s *State) GetMany(ctx context.Context, userID int64, keys []core.RatingKey
 // returned so the caller emits them after the lock is released (subscribers
 // may call back into State).
 func (s *State) update(ctx context.Context, userID int64, keys []core.RatingKey, fn func(cur *row, now time.Time) (logHistory, completed bool, evs []Event)) error {
-	s.wmu.Lock()
-	now := s.now().UTC()
+	return s.updateAt(ctx, userID, keys, time.Time{}, fn)
+}
+
+// updateAt is update at a given time (zero: now); held progress replays
+// with the time it was reported.
+func (s *State) updateAt(ctx context.Context, userID int64, keys []core.RatingKey, at time.Time, fn func(cur *row, now time.Time) (logHistory, completed bool, evs []Event)) error {
+	if err := s.lockWrites(ctx); err != nil {
+		return err
+	}
+	now := at.UTC()
+	if at.IsZero() {
+		now = s.now().UTC()
+	}
 	var events []Event
 	var err error
 	for attempt := 0; attempt < maxUpdateAttempts; attempt++ {
@@ -335,7 +427,7 @@ func (s *State) update(ctx context.Context, userID int64, keys []core.RatingKey,
 			break
 		}
 	}
-	s.wmu.Unlock()
+	s.unlockWrites()
 	if err != nil {
 		return err
 	}
@@ -344,6 +436,17 @@ func (s *State) update(ctx context.Context, userID int64, keys []core.RatingKey,
 	}
 	return nil
 }
+
+func (s *State) lockWrites(ctx context.Context) error {
+	select {
+	case s.wmu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *State) unlockWrites() { <-s.wmu }
 
 func (s *State) updateTx(ctx context.Context, userID int64, keys []core.RatingKey, now time.Time, fn func(cur *row, now time.Time) (bool, bool, []Event)) ([]Event, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -402,12 +505,27 @@ func loadTx(ctx context.Context, tx *sql.Tx, userID int64, key core.RatingKey) (
 // 5%/90% rules. A duration of 0 keeps the previously known duration; with no
 // known duration the offset is kept as a resume point and nothing is ever
 // marked watched by progress alone.
+//
+// On a clustered node a Progress the database cannot take within a short
+// timeout is held and written later (see Options.Availability); it then
+// returns nil.
 func (s *State) Progress(ctx context.Context, userID int64, key core.RatingKey, offset, duration time.Duration, state string) error {
 	if offset < 0 {
 		offset = 0
 	}
-	reported := offset
-	return s.update(ctx, userID, []core.RatingKey{key}, func(cur *row, now time.Time) (bool, bool, []Event) {
+	w := progressWrite{offset: offset, duration: duration, state: state}
+	if s.progress == nil {
+		return s.progressAt(ctx, userID, key, w)
+	}
+	w.at = s.now()
+	_, err := s.progress.Write(ctx, progressKey{userID, key}, w)
+	return err
+}
+
+// progressAt applies one timeline update (at zero: now).
+func (s *State) progressAt(ctx context.Context, userID int64, key core.RatingKey, w progressWrite) error {
+	reported, duration, state := w.offset, w.duration, w.state
+	return s.updateAt(ctx, userID, []core.RatingKey{key}, w.at, func(cur *row, now time.Time) (bool, bool, []Event) {
 		offset := reported // fn may be re-run after a conflict
 		if duration > 0 {
 			cur.ws.Duration = duration
