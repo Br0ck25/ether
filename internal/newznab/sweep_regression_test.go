@@ -213,3 +213,31 @@ func TestSearchCacheFollowsIndexerConfig(t *testing.T) {
 		t.Fatalf("unchanged config missed the persisted cache: hits=%d", b.hitsFor("search"))
 	}
 }
+
+// A pause stored before Retry-After was capped is bounded when it is read,
+// in memory and in the shared row.
+func TestStoredRateLimitPauseIsBounded(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	cfg := testConfig("http://127.0.0.1:1")
+	c := New(cfg, db, Options{Now: func() time.Time { return now }})
+	if _, err := db.ExecContext(ctx, `INSERT INTO newznab_rate_limit(indexer_id, retry_at) VALUES (?,?)`, c.indexerID(), now.AddDate(10, 0, 0).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	until, err := c.rateLimitUntil(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(maxRateLimitPause); !until.Equal(want) {
+		t.Fatalf("pause until %v, want %v", until, want)
+	}
+	var at int64
+	if err := db.QueryRowContext(ctx, `SELECT retry_at FROM newznab_rate_limit WHERE indexer_id=?`, c.indexerID()).Scan(&at); err != nil || at != now.Add(maxRateLimitPause).Unix() {
+		t.Fatalf("stored retry_at %d (%v), want bounded", at, err)
+	}
+}
