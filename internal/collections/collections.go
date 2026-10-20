@@ -265,10 +265,15 @@ type memberSet struct {
 	keys      []core.RatingKey
 	personal  []*rule
 	personalX []*rule
+	unshared  map[core.RatingKey]bool // see buildResult.unshared
 	spec      core.CollectionSpec
 	builtAt   time.Time
 	hash      string
 	loadedAt  time.Time
+}
+
+func (ms *memberSet) personalRules() personalRules {
+	return personalRules{include: ms.personal, exclude: ms.personalX, any: ms.spec.Match == MatchAny, unshared: ms.unshared}
 }
 
 type buildFlight struct {
@@ -314,11 +319,11 @@ func (s *Service) membersFor(ctx context.Context, row *specRow, wait bool) (*mem
 		return ms, nil
 	}
 	if row.spec.Refresh != RefreshLive && !row.lastBuilt.IsZero() && row.buildHash != "" {
-		keys, err := s.loadMembers(ctx, row.id)
+		keys, unshared, err := s.loadMembers(ctx, row.id)
 		if err != nil {
 			return nil, err
 		}
-		ms := s.newMemberSet(row.spec, keys, row.lastBuilt, row.buildHash)
+		ms := s.newMemberSet(row.spec, keys, unshared, row.lastBuilt, row.buildHash)
 		s.mu.Lock()
 		s.members[row.id] = ms
 		s.mu.Unlock()
@@ -345,8 +350,8 @@ func (s *Service) membersFor(ctx context.Context, row *specRow, wait bool) (*mem
 
 var errNotBuilt = errors.New("collection not built yet")
 
-func (s *Service) newMemberSet(sp core.CollectionSpec, keys []core.RatingKey, builtAt time.Time, hash string) *memberSet {
-	ms := &memberSet{keys: keys, spec: sp, builtAt: builtAt, hash: hash, loadedAt: s.now()}
+func (s *Service) newMemberSet(sp core.CollectionSpec, keys []core.RatingKey, unshared map[core.RatingKey]bool, builtAt time.Time, hash string) *memberSet {
+	ms := &memberSet{keys: keys, unshared: unshared, spec: sp, builtAt: builtAt, hash: hash, loadedAt: s.now()}
 	if rs, err := compileRules(sp.Rules); err == nil {
 		splitPersonal(rs, &ms.personal)
 	}
@@ -402,12 +407,12 @@ func (s *Service) buildNow(ctx context.Context, row *specRow) (*memberSet, error
 		}
 	}
 	at := s.now().UTC().Truncate(time.Second)
-	if err := s.saveBuild(ctx, row.id, res.keys, res.itemCount(), res.warnings, res.hash, at); err != nil {
+	if err := s.saveBuild(ctx, row.id, res.keys, res.unshared, res.itemCount(), res.warnings, res.hash, at); err != nil {
 		return nil, err
 	}
 	s.log.Debug("collections: built", "id", row.publicID(), "name", row.spec.Name, "items", res.itemCount(),
 		"warnings", len(res.warnings), "took", time.Since(started).Round(time.Millisecond))
-	ms := &memberSet{keys: res.keys, personal: res.personal, personalX: res.personalX, spec: row.spec,
+	ms := &memberSet{keys: res.keys, personal: res.personal, personalX: res.personalX, unshared: res.unshared, spec: row.spec,
 		builtAt: at, hash: res.hash, loadedAt: s.now()}
 	if row.buildHash != res.hash {
 		row.changedAt = at
@@ -449,7 +454,7 @@ func (s *Service) serve(ctx context.Context, row *specRow, user *core.User, wait
 			return nil, err
 		}
 	}
-	keys := s.filterForUser(ctx, ms.keys, ms.personal, ms.personalX, user, snap)
+	keys := s.filterForUser(ctx, ms.keys, ms.personalRules(), user, snap)
 	sp := ms.spec
 	if sp.Sort == "personal" && user != nil {
 		keys = s.personalOrder(ctx, row.id, ms.hash, user, keys)
@@ -678,11 +683,7 @@ func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey
 		if offset >= total {
 			return core.Page{Items: []core.Title{}, Total: total}, nil
 		}
-		end := offset + limit
-		if end > total {
-			end = total
-		}
-		items, err := loadTitles(ctx, s.db, keys[offset:end])
+		items, err := loadTitles(ctx, s.db, keys[offset:pageEnd(offset, limit, total)])
 		if err != nil {
 			return core.Page{}, err
 		}
@@ -804,11 +805,16 @@ func (s *Service) franchiseItems(ctx context.Context, user *core.User, key core.
 	if offset >= total {
 		return core.Page{Items: []core.Title{}, Total: total}, nil
 	}
-	end := offset + limit
-	if end > total {
-		end = total
+	return core.Page{Items: items[offset:pageEnd(offset, limit, total)], Total: total}, nil
+}
+
+// pageEnd is the end of the page [offset, offset+limit) clipped to total,
+// for 0 <= offset < total and limit > 0, without overflowing on huge limits.
+func pageEnd(offset, limit, total int) int {
+	if limit >= total-offset {
+		return total
 	}
-	return core.Page{Items: items[offset:end], Total: total}, nil
+	return offset + limit
 }
 
 func filterTitlesByRating(items []core.Title, user *core.User) []core.Title {

@@ -32,3 +32,34 @@ func TestChildrenInheritShowKeywords(t *testing.T) {
 		}
 	}
 }
+
+// Fetching an episode's external ids re-saves the episode; the keywords it
+// inherited from its show must not be persisted as its own, or later
+// changes to the show's keywords never reach it.
+func TestEpisodeDetailUpsertDoesNotPersistInheritedKeywords(t *testing.T) {
+	ctx := context.Background()
+	c := newTestCatalog(t, fakeTMDB(t))
+	show := core.Title{Key: core.ShowKey(100), Type: core.TypeShow, IDs: core.IDs{TMDB: 100}, Title: "Space Show",
+		Released: time.Date(2020, 1, 10, 0, 0, 0, 0, time.UTC), Keywords: []string{"gore"}}
+	if err := c.UpsertTitle(ctx, show, true); err != nil {
+		t.Fatal(err)
+	}
+	ep, err := c.Get(ctx, core.EpisodeKey(100, 1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ep.IDs.IMDB != "tt5001001" || len(ep.Keywords) != 1 || ep.Keywords[0] != "gore" {
+		t.Fatalf("episode = %+v", ep)
+	}
+	show.Keywords = []string{"calm"}
+	if err := c.UpsertTitle(ctx, show, true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.CachedTitle(ctx, core.EpisodeKey(100, 1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Keywords) != 1 || got.Keywords[0] != "calm" {
+		t.Fatalf("episode keywords = %v, want the show's current [calm]", got.Keywords)
+	}
+}

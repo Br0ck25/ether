@@ -89,6 +89,9 @@ func (c *Catalog) getShow(ctx context.Context, id int64) (*core.Title, error) {
 		t := c.tvDetailsToTitle(ctx, d)
 		titles := []core.Title{t}
 		for _, s := range d.Seasons {
+			if !episodeKeyFits(s.SeasonNumber, 0) {
+				continue // its episodes have no rating keys (year-numbered seasons)
+			}
 			titles = append(titles, seasonToTitle(t, s))
 		}
 		// Upsert show as detail; seasons as non-detail summaries in same call would
@@ -169,11 +172,15 @@ func (c *Catalog) fetchSeason(ctx context.Context, showID int64, season int) (*c
 		seasonName = "Season " + itoa(season)
 	}
 	seasonT := seasonToTitle(*show, tmdbSeasonSummary(sd))
-	seasonT.ChildCount = len(sd.Episodes)
 	eps := make([]core.Title, 0, len(sd.Episodes))
 	for _, e := range sd.Episodes {
+		if !episodeKeyFits(e.SeasonNumber, e.EpisodeNumber) {
+			// Its rating key would decode as another title's episode.
+			continue
+		}
 		eps = append(eps, episodeToTitle(*show, seasonName, e))
 	}
+	seasonT.ChildCount = len(eps)
 	if err := c.upsert(ctx, seasonT, upsertOpts{detail: true}); err != nil {
 		return nil, err
 	}
@@ -183,6 +190,12 @@ func (c *Catalog) fetchSeason(ctx context.Context, showID int64, season int) (*c
 		return nil, err
 	}
 	return &seasonT, nil
+}
+
+// episodeKeyFits reports whether an episode's numbers fit its rating key
+// (core.EpisodeKey: season < 1000, episode < 10000).
+func episodeKeyFits(season, episode int) bool {
+	return season >= 0 && season < 1000 && episode >= 0 && episode < 10_000
 }
 
 func tmdbSeasonSummary(sd *tmdb.SeasonDetails) tmdb.SeasonSummary {
@@ -212,9 +225,11 @@ func (c *Catalog) getEpisode(ctx context.Context, key core.RatingKey) (*core.Tit
 			if ext.TVDBID != 0 {
 				t.IDs.TVDB = ext.TVDBID
 			}
-			// Preserve credits: nil them so upsert doesn't wipe? upsert replaces when non-nil.
+			// Nil facets so the upsert keeps the stored rows. Keywords
+			// especially: the loaded episode carries its show's (inherited
+			// on read), which must not be saved as the episode's own.
 			t.Cast, t.Directors, t.Writers = nil, nil, nil
-			t.Genres, t.Studios, t.Countries = nil, nil, nil
+			t.Genres, t.Studios, t.Countries, t.Keywords = nil, nil, nil, nil
 			_ = c.upsert(ctx, t, upsertOpts{detail: true})
 			st.t.IDs.IMDB = ext.IMDBID
 			if ext.TVDBID != 0 {

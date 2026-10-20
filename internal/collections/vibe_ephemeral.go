@@ -404,8 +404,7 @@ func (s *Service) ephemeralPage(ctx context.Context, user *core.User, e *ephemer
 		if offset >= total {
 			return core.Page{Items: []core.Title{}, Total: total}, nil
 		}
-		end := min(offset+limit, total)
-		return core.Page{Items: kept[offset:end], Total: total}, nil
+		return core.Page{Items: kept[offset:pageEnd(offset, limit, total)], Total: total}, nil
 	}
 	return s.cat.Browse(ctx, core.BrowseQuery{
 		Filter: f, Sort: e.vibe.Sort, Desc: e.vibe.Desc,

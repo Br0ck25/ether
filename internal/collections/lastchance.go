@@ -38,14 +38,14 @@ func (s *Service) LastChance(ctx context.Context, user *core.User, key core.Rati
 			if row.lastBuilt.IsZero() || row.buildHash == "" {
 				continue
 			}
-			keys, e := s.loadMembers(ctx, row.id)
+			keys, unshared, e := s.loadMembers(ctx, row.id)
 			if e != nil {
 				return time.Time{}, e
 			}
-			ms = s.newMemberSet(row.spec, keys, row.lastBuilt, row.buildHash)
+			ms = s.newMemberSet(row.spec, keys, unshared, row.lastBuilt, row.buildHash)
 		}
 		// Retain serving's exact filtering/order/limit before comparing rotations.
-		keys := s.filterForUser(ctx, ms.keys, ms.personal, ms.personalX, user, snap)
+		keys := s.filterForUser(ctx, ms.keys, ms.personalRules(), user, snap)
 		if sp.Sort == "personal" {
 			keys = s.personalOrder(ctx, row.id, ms.hash, user, keys)
 		}

@@ -201,6 +201,9 @@ func ParseXMLTV(r io.Reader) (XMLGuide, error) {
 			if err := d.DecodeElement(&p, &el); err != nil {
 				return g, err
 			}
+			if strings.TrimSpace(p.Channel) == "" {
+				continue // channel is required; such an entry belongs to no channel
+			}
 			start, err := xmlTime(p.Start)
 			if err != nil {
 				return g, err
@@ -213,7 +216,10 @@ func ParseXMLTV(r io.Reader) (XMLGuide, error) {
 					return g, err
 				}
 				if !end.After(start) {
-					return g, fmt.Errorf("programme stop must follow start")
+					// Feeds carry zero-length markers and the odd inverted
+					// entry; neither can be aired, and neither should cost
+					// the whole guide.
+					continue
 				}
 			}
 			item := Item{Thumb: p.Icon.Src}

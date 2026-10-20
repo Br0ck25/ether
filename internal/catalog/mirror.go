@@ -29,7 +29,7 @@ type MirrorFingerprint struct {
 
 func (m *Mirror) Fingerprint(ctx context.Context) (MirrorFingerprint, error) {
 	var fp MirrorFingerprint
-	err := m.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(fetched_at),0),COALESCE(MAX(added_at),0) FROM catalog_titles WHERE type IN ('movie','show') AND browsable=1`).Scan(&fp.Count, &fp.MaxFetch, &fp.MaxAdd)
+	err := m.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(MAX(fetched_at),0),COALESCE(MAX(added_at),0) FROM catalog_titles t WHERE `+mirrorBrowsableWhere).Scan(&fp.Count, &fp.MaxFetch, &fp.MaxAdd)
 	return fp, err
 }
 
@@ -39,7 +39,9 @@ type MirrorItem struct {
 	Detailed bool
 }
 
-const mirrorBrowsableWhere = `t.type IN ('movie','show') AND t.browsable=1`
+// mirrorBrowsableWhere is the browsable set as Browse serves it: adult
+// titles are never shown, whatever the sync settings.
+const mirrorBrowsableWhere = `t.type IN ('movie','show') AND t.browsable=1 AND t.adult=0`
 
 func (m *Mirror) Snapshot(ctx context.Context) ([]MirrorItem, error) {
 	rows, err := m.db.QueryContext(ctx, `SELECT t.key,t.type,t.title,t.sort_title,t.year,t.released_ts,t.added_at,t.runtime_sec,t.rating,t.vote_count,t.popularity,t.language,t.content_rating,t.collection_id,t.poster,t.backdrop,t.detail FROM catalog_titles t WHERE `+mirrorBrowsableWhere+` ORDER BY t.popularity DESC,t.key ASC`)
@@ -57,7 +59,7 @@ func (m *Mirror) Snapshot(ctx context.Context) ([]MirrorItem, error) {
 			return nil, err
 		}
 		if released != 0 {
-			t.Released = time.Unix(released, 0)
+			t.Released = time.Unix(released, 0).UTC()
 		}
 		t.Runtime = time.Duration(runtime) * time.Second
 		byKey[t.Key] = len(out)

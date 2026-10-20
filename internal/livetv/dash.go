@@ -1,6 +1,7 @@
 package livetv
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"net/http"
@@ -19,51 +20,11 @@ func (s *Service) ServeDASH(w http.ResponseWriter, r *http.Request, id string, u
 		writeStreamError(w, err)
 		return
 	}
-	ss.mu.Lock()
-	ss.consumed = true
-	if ss.dash == nil {
-		if ss.info.Channel.Kind != "iptv" || s.o.Transcoder == nil {
-			ss.mu.Unlock()
-			writeStreamError(w, core.ErrNotAvailable)
-			return
-		}
-		info := ss.info.MediaInfo
-		var e error
-		if info == nil {
-			info, e = s.probeLiveInputWithHeaders(r.Context(), ss.inputURL, ss.inputHeaders)
-		}
-		if e != nil {
-			ss.mu.Unlock()
-			writeStreamError(w, e)
-			return
-		}
-		copy := *info
-		info = &copy
-		info.Duration = 0
-		ss.info.MediaInfo = info
-		dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectStream: true, AudioStream: -1, SubtitleStream: -1})
-		if dec.Kind == core.DecisionDirectPlay {
-			dec.Kind = core.DecisionRemux
-			dec.VideoCopy = true
-			dec.AudioCopy = true
-		}
-		hs, e := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: ss.inputURL, InputHeaders: flattenInputHeaders(ss.inputHeaders), Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
-		if e != nil {
-			ss.mu.Unlock()
-			writeStreamError(w, e)
-			return
-		}
-		ds, ok := hs.(core.DASHSession)
-		if !ok {
-			hs.Close()
-			ss.mu.Unlock()
-			writeStreamError(w, core.ErrNotAvailable)
-			return
-		}
-		ss.dash = ds
+	ds, err := s.ensureDASH(r.Context(), ss, id)
+	if err != nil {
+		writeStreamError(w, err)
+		return
 	}
-	ds := ss.dash
-	ss.mu.Unlock()
 	rec := httptest.NewRecorder()
 	ds.ServeManifest(rec, r)
 	if rec.Code != 200 {
@@ -81,6 +42,55 @@ func (s *Service) ServeDASH(w http.ResponseWriter, r *http.Request, id string, u
 	if r.Method != "HEAD" {
 		fmt.Fprint(w, body)
 	}
+}
+
+// ensureDASH returns the session's DASH transcoder, starting it on first
+// use. A session closed since it was looked up gets none: close has already
+// run and would never stop a transcoder started now.
+func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.DASHSession, error) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.closed {
+		return nil, core.ErrNotFound
+	}
+	ss.consumed = true
+	if ss.dash != nil {
+		return ss.dash, nil
+	}
+	if ss.info.Channel.Kind != "iptv" || s.o.Transcoder == nil {
+		return nil, core.ErrNotAvailable
+	}
+	info := ss.info.MediaInfo
+	if info == nil {
+		var err error
+		if info, err = s.probeLiveInputWithHeaders(ctx, ss.inputURL, ss.inputHeaders); err != nil {
+			return nil, err
+		}
+		if info == nil {
+			return nil, core.ErrNotAvailable
+		}
+	}
+	copy := *info
+	info = &copy
+	info.Duration = 0
+	ss.info.MediaInfo = info
+	dec := s.o.Transcoder.Decide(*info, ss.caps, core.DecideOptions{DirectStream: true, AudioStream: -1, SubtitleStream: -1})
+	if dec.Kind == core.DecisionDirectPlay {
+		dec.Kind = core.DecisionRemux
+		dec.VideoCopy = true
+		dec.AudioCopy = true
+	}
+	hs, err := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: ss.inputURL, InputHeaders: flattenInputHeaders(ss.inputHeaders), Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
+	if err != nil {
+		return nil, err
+	}
+	ds, ok := hs.(core.DASHSession)
+	if !ok {
+		hs.Close()
+		return nil, core.ErrNotAvailable
+	}
+	ss.dash = ds
+	return ds, nil
 }
 
 func (s *Service) ServeDASHPart(w http.ResponseWriter, r *http.Request, id string, u *core.User, rep, n int, init bool) {
