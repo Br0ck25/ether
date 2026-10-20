@@ -212,7 +212,7 @@ func (s *Server) artPath(ctx context.Context, key core.RatingKey, element string
 			u := FromContext(ctx).User
 			if p, err := s.d.Collections.Items(ctx, u, key, 0, 20); err == nil {
 				for i := range p.Items {
-					if p.Items[i].PosterPath != "" && s.titleVisible(u, &p.Items[i]) {
+					if p.Items[i].PosterPath != "" && s.visibleTitle(ctx, u, &p.Items[i]) {
 						return p.Items[i].PosterPath, 500, nil
 					}
 				}

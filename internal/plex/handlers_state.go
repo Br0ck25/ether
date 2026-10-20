@@ -372,12 +372,21 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	for i := range titles {
 		byKey[titles[i].Key] = &titles[i]
 	}
+	visible := map[core.RatingKey]bool{}
 	for i, h := range hist {
 		t, ok := byKey[h.Key]
 		// History is rendered by hand, not through renderTitles: apply the
-		// same visibility guard so titles restricted after they were
-		// watched stay hidden.
-		if !ok || !s.titleVisible(pr.User, t) {
+		// same visibility guard (the show's policy included) so titles
+		// restricted after they were watched stay hidden.
+		if !ok {
+			continue
+		}
+		v, seen := visible[t.Key]
+		if !seen {
+			v = s.visibleTitle(ctx, pr.User, t)
+			visible[t.Key] = v
+		}
+		if !v {
 			continue
 		}
 		md := model.Metadata{
