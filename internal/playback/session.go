@@ -195,7 +195,7 @@ type session struct {
 	genSince   time.Time // when the current generation started serving
 	graceUntil time.Time // slow-source checks are ignored before this
 	slowChecks int       // consecutive slow evaluations
-	lastSrcPos int64     // furthest source offset read on the current generation
+	lastSrcPos int64     // latest source read position on the current generation
 	expectPos  int64     // next sequential read offset (-1 = unknown)
 }
 

@@ -96,9 +96,9 @@ func (s *session) noteReadPos(off int64, n int, now time.Time, grace time.Durati
 		s.slowChecks = 0
 		s.speed.reset()
 	}
-	if end := off + int64(n); end > s.lastSrcPos {
-		s.lastSrcPos = end
-	}
+	// A tail/index probe or a previous forward seek is not the playhead.
+	// Following it with an earlier media read must move this position back.
+	s.lastSrcPos = off + int64(n)
 	s.expectPos = off + int64(n)
 }
 
@@ -153,7 +153,7 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 	if downs >= m.opts.MaxDownFailovers {
 		return
 	}
-	_, hasHLS := m.deps.HLSLookup(s.id)
+	hls, hasHLS := m.deps.HLSLookup(s.id)
 	if retry, ok := g.src.(interface{ RetryDirectPlay() bool }); ok && retry.RetryDirectPlay() && !hasHLS && decision == core.DecisionDirectPlay {
 		// Byte-range players do not renegotiate when delivery slows. Keep
 		// their representation intact; bitrate adaptation belongs to an
@@ -190,6 +190,11 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 	slow := s.slowChecks
 	at := g.timeMapSnapshot().TimeAt(s.lastSrcPos)
 	s.speedMu.Unlock()
+	if position, ok := hls.(interface{ RequestedPosition() time.Duration }); ok {
+		// The segment requested by the player is a better resume point
+		// than the encoder's source reads, which may probe the file tail.
+		at = position.RequestedPosition()
+	}
 	if slow < m.opts.SpeedSlowChecks {
 		return // hysteresis: one slow window is not enough
 	}

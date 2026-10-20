@@ -179,6 +179,14 @@ func (s *Session) HWAccelerated() bool {
 // SegmentDuration is the session's segment length.
 func (s *Session) SegmentDuration() time.Duration { return s.segDur }
 
+// RequestedPosition is the title position of the player's latest segment
+// request. Source reads can be far ahead or at the container's tail index.
+func (s *Session) RequestedPosition() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.segStart(s.lastReq)
+}
+
 // Container is "mpegts", "fmp4", or explicitly negotiated "mkv".
 func (s *Session) Container() string { return s.container }
 
