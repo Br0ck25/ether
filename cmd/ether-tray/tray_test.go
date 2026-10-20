@@ -59,6 +59,29 @@ func TestPollIdentityOnly(t *testing.T) {
 	}
 }
 
+func TestPollNegotiatesIdentityXMLAndStatusJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/identity" {
+			if strings.Contains(r.Header.Get("Accept"), "application/json") {
+				fmt.Fprint(w, `{"MediaContainer":{"machineIdentifier":"abc123"}}`)
+				return
+			}
+			fmt.Fprint(w, `<MediaContainer machineIdentifier="abc123" version="1.2.3"/>`)
+			return
+		}
+		if r.Header.Get("Accept") != "application/json" {
+			http.Error(w, "JSON required", http.StatusNotAcceptable)
+			return
+		}
+		fmt.Fprint(w, `{"version":"0.2.0"}`)
+	}))
+	defer srv.Close()
+	st, err := NewStatusClient(srv.URL, srv.Client()).Poll(context.Background())
+	if err != nil || !st.Running || st.Version != "0.2.0" {
+		t.Fatalf("status=%+v err=%v", st, err)
+	}
+}
+
 func TestPollServerDown(t *testing.T) {
 	s := httptest.NewServer(http.NotFoundHandler())
 	url := s.URL

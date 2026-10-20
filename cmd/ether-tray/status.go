@@ -97,7 +97,13 @@ func (c *StatusClient) get(ctx context.Context, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/json, application/xml")
+	if path == "/identity" {
+		// Identity is decoded as XML. Ether and PMS prefer JSON whenever
+		// application/json appears anywhere in Accept, even after XML.
+		req.Header.Set("Accept", "application/xml")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
 	req.Header.Set("X-Plex-Product", "Ether Tray")
 	req.Header.Set("X-Plex-Client-Identifier", "ether-tray")
 	resp, err := c.http.Do(req)
