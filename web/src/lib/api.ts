@@ -39,6 +39,7 @@ import type {
   SetupStatus,
   SourceStartup,
   TestResult,
+  UpdateStatus,
   UsenetProvider,
 } from "./types";
 
@@ -232,6 +233,10 @@ export const api = {
   logs: (params: { limit?: number; level?: string; q?: string }) =>
     apiFetch<{ entries: LogEntry[]; total: number }>(`/logs${qs(params)}`),
   clearLogs: () => apiFetch<{ ok: boolean }>("/logs", { method: "DELETE" }),
+
+  // ---- Updates -----------------------------------------------------------------
+  updateStatus: () => apiFetch<UpdateStatus>("/updates/"),
+  updateNow: (force = false) => post<UpdateStatus>("/updates/apply", { force }),
 
   // ---- Users (limits) ----------------------------------------------------------
   users: async () => (await apiFetch<{ users: EtherUser[] | null }>("/users")).users ?? [],

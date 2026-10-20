@@ -23,11 +23,13 @@ folder). Ether ships no content, providers or indexers; see
 1. Download `EtherSetup-<version>.exe` from the releases page and run it
    (administrator approval is needed to register the service).
 2. Ether installs to `C:\Program Files\Ether`, registers the **Ether**
-   Windows service (automatic start), adds a firewall rule for TCP 32400,
-   and puts the Ether tray icon in your login items.
-3. Settings and data live in `%ProgramData%\Ether` (service) /
-   `%LOCALAPPDATA%\Ether`. Uninstalling keeps this data; delete the
-   folder to purge.
+   Windows service (delayed automatic start; restarted automatically if
+   it ever stops), adds a firewall rule for TCP 32400, and puts the Ether
+   tray icon in your login items.
+3. Settings, database, cache and logs live in `%ProgramData%\Ether`.
+   The folder holds credentials, so it is readable only by SYSTEM and
+   Administrators. Uninstalling keeps this data; delete the folder to
+   purge.
 
 Manage the service with `ether.exe service start|stop|restart|status`
 from an elevated prompt, or from the tray menu.
@@ -104,9 +106,12 @@ sudo ./ether service start
 ./ether service status
 ```
 
-`ETHER_DATA_DIR` overrides the data directory (defaults:
-`/var/lib/ether` as root on Linux, `~/Library/Application Support/Ether`
-on macOS, `%LOCALAPPDATA%\Ether` on Windows).
+`ETHER_DATA_DIR` (or `--data-dir`, which `ether service install
+--data-dir DIR` bakes into the service) overrides the data directory
+(defaults: `/var/lib/ether` as root on Linux,
+`~/Library/Application Support/Ether` on macOS, `%ProgramData%\Ether`
+on Windows). Logs are written to `<data dir>/logs/ether.log` (rotated)
+and fatal crash traces to `<data dir>/logs/crash.log`.
 
 ## Remote access / port forwarding
 

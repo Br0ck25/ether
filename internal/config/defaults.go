@@ -39,12 +39,14 @@ func Defaults(dataDir string) Config {
 			SecureConnections: "preferred",
 		},
 		Cache: Cache{
-			Dir:                 filepath.Join(dataDir, "cache"),
-			BudgetBytes:         50 << 30,
-			PrefetchNextEpisode: true,
-			PrefetchBytes:       64 << 20,
-			KeepInProgressWarm:  true,
-			NextEpisodeAt:       0.8,
+			Dir:                  filepath.Join(dataDir, "cache"),
+			BudgetBytes:          50 << 30,
+			PrefetchNextEpisode:  true,
+			PrefetchBytes:        64 << 20,
+			KeepInProgressWarm:   true,
+			NextEpisodeAt:        0.8,
+			InProgressPinMaxAge:  Duration(30 * 24 * time.Hour),
+			InProgressPinPercent: 50,
 		},
 		Catalog: Catalog{
 			Language:        "en-US",
@@ -83,7 +85,7 @@ func Defaults(dataDir string) Config {
 			Expiry:               Duration(24 * time.Hour),
 			MaxHeight:            1080,
 		},
-		Updates: Updates{Channel: "stable", AutoUpdate: false},
+		Updates: Updates{Channel: "stable", AutoUpdate: false, MaintenanceStart: "03:00", MaintenanceEnd: "06:00"},
 	}
 }
 

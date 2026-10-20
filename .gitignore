@@ -1,5 +1,9 @@
 /dist/
 /bin/
+/ether
+/ether-tray
+/ether.exe
+/ether-tray.exe
 node_modules/
 *.db
 *.db-*

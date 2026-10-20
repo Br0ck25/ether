@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 )
@@ -48,6 +49,16 @@ func (v *validator) oneOf(field, s string, allowed ...string) {
 		}
 	}
 	v.add(field, "must be one of: %s", strings.Join(allowed, ", "))
+}
+
+// clock accepts an empty value (default) or a 24-hour "HH:MM" time.
+func (v *validator) clock(field, s string) {
+	if s == "" {
+		return
+	}
+	if _, err := time.Parse("15:04", s); err != nil || len(s) != 5 {
+		v.add(field, "must be a 24-hour time like 03:00")
+	}
 }
 
 // ValidateConfig checks a candidate config for the problems the owner can
@@ -243,5 +254,7 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	if cfg.Updates.FeedURL != "" {
 		v.httpURL("updates.feedUrl", cfg.Updates.FeedURL, false)
 	}
+	v.clock("updates.maintenanceStart", cfg.Updates.MaintenanceStart)
+	v.clock("updates.maintenanceEnd", cfg.Updates.MaintenanceEnd)
 	return v.errs
 }

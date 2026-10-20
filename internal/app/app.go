@@ -135,6 +135,7 @@ type App struct {
 	migration         *migrate.Service
 	invites           *invites.Service
 	safety            *safety.Service
+	updates           *updateState
 	plexServer        *plex.Server
 	handler           http.Handler
 	closers           []func()
@@ -156,6 +157,9 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	}
 	a.log = slog.New(admin.TeeHandler(base.Handler(), a.logs))
 	slog.SetDefault(a.log)
+	if err := a.confirmUpdateStartup(); err != nil {
+		return nil, err
+	}
 
 	var err error
 	if a.cfg, err = config.Open(opts.DataDir); err != nil {
@@ -185,6 +189,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		a.Close()
 		return nil, err
 	}
+	a.initUpdates()
 	return a, nil
 }
 
@@ -501,12 +506,14 @@ func (a *App) Run(ctx context.Context) error {
 	defer background.Wait()
 	defer cancel()
 	background.start(func() { a.housekeeping(ctx) })
+	background.start(func() { a.maintainDB(ctx) })
 	background.start(func() { a.stats.Run(ctx) })
 	background.start(func() { a.notifications.Run(ctx) })
 	background.start(func() { a.watchlist.Run(ctx) })
 	background.start(func() { a.ratings.Run(ctx) })
 	background.start(func() { a.plexDiscovery.Run(ctx) })
 	background.start(func() { a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) }) })
+	background.start(func() { a.runUpdates(ctx, cancel) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)
@@ -525,19 +532,27 @@ func (a *App) Run(ctx context.Context) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(dl) }()
+	// Hang watchdog: restart via the supervisor if we stop answering.
+	watchdogErr := make(chan error, 1)
+	go func() { watchdogErr <- newWatchdog(probeURL(ln.Addr()), a.log.With("component", "watchdog")).run(ctx) }()
+	var runErr error
 	select {
 	case <-ctx.Done():
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
+	case runErr = <-watchdogErr:
 	}
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	_ = srv.Shutdown(shutdown)
 	a.registrar.Stop()
 	a.gdm.Stop()
-	return nil
+	if runErr != nil {
+		return runErr
+	}
+	return a.runResult()
 }
 
 func (a *App) housekeeping(ctx context.Context) {

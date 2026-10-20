@@ -36,6 +36,7 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 		},
 		Logger: a.log.With("component", "release-console"),
 	})
+	m["updates"] = a.updatesHandler()
 	a.discoveryHandlers(m)
 	adoptionHandlers(a, m)
 	return m

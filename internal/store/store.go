@@ -44,7 +44,10 @@ func Open(ctx context.Context, dataDir string) (*sql.DB, error) {
 
 // OpenPath opens a database file; ":memory:" works for tests (single conn).
 func OpenPath(ctx context.Context, path string) (*sql.DB, error) {
-	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+	// journal_size_limit caps the WAL left on disk after a checkpoint; without
+	// it one large transaction leaves a WAL file that never shrinks.
+	dsn := "file:" + path + "?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)" +
+		fmt.Sprintf("&_pragma=journal_size_limit(%d)", journalSizeLimit)
 	if path == ":memory:" {
 		dsn = "file::memory:?_pragma=foreign_keys(1)"
 	}
@@ -59,6 +62,9 @@ func OpenPath(ctx context.Context, path string) (*sql.DB, error) {
 		db.Close()
 		return nil, err
 	}
+	// Recommended at open by the SQLite docs: analyse tables whose stats are
+	// missing or stale, bounded by the 0x10000 analysis limit so it is cheap.
+	_, _ = db.ExecContext(ctx, `PRAGMA optimize=0x10002`)
 	return db, nil
 }
 

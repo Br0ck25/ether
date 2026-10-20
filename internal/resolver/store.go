@@ -43,14 +43,18 @@ func (s *Service) loadPersisted(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT release_id, reason FROM resolver_bad`)
+	// Owner blocks (manual) never expire; automatic marks are loaded only
+	// while inside badRetention of when they were last marked.
+	rows, err := s.db.QueryContext(ctx, `SELECT release_id, reason, updated_at, manual FROM resolver_bad WHERE manual=1 OR updated_at>=?`, s.now().Add(-badRetention).Unix())
 	if err == nil {
 		defer rows.Close()
 		s.mu.Lock()
 		for rows.Next() {
 			var id, reason string
-			if rows.Scan(&id, &reason) == nil {
-				s.bad[id] = reason
+			var at int64
+			var manual int
+			if rows.Scan(&id, &reason, &at, &manual) == nil {
+				s.bad[id] = badMark{reason: reason, at: time.Unix(at, 0), manual: manual == 1}
 			}
 		}
 		s.mu.Unlock()
@@ -132,8 +136,10 @@ type availEntry struct {
 }
 
 func (s *Service) setAvailability(ctx context.Context, key int64, available bool, ttl time.Duration) {
-	exp := s.now().Add(ttl)
+	now := s.now()
+	exp := now.Add(ttl)
 	s.mu.Lock()
+	boundMap(s.avail, maxAvailEntries, func(e availEntry) bool { return now.After(e.expires) })
 	s.avail[key] = availEntry{available: available, expires: exp}
 	s.mu.Unlock()
 	if s.db != nil {
@@ -168,7 +174,9 @@ func (s *Service) getAvailability(ctx context.Context, key int64) (availEntry, b
 			if s.now().After(e.expires) {
 				return availEntry{}, false
 			}
+			now := s.now()
 			s.mu.Lock()
+			boundMap(s.avail, maxAvailEntries, func(e availEntry) bool { return now.After(e.expires) })
 			s.avail[key] = e
 			s.mu.Unlock()
 			return e, true

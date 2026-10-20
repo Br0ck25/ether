@@ -49,3 +49,16 @@ describe("Overview", () => {
     );
   });
 });
+
+describe("Updates settings", () => {
+  it("shows update status and asks the server to install", async () => {
+    const { fake } = renderApp("/settings/updates");
+    expect(await screen.findByText(/Version 0\.3\.0/, {}, WAIT)).toBeInTheDocument();
+    expect(screen.getByText(/03:00–06:00 local time/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Update now" }));
+    expect(
+      await screen.findByRole("button", { name: "Install now anyway" }, WAIT),
+    ).toBeInTheDocument();
+    expect(calls(fake, "POST", "/updates/apply").length).toBe(1);
+  });
+});

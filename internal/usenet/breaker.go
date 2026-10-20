@@ -10,12 +10,16 @@ import (
 const (
 	StateOK       = "ok"
 	StateBackoff  = "backoff"     // connection failures; retrying after a delay
-	StateAuthFail = "auth_failed" // disabled until the provider's settings change
+	StateAuthFail = "auth_failed" // disabled; re-probed after a growing backoff or on a settings change
 	StateClosed   = "closed"
 )
 
 // breaker is a per-provider circuit breaker. Authentication failures open it
-// permanently (a new pool, created when settings change, starts closed).
+// until a single background probe (see pool.authProbe) logs in again; probes
+// run after authMin, doubling per failed probe up to authMax, so a provider
+// whose auth service has a transient outage heals by itself while bad
+// credentials cost one login attempt per backoff. A new pool (created when
+// settings change) starts closed.
 // Connection failures open it for an exponentially growing backoff once
 // failThreshold consecutive connections or commands have failed; a successful
 // article/STAT response resets it. A successful login alone does not.
@@ -26,18 +30,24 @@ type breaker struct {
 	maxBackoff    time.Duration
 	failThreshold int
 
-	failures int
-	until    time.Time
-	authErr  error
-	lastErr  error
-	lastAt   time.Time
+	authMin, authMax time.Duration
+
+	failures  int
+	until     time.Time
+	authErr   error
+	authFails int       // consecutive failed logins (initial failure + probes)
+	authUntil time.Time // next auth probe is due
+	probing   bool      // an auth probe is in flight
+	lastErr   error
+	lastAt    time.Time
 }
 
 func newBreaker(minB, maxB time.Duration, threshold int, now func() time.Time) *breaker {
 	if threshold < 1 {
 		threshold = 1
 	}
-	return &breaker{now: now, minBackoff: minB, maxBackoff: maxB, failThreshold: threshold}
+	return &breaker{now: now, minBackoff: minB, maxBackoff: maxB, failThreshold: threshold,
+		authMin: DefaultAuthRetryMin, authMax: DefaultAuthRetryMax}
 }
 
 // allow returns nil if the provider may be used now.
@@ -80,9 +90,56 @@ func (b *breaker) connFailure(err error) time.Duration {
 	return d
 }
 
-func (b *breaker) authFailure(err error) {
+// authFailure disables the provider after a rejected login and returns the
+// delay until the next probe. Failures reported while already disabled and
+// not probing (concurrent dials racing the first one) do not grow the
+// backoff.
+func (b *breaker) authFailure(err error) time.Duration {
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	b.lastErr, b.lastAt = err, now
+	if b.authErr != nil && !b.probing {
+		return max(b.authUntil.Sub(now), 0)
+	}
+	b.probing = false
 	b.authErr = err
+	b.authFails++
+	d := b.authMin
+	for i := 1; i < b.authFails && d < b.authMax; i++ {
+		d *= 2
+	}
+	d = min(d, b.authMax)
+	b.authUntil = now.Add(d)
+	return d
+}
+
+// authProbeDue reports whether an auth-disabled provider is due a login
+// probe, and if so claims it so only one runs at a time.
+func (b *breaker) authProbeDue() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.authErr == nil || b.probing || b.now().Before(b.authUntil) {
+		return false
+	}
+	b.probing = true
+	return true
+}
+
+// authRecovered re-enables the provider after a successful login probe.
+func (b *breaker) authRecovered() {
+	b.mu.Lock()
+	b.authErr, b.authFails, b.authUntil, b.probing = nil, 0, time.Time{}, false
+	b.mu.Unlock()
+}
+
+// authProbeInconclusive ends a probe that failed for a reason other than
+// the credentials (e.g. the network is down); it is retried after authMin
+// without growing the backoff.
+func (b *breaker) authProbeInconclusive(err error) {
+	b.mu.Lock()
+	b.probing = false
+	b.authUntil = b.now().Add(b.authMin)
 	b.lastErr, b.lastAt = err, b.now()
 	b.mu.Unlock()
 }
@@ -99,7 +156,7 @@ func (b *breaker) state() (state string, until time.Time, lastErr error, lastAt 
 	defer b.mu.Unlock()
 	switch {
 	case b.authErr != nil:
-		state = StateAuthFail
+		return StateAuthFail, b.authUntil, b.lastErr, b.lastAt
 	case b.now().Before(b.until):
 		state = StateBackoff
 	default:

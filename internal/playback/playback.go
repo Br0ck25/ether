@@ -62,6 +62,11 @@ type Options struct {
 	DataDir string
 	// IdleTimeout ends sessions without viewer activity (default 2m).
 	IdleTimeout time.Duration
+	// WriteStallTimeout fails a direct-play write that makes no progress
+	// for this long, so a client that stopped reading releases its source
+	// (default IdleTimeout: a paused player is not cut off before its
+	// session would be reaped anyway).
+	WriteStallTimeout time.Duration
 	// StoppedGrace ends a session this long after a "stopped" timeline (default 1m).
 	StoppedGrace time.Duration
 	// PrepareTimeout bounds resolve+open+probe (default 90s).
@@ -113,6 +118,7 @@ func (o *Options) defaults() {
 		}
 	}
 	def(&o.IdleTimeout, 2*time.Minute)
+	def(&o.WriteStallTimeout, o.IdleTimeout)
 	def(&o.StoppedGrace, time.Minute)
 	def(&o.PrepareTimeout, 90*time.Second)
 	def(&o.ProbeTimeout, 30*time.Second)

@@ -678,6 +678,7 @@ func (s *Session) serveFiles(w http.ResponseWriter, r *http.Request, paths []str
 		}
 	}
 	s.setSegmentHeaders(w)
+	armSegmentDeadline(w)
 	s.serveCounted(w, r, filepath.Base(paths[0]), mod, bytes.NewReader(buf.Bytes()), n)
 	return true
 }
@@ -740,8 +741,22 @@ func (s *Session) serveFile(w http.ResponseWriter, r *http.Request, path string,
 	if n == InitSegment {
 		name = initSegmentName(s.container)
 	}
+	armSegmentDeadline(w)
 	s.serveCounted(w, r, name, st.ModTime(), f, n)
 	return true
+}
+
+// segmentWriteTimeout bounds delivering one finished segment. Servers have
+// no WriteTimeout (direct play lasts hours), so without it a client that
+// stops reading would hold the request goroutine and the open segment file
+// (which Windows then cannot delete on session cleanup) forever. A segment
+// that takes longer than this is far below playable bitrate anyway.
+const segmentWriteTimeout = 5 * time.Minute
+
+// armSegmentDeadline sets the connection write deadline just before a
+// segment is written (never before waiting for ffmpeg).
+func armSegmentDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(segmentWriteTimeout))
 }
 
 // throttleLocked keeps ffmpeg from running far ahead of the player, so a

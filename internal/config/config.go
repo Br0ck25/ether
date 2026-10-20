@@ -155,6 +155,13 @@ type Cache struct {
 	PrefetchBytes       int64   `json:"prefetchBytes"` // opening bytes pulled ahead
 	KeepInProgressWarm  bool    `json:"keepInProgressWarm"`
 	NextEpisodeAt       float64 `json:"nextEpisodeAt"` // fraction of current episode, e.g. 0.8
+	// InProgressPinMaxAge: an in-progress title nobody has watched for this
+	// long stops pinning its release in the cache (0 = default 30 days).
+	InProgressPinMaxAge Duration `json:"inProgressPinMaxAge,omitempty"`
+	// InProgressPinPercent caps the share of BudgetBytes that in-progress
+	// pins may hold; the least recently watched titles lose their pin first
+	// (0 = default 50, max 100).
+	InProgressPinPercent int `json:"inProgressPinPercent,omitempty"`
 }
 
 type Catalog struct {
@@ -280,6 +287,11 @@ type Updates struct {
 	Channel    string `json:"channel"` // "stable", "beta"
 	AutoUpdate bool   `json:"autoUpdate"`
 	FeedURL    string `json:"feedUrl"`
+	// MaintenanceStart/End bound the local-time window ("HH:MM") in which
+	// a downloaded update may be installed automatically. The window may
+	// wrap midnight; equal values mean "any time".
+	MaintenanceStart string `json:"maintenanceStart"`
+	MaintenanceEnd   string `json:"maintenanceEnd"`
 }
 
 // Spike serves local files as a library so the Plex front end can be
@@ -312,30 +324,40 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 }
 func (d Duration) D() time.Duration { return time.Duration(d) }
 
-// DefaultDataDir is where Ether keeps config, database and cache.
+// DefaultDataDir is where Ether keeps config, database and cache. On
+// Windows that is %ProgramData%\Ether: the server runs as a LocalSystem
+// service, so a per-user directory would depend on who installed it.
 func DefaultDataDir() string {
-	if v := os.Getenv("ETHER_DATA_DIR"); v != "" {
+	return defaultDataDir(runtime.GOOS, os.Getenv, os.UserHomeDir, os.Geteuid)
+}
+
+func defaultDataDir(goos string, getenv func(string) string, home func() (string, error), euid func() int) string {
+	if v := getenv("ETHER_DATA_DIR"); v != "" {
 		return v
 	}
-	switch runtime.GOOS {
+	switch goos {
 	case "windows":
-		if v := os.Getenv("LOCALAPPDATA"); v != "" {
-			return filepath.Join(v, "Ether")
+		base := getenv("PROGRAMDATA")
+		if base == "" {
+			base = `C:\ProgramData`
 		}
+		// Join with a backslash explicitly so the result is right even
+		// when computed (in tests) on a non-Windows host.
+		return strings.TrimRight(base, `\/`) + `\Ether`
 	case "darwin":
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "Ether")
+		if h, err := home(); err == nil {
+			return filepath.Join(h, "Library", "Application Support", "Ether")
 		}
 	case "linux":
-		if os.Geteuid() == 0 {
+		if euid() == 0 {
 			return "/var/lib/ether"
 		}
-		if v := os.Getenv("XDG_DATA_HOME"); v != "" {
+		if v := getenv("XDG_DATA_HOME"); v != "" {
 			return filepath.Join(v, "ether")
 		}
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "ether")
+	h, _ := home()
+	return filepath.Join(h, ".local", "share", "ether")
 }
 
 // Store loads, saves and broadcasts the config.
@@ -430,9 +452,5 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return writeFileAtomic(s.path, b, 0o600)
 }

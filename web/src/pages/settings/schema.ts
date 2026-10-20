@@ -416,7 +416,26 @@ export const UPDATES: FieldGroup[] = [
           { value: "beta", label: "Beta" },
         ],
       },
-      { key: "autoUpdate", label: "Install updates automatically", kind: "bool" },
+      {
+        key: "autoUpdate",
+        label: "Install updates automatically",
+        kind: "bool",
+        help: "Installs during the maintenance window, once nobody is watching.",
+      },
+      {
+        key: "maintenanceStart",
+        label: "Maintenance window starts",
+        kind: "text",
+        placeholder: "03:00",
+        help: "24-hour local time.",
+      },
+      {
+        key: "maintenanceEnd",
+        label: "Maintenance window ends",
+        kind: "text",
+        placeholder: "06:00",
+        help: "May wrap past midnight.",
+      },
       {
         key: "feedUrl",
         label: "Update feed",

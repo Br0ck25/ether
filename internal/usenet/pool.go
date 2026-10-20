@@ -119,6 +119,12 @@ func newPool(key string, cfg config.UsenetProvider, o *Options, log *slog.Logger
 		stop:   make(chan struct{}),
 	}
 	p.minIdle.Store(int32(effectiveMinIdle(cfg, globalMinIdle)))
+	if o.AuthRetryMin > 0 {
+		p.brk.authMin = o.AuthRetryMin
+	}
+	if o.AuthRetryMax > 0 {
+		p.brk.authMax = max(o.AuthRetryMax, p.brk.authMin)
+	}
 	p.wg.Add(1)
 	go p.janitor()
 	return p
@@ -270,8 +276,8 @@ func (p *pool) dialNew(ctx context.Context) (*Conn, error) {
 			return nil, ctxErr(ctx)
 		case errors.Is(err, ErrAuthFailed):
 			p.errs.Add(1)
-			p.brk.authFailure(err)
-			p.log.Error("usenet: provider rejected credentials; disabled until its settings change", "err", err)
+			d := p.brk.authFailure(err)
+			p.log.Error("usenet: provider rejected credentials; disabled until a login probe succeeds or its settings change", "err", err, "retry_in", d)
 		case errors.Is(err, ErrServiceUnavailable) && p.liveCount() > 0:
 			// The server is up and serving our other connections; the
 			// account is just at its real connection limit. Shrink to it
@@ -373,6 +379,10 @@ func (p *pool) janitor() {
 }
 
 func (p *pool) sweep() {
+	if p.brk.authProbeDue() {
+		p.wg.Add(1) // janitor holds a count, so this cannot race close's Wait
+		go p.authProbe()
+	}
 	now := time.Now()
 	p.mu.Lock()
 	restore := !p.limitedUntil.IsZero() && now.After(p.limitedUntil)
@@ -666,6 +676,39 @@ func (p *pool) statMany(ctx context.Context, ids []string) (map[string]bool, err
 	p.latency.add(rtt)
 	p.latMu.Unlock()
 	return result, nil
+}
+
+// authProbe tries one login on a provider disabled by an authentication
+// failure. Success re-enables it; another rejection doubles the delay to
+// the next probe; any other error retries after the minimum delay.
+func (p *pool) authProbe() {
+	defer p.wg.Done()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-p.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	c, err := Dial(ctx, p.dialOptions())
+	switch {
+	case err == nil:
+		p.dials.Add(1)
+		p.brk.authRecovered()
+		p.log.Info("usenet: provider accepted credentials again; re-enabled")
+		go c.Quit()
+	case ctx.Err() != nil:
+		p.brk.authProbeInconclusive(err)
+	case errors.Is(err, ErrAuthFailed):
+		p.errs.Add(1)
+		d := p.brk.authFailure(err)
+		p.log.Warn("usenet: provider still rejects credentials", "err", err, "retry_in", d)
+	default:
+		p.brk.authProbeInconclusive(err)
+		p.log.Debug("usenet: auth probe could not reach provider", "err", err)
+	}
 }
 
 // warm opens and authenticates one connection and returns it to the idle pool.

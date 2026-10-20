@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -85,7 +86,44 @@ func newResumeStore(db *sql.DB, dataDir string) (*resumeStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("playback: nzb dir: %w", err)
 	}
-	return &resumeStore{db: db, dir: dir}, nil
+	s := &resumeStore{db: db, dir: dir}
+	s.sweep(context.Background())
+	return s, nil
+}
+
+// sweepMinAge keeps the startup sweep away from files a concurrent save may
+// still be writing or about to reference.
+const sweepMinAge = time.Hour
+
+// sweep removes temp files left by a crash mid-write and NZB files no
+// resume record references (e.g. the process died between writing the
+// file and inserting its row). It runs once at startup.
+func (s *resumeStore) sweep(ctx context.Context) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-sweepMinAge)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(name, "nzb-") && strings.HasSuffix(name, ".tmp"):
+			_ = os.Remove(filepath.Join(s.dir, name))
+		case strings.HasSuffix(name, ".nzb"):
+			hash := strings.TrimSuffix(name, ".nzb")
+			var n int
+			if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM playback_resume WHERE nzb_hash=?`, hash).Scan(&n); err == nil && n == 0 {
+				_ = os.Remove(filepath.Join(s.dir, name))
+			}
+		}
+	}
 }
 
 func nzbHash(b []byte) string {
