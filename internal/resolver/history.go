@@ -39,7 +39,7 @@ type HistoryFilter struct {
 }
 
 // compactTrace bounds a trace for storage: the winner, the pinned release
-// and accepted candidates are kept ahead of rejected ones.
+// and attempted candidates are kept ahead of untried and statically rejected ones.
 func compactTrace(tr Trace) Trace {
 	if len(tr.Candidates) <= maxTraceCandidates {
 		return tr
@@ -50,9 +50,9 @@ func compactTrace(tr Trace) Trace {
 			return 0
 		case c.Pinned:
 			return 1
-		case !c.Rejected:
+		case c.Attempted || c.HealthChecked || c.FetchDuration > 0 || c.HealthDuration > 0:
 			return 2
-		case c.HealthChecked:
+		case !c.Rejected:
 			return 3
 		}
 		return 4

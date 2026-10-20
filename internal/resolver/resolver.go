@@ -55,7 +55,8 @@ type CandidateTrace struct {
 	Rejected       bool          `json:"rejected"`
 	Reason         string        `json:"reason,omitempty"`
 	Size           int64         `json:"size,omitempty"`
-	Pinned         bool          `json:"pinned,omitempty"` // the owner's pin for the title
+	Pinned         bool          `json:"pinned,omitempty"`    // the owner's pin for the title
+	Attempted      bool          `json:"attempted,omitempty"` // fetch or health validation actually ran
 	HealthChecked  bool          `json:"healthChecked"`
 	Healthy        bool          `json:"healthy"`
 	FetchDuration  time.Duration `json:"fetchDuration"`
@@ -518,7 +519,10 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	cands = s.prepareSources(ctx, cands, req.Title, &trace, &checks)
 	trace.SourcePreparationDuration = time.Since(prepareStart)
 	if rcfg.OptimisticStart && !preferTried {
+		at := time.Now()
 		nzb, err := s.indexer.FetchNZB(ctx, cands[0].rel)
+		trace.Candidates[cands[0].trace].Attempted = true
+		trace.Candidates[cands[0].trace].FetchDuration = time.Since(at)
 		if err == nil {
 			winner := cands[0]
 			trace.Winner = winner.rel.ID

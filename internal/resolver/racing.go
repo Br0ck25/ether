@@ -139,6 +139,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				v = <-ordered[j]
 			}
 			ct := &tr.Candidates[cands[v.index].trace]
+			ct.Attempted = true
 			ct.FetchDuration = v.fetchDuration
 			ct.HealthDuration = v.healthDuration
 			ct.HealthChecked = v.healthChecked

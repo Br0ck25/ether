@@ -578,3 +578,23 @@ func TestBlockingAPinnedReleaseSurfacesOnThePin(t *testing.T) {
 		t.Fatalf("trace %q %q", tr.PinStatus, tr.TitleName)
 	}
 }
+
+// A slow failed grab is more useful than fifty untried alternatives when
+// explaining startup latency. Keep even zero-duration attempts (coarse clocks).
+func TestCompactTraceRetainsFailedAttemptsAheadOfUntriedCandidates(t *testing.T) {
+	tr := Trace{Winner: "winner"}
+	for i := 0; i < 80; i++ {
+		tr.Candidates = append(tr.Candidates, CandidateTrace{ReleaseID: fmt.Sprint(i)})
+	}
+	tr.Candidates = append(tr.Candidates,
+		CandidateTrace{ReleaseID: "failed-fetch", Attempted: true, Rejected: true, Reason: "HTTP 429"},
+		CandidateTrace{ReleaseID: "failed-health", HealthChecked: true, Rejected: true},
+		CandidateTrace{ReleaseID: "winner", Attempted: true, Healthy: true})
+	got := compactTrace(tr)
+	if len(got.Candidates) != maxTraceCandidates || got.Candidates[0].ReleaseID != "winner" || got.Candidates[1].ReleaseID != "failed-fetch" || got.Candidates[2].ReleaseID != "failed-health" {
+		t.Fatalf("lost startup failures: %+v", got.Candidates[:3])
+	}
+	if tr.Candidates[0].Attempted || tr.Candidates[0].ReleaseID != "0" {
+		t.Fatal("compaction mutated source trace")
+	}
+}
