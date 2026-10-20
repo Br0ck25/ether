@@ -1166,10 +1166,12 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 				viewed++
 			}
 		}
+		// The episodes just counted are the ones the viewer can list and
+		// play (aired, visible, in their episode order), so leafCount comes
+		// from the same list as viewedLeafCount and a fully watched show
+		// or season reads as watched.
 		items[i].ViewedLeafCount = model.Ptr(viewed)
-		if s.d.EpisodeOrder != nil || items[i].LeafCount == nil || *items[i].LeafCount == 0 {
-			items[i].LeafCount = model.Ptr(len(eps))
-		}
+		items[i].LeafCount = model.Ptr(len(eps))
 		if viewed > 0 && viewed == len(eps) {
 			items[i].ViewCount = max(items[i].ViewCount, 1)
 		}

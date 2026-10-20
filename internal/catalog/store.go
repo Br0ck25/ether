@@ -109,6 +109,9 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	if len(items) == 0 {
 		return nil
 	}
+	if err := c.airedCounts(ctx, items); err != nil {
+		return err
+	}
 	idx := map[core.RatingKey]int{}
 	for i := range items {
 		idx[items[i].Key] = i
@@ -288,6 +291,12 @@ func placeholders(n int) string {
 type upsertOpts struct {
 	browsable bool // request browsable (added_at set if newly browsable)
 	detail    bool
+	// airDates: the payload is authoritative for the title's air date even
+	// though it is not a detail fetch. Season and episode air dates come
+	// only from TMDB's show and season payloads, so a date that is added,
+	// moved or withdrawn must replace the stored one, including on rows an
+	// earlier detail upsert marked (which otherwise keep their date).
+	airDates bool
 }
 
 // UpsertTitle stores a title (exported for tests/seeders and other components that
@@ -392,6 +401,11 @@ ON CONFLICT(key) DO UPDATE SET
 		t.CollectionID, t.CollectionName, t.ChildCount, t.LeafCount, browsableInt, addedAtFor(browsableInt, now), now, detailInt, t.Adult, detailAtFor(detailInt, now))
 	if err != nil {
 		return fmt.Errorf("catalog: upsert %d: %w", t.Key, err)
+	}
+	if o.airDates && !o.detail {
+		if _, err := tx.ExecContext(ctx, `UPDATE catalog_titles SET released_ts=?, year=? WHERE key=?`, releasedTS, t.Year, int64(t.Key)); err != nil {
+			return fmt.Errorf("catalog: upsert %d air date: %w", t.Key, err)
+		}
 	}
 	// Replace join rows only when the incoming title carries that facet, so
 	// summary upserts don't wipe detail-fetched genres/credits.
