@@ -258,15 +258,18 @@ func sanitize(err error) error {
 	return err
 }
 
+// retryAfter parses a Retry-After header, capped at maxBackoff: a huge
+// value must neither overflow the duration nor pause a provider or CDN
+// host for longer than this server's own longest back-off.
 func retryAfter(v string) time.Duration {
 	if v == "" {
 		return 0
 	}
-	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
-		return time.Duration(n) * time.Second
+	if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n >= 0 {
+		return time.Duration(min(n, int64(maxBackoff/time.Second))) * time.Second
 	}
 	if t, err := http.ParseTime(v); err == nil {
-		return time.Until(t)
+		return min(time.Until(t), maxBackoff)
 	}
 	return 0
 }
