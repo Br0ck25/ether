@@ -37,6 +37,7 @@ import { useApp, useLiveDashboard } from "../app-context";
 import { Artwork } from "../components/Artwork";
 import { Meter, TimeBars } from "../components/charts";
 import { ErrorPanel, LoadingRows } from "../components/feedback";
+import { ServerLoad } from "../components/ServerLoad";
 import { LevelBadge, StatusDot } from "../components/status";
 import { api } from "../lib/api";
 import type { ActivityDay, RowInsight } from "../lib/contract";
@@ -115,6 +116,8 @@ export default function Home() {
           nowPlaying={sessions.length}
           loading={activity.loading && !activity.data}
         />
+
+        <ServerLoad />
 
         <div className="grid items-start gap-6 xl:grid-cols-3">
           <div className="min-w-0 space-y-6 xl:col-span-2">

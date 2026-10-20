@@ -57,6 +57,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/stream"
 	"github.com/braedonsaunders/ether/internal/subtitles"
+	"github.com/braedonsaunders/ether/internal/sysload"
 	"github.com/braedonsaunders/ether/internal/tmdb"
 	"github.com/braedonsaunders/ether/internal/trackprefs"
 	"github.com/braedonsaunders/ether/internal/trakt"
@@ -131,6 +132,7 @@ type App struct {
 	sources    *debrid.Indexer // core.Indexer over indexers
 	resolver   *resolver.Service
 	transcoder *transcode.Manager
+	load       *sysload.Sampler // machine load for the Overview
 	playback   *playback.Manager
 	prefetch   *prefetch.Prefetcher
 	plextv     *plextv.Client
@@ -382,6 +384,8 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.resolver.SetSourceSignals(a.debrid)
 	a.closers = append(a.closers, func() { a.resolver.Close() })
 
+	a.load = sysload.New(sysload.Options{Logger: log.With("component", "sysload")})
+
 	// Transcoder. A missing ffmpeg is not fatal: direct play still works.
 	a.transcoder, err = transcode.New(cfg.Transcode, log)
 	if err != nil {
@@ -615,6 +619,7 @@ func (a *App) Run(ctx context.Context) error {
 	go a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run)
 	go a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run)
 	go a.trakt.Start(ctx)
+	background.start(func() { a.load.Run(ctx) })
 	if a.clustered() {
 		background.start(func() { a.runRegistrarAsLeader(ctx) })
 		background.start(func() { a.registrar.RunPortMapping(ctx) })

@@ -25,6 +25,8 @@ import { normalizeSpec } from "../lib/rules";
 import type {
   Bootstrap,
   LLMProvider,
+  LoadSample,
+  SystemLoad,
   ClusterNode,
   ClusterStatus,
   EtherConfig,
@@ -1753,6 +1755,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
           models: MOCK_LLM_MODELS[p?.id ?? ""] ?? [{ id: "llama3" }, { id: "qwen3:8b" }],
         });
       }
+      case "GET /system/load":
+        return json(mockSystemLoad(Date.now()));
       case "POST /test/usenet":
       case "POST /test/indexer":
       case "POST /test/debrid":
@@ -2357,3 +2361,42 @@ const MOCK_LLM_MODELS: Record<string, { id: string; label?: string }[]> = {
     { id: "openai/gpt-4o", label: "OpenAI: GPT-4o" },
   ],
 };
+/** Plausible, gently moving machine load for the Overview. */
+function mockSystemLoad(now: number): SystemLoad {
+  const step = 2_000;
+  const wave = (t: number, period: number, lo: number, hi: number) =>
+    lo + ((Math.sin((t / period) * Math.PI * 2) + 1) / 2) * (hi - lo);
+  const history: LoadSample[] = Array.from({ length: 150 }, (_, i) => {
+    const t = now - (149 - i) * step;
+    return {
+      at: new Date(t).toISOString(),
+      cpu: wave(t, 90_000, 8, 42),
+      memUsed: wave(t, 240_000, 9.1, 10.4) * 2 ** 30,
+      netRxBps: wave(t, 60_000, 1.5e6, 9e6),
+      netTxBps: wave(t, 75_000, 0.8e6, 4.5e6),
+      procCpu: wave(t, 90_000, 2, 14),
+      procRss: 412 * 2 ** 20,
+      gpu: wave(t, 50_000, 5, 38),
+    };
+  });
+  return {
+    cores: 12,
+    memTotal: 24 * 2 ** 30,
+    swapUsed: 0,
+    swapTotal: 0,
+    load: [1.84, 1.62, 1.4],
+    intervalSeconds: 2,
+    current: history.at(-1),
+    history,
+    gpus: [
+      {
+        name: "NVIDIA GeForce RTX 4080",
+        util: history.at(-1)!.gpu,
+        encoder: 18,
+        decoder: 11,
+        memUsed: 2.1 * 2 ** 30,
+        memTotal: 16 * 2 ** 30,
+      },
+    ],
+  };
+}

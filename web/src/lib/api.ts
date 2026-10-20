@@ -44,6 +44,7 @@ import type {
   SiteUpdateReport,
   SetupStatus,
   SourceStartup,
+  SystemLoad,
   TestResult,
   UpdateStatus,
   UsenetProvider,
@@ -235,6 +236,7 @@ export const api = {
 
   // ---- Status ----------------------------------------------------------------
   dashboard: () => apiFetch<DashboardData>("/dashboard"),
+  systemLoad: (signal?: AbortSignal) => apiFetch<SystemLoad>("/system/load", { signal }),
   debridStatus: async () =>
     (await apiFetch<{ value: DebridStatus | null }>("/status/debrid")).value,
   sourceStartup: async () =>

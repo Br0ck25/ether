@@ -363,6 +363,14 @@ func (h *Handler) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) handleSystemLoad(w http.ResponseWriter, r *http.Request) {
+	if h.deps.SystemLoad == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "system load is not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, h.safeStatus(r, h.deps.SystemLoad))
+}
+
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	fn, ok := h.statusProviders()[name]

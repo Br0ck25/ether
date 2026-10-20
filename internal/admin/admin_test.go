@@ -673,3 +673,24 @@ func TestLLMProvidersAndModels(t *testing.T) {
 		t.Fatalf("provider failure should be 200 with an error and empty list: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestSystemLoadRoute(t *testing.T) {
+	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
+	auth := func(r *http.Request) *http.Request { r.Header.Set("X-Plex-Token", ownerToken); return r }
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
+	if rec := serve(h, auth(req(http.MethodGet, "/ether/api/system/load", ""))); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("without a sampler: %d", rec.Code)
+	}
+	h = admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store),
+		SystemLoad: func(context.Context) any { return map[string]any{"cores": 8} }})
+	if rec := serve(h, req(http.MethodGet, "/ether/api/system/load", "")); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("load must be owner-only: %d", rec.Code)
+	}
+	rec := serve(h, auth(req(http.MethodGet, "/ether/api/system/load", "")))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"cores":8`) {
+		t.Fatalf("load: %d %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(serve(h, auth(req(http.MethodGet, "/ether/api/dashboard", ""))).Body.String(), `"cores"`) {
+		t.Fatal("dashboard should not carry system load")
+	}
+}

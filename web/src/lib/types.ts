@@ -567,3 +567,39 @@ export interface CreatedJoinToken {
   command: string;
   warning: string;
 }
+
+/** One machine-load reading (internal/sysload). Percentages cover all cores. */
+export interface LoadSample {
+  at: string;
+  cpu: number;
+  memUsed: number;
+  netRxBps: number;
+  netTxBps: number;
+  procCpu: number;
+  procRss: number;
+  gpu?: number;
+}
+
+export interface LoadGPU {
+  name: string;
+  util?: number;
+  encoder?: number;
+  decoder?: number;
+  memUsed?: number;
+  memTotal?: number;
+}
+
+/** GET /system/load: this server's load now and over the last few minutes. */
+export interface SystemLoad {
+  cores: number;
+  memTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  /** 1, 5 and 15-minute load averages; absent on Windows. */
+  load?: number[];
+  intervalSeconds: number;
+  current?: LoadSample;
+  history: LoadSample[];
+  gpus: LoadGPU[];
+  error?: string;
+}
