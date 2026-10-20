@@ -576,7 +576,17 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		remuxSwitch bool
 		lastErr     error
 	)
-	for attempt := 0; attempt < m.opts.MaxAttempts; attempt++ {
+	if !direct && !fo.down {
+		// Any healthy alternate continues an encoder session, so open
+		// several at once instead of stalling through each broken one.
+		var failed []string
+		g, failed, lastErr = m.raceAlternates(ctx, s, tried, alternates, fallback, failoverRaceWidth)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		tried = append(tried, failed...)
+	}
+	for attempt := 0; g == nil && attempt < m.opts.MaxAttempts; attempt++ {
 		res, err := m.nextResolution(ctx, s, tried, alternates)
 		if err != nil {
 			lastErr = err
@@ -677,11 +687,16 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	if fo.down {
 		s.downFailovers++
 	}
-	s.tried = tried
+	// Racers that failed after the winner may already have been recorded.
+	for _, id := range tried {
+		if !slices.Contains(s.tried, id) {
+			s.tried = append(s.tried, id)
+		}
+	}
 	if len(g.res.Alternates) > 0 {
 		s.alternates = g.res.Alternates
 	} else {
-		s.alternates = withoutTried(alternates, append(tried, g.releaseID()))
+		s.alternates = withoutTried(alternates, append(slices.Clone(s.tried), g.releaseID()))
 	}
 	s.mu.Unlock()
 
