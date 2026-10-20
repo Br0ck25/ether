@@ -59,3 +59,40 @@ func TestImportCompletionTracksResumeState(t *testing.T) {
 		}
 	}
 }
+
+func TestImportKeepsNewestStateRegardlessOfRecordOrder(t *testing.T) {
+	for _, newestFirst := range []bool{false, true} {
+		name := "oldest_first"
+		if newestFirst {
+			name = "newest_first"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, now := newTestState(t)
+			key := core.MovieKey(19)
+			old := ImportRecord{UserID: 1, Key: key, Views: 1, Offset: 20 * time.Minute, Duration: 100 * time.Minute, Rating: 3, ViewedAt: now.Add(-48 * time.Hour)}
+			latest := old
+			latest.Offset, latest.Rating, latest.Views, latest.ViewedAt = 70*time.Minute, 9, 2, now.Add(-24*time.Hour)
+			records := []ImportRecord{old, latest}
+			if newestFirst {
+				records = []ImportRecord{latest, old}
+			}
+			if err := s.ImportTransaction(ctx, func(*sql.Tx) (ImportBatch, error) { return ImportBatch{Records: records}, nil }); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.Get(ctx, 1, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.ViewOffset != latest.Offset || got.UserRating != latest.Rating || got.ViewCount != latest.Views || !got.LastViewedAt.Equal(latest.ViewedAt) {
+				t.Fatalf("newest state lost: %+v", got)
+			}
+			history, err := s.History(ctx, 1, time.Time{}, 100)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(history) != 2 {
+				t.Fatalf("history count = %d, want 2", len(history))
+			}
+		})
+	}
+}
