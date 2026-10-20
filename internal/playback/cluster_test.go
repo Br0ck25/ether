@@ -191,3 +191,35 @@ func TestStandaloneWritesNoSessionRows(t *testing.T) {
 		t.Fatal("standalone manager has a registry")
 	}
 }
+
+// An owner change made on one node drops the warm detail-page entries of
+// every node.
+func TestInvalidateTitleReachesEveryNode(t *testing.T) {
+	a, b, hub := twoNodes(t, nil)
+	warm := func(h *harness, key core.RatingKey) {
+		h.m.mu.Lock()
+		h.m.warm[identity{userID: 1, clientID: "c", key: key}] = &warmEntry{}
+		h.m.mu.Unlock()
+	}
+	count := func(h *harness) int {
+		h.m.mu.Lock()
+		defer h.m.mu.Unlock()
+		return len(h.m.warm)
+	}
+	warm(a, movieKey)
+	warm(b, movieKey)
+	warm(b, movie2)
+	if n := a.m.InvalidateTitleEverywhere(movieKey); n != 1 {
+		t.Fatalf("local entries dropped %d", n)
+	}
+	eventually(t, "B drops the title", func() bool { return count(b) == 1 })
+	b.m.mu.Lock()
+	_, kept := b.m.warm[identity{userID: 1, clientID: "c", key: movie2}]
+	b.m.mu.Unlock()
+	if !kept {
+		t.Fatal("B dropped another title")
+	}
+	// A bus resync drops every warm entry.
+	hub.Resync("b")
+	eventually(t, "resync clears", func() bool { return count(b) == 0 })
+}

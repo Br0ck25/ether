@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // Cluster cache coherence. The resolver mirrors resolver_bad and
@@ -19,6 +20,8 @@ import (
 //	bad:<release id>   reload that release's bad mark, forget its verification
 //	avail:<rating key> forget the cached availability (re-read on demand)
 //	reps               reload indexer reputations
+//	pin:<rating key>   reload that title's owner pin (pinned, unpinned or
+//	                   its last status changed)
 
 // SetBus connects the cluster bus (nil disconnects). A standalone server
 // never calls it.
@@ -37,6 +40,9 @@ func (s *Service) notify(hint string) {
 	s.invalMu.Unlock()
 	iv.Notify(hint)
 }
+
+// notifyPin tells the other nodes a title's pin changed.
+func (s *Service) notifyPin(key core.RatingKey) { s.notify("pin:" + strconv.FormatInt(int64(key), 10)) }
 
 func (s *Service) applyRemote(ctx context.Context, hints []string, all bool) {
 	if all {
@@ -63,6 +69,10 @@ func (s *Service) applyRemote(ctx context.Context, hints []string, all bool) {
 			}
 		case "reps":
 			reps = true
+		case "pin":
+			if k, err := strconv.ParseInt(arg, 10, 64); err == nil {
+				s.reloadPin(ctx, core.RatingKey(k))
+			}
 		}
 	}
 	if reps {

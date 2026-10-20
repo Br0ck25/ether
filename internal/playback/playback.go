@@ -185,7 +185,9 @@ type Manager struct {
 	now    func() time.Time
 	resume *resumeStore
 	reg    *registry // nil on a standalone server
-	bufs   sync.Pool
+	// titleInval broadcasts title invalidations (nil standalone).
+	titleInval *clusterbus.Invalidator
+	bufs       sync.Pool
 
 	cfgMu sync.RWMutex
 	cfg   config.Config
@@ -321,6 +323,7 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 			return nil, errors.New("playback: Cluster requires DB")
 		}
 		m.reg = newRegistry(m, deps.DB, deps.Cluster)
+		m.startTitleInvalidation(deps.Cluster)
 	}
 
 	ln, err := net.Listen("tcp", opts.LoopbackAddr)
@@ -386,6 +389,7 @@ func (m *Manager) Close() error {
 	if m.reg != nil {
 		m.reg.close()
 	}
+	m.titleInval.Close()
 	return err
 }
 

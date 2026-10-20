@@ -35,7 +35,8 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 		Catalog: a.catalog,
 		Invalidate: func(key core.RatingKey) {
 			if a.playback != nil {
-				a.playback.InvalidateTitle(key)
+				// Every node drops its warm entries for the title.
+				a.playback.InvalidateTitleEverywhere(key)
 			}
 		},
 		Logger: a.log.With("component", "release-console"),
