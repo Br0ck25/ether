@@ -160,6 +160,7 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	m.tokens[s.id+"/"+g.token] = g
 	m.mu.Unlock()
 
+	probeStarted := time.Now()
 	pctx, cancel := context.WithTimeout(ctx, m.opts.ProbeTimeout)
 	var info *core.MediaInfo
 	var perr error
@@ -172,6 +173,7 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		info, perr = m.deps.Transcoder.Probe(pctx, m.urlFor(g))
 	}
 	cancel()
+	probeDuration := time.Since(probeStarted)
 	var mi core.MediaInfo
 	switch {
 	case g.sourceFailure() != nil || g.articleMissing.Load():
@@ -202,9 +204,13 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	}
 	// A cached warm probe was already augmented when it was made; running
 	// AugmentMedia again would put its cost back on the Play path.
+	augmentStarted := time.Now()
 	if facts == nil && m.deps.AugmentMedia != nil {
 		m.deps.AugmentMedia(ctx, s.title, &s.user, res, src, &mi)
 	}
+	m.log.Info("media preparation completed", "session", s.id, "release", res.Release.ID,
+		"probe", probeDuration, "probeCached", facts != nil, "estimated", mi.Estimated,
+		"augment", time.Since(augmentStarted))
 	var points []IndexPoint
 	if facts != nil {
 		points = facts.points

@@ -41,7 +41,16 @@ func (x *Indexer) Name() string { return x.inner.Name() }
 
 // Search implements core.Indexer.
 func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	started := time.Now()
 	results, err := x.inner.Search(ctx, req)
+	searchDuration := time.Since(started)
+	var cacheDuration time.Duration
+	var hashCount int
+	defer func() {
+		x.svc.log.Info("source search completed", "indexers", searchDuration,
+			"cacheDiscovery", cacheDuration, "torrentHashes", hashCount,
+			"results", len(results), "took", time.Since(started), "success", err == nil)
+	}()
 	if err != nil {
 		return results, err
 	}
@@ -69,7 +78,9 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	// health-check attempts), and known-cached torrents move ahead of
 	// unknown ones of equal rank.
 	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	cacheStart := time.Now()
 	cached, definitive := x.svc.CheckCached(cctx, torrents)
+	cacheDuration, hashCount = time.Since(cacheStart), len(torrents)
 	cancel()
 	kept := out[:0]
 	for _, r := range out {
