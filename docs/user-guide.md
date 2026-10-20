@@ -49,7 +49,7 @@ start › Source for equal-quality releases**:
 - **Prefer Usenet** or **Prefer debrid:** always try that source first.
 
 The best release from the other source is checked at the same time, and both
-remain available for failover. **Releases › Search** and **History** show when
+remain available for failover. **Releases › Pinned** (when you find a title) and **History** show when
 routing moved a release, and why.
 
 The debrid integrations were built from each service's public API
@@ -171,15 +171,17 @@ progresses.
 
 **Releases** explains and overrides which release plays for each title.
 
-- **Search** finds a movie, or a show then a season and episode, and lists
-  every release the indexers return. Each one shows its score, custom formats,
-  size, age, indexer and Ether's verdict for the chosen quality profile, ranked
-  exactly as playback ranks them, with the release that would play first marked.
-  Choose **No profile limits** to see releases a profile would reject, or
-  **Offline download** for the download profile. **Search again** forgets the
-  cached results and any "unavailable" cool-off for the title. Each release's
-  menu can pin it, block it with a reason, or check its health now.
-- **Pinned** lists releases you pinned. A pin plays first for its title on
+- **Pinned** starts with **Find a release**: find a movie, or a show then a
+  season and episode, to list every release the indexers return. Each one
+  shows its score, custom formats, size, age, indexer and Ether's verdict for
+  the chosen quality profile, ranked exactly as playback ranks them, with the
+  release that would play first marked. Choose **No profile limits** to see
+  releases a profile would reject, or **Offline download** for the download
+  profile. **Search again** forgets the cached results and any "unavailable"
+  cool-off for the title. Each release's menu can pin it, block it with a
+  reason, or check its health now.
+
+  Below the search are the releases you pinned. A pin plays first for its title on
   every app, overriding quality-profile limits and title matching. Ether still
   skips a pin that is blocklisted, passworded, already tried during the current
   playback, a season pack for an episode, in a video codec the app cannot

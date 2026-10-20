@@ -14,6 +14,7 @@ import { errorMessage } from "../../lib/api";
 import { formatBytes, formatDateTime, relativeTime } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { PIN_STATUS_LABEL, qualityLabel, releaseConsole, type Pin } from "../../lib/releases";
+import { ReleaseSearch } from "./Search";
 
 /** Last outcome of a pin: playing, failing, not playable for an app, or not tried yet. */
 export function PinStatusBadge({ pin }: { pin: Pin }) {
@@ -24,11 +25,12 @@ export function PinStatusBadge({ pin }: { pin: Pin }) {
   return <Badge variant={variant}>{PIN_STATUS_LABEL[s]}</Badge>;
 }
 
+/** The Pinned page with a title's releases already searched. */
 export function searchLink(key: string, title: string) {
-  return `/releases/search?key=${encodeURIComponent(key)}&title=${encodeURIComponent(title)}`;
+  return `/releases/pinned?key=${encodeURIComponent(key)}&title=${encodeURIComponent(title)}`;
 }
 
-/** Releases the owner pinned to titles, newest first. */
+/** Find a release to pin, then the releases already pinned, newest first. */
 export function PinnedTab() {
   const state = useAsync((signal) => releaseConsole.pins(signal), []);
   const [busy, setBusy] = useState<string | null>(null);
@@ -68,6 +70,7 @@ export function PinnedTab() {
 
   return (
     <>
+      <ReleaseSearch onPinsChanged={() => void state.reload()} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-2xl text-sm text-fg-muted">
           A pinned release plays first for its title, ahead of the automatic ranking. When it fails,

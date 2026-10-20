@@ -167,8 +167,12 @@ function verdict(r: ConsoleRelease) {
   );
 }
 
-/** Interactive search: every release for one title, ranked exactly as playback ranks them. */
-export function SearchTab() {
+/**
+ * Find a release: every release for one title, ranked exactly as playback
+ * ranks them, with pin, block and health-check actions. Lives on the Pinned
+ * page; onPinsChanged lets that page refresh its list after a pin changes.
+ */
+export function ReleaseSearch({ onPinsChanged }: { onPinsChanged?: () => void }) {
   const id = useId();
   const [params, setParams] = useSearchParams();
   const key = params.get("key") ?? "";
@@ -242,7 +246,10 @@ export function SearchTab() {
       message: "Ether goes back to picking the best release automatically.",
       confirmLabel: "Unpin",
     });
-    if (ok) await act(() => releaseConsole.unpin(key), "Pin removed");
+    if (ok) {
+      await act(() => releaseConsole.unpin(key), "Pin removed");
+      onPinsChanged?.();
+    }
   };
 
   const check = async (r: ConsoleRelease) => {
@@ -271,6 +278,7 @@ export function SearchTab() {
       toast.success("Release pinned");
       setPinning(null);
       await result.reload();
+      onPinsChanged?.();
     } catch (e) {
       setPinError(e);
     } finally {
@@ -283,8 +291,8 @@ export function SearchTab() {
   return (
     <>
       <Section
-        title="Find a title"
-        description="Search the indexers for one movie or episode and see every release, scored and judged exactly as playback would."
+        title="Find a release"
+        description="Search the indexers for one movie or episode and see every release, scored and judged exactly as playback would. Pin the one you want, or block a bad one."
       >
         <TitlePicker onPick={(k, n) => setParams({ key: k, title: n })} />
         <div className="flex flex-wrap items-end gap-3">
