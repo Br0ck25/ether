@@ -60,3 +60,22 @@ func TestTitleWordsAreNotAudioLanguages(t *testing.T) {
 		}
 	}
 }
+
+// Resolution, source and codec tags end the title even before the episode
+// marker or release year; only ordinary title words are protected there.
+func TestTechnicalTagsBeforeMarkerEndTitle(t *testing.T) {
+	for name, want := range map[string]string{
+		"Show.Name.720p.S01E01-GROUP":               "Show Name",
+		"Show.Name.1080p.BluRay.x264.S01-GROUP":     "Show Name",
+		"Show.Name.HDTV.x264.S01E01-GRP":            "Show Name",
+		"Show.Name.PROPER.S01E01.720p.HDTV-GRP":     "Show Name",
+		"Movie.Title.1080p.BluRay.x264-S1":          "Movie Title",
+		"The.Spanish.Princess.S01E01.1080p.WEB-GRP": "The Spanish Princess",
+		"Charlottes.Web.S01E01.720p.HDTV-GRP":       "Charlottes Web",
+		"Internal.Affairs.1990.1080p.BluRay-GRP":    "Internal Affairs",
+	} {
+		if got := Parse(name).Title; got != want {
+			t.Errorf("%s: title %q, want %q", name, got, want)
+		}
+	}
+}
