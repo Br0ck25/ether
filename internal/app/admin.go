@@ -171,8 +171,10 @@ func (p *plexAuth) PollPIN(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("plex.tv account: %w", err)
 	}
+	ownerRejected := false
 	if err := p.app.cfg.Update(func(c *config.Config) error {
-		if c.Plex.OwnerPlexID != 0 && c.Plex.OwnerPlexID != acct.ID {
+		if c.Plex.Claimed && c.Plex.OwnerPlexID != 0 && c.Plex.OwnerPlexID != acct.ID {
+			ownerRejected = true
 			return errors.New("this Plex account does not own the server; sign in as the existing owner")
 		}
 		c.Plex.Token = got.AuthToken
@@ -180,6 +182,11 @@ func (p *plexAuth) PollPIN(ctx context.Context, id string) (bool, error) {
 		c.Plex.OwnerUsername = acct.Username
 		return nil
 	}); err != nil {
+		if ownerRejected {
+			p.mu.Lock()
+			delete(p.pins, id)
+			p.mu.Unlock()
+		}
 		return false, err
 	}
 	p.mu.Lock()

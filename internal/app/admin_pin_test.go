@@ -52,15 +52,27 @@ func pinTestApp(t *testing.T, accountID int64) *App {
 }
 
 func TestWizardPINCannotReplaceExistingOwner(t *testing.T) {
-	for _, owner := range []int64{0, 42, 99} {
-		t.Run(strconv.FormatInt(owner, 10), func(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		owner                  int64
+		claimed, setup, reject bool
+	}{
+		{name: "first sign-in"},
+		{name: "same claimed owner", owner: 42, claimed: true},
+		{name: "different claimed owner", owner: 99, claimed: true, reject: true},
+		{name: "authenticated transfer after unclaim", owner: 99, setup: true},
+		{name: "correct initial account", owner: 99},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner := tc.owner
 			a := pinTestApp(t, 42)
 			if err := a.cfg.Update(func(c *config.Config) error {
 				c.Plex.OwnerPlexID = owner
 				if owner != 0 {
 					c.Plex.Token = "existing-token"
 					c.Plex.OwnerUsername = "existing"
-					c.Plex.Claimed = true
+					c.Plex.Claimed = tc.claimed
+					c.SetupComplete = tc.setup
 				}
 				return nil
 			}); err != nil {
@@ -69,9 +81,12 @@ func TestWizardPINCannotReplaceExistingOwner(t *testing.T) {
 			before := a.cfg.Get().Plex
 			p := &plexAuth{app: a, pins: map[string]*plextv.PIN{"1": {ID: 1, Code: "fixture", ExpiresAt: time.Now().Add(time.Minute)}}}
 			ok, err := p.PollPIN(context.Background(), "1")
-			if owner == 99 {
+			if tc.reject {
 				if err == nil || ok {
 					t.Fatalf("different account replaced owner: ok=%v err=%v", ok, err)
+				}
+				if p.pins["1"] != nil {
+					t.Fatal("rejected owner PIN retained")
 				}
 				got := a.cfg.Get().Plex
 				if got.OwnerPlexID != before.OwnerPlexID || got.Token != before.Token || got.OwnerUsername != before.OwnerUsername {
