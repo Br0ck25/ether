@@ -494,7 +494,7 @@ func TestPrepareErrors(t *testing.T) {
 
 func TestPrepareSkipsBrokenRelease(t *testing.T) {
 	broken := mkv("A", 10000, time.Minute)
-	broken.FailFrom, broken.FailTo = 0, 10000 // header missing: the probe fails
+	broken.setFail(0, 10000, nil) // header missing: the probe fails
 	h := newHarness(t, []*fakeRelease{broken, mkv("B", 20000, time.Minute)}, []string{"A", "B"})
 	ps := h.prepare(owner, movieKey, "c1")
 	if ps.Resolution.Release.ID != "B" {
@@ -527,7 +527,7 @@ func TestPrepareProbeFailureUsesEstimate(t *testing.T) {
 func TestFailoverMidResponseEndsMKV(t *testing.T) {
 	const sizeA, sizeB = 200_000, 200_000
 	a := mkv("A", sizeA, 100*time.Second)
-	a.FailFrom, a.FailTo = 120_000, 130_000
+	a.setFail(120_000, 130_000, nil)
 	h := newHarness(t, []*fakeRelease{a, mkv("B", sizeB, 100*time.Second)}, []string{"A", "B"})
 	ps := h.prepare(owner, movieKey, "c1")
 	srv := directPlayServer(t, h.m, ps.ID)
@@ -571,7 +571,7 @@ func TestDirectPlayRejectsDifferentSizeReplacement(t *testing.T) {
 	// point, the session swaps to B, and the next decision must be a
 	// remux (RequiresRemux).
 	a := mkv("A", 200000, 100*time.Second)
-	a.FailFrom, a.FailTo = 120000, 130000
+	a.setFail(120000, 130000, nil)
 	h := newHarness(t, []*fakeRelease{a, mkv("B", 400000, 100*time.Second)}, []string{"A", "B"})
 	ps := h.prepare(owner, movieKey, "c1")
 	srv := directPlayServer(t, h.m, ps.ID)
@@ -689,7 +689,7 @@ func TestLoopbackReadFailureTriggersHLSFailover(t *testing.T) {
 	h := newHarness(t, []*fakeRelease{a, mkv("B", 100_000, 100*time.Second)}, []string{"A", "B"})
 	ps := h.prepare(owner, movieKey, "c1")
 	hls := h.tr.addHLS(ps.ID)
-	a.FailFrom, a.FailTo = 50_000, 60_000 // goes missing after the probe
+	a.setFail(50_000, 60_000, nil) // goes missing after the probe
 
 	resp, _, err := get(t, h.m.InputURL(ps.ID), map[string]string{"Range": "bytes=40000-"})
 	if resp.StatusCode != 206 || err == nil {
@@ -913,7 +913,7 @@ func TestRememberHint(t *testing.T) {
 
 func TestConcurrentServeAndFailover(t *testing.T) {
 	a := mkv("A", 500_000, 100*time.Second)
-	a.FailFrom, a.FailTo = 250_000, 260_000
+	a.setFail(250_000, 260_000, nil)
 	h := newHarness(t, []*fakeRelease{a, mkv("B", 500_000, 100*time.Second)}, []string{"A", "B"})
 	ps := h.prepare(owner, movieKey, "c1")
 	srv := directPlayServer(t, h.m, ps.ID)
@@ -957,7 +957,7 @@ func TestReadFailuresRecoverWithoutPoisoningReleases(t *testing.T) {
 			a, b := mkv("A", 100000, 100*time.Second), mkv("B", 100000, 100*time.Second)
 			h := newHarness(t, []*fakeRelease{a, b}, []string{"A", "B"})
 			ps := h.prepare(owner, movieKey, "reader")
-			a.FailFrom, a.FailTo, a.ReadErr = 5000, 10000, tc.err
+			a.setFail(5000, 10000, tc.err)
 			srv := directPlayServer(t, h.m, ps.ID)
 			resp, body, err := get(t, srv.URL, map[string]string{"Range": "bytes=6000-6999"})
 			if err != nil || resp.StatusCode != 206 || !bytes.Equal(body, expected("B", 6000, 1000)) {

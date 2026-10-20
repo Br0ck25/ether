@@ -292,7 +292,7 @@ func TestPrepareVariantIgnoresWarmOfOtherRelease(t *testing.T) {
 // a higher-ranked mismatched candidate.
 func TestDirectFailoverPrefersExactSizeRepost(t *testing.T) {
 	a := mkv("A", 200000, 100*time.Second)
-	a.FailFrom, a.FailTo = 120000, 130000
+	a.setFail(120000, 130000, nil)
 	h := newHarness(t, []*fakeRelease{a, mkv("B", 400000, 100*time.Second), mkv("C", 200000, 100*time.Second)}, []string{"A", "B", "C"})
 	for i, size := range []int64{200000, 400000, 200000} {
 		h.resolver.candidates[i].Size = size
@@ -331,7 +331,7 @@ func TestDirectFailoverPrefersExactSizeRepost(t *testing.T) {
 // #5: SetDecision(remux) satisfies a pending remux requirement.
 func TestRequiresRemuxClearedByRemuxDecision(t *testing.T) {
 	a := mkv("A", 200000, 100*time.Second)
-	a.FailFrom, a.FailTo = 120000, 130000
+	a.setFail(120000, 130000, nil)
 	h := newHarness(t, []*fakeRelease{a, mkv("B", 400000, 100*time.Second)}, []string{"A", "B"})
 	ps := h.prepare(owner, movieKey, "c1")
 	srv := directPlayServer(t, h.m, ps.ID)
