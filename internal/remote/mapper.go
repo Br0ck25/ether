@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -186,6 +187,19 @@ func (m *PortMapper) mapLocked(ctx context.Context, now time.Time) error {
 }
 
 func (m *PortMapper) mapUPnP(ctx context.Context, igd *IGD, now time.Time) error {
+	// Re-resolve this host's address towards the gateway on every
+	// (re)mapping: a cached gateway keeps the address found at discovery,
+	// and after a DHCP change renewing with it would keep forwarding the
+	// port to the old address while reporting success.
+	staleIP := igd.LocalIP
+	if u, err := url.Parse(igd.ControlURL); err == nil && u.Hostname() != "" {
+		if ip := localIPFor(u.Hostname()); ip != nil {
+			igd.LocalIP = ip
+		}
+	}
+	if staleIP.Equal(igd.LocalIP) {
+		staleIP = nil
+	}
 	if igd.LocalIP == nil {
 		return errors.New("upnp: cannot determine local address towards gateway")
 	}
@@ -200,7 +214,9 @@ func (m *PortMapper) mapUPnP(ctx context.Context, igd *IGD, now time.Time) error
 	if errors.As(err, &ue) && ue.Code == UPnPErrConflictInMappingEntry {
 		// Another host (or a stale entry of ours) holds the port. If it is
 		// ours, replace it; otherwise report the conflict.
-		if e, gerr := igd.GetSpecificPortMapping(ctx, "TCP", m.external); gerr == nil && net.ParseIP(e.InternalClient).Equal(igd.LocalIP) {
+		// Our own entry from before an address change counts as ours too.
+		if e, gerr := igd.GetSpecificPortMapping(ctx, "TCP", m.external); gerr == nil &&
+			(net.ParseIP(e.InternalClient).Equal(igd.LocalIP) || (staleIP != nil && net.ParseIP(e.InternalClient).Equal(staleIP))) {
 			_ = igd.DeletePortMapping(ctx, "TCP", m.external)
 			err = igd.AddPortMapping(ctx, "TCP", m.external, m.internal, igd.LocalIP, m.o.Description, lease)
 		} else if gerr == nil {

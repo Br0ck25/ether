@@ -497,6 +497,21 @@ func publicPort(cfg config.Config) int {
 	return serverPort(cfg)
 }
 
+// wanPort is the port remote clients reach this server on. While the
+// gateway holds a mapping it is the external port actually mapped: a
+// NAT-PMP gateway may grant a different port than the one requested
+// (RFC 6886 3.3, e.g. when another host already holds it), and publishing
+// the requested port would then advertise a dead address. Otherwise it is
+// publicPort.
+func (r *Registrar) wanPort(cfg config.Config) int {
+	if cfg.Plex.RemoteAccess && cfg.Plex.UseUPnP {
+		if m := r.o.Mapper.Status(); m.Active && m.ExternalPort > 0 {
+			return m.ExternalPort
+		}
+	}
+	return publicPort(cfg)
+}
+
 func (r *Registrar) refreshAddresses(ctx context.Context, cfg config.Config) {
 	r.addrMu.Lock()
 	defer r.addrMu.Unlock()
@@ -561,7 +576,7 @@ func (r *Registrar) connections(cfg config.Config) []remote.Connection {
 			// PublicHost is a DNS name: publish it as a custom URL, using https
 			// when a custom TLS certificate is installed, port 443 is used, or
 			// secure connections are required.
-			port := publicPort(cfg)
+			port := r.wanPort(cfg)
 			hostPort := net.JoinHostPort(wanS, fmt.Sprint(port))
 			customCert := r.o.Certs != nil && r.o.Certs.Info().Present && r.o.Certs.Info().Custom && !r.o.Certs.Info().SelfSigned
 			if cfg.Plex.SecureConnections != remote.SecureDisabled && (customCert || port == 443 || cfg.Plex.SecureConnections == remote.SecureRequired) {
@@ -585,7 +600,7 @@ func (r *Registrar) connections(cfg config.Config) []remote.Connection {
 		}
 	}
 	return remote.BuildConnections(remote.BuildOptions{
-		LAN: lan, WAN: wan, LocalPort: serverPort(cfg), PublicPort: publicPort(cfg),
+		LAN: lan, WAN: wan, LocalPort: serverPort(cfg), PublicPort: r.wanPort(cfg),
 		CertHash: hash, Secure: cfg.Plex.SecureConnections, CustomURLs: extraURLs,
 	})
 }
@@ -742,7 +757,7 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 		reg.PrivateAddress = lan[0]
 	}
 	if cfg.Plex.RemoteAccess {
-		reg.Port = publicPort(cfg)
+		reg.Port = r.wanPort(cfg)
 		if net.ParseIP(wan) != nil {
 			reg.Address = wan
 		}
@@ -824,7 +839,7 @@ func (r *Registrar) CheckReachability(ctx context.Context) remote.Reachability {
 			}
 		}
 		if hash != "" {
-			uris = append(uris, "https://"+net.JoinHostPort(remote.PlexDirectHost(ip, hash), fmt.Sprint(publicPort(cfg))))
+			uris = append(uris, "https://"+net.JoinHostPort(remote.PlexDirectHost(ip, hash), fmt.Sprint(r.wanPort(cfg))))
 		}
 	}
 	for _, c := range r.connections(cfg) {

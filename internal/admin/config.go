@@ -39,8 +39,13 @@ func (h *Handler) saveConfig(next config.Config) ([]FieldError, error) {
 		// The database is node-local and chosen at startup (config file or
 		// ETHER_DATABASE_URL); the admin API shows it redacted, never edits it.
 		keepDatabase := c.Database
+		// Setup completion gates tokenless local-network access
+		// (requireAuth) and changes only through /api/setup/complete: a
+		// config document loaded before setup finished must not clear it.
+		keepSetup := c.SetupComplete
 		*c = next
 		c.Database = keepDatabase
+		c.SetupComplete = keepSetup
 		if keepMachine != "" {
 			c.Server.MachineIdentifier = keepMachine
 		}

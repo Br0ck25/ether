@@ -636,3 +636,43 @@ func TestParseProcRoute(t *testing.T) {
 		t.Fatal(ip, err)
 	}
 }
+
+// After this host's LAN address changes (DHCP), renewing through the cached
+// gateway must forward the port to the new address, replacing our own
+// entry for the old one, not keep re-asserting the stale forward.
+func TestPortMapperFollowsLocalAddressChange(t *testing.T) {
+	f := newFakeIGD(t)
+	now := time.Unix(1_700_000_000, 0)
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	m := NewPortMapper(PortMapperOptions{
+		DiscoverIGD: func(ctx context.Context) (*IGD, error) { return LoadIGD(ctx, nil, f.srv.URL+"/rootDesc.xml") },
+		Gateway:     func() (net.IP, error) { return nil, fmt.Errorf("no nat-pmp") },
+		Now:         clock,
+	})
+	ctx := context.Background()
+	if _, err := m.Ensure(ctx, 32400, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the mapping having been made from the previous address.
+	m.opMu.Lock()
+	m.igd.LocalIP = net.ParseIP("192.168.1.77").To4()
+	m.opMu.Unlock()
+	f.mu.Lock()
+	f.mappings["TCP/32400"] = "192.168.1.77:32400"
+	f.mu.Unlock()
+
+	mu.Lock()
+	now = now.Add(3 * time.Hour) // past the renewal point
+	mu.Unlock()
+	st, err := m.Ensure(ctx, 32400, 0)
+	if err != nil || !st.Active {
+		t.Fatalf("renew: st=%+v err=%v", st, err)
+	}
+	if v, _ := f.mapping("TCP/32400"); v != "127.0.0.1:32400" {
+		t.Fatalf("mapping still forwards to %q after the address change", v)
+	}
+	if st.InternalIP != "127.0.0.1" {
+		t.Fatalf("status internal IP %q", st.InternalIP)
+	}
+}

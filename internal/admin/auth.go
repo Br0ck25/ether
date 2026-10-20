@@ -43,6 +43,42 @@ func isLocalOrLAN(r *http.Request) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()
 }
 
+// localSetupHosts are DNS suffixes that only resolve on the local network.
+var localSetupHosts = []string{".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".plex.direct"}
+
+// localHost reports whether the Host the browser addressed is an IP
+// literal, localhost, a single-label LAN name ("nas") or a name under a
+// local-only suffix. Tokenless setup access is limited to such hosts: a web
+// page on any public domain can re-point that domain at this server's LAN
+// address (DNS rebinding) and then drive the setup API from the owner's
+// browser as a same-origin, LAN-peer request.
+func localHost(r *http.Request) bool {
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.Trim(host, "[]")), ".")
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(host) != nil || host == "localhost" || strings.HasSuffix(host, ".localhost") || !strings.Contains(host, ".") {
+		return true
+	}
+	for _, s := range localSetupHosts {
+		if strings.HasSuffix(host, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// setupOpen reports whether r gets tokenless access: setup is not complete
+// and the browser is on the local network, addressing this server by a
+// local name.
+func setupOpen(cfgSetupComplete bool, r *http.Request) bool {
+	return !cfgSetupComplete && isLocalOrLAN(r) && localHost(r)
+}
+
 // requireAuth implements the admin access policy:
 //
 //   - A valid owner token always passes, from anywhere.
@@ -61,9 +97,13 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !h.deps.Config.Get().SetupComplete {
-			if isLocalOrLAN(r) {
+		if setupComplete := h.deps.Config.Get().SetupComplete; !setupComplete {
+			if setupOpen(setupComplete, r) {
 				next.ServeHTTP(w, r)
+				return
+			}
+			if isLocalOrLAN(r) {
+				writeError(w, http.StatusForbidden, "setup_local_host", "open setup at this server's IP address or local hostname (for example http://192.168.1.10:32400/ether/) until it is complete")
 				return
 			}
 			writeError(w, http.StatusForbidden, "setup_local_only", "setup is only available from the local network until it is complete")
@@ -80,7 +120,7 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	cfg := h.deps.Config.Get()
 	token := tokenFromRequest(r)
-	authed := h.isOwner(r, token) || (!cfg.SetupComplete && isLocalOrLAN(r))
+	authed := h.isOwner(r, token) || setupOpen(cfg.SetupComplete, r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":            true,
 		"version":       h.version,
