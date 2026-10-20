@@ -432,6 +432,12 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		if total > 0 && startSeg >= total {
 			startSeg = total - 1
 		}
+		if len(rungs) > 1 && findStream(req.Info, d.AudioStream, "audio") == nil {
+			// Ladder reps are numbered after an audio track 1
+			// (dashTrackForRung). Without audio their IDs would not match
+			// their session tracks and the last one could never be served.
+			rungs = rungs[:1]
+		}
 		reps = dashRepsLadder(req.Info, d, rungs)
 		if len(reps) == 0 {
 			return nil, errors.New("transcode: StartHLS: no video or audio stream for DASH")

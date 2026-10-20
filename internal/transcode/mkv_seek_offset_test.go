@@ -1,6 +1,7 @@
 package transcode
 
 import (
+	"context"
 	"math"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,12 @@ func TestIntegrationMatroskaPresentationStartsAtSeekOffset(t *testing.T) {
 
 func TestIntegrationMatroskaPresentationLongSeekOffset(t *testing.T) {
 	e := newRealEnv(t, WithoutHWDetection(), WithSegmentTimeout(5*time.Second))
-	out, err := exec.Command(e.ffmpeg, "-hide_banner", "-v", "error", "-y", "-f", "lavfi", "-i", "color=size=64x64:rate=1", "-f", "lavfi", "-i", "anullsrc=sample_rate=8000:channel_layout=stereo", "-t", "4500", "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "pools=1:frame-threads=1:keyint=2:min-keyint=2:scenecut=0", "-c:a", "aac", filepath.Join(e.dir, "long-seek.mkv")).CombinedOutput()
+	// -max_interleave_delta 0: without it a loaded machine lets the x265
+	// thread fall >10s behind the audio and the muxer flushes audio alone,
+	// so the fixture's interleaving (and where -ss lands) varied per run.
+	gctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute) // bounded under load
+	defer cancel()
+	out, err := exec.CommandContext(gctx, e.ffmpeg, "-hide_banner", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "color=size=64x64:rate=1", "-f", "lavfi", "-i", "anullsrc=sample_rate=8000:channel_layout=stereo", "-t", "4500", "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "pools=1:frame-threads=1:keyint=2:min-keyint=2:scenecut=0", "-c:a", "aac", "-max_interleave_delta", "0", filepath.Join(e.dir, "long-seek.mkv")).CombinedOutput()
 	if err != nil {
 		t.Skipf("cannot generate HEVC: %v %s", err, out)
 	}
