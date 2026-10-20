@@ -21,6 +21,15 @@ import (
 // resizes its pools whenever membership changes and every budgetPoll (which
 // also catches crashed nodes expiring). A standalone server keeps the
 // configured counts.
+//
+// TMDB limits requests per API key (all nodes share the bundled or owner
+// key), so each node's request rate is the configured rate divided by the
+// number of live nodes, with a floor (tmdb.MinClusterRate).
+//
+// Indexer API and grab budgets need no division: newznab reserves them
+// atomically in the shared database. Trakt and OpenSubtitles have no
+// client-side budget (they back off on 429 responses), so they are left
+// as they are.
 
 // budgetPoll re-reads membership for budget shares.
 const budgetPoll = 30 * time.Second
@@ -49,6 +58,9 @@ func (a *App) applyBudgets(m budgetMembers) {
 	a.fetcher.SetConnectionShare(func(configured int) int {
 		return usenet.ShareOf(configured, m.self, m.weights)
 	})
+	if a.tmdb != nil {
+		a.tmdb.SetRateShare(len(m.weights))
+	}
 }
 
 // runBudgets keeps this node's budget shares in step with membership

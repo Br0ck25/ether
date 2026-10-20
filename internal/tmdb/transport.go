@@ -9,60 +9,93 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// rateLimiter is a token bucket.
+// rateLimiter is a token bucket whose rate can change at run time (a
+// cluster divides TMDB's per-key budget among live nodes). Callers reserve
+// a token and sleep until it is due, so concurrent waiters are served in
+// order without polling.
 type rateLimiter struct {
-	tokens chan struct{}
+	mu     sync.Mutex
+	rate   float64 // tokens per second
+	burst  float64
+	tokens float64 // may go negative: tokens reserved by waiters
+	last   time.Time
 	stop   chan struct{}
 }
 
 func newRateLimiter(perSec float64, burst int) *rateLimiter {
+	perSec, b := limiterParams(perSec, burst)
+	return &rateLimiter{rate: perSec, burst: b, tokens: b, last: time.Now(), stop: make(chan struct{})}
+}
+
+func limiterParams(perSec float64, burst int) (float64, float64) {
 	if burst <= 0 {
 		burst = 1
 	}
 	if perSec <= 0 {
 		perSec = 40
 	}
-	r := &rateLimiter{tokens: make(chan struct{}, burst), stop: make(chan struct{})}
-	for i := 0; i < burst; i++ {
-		r.tokens <- struct{}{}
+	return perSec, float64(burst)
+}
+
+// refillLocked adds the tokens earned since the last refill.
+func (r *rateLimiter) refillLocked(now time.Time) {
+	if el := now.Sub(r.last).Seconds(); el > 0 {
+		r.tokens = min(r.burst, r.tokens+el*r.rate)
 	}
-	interval := time.Duration(float64(time.Second) / perSec)
-	if interval < time.Millisecond {
-		interval = time.Millisecond
-	}
-	go func() {
-		t := time.NewTicker(interval)
-		defer t.Stop()
-		for {
-			select {
-			case <-r.stop:
-				return
-			case <-t.C:
-				select {
-				case r.tokens <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}()
-	return r
+	r.last = now
+}
+
+// setRate changes the rate and burst; tokens earned so far are kept (up
+// to the new burst).
+func (r *rateLimiter) setRate(perSec float64, burst int) {
+	perSec, b := limiterParams(perSec, burst)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refillLocked(time.Now())
+	r.rate, r.burst = perSec, b
+	r.tokens = min(r.tokens, b)
+}
+
+func (r *rateLimiter) current() (float64, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rate, int(r.burst)
 }
 
 func (r *rateLimiter) wait(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.refillLocked(time.Now())
+	r.tokens--
+	if r.tokens >= 0 {
+		r.mu.Unlock()
+		return nil
+	}
+	delay := time.Duration(-r.tokens / r.rate * float64(time.Second))
+	r.mu.Unlock()
+	t := time.NewTimer(delay)
+	defer t.Stop()
 	select {
 	case <-ctx.Done():
+		r.mu.Lock()
+		r.tokens++ // give the reservation back
+		r.mu.Unlock()
 		return ctx.Err()
-	case <-r.tokens:
+	case <-t.C:
 		return nil
 	}
 }
 
-// Close stops the rate limiter goroutine.
+// Close releases the client (the rate limiter has no goroutine; Close is
+// kept for callers that own the client).
 func (c *Client) Close() {
 	if c.lim != nil {
 		select {

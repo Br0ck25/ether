@@ -15,6 +15,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/cluster"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/tmdb"
 	"github.com/braedonsaunders/ether/internal/usenet"
 )
 
@@ -75,17 +76,24 @@ func TestRunBudgetsFollowsMembership(t *testing.T) {
 	fm := &liveMembers{fakeMembers: fakeMembers{Solo: solo}}
 	self, b := cluster.Node{ID: "self", Live: true}, cluster.Node{ID: "b", Live: true}
 	fm.set(self, b)
-	a := &App{cluster: fm, fetcher: testFetcher(t, 10), log: quietLog()}
+	a := &App{cluster: fm, fetcher: testFetcher(t, 10), tmdb: tmdb.New("k", quietLog()), log: quietLog()}
+	defer a.tmdb.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { a.runBudgets(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
 	waitUntil(t, "half the connections", func() bool { return a.fetcher.MaxConnections() == 5 })
+	if rate, _ := a.tmdb.RateLimit(); rate != 20 {
+		t.Fatalf("TMDB rate with two nodes: %v/s", rate)
+	}
 
 	// A third node joins (announced on the members topic).
 	fm.set(self, b, cluster.Node{ID: "c", Live: true, Caps: cluster.Caps{Weight: 3}})
 	_ = fm.Publish(ctx, cluster.TopicMembers, []byte("c"))
 	waitUntil(t, "a fifth after c joins", func() bool { return a.fetcher.MaxConnections() == 2 })
+	if rate, _ := a.tmdb.RateLimit(); rate < 13.3 || rate > 13.4 {
+		t.Fatalf("TMDB rate with three nodes: %v/s", rate)
+	}
 
 	// c leaves: its share comes back.
 	fm.set(self, b)
