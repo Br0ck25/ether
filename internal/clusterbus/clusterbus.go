@@ -52,7 +52,7 @@ func (a adapter) Publish(ctx context.Context, topic string, payload []byte) erro
 	return a.c.Publish(ctx, topic, payload)
 }
 func (a adapter) Subscribe(topic string, fn func([]byte)) func() { return a.c.Subscribe(topic, fn) }
-func (a adapter) NodeID() string                                { return a.c.Self().ID }
+func (a adapter) NodeID() string                                 { return a.c.Self().ID }
 func (a adapter) LiveNodes(ctx context.Context) (map[string]bool, error) {
 	nodes, err := a.c.Nodes(ctx)
 	if err != nil {

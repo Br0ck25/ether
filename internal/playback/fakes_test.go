@@ -491,7 +491,7 @@ type harness struct {
 	clock    *fakeClock
 	cfg      config.Config
 	dataDir  string
-	noCache  bool // build the Manager without a segment cache
+	noCache  bool            // build the Manager without a segment cache
 	db       *sql.DB         // shared database (two-node tests); nil opens a fresh one
 	node     clusterbus.Node // cluster membership; nil = standalone
 }
