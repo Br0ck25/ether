@@ -106,8 +106,10 @@ func (s *Service) Get(id int64) Policy {
 	p.BlockedKeywords = append([]string(nil), p.BlockedKeywords...)
 	return p
 }
-func (s *Service) Put(ctx context.Context, id int64, p Policy) error {
-	if id == 0 || p.MaxBitrateKbps < 0 || p.StreamLimit < 0 {
+
+// Validate reports why p cannot be stored, if it cannot.
+func (p Policy) Validate() error {
+	if p.MaxBitrateKbps < 0 || p.StreamLimit < 0 {
 		return fmt.Errorf("invalid viewer or bitrate")
 	}
 	if p.MaxContentRating != "" && catalog.RatingRank(p.MaxContentRating) == 0 {
@@ -122,6 +124,16 @@ func (s *Service) Put(ctx context.Context, id int64, p Policy) error {
 		if _, err := time.LoadLocation(p.Timezone); err != nil {
 			return fmt.Errorf("invalid timezone")
 		}
+	}
+	return nil
+}
+
+func (s *Service) Put(ctx context.Context, id int64, p Policy) error {
+	if id == 0 {
+		return fmt.Errorf("invalid viewer or bitrate")
+	}
+	if err := p.Validate(); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(p)
 	if err != nil {

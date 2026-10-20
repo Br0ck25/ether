@@ -75,6 +75,7 @@ type Service struct {
 	drainMu        sync.Mutex
 	healthMu       sync.Mutex
 	providerStates map[string]string
+	indexerStates  map[string]string // indexer+kind -> "outage"/"budget"
 	cacheFull      bool
 	db             *sql.DB
 	opts           Options
@@ -296,7 +297,24 @@ func (s *Service) Drain(ctx context.Context) error {
 		if c.DigestMinutes > 0 {
 			limit = 100
 		}
-		rows, err := s.db.QueryContext(ctx, `SELECT id,event FROM notify_queue WHERE channel=? AND status='pending' AND due<=? ORDER BY id LIMIT ?`, c.ID, now, limit)
+		query := `SELECT id,event FROM notify_queue WHERE channel=? AND status='pending' AND due<=? ORDER BY id LIMIT ?`
+		args := []any{c.ID, now, limit}
+		if c.DigestMinutes > 0 {
+			// A digest window opens with its first event: once that event
+			// is due, everything queued behind it goes in the same message.
+			// Selecting only due rows would send each event on its own as
+			// it individually came due, so nothing was ever batched.
+			var due int
+			if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notify_queue WHERE channel=? AND status='pending' AND due<=?`, c.ID, now).Scan(&due); err != nil {
+				return err
+			}
+			if due == 0 {
+				continue
+			}
+			query = `SELECT id,event FROM notify_queue WHERE channel=? AND status='pending' ORDER BY id LIMIT ?`
+			args = []any{c.ID, limit}
+		}
+		rows, err := s.db.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}

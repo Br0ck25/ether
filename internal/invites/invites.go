@@ -96,6 +96,14 @@ func (s *Service) Create(ctx context.Context, in Invite) (Invite, string, error)
 			return in, "", fmt.Errorf("invalid library section")
 		}
 	}
+	// Redemption stages the policy (with the stream limit) through
+	// safety.Put, which rejects invalid values: an invite carrying one could
+	// never be redeemed, failing every viewer at the last step.
+	staged := in.Policy
+	staged.StreamLimit = in.StreamLimit
+	if err := staged.Validate(); err != nil {
+		return in, "", fmt.Errorf("invalid policy: %w", err)
+	}
 	token, err := secret()
 	if err != nil {
 		return in, "", err
@@ -390,7 +398,18 @@ func (s *Service) poll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err = s.Redeem(r.Context(), in, *a); err != nil {
-		http.Error(w, err.Error(), 409)
+		switch {
+		case errors.Is(err, core.ErrNotFound):
+			// The last use went to someone else (or the invite was revoked
+			// or expired) while this viewer signed in. The landing page
+			// retries 409s forever, so answer with a final status.
+			_, _ = s.db.ExecContext(r.Context(), `DELETE FROM invites_pins WHERE handle_hash=?`, hash(body.Handle))
+			http.Error(w, "This invitation is no longer available. Ask the owner for a new one.", http.StatusGone)
+		case errors.Is(err, core.ErrUnauthorized):
+			http.Error(w, "This Plex account cannot accept the invitation.", http.StatusForbidden)
+		default:
+			http.Error(w, err.Error(), 409)
+		}
 		return
 	}
 	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM invites_pins WHERE handle_hash=?`, hash(body.Handle))

@@ -418,6 +418,7 @@ func (r *Registrar) runDue(ctx context.Context) {
 	}
 	if r.o.Certs != nil && r.due(taskCert, r.o.CertInterval) {
 		_ = r.RenewCertificate(ctx, false)
+		r.scheduleCertCheck()
 	}
 	claimed := cfg.Plex.Claimed && cfg.Plex.Token != ""
 	if !claimed {
@@ -468,6 +469,12 @@ func (r *Registrar) ensureMapping(ctx context.Context, cfg config.Config) {
 	r.mappingOn = true
 	if st.Active && (st.ExternalPort != prev.ExternalPort || !prev.Active) {
 		r.forcePub = true
+	}
+	// A gateway may grant (or an adopted entry may have) a lease shorter
+	// than MappingInterval: check again when the mapper wants to renew,
+	// or the mapping lapses between checks.
+	if st.Active && !st.RenewAt.IsZero() && st.RenewAt.Before(r.next[taskMapping]) {
+		r.next[taskMapping] = st.RenewAt
 	}
 	r.mu.Unlock()
 	if err != nil && ctx.Err() == nil {
@@ -868,6 +875,41 @@ func (r *Registrar) RenewCertificate(ctx context.Context, force bool) error {
 		r.mu.Unlock()
 	}
 	return err
+}
+
+// scheduleCertCheck brings the next certificate check forward from
+// CertInterval to when a failed plex.tv request may be retried, or to when
+// the certificate enters its renewal window. Without it a request that
+// failed once (a fresh install left on the self-signed fallback, or a
+// renewal near expiry) waited a whole CertInterval instead of the
+// manager's RetryAfter.
+func (r *Registrar) scheduleCertCheck() {
+	now := r.o.Now()
+	next := now.Add(r.o.CertInterval)
+	earlier := func(at time.Time) {
+		if at.Before(next) {
+			next = at
+		}
+	}
+	info := r.o.Certs.Info()
+	switch {
+	case info.Custom:
+	case !info.NextAttempt.IsZero():
+		if info.NextAttempt.After(now) {
+			earlier(info.NextAttempt)
+		} else {
+			earlier(now.Add(time.Minute))
+		}
+	case info.Present && !info.SelfSigned:
+		at := info.NotAfter.Add(-r.o.Certs.renewBefore(info))
+		if !at.After(now) {
+			// Due but not requested by this node (e.g. a cluster
+			// follower waiting for the leader): look again hourly.
+			at = now.Add(time.Hour)
+		}
+		earlier(at)
+	}
+	r.schedule(taskCert, next)
 }
 
 // Claim claims the server for the account behind userToken (from PIN

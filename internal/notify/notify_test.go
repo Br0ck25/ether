@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -203,5 +204,85 @@ func TestImmediateRateLimit(t *testing.T) {
 	now = now.Add(61 * time.Second)
 	if err := s.Drain(ctx); err != nil || calls != 2 {
 		t.Fatalf("did not release queued item %d %v", calls, err)
+	}
+}
+
+// Events arriving at different times within one digest window go out as a
+// single digest once the window's first event is due.
+func TestDigestBatchesEventsAcrossTheWindow(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	var calls atomic.Int32
+	var message string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var e Event
+		_ = json.NewDecoder(r.Body).Decode(&e)
+		message = e.Message
+		w.WriteHeader(204)
+	}))
+	defer up.Close()
+	s := New(db, Options{Now: func() time.Time { return now }})
+	if err := s.Save(ctx, Channel{ID: "d", Kind: "webhook", Enabled: true, Endpoint: up.URL, Events: []string{"*"}, PerMinute: 5, DigestMinutes: 5}); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"one", "two", "three"} {
+		if err := s.Emit(ctx, Event{Kind: "playback.error", Message: m}); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Minute)
+	}
+	now = now.Add(2 * time.Minute) // five minutes after "one"
+	for i := 0; i < 3; i++ {
+		if err := s.Drain(ctx); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Second)
+	}
+	if calls.Load() != 1 || !strings.Contains(message, "one") || !strings.Contains(message, "two") || !strings.Contains(message, "three") {
+		t.Fatalf("digest sent %d messages, last %q", calls.Load(), message)
+	}
+}
+
+// An indexer outage alerts once, not once per failed request; a success
+// re-arms the alert.
+func TestIndexerOutageAlertsOncePerOutage(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db, Options{})
+	if err := s.Save(ctx, Channel{ID: "x", Kind: "webhook", Enabled: true, Endpoint: "https://hooks.example/x", Events: []string{"indexer.outage", "indexer.budget"}}); err != nil {
+		t.Fatal(err)
+	}
+	queued := func() int {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM notify_queue`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	fail := newznab.Event{Indexer: "ix", Kind: "search"}
+	for i := 0; i < 5; i++ {
+		s.ObserveIndexer(fail)
+	}
+	if n := queued(); n != 1 {
+		t.Fatalf("outage queued %d notifications", n)
+	}
+	s.ObserveIndexer(newznab.Event{Indexer: "ix", Kind: "search", Success: true})
+	s.ObserveIndexer(fail)
+	if n := queued(); n != 2 {
+		t.Fatalf("a new outage after recovery should alert again: %d", n)
+	}
+	s.ObserveIndexer(newznab.Event{Indexer: "ix", Kind: "search", BudgetExhausted: true})
+	if n := queued(); n != 3 {
+		t.Fatalf("budget exhaustion should alert: %d", n)
 	}
 }

@@ -156,3 +156,73 @@ func TestPollRetriesPolicyWithoutRepeatingAccountOrShare(t *testing.T) {
 		t.Fatalf("uses=%d", uses)
 	}
 }
+
+// An invite whose policy safety.Put would reject can never be redeemed, so
+// it must be refused when the owner creates it.
+func TestCreateRejectsUnstageablePolicy(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now()
+	s := New(db, Deps{Now: func() time.Time { return now }})
+	base := Invite{Label: "Kids", Expires: now.Add(time.Hour), MaxUses: 1, Sections: []int{1}}
+	bad := []Invite{base, base, base, base}
+	bad[0].Policy.MaxContentRating = "Kinda Spooky"
+	bad[1].Policy.AllowedHours = []int{25}
+	bad[2].Policy.Timezone = "Mars/Olympus"
+	bad[3].StreamLimit = -1
+	for i, in := range bad {
+		if _, _, err := s.Create(ctx, in); err == nil {
+			t.Errorf("case %d: invalid policy accepted", i)
+		}
+	}
+	ok := base
+	ok.Policy.MaxContentRating = "PG-13"
+	ok.StreamLimit = 2
+	if _, _, err := s.Create(ctx, ok); err != nil {
+		t.Fatalf("valid policy rejected: %v", err)
+	}
+}
+
+// A viewer who signed in while someone else took the invite's last use
+// gets a final answer, not the 409 the landing page retries forever.
+func TestPollReportsUsedUpInviteAsFinal(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	s := New(db, Deps{
+		Start: func(context.Context) (string, string, string, error) {
+			return "pin", "code", "https://example.test", nil
+		},
+		Poll:  func(context.Context, string) (*Account, error) { return &Account{7, "late@example.test"}, nil },
+		Share: func(context.Context, Account, Invite) error { return nil },
+	})
+	in, token, err := s.Create(ctx, Invite{Expires: time.Now().Add(time.Hour), MaxUses: 1, Sections: []int{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.PublicHandler()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/"+token+"/pin", nil))
+	var started struct {
+		Handle string `json:"handle"`
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	// Another viewer redeems the only use first.
+	if err := s.Redeem(ctx, in, Account{1, "first@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/"+token+"/poll", strings.NewReader(`{"handle":"`+started.Handle+`"}`)))
+	if w.Code == http.StatusConflict || w.Code == http.StatusOK || w.Code == http.StatusBadGateway {
+		t.Fatalf("used-up invite answered %d %q; the landing page would retry forever", w.Code, w.Body.String())
+	}
+}

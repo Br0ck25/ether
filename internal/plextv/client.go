@@ -323,7 +323,7 @@ func (c *Client) once(ctx context.Context, r request) (*response, error) {
 	start := time.Now()
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("plex.tv %s %s: %w", r.method, r.path, err)
+		return nil, fmt.Errorf("plex.tv %s %s: %w", r.method, r.path, redactURLError(err))
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
@@ -341,6 +341,26 @@ func (c *Client) once(ctx context.Context, r request) (*response, error) {
 		return nil, parseAPIError(r.method, r.path, resp, b)
 	}
 	return &response{status: resp.StatusCode, header: resp.Header, body: b}, nil
+}
+
+// redactURLError drops the query string from a transport error's URL.
+// net/http's *url.Error quotes the full request URL, and several plex.tv
+// endpoints carry the server token (auth_token, X-Plex-Token) or a Home PIN
+// in the query, so the raw error would leak them into logs, the admin
+// status and API error messages.
+func redactURLError(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	safe := ue.URL
+	if u, perr := url.Parse(ue.URL); perr == nil {
+		u.RawQuery, u.Fragment, u.User = "", "", nil
+		safe = u.String()
+	} else if i := strings.IndexAny(safe, "?#"); i >= 0 {
+		safe = safe[:i]
+	}
+	return &url.Error{Op: ue.Op, URL: safe, Err: ue.Err}
 }
 
 func (c *Client) setHeaders(h http.Header, token string) {

@@ -75,6 +75,27 @@ func (c *Client) AccessTokens(ctx context.Context, serverToken string) ([]Friend
 			Restricted: n.boolAttr("restricted"),
 			AllLibs:    n.boolAttr("allLibraries", "all_libraries"),
 		}
+		// Observed v2 responses carry a friend's identity on an <invited>
+		// child (<token type="server"><invited id=… username=…/>), not on
+		// the token element. Without it every friend has no Plex id and the
+		// sync drops them all.
+		if inv := childElement(n, "invited"); inv != nil {
+			if f.PlexID == 0 {
+				f.PlexID = inv.intAttr("id")
+			}
+			fill := func(dst *string, src string) {
+				if *dst == "" {
+					*dst = src
+				}
+			}
+			fill(&f.UUID, inv.attr("uuid"))
+			fill(&f.Username, inv.attr("username"))
+			fill(&f.Title, inv.attr("title"))
+			fill(&f.Email, inv.attr("email"))
+			fill(&f.Thumb, inv.attr("thumb"))
+			f.Home = f.Home || inv.boolAttr("home")
+			f.Restricted = f.Restricted || inv.boolAttr("restricted")
+		}
 		for _, s := range n.findAll("section") {
 			if k := s.attr("key", "id"); k != "" {
 				f.Sections = append(f.Sections, k)
@@ -86,6 +107,17 @@ func (c *Client) AccessTokens(ctx context.Context, serverToken string) ([]Friend
 		out = append(out, f)
 	}
 	return out, nil
+}
+
+// childElement returns n's first direct child element named name.
+func childElement(n *xmlNode, name string) *xmlNode {
+	want := normName(name)
+	for i := range n.Nodes {
+		if normName(n.Nodes[i].XMLName.Local) == want {
+			return &n.Nodes[i]
+		}
+	}
+	return nil
 }
 
 // SharedServers lists the owner's shares of this server with their access
