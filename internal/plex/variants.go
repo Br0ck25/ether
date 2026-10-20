@@ -142,7 +142,7 @@ func (r *variantIDRegistry) idFor(key core.RatingKey, releaseID string) int64 {
 	if r.db != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, _ = r.db.ExecContext(ctx,
-			`INSERT OR IGNORE INTO variants_ids(media_id, rating_key, release_id) VALUES (?,?,?)`,
+			`INSERT INTO variants_ids(media_id, rating_key, release_id) VALUES (?,?,?) ON CONFLICT DO NOTHING`,
 			id, int64(key), releaseID)
 		cancel()
 	}
