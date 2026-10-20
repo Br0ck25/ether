@@ -1,0 +1,42 @@
+---
+# Synthetic definition for tests: cookie login and two-line rows.
+id: fakecookie
+name: Fake Cookie
+links:
+  - https://fakecookie.invalid/
+settings:
+  - name: cookie
+    type: text
+    label: Cookie
+  - name: info_cookie
+    type: info_cookie
+caps:
+  categorymappings:
+    - {id: 1, cat: TV}
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+login:
+  method: cookie
+  inputs:
+    cookie: "{{ .Config.cookie }}"
+  test:
+    path: index.php
+    selector: a.logout
+search:
+  paths:
+    - path: search
+  inputs:
+    q: "{{ .Keywords }}"
+  rows:
+    selector: table.list tr
+    after: 1
+  fields:
+    title:
+      selector: td.name
+    infohash:
+      selector: td.hash
+    size:
+      selector: td.size
+    category:
+      text: 1

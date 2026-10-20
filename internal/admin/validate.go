@@ -98,6 +98,12 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	for i, ix := range cfg.Indexers {
 		f := fmt.Sprintf("indexers[%d]", i)
 		v.httpURL(f+".url", ix.URL, true)
+		if ix.Kind != "" {
+			v.oneOf(f+".kind", ix.Kind, config.IndexerKindNewznab, config.IndexerKindCardigann)
+		}
+		if ix.IsBuiltin() && strings.TrimSpace(ix.Definition) == "" {
+			v.add(f+".definition", "is required for a built-in site")
+		}
 		if ix.DailyLimit < 0 {
 			v.add(f+".dailyLimit", "must be >= 0")
 		}
@@ -114,6 +120,9 @@ func ValidateConfig(cfg config.Config) []FieldError {
 			seenIx[ix.ID] = true
 		}
 	}
+
+	v.httpURL("indexerSites.definitionsUrl", cfg.IndexerSites.DefinitionsURL, false)
+	v.httpURL("indexerSites.flareSolverrUrl", cfg.IndexerSites.FlareSolverrURL, false)
 
 	seenDebrid := map[string]bool{}
 	for i, p := range cfg.Debrid.Providers {

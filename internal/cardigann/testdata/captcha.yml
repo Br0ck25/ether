@@ -1,0 +1,25 @@
+---
+# Synthetic definition for tests: a login that needs a captcha.
+id: fakecaptcha
+name: Fake Captcha
+links:
+  - https://fakecaptcha.invalid/
+login:
+  path: login
+  method: form
+  captcha:
+    type: image
+    selector: img.captcha
+    input: captcha
+  test:
+    path: index
+search:
+  path: s
+  rows:
+    selector: li
+  fields:
+    title:
+      selector: span
+    magnet:
+      selector: a
+      attribute: href

@@ -36,6 +36,7 @@ type Config struct {
 	Personalize   Personalize   `json:"personalize"`
 	Extras        Extras        `json:"extras"`
 	Debrid        Debrid        `json:"debrid"`
+	IndexerSites  IndexerSites  `json:"indexerSites"`
 	SetupComplete bool          `json:"setupComplete"`
 }
 
@@ -122,10 +123,31 @@ type Indexer struct {
 	// Protocol is "usenet" (Newznab, the default when empty) or "torrent"
 	// (Torznab; results stream through a debrid provider).
 	Protocol string `json:"protocol,omitempty"`
+	// Kind selects how the indexer is searched: "" or IndexerKindNewznab
+	// for a Newznab/Torznab API at URL, IndexerKindCardigann for a built-in
+	// site run from an owner-installed definition. For a built-in site URL
+	// is the site address and Protocol follows the definition.
+	Kind string `json:"kind,omitempty"`
+	// Definition is the installed definition id of a built-in site.
+	Definition string `json:"definition,omitempty"`
+	// Settings are the definition's setting values by name.
+	Settings map[string]string `json:"settings,omitempty"`
+	// SecretSettings are the definition's password-type settings. They are
+	// sealed at rest and redacted in API responses like API keys.
+	SecretSettings map[string]string `json:"secretSettings,omitempty"`
 }
+
+// Indexer kinds (Indexer.Kind).
+const (
+	IndexerKindNewznab   = "newznab"
+	IndexerKindCardigann = "cardigann"
+)
 
 // IsTorrent reports whether the indexer is a Torznab (torrent) indexer.
 func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
+
+// IsBuiltin reports whether the indexer is a built-in site.
+func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
 
 type Cache struct {
 	Dir         string `json:"dir"`

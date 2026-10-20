@@ -22,7 +22,7 @@ func (a *App) buildAdmin() http.Handler {
 	return admin.New(admin.Deps{
 		Config:        a.cfg,
 		Extensions:    a.extensionHandlers(),
-		ValidateExtra: validatePlaybackConfig,
+		ValidateExtra: a.validateExtra,
 		Logger:        a.log.With("component", "admin"),
 		Logs:          a.logs,
 		Version:       a.opts.Version,
@@ -36,6 +36,12 @@ func (a *App) buildAdmin() http.Handler {
 			return usenet.TestProvider(ctx, p)
 		},
 		TestIndexer: func(ctx context.Context, ix config.Indexer) error {
+			if ix.IsBuiltin() {
+				if res := a.sites.Test(ctx, ix, false); !res.OK {
+					return errors.New(res.Error)
+				}
+				return nil
+			}
 			return newznab.Test(ctx, ix)
 		},
 		TestDebrid: func(ctx context.Context, p config.DebridProvider) error {

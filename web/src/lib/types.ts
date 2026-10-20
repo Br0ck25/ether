@@ -29,9 +29,90 @@ export interface Indexer {
   tvCategories: number[] | null;
   /** "usenet" (Newznab, the default when empty or absent) or "torrent" (Torznab). */
   protocol?: IndexerProtocol | "";
+  /** "cardigann" for a built-in site; empty or "newznab" for a Newznab/Torznab URL. */
+  kind?: IndexerKind | "";
+  /** Installed definition id of a built-in site. */
+  definition?: string;
+  /** A built-in site's setting values by name. */
+  settings?: Record<string, string> | null;
+  /** A built-in site's password settings; each set value is redacted to "••••". */
+  secretSettings?: Record<string, string> | null;
 }
 
 export type IndexerProtocol = "usenet" | "torrent";
+export type IndexerKind = "newznab" | "cardigann";
+
+/** Definitions source and FlareSolverr for built-in sites (config.indexerSites). */
+export interface IndexerSitesConfig {
+  definitionsUrl?: string;
+  flareSolverrUrl?: string;
+}
+
+/** One setting a site definition declares. */
+export interface SiteSetting {
+  name: string;
+  /** text, password, checkbox, select, multi-select, or info* (read-only guidance). */
+  type: string;
+  label?: string;
+  default?: string;
+  defaults?: string[];
+  options?: { value: string; label: string }[];
+}
+
+/** An installed site definition (GET /indexer-sites/definitions). */
+export interface SiteDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  language?: string;
+  /** public, semi-private or private. */
+  type?: string;
+  protocol: IndexerProtocol;
+  links: string[];
+  settings: SiteSetting[];
+  movies: boolean;
+  tv: boolean;
+  /** Login method when the site needs an account. */
+  login?: string;
+  /** "upload" or "source". */
+  source: string;
+  warnings?: string[];
+  installedAt: string;
+  updatedAt: string;
+}
+
+/** A definition offered by the owner's definitions source. */
+export interface CatalogEntry {
+  id: string;
+  file: string;
+  installed: boolean;
+  updateAvailable?: boolean;
+}
+
+/** POST /indexer-sites/test. */
+export interface SiteTestResult {
+  ok: boolean;
+  results: number;
+  titles?: string[] | null;
+  error?: string;
+  durationMs: number;
+}
+
+/** A built-in indexer's last test (GET /indexer-sites/status). */
+export interface SiteTestStatus {
+  indexerId: string;
+  ok: boolean;
+  message?: string;
+  results: number;
+  testedAt: string;
+}
+
+/** POST /indexer-sites/update. */
+export interface SiteUpdateReport {
+  updated: string[];
+  unchanged: number;
+  failed: { id: string; error: string }[];
+}
 
 export type DebridKind = "realdebrid" | "torbox" | "alldebrid" | "premiumize";
 
@@ -138,6 +219,7 @@ export interface EtherConfig {
   };
   usenet: { providers: UsenetProvider[] | null };
   indexers: Indexer[] | null;
+  indexerSites?: IndexerSitesConfig;
   /** Absent on servers without debrid support. */
   debrid?: DebridConfig;
   cache: {

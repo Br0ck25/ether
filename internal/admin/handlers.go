@@ -55,7 +55,7 @@ func SetupStatus(cfg config.Config) (steps []SetupStep, complete bool) {
 		{ID: "plex", Title: "Sign in to plex.tv and claim", Complete: plexDone, Required: true, Detail: plexDetail},
 		{ID: "usenet", Title: "Usenet providers", Complete: enabledProviders > 0, Required: true,
 			Detail: fmt.Sprintf("%d enabled", enabledProviders)},
-		{ID: "indexers", Title: "Newznab indexers", Complete: enabledIndexers > 0, Required: true,
+		{ID: "indexers", Title: "Indexers", Complete: enabledIndexers > 0, Required: true,
 			Detail: fmt.Sprintf("%d enabled", enabledIndexers)},
 		{ID: "cache", Title: "Cache folder and disk budget", Complete: cacheDone, Required: true, Detail: cfg.Cache.Dir},
 		{ID: "optional", Title: "Optional integrations", Complete: true, Required: false,
