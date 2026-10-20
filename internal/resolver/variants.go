@@ -126,7 +126,7 @@ func pickVariants(t *core.Title, caps core.ClientCaps, profile core.QualityProfi
 			Edition: rel.Info.Edition,
 			Auto:    isAuto,
 			Release: rel,
-			Info:    estimateVariantInfo(t, rel),
+			Info:    estimateVariantInfo(t, sizedForEpisode(rel)),
 		})
 		return true
 	}

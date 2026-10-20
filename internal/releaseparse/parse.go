@@ -52,13 +52,19 @@ func Parse(name string) core.ReleaseInfo {
 	if raw == "" {
 		return info
 	}
-	// Leading / trailing bracket group, e.g. [YTS.MX] or [HorribleSubs].
-	bracketGroup := ""
-	if ms := reBracket.FindAllStringSubmatch(raw, -1); len(ms) > 0 {
-		for _, m := range ms {
-			v := strings.TrimSpace(m[1])
+	// Leading / trailing bracket group, e.g. [HorribleSubs] or [YTS.MX].
+	// A leading bracket names the group (anime convention); a trailing one
+	// is only used when there is no -GROUP suffix ("-SPARKS[rarbg]" names
+	// SPARKS, and [rarbg] is the uploader).
+	bracketGroup, leadingGroup := "", ""
+	if ms := reBracket.FindAllStringSubmatchIndex(raw, -1); len(ms) > 0 {
+		for i, m := range ms {
+			v := strings.TrimSpace(raw[m[2]:m[3]])
 			if v != "" && len(v) <= 20 && !looksLikeMeta(v) {
 				bracketGroup = v
+				if i == 0 && m[0] == 0 {
+					leadingGroup = v
+				}
 			}
 		}
 	}
@@ -74,22 +80,28 @@ func Parse(name string) core.ReleaseInfo {
 	}
 	// Group: trailing -GROUP (after stripping bracket chunks).
 	noBrackets := reBracket.ReplaceAllString(stem, " ")
-	if bracketGroup != "" {
+	if leadingGroup != "" {
+		info.Group = leadingGroup
+	} else if m := reGroupTail.FindStringSubmatch(strings.TrimSpace(noBrackets)); m != nil && !isKnownTail(m[1]) {
+		info.Group = m[1]
+	} else {
 		info.Group = bracketGroup
-	} else if m := reGroupTail.FindStringSubmatch(strings.TrimSpace(noBrackets)); m != nil {
-		g := m[1]
-		if !isKnownTail(g) {
-			info.Group = g
-		}
 	}
 
 	spaced := spacify(stem)
 	upper := " " + strings.ToUpper(spaced) + " "
 
 	// Season / episode.
-	parseEpisodes(spaced, &info)
+	markerAt := parseEpisodes(spaced, &info)
 	var yearAt int
 	info.Year, yearAt = parseYearAt(spaced)
+	// Words before the release year or the episode/season marker are the
+	// title ("The.Spanish.Princess.S01E01", "The.French.Dispatch.2021"):
+	// release tags only count after the earlier of the two.
+	floor := yearAt
+	if markerAt >= 0 && (floor < 0 || markerAt < floor) {
+		floor = markerAt
+	}
 	// "COMPLETE" before the release year is usually part of the title
 	// ("A.Complete.Unknown.2024"), unless it names a pack.
 	if idx := tokenIndex(spaced, "COMPLETE"); idx >= 0 && (idx > yearAt || len(info.Seasons) > 0 || namesPack(spaced[idx+len("COMPLETE"):])) {
@@ -108,7 +120,7 @@ func Parse(name string) core.ReleaseInfo {
 			info.Channels = m[1]
 		}
 	}
-	if strings.Contains(upper, "HDR10+") || strings.Contains(upper, "HDR10PLUS") || strings.Contains(upper, " HDR10 ") || strings.Contains(upper, " HDR ") || strings.Contains(upper, "HDR10") {
+	if strings.Contains(upper, "HDR10+") || strings.Contains(upper, "HDR10PLUS") || strings.Contains(upper, " HDR10 ") || strings.Contains(upper, " HDR ") || strings.Contains(upper, " HDR-") || strings.Contains(upper, "HDR10") {
 		info.HDR10 = true
 	}
 	if strings.Contains(upper, "DOLBY VISION") || strings.Contains(upper, " DOLBYVISION ") || strings.Contains(upper, " DOVI ") || strings.Contains(upper, " DV ") || strings.Contains(upper, " DV-") || strings.HasSuffix(strings.TrimSpace(upper), " DV") {
@@ -118,12 +130,7 @@ func Parse(name string) core.ReleaseInfo {
 	info.Proper = strings.Contains(upper, " PROPER ")
 	info.Repack = strings.Contains(upper, " REPACK ")
 	// Words of the title itself ("The.French.Dispatch.2021", "The Danish
-	// Girl") are not audio languages: only tags after the release year or
-	// the episode marker count when the name has one.
-	floor := yearAt
-	if loc := reSE.FindStringIndex(spaced); loc != nil && (floor <= 0 || loc[0] < floor) {
-		floor = loc[0]
-	}
+	// Girl") are not audio languages.
 	seen := map[string]bool{}
 	for _, l := range languages {
 		if languageTagAfter(spaced, l.token, floor) {
@@ -133,12 +140,16 @@ func Parse(name string) core.ReleaseInfo {
 			}
 		}
 	}
-	info.Title = extractTitle(spaced, yearAt, &info)
+	info.Title = extractTitle(spaced, yearAt, floor, &info)
 	return info
 }
 
 func looksLikeMeta(v string) bool {
 	u := strings.ToUpper(v)
+	// An anime CRC32 checksum ("[ABCDEF12]") is not a release group.
+	if len(u) == 8 && strings.Trim(u, "0123456789ABCDEF") == "" {
+		return true
+	}
 	for _, k := range []string{"1080", "720", "2160", "480", "BLURAY", "WEB", "HDTV", "X264", "X265", "HEVC", "HDR"} {
 		if strings.Contains(u, k) {
 			return true
@@ -162,8 +173,11 @@ func spacify(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-func parseEpisodes(spaced string, info *core.ReleaseInfo) {
-	if m := reSE.FindStringSubmatch(spaced); m != nil {
+// parseEpisodes fills seasons and episodes and returns the offset of the
+// marker it read them from, or -1.
+func parseEpisodes(spaced string, info *core.ReleaseInfo) int {
+	if loc := reSE.FindStringSubmatchIndex(spaced); loc != nil {
+		m := submatches(spaced, loc)
 		s, _ := strconv.Atoi(m[1])
 		info.Seasons = []int{s}
 		first, _ := strconv.Atoi(m[2])
@@ -188,15 +202,17 @@ func parseEpisodes(spaced string, info *core.ReleaseInfo) {
 		}
 		sort.Ints(eps)
 		info.Episodes = dedupeInts(eps)
-		return
+		return loc[0]
 	}
-	if m := reSeasonWord.FindStringSubmatch(spaced); m != nil {
+	if loc := reSeasonWord.FindStringSubmatchIndex(spaced); loc != nil {
+		m := submatches(spaced, loc)
 		s, _ := strconv.Atoi(m[1])
 		info.Seasons = []int{s}
 		info.FullSeason = true
-		return
+		return loc[0]
 	}
-	if m := reSeasonOnly.FindStringSubmatch(spaced); m != nil {
+	if loc := reSeasonOnly.FindStringSubmatchIndex(spaced); loc != nil {
+		m := submatches(spaced, loc)
 		// Guard against matching the S in e.g. S01E02 (already handled) —
 		// here no E followed, so it is a season pack.
 		s, _ := strconv.Atoi(m[1])
@@ -208,17 +224,32 @@ func parseEpisodes(spaced string, info *core.ReleaseInfo) {
 			}
 		}
 		info.FullSeason = true
-		return
+		return loc[0]
 	}
-	if m := reXEpisode.FindStringSubmatch(spaced); m != nil {
+	if loc := reXEpisode.FindStringSubmatchIndex(spaced); loc != nil {
+		m := submatches(spaced, loc)
 		s, _ := strconv.Atoi(m[1])
 		e, _ := strconv.Atoi(m[2])
 		// 1x02 is ambiguous with e.g. codec-ish tokens; season<=50 guard.
 		if s >= 1 && s <= 50 {
 			info.Seasons = []int{s}
 			info.Episodes = []int{e}
+			return loc[0]
 		}
 	}
+	return -1
+}
+
+// submatches turns FindStringSubmatchIndex output into strings ("" for a
+// group that did not participate).
+func submatches(s string, loc []int) []string {
+	out := make([]string, len(loc)/2)
+	for i := range out {
+		if loc[2*i] >= 0 {
+			out[i] = s[loc[2*i]:loc[2*i+1]]
+		}
+	}
+	return out
 }
 
 func rangeTailPresent(spaced, match string) bool {
@@ -260,6 +291,12 @@ func parseYearAt(spaced string) (int, int) {
 	}
 	pick := locs[0]
 	for _, l := range locs[1:] {
+		// Release tags after a year ("Movie.1984.Remastered.2014") mean
+		// the metadata has begun: that year was the release year, and
+		// later ones are remaster or group years.
+		if l[0] < limit && releaseMarkerIn(spaced[pick[1]:l[0]]) {
+			break
+		}
 		// The end of a span ("1994-2004") is not a release year.
 		rangeEnd := l[0] >= 2 && spaced[l[0]-1] == '-' && spaced[l[0]-2] >= '0' && spaced[l[0]-2] <= '9'
 		if l[0] < limit && !rangeEnd {
@@ -270,14 +307,28 @@ func parseYearAt(spaced string) (int, int) {
 	return y, pick[0]
 }
 
-// namesPack reports whether the words after "COMPLETE" describe a pack.
+// releaseMarkerIn reports whether seg carries a release tag (a boundary
+// keyword or an edition label) rather than only title words.
+func releaseMarkerIn(seg string) bool {
+	for _, kw := range boundaryKeywords {
+		if tokenIndex(seg, kw) >= 0 {
+			return true
+		}
+	}
+	return ParseEdition(seg) != ""
+}
+
+// namesPack reports whether the words after "COMPLETE" describe a pack
+// ("Complete Series", "Complete S01-S05").
 func namesPack(rest string) bool {
-	next, _, _ := strings.Cut(strings.TrimLeft(rest, " -"), " ")
+	rest = strings.TrimLeft(rest, " -")
+	next, _, _ := strings.Cut(rest, " ")
 	switch strings.ToUpper(next) {
 	case "SERIES", "SEASON", "SEASONS", "PACK", "COLLECTION", "BOXSET":
 		return true
 	}
-	return false
+	loc := reSeasonOnly.FindStringIndex(rest)
+	return loc != nil && loc[0] == 0
 }
 
 // languageTagAfter reports whether the ASCII tag occurs in spaced after
@@ -319,8 +370,10 @@ func tokenIndex(s, kw string) int {
 }
 
 func parseHeight(upper string) int {
+	// An explicit resolution wins over a source hint: "1080p.UHD.BluRay"
+	// is a 1080p encode of a UHD disc.
 	switch {
-	case strings.Contains(upper, "2160P") || strings.Contains(upper, "2160I") || strings.Contains(upper, " 4K ") || strings.Contains(upper, " 4K-") || strings.Contains(upper, " UHD ") || strings.HasSuffix(strings.TrimSpace(upper), "UHD") || strings.Contains(upper, "UHD "):
+	case strings.Contains(upper, "2160P") || strings.Contains(upper, "2160I"):
 		return 2160
 	case strings.Contains(upper, "1080P") || strings.Contains(upper, "1080I"):
 		return 1080
@@ -332,13 +385,15 @@ func parseHeight(upper string) int {
 		return 480
 	case strings.Contains(upper, "360P"):
 		return 360
+	case strings.Contains(upper, " 4K ") || strings.Contains(upper, " 4K-") || strings.Contains(upper, " UHD ") || strings.HasSuffix(strings.TrimSpace(upper), "UHD") || strings.Contains(upper, "UHD "):
+		return 2160
 	}
 	return 0
 }
 
 func parseSource(upper string) core.Source {
 	switch {
-	case strings.Contains(upper, " REMUX"):
+	case strings.Contains(upper, " REMUX") || strings.Contains(upper, "BDREMUX"):
 		return core.SourceRemux
 	case containsAny(upper, "BLURAY", "BLU-RAY", "BDRIP", "BRRIP", "BD-RIP"):
 		return core.SourceBluRay
@@ -352,7 +407,7 @@ func parseSource(upper string) core.Source {
 		return core.SourceScreener
 	case containsAny(upper, "DVDRIP", "DVD-RIP", " DVD "):
 		return core.SourceDVD
-	case containsAny(upper, "HDCAM", " HD CAM", " CAM ", " CAM-", "HDTS", "HD-TS", " TELESYNC", " TELECINE", " TS ", " TC ", "-TS ", "-TC "):
+	case containsAny(upper, "HDCAM", " HD CAM", " CAM ", " CAM-", "CAMRIP", "HQCAM", "HDTS", "HD-TS", "TSRIP", "HDTC", "HD-TC", " TELESYNC", " TELECINE", " TS ", " TC ", "-TS ", "-TC "):
 		return core.SourceCam
 	case strings.HasSuffix(strings.TrimSpace(upper), "CAM"):
 		return core.SourceCam
@@ -423,7 +478,7 @@ var boundaryKeywords = []string{
 	"INTERNAL", "LIMITED", "SUBBED", "DUBBED",
 }
 
-func extractTitle(spaced string, yearAt int, info *core.ReleaseInfo) string {
+func extractTitle(spaced string, yearAt, floor int, info *core.ReleaseInfo) string {
 	cut := len(spaced)
 	consider := func(idx int) {
 		if idx > 0 && idx < cut {
@@ -448,9 +503,10 @@ func extractTitle(spaced string, yearAt int, info *core.ReleaseInfo) string {
 	}
 	for _, kw := range boundaryKeywords {
 		// Keywords are whole tokens ("Multiverse" is not MULTI, "Scam" is
-		// not CAM), and words before the release year belong to the title
-		// ("Charlottes Web 2006", "Internal Affairs 1990").
-		if idx := tokenIndex(spaced, kw); idx > 0 && (idx > yearAt || kw == "COMPLETE" && namesPack(spaced[idx+len(kw):])) {
+		// not CAM), and words before the release year or episode marker
+		// belong to the title ("Charlottes Web 2006", "Internal Affairs
+		// 1990", "The Spanish Princess S01E01").
+		if idx := tokenIndex(spaced, kw); idx > 0 && (idx > floor || kw == "COMPLETE" && namesPack(spaced[idx+len(kw):])) {
 			consider(idx)
 		}
 	}

@@ -48,7 +48,11 @@ func EpisodeTitleMatches(name, want string) bool {
 			}
 		}
 		switch u {
-		case "AAC", "AC3", "EAC3", "DDP", "DDP5", "DTS", "TRUEHD", "READNFO", "UNCENSORED", "EXTENDED":
+		case "AAC", "AC3", "EAC3", "DDP", "DDP5", "DTS", "TRUEHD", "READNFO", "UNCENSORED", "EXTENDED",
+			// Release tags that can precede the resolution; they are not
+			// episode title words ("Show.S01E01.DV.2160p.WEB").
+			"DV", "DOVI", "HDR10PLUS", "SDR", "HYBRID", "RERIP", "REAL", "10BIT", "DUAL", "DL",
+			"AMZN", "NF", "DSNP", "HMAX", "ATVP", "PCOK", "HULU", "UNCUT", "REMASTERED", "IMAX":
 			technical = true
 		}
 		if technical {

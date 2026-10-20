@@ -33,6 +33,8 @@ func parseDate(s string) time.Time {
 	for _, layout := range []string{
 		time.RFC1123Z, time.RFC1123, time.RFC822Z, time.RFC822, time.RFC3339,
 		"Mon, 02 Jan 2006 15:04:05 -0700", "2006-01-02 15:04:05",
+		// Single-digit days ("Mon, 2 Jan 2006"), which RFC1123 layouts reject.
+		"Mon, 2 Jan 2006 15:04:05 -0700", "Mon, 2 Jan 2006 15:04:05 MST",
 	} {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t
@@ -104,6 +106,11 @@ func parseFeed(body []byte, indexer string) ([]core.Release, error) {
 
 func parseXMLFeed(body []byte, indexer string) ([]core.Release, error) {
 	dec := xml.NewDecoder(bytes.NewReader(body))
+	// Indexer feeds are often not well-formed XML: a bare "&" in a link or
+	// description, or an HTML entity ("&nbsp;"). One bad character must not
+	// fail the whole search.
+	dec.Strict = false
+	dec.Entity = xml.HTMLEntity
 	var out []core.Release
 	var cur *rawItem
 	var field string

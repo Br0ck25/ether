@@ -30,7 +30,22 @@ const (
 	defaultSearchLimit = 100
 	defaultHTTPTimeout = 30 * time.Second
 	defaultCacheTTL    = 6 * time.Hour
+	// capsRetry spaces caps requests after a failure. Every caps request
+	// spends a daily API hit, and searches work (ungated) without caps.
+	capsRetry = time.Hour
 )
+
+var errCapsUnavailable = errors.New("newznab: capabilities unavailable; retrying later")
+
+// redactURLError drops the request URL from a *url.Error: indexer URLs
+// carry the API key, and callers log and surface these errors.
+func redactURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("newznab: %s request: %w", ue.Op, ue.Err)
+	}
+	return err
+}
 
 // Options tunes a Client or Manager. Zero values get sensible defaults.
 type Options struct {
@@ -76,9 +91,10 @@ type Client struct {
 	memCache map[string]memCacheEntry
 	torrents torrentDescriptorCache
 
-	capsMu sync.Mutex
-	caps   *Caps
-	capsAt time.Time
+	capsMu     sync.Mutex
+	caps       *Caps
+	capsAt     time.Time
+	capsFailAt time.Time // last failed caps request; searches skip caps for capsRetry
 
 	cfgMu sync.RWMutex
 }
@@ -129,8 +145,15 @@ func (c *Client) Config() config.Indexer {
 // UpdateConfig swaps the indexer config (called on config reload).
 func (c *Client) UpdateConfig(cfg config.Indexer) {
 	c.cfgMu.Lock()
-	defer c.cfgMu.Unlock()
+	changed := c.cfg.URL != cfg.URL || c.cfg.APIKey != cfg.APIKey
 	c.cfg = cfg
+	c.cfgMu.Unlock()
+	if changed {
+		// A corrected URL or key deserves a fresh caps attempt.
+		c.capsMu.Lock()
+		c.capsFailAt = time.Time{}
+		c.capsMu.Unlock()
+	}
 }
 
 // SetCacheTTL changes the result-cache TTL (called on config reload).
@@ -184,7 +207,7 @@ func (c *Client) apiURL(params url.Values) (string, error) {
 func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	req.Header.Set("User-Agent", "Ether/1.0")
 	resp, err := c.http.Do(req)
@@ -243,6 +266,10 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 		defer c.capsMu.Unlock()
 		return c.caps, nil
 	}
+	if !c.capsFailAt.IsZero() && c.now().Sub(c.capsFailAt) < capsRetry {
+		c.capsMu.Unlock()
+		return nil, errCapsUnavailable
+	}
 	c.capsMu.Unlock()
 	if caps, ok := c.capsFromDB(ctx); ok {
 		c.capsMu.Lock()
@@ -253,6 +280,23 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 	if err := c.reserve(ctx, "hit"); err != nil {
 		return nil, err
 	}
+	caps, err := c.fetchCaps(ctx)
+	if err != nil {
+		if ctx.Err() == nil && !errors.Is(err, core.ErrBudgetExhausted) {
+			c.capsMu.Lock()
+			c.capsFailAt = c.now()
+			c.capsMu.Unlock()
+		}
+		return nil, err
+	}
+	c.capsMu.Lock()
+	c.caps, c.capsAt, c.capsFailAt = caps, c.now(), time.Time{}
+	c.capsMu.Unlock()
+	c.capsToDB(ctx, caps)
+	return caps, nil
+}
+
+func (c *Client) fetchCaps(ctx context.Context) (*Caps, error) {
 	u, err := c.apiURL(url.Values{"t": {"caps"}})
 	if err != nil {
 		return nil, err
@@ -271,10 +315,6 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 	if err != nil {
 		return nil, fmt.Errorf("newznab: parse caps: %w", err)
 	}
-	c.capsMu.Lock()
-	c.caps, c.capsAt = caps, c.now()
-	c.capsMu.Unlock()
-	c.capsToDB(ctx, caps)
 	return caps, nil
 }
 
@@ -284,7 +324,9 @@ func cacheKey(c *Client, req core.SearchRequest) string {
 	// with regional tags were persisted as unknown language; refresh them
 	// instead of applying corrected ranking only after their TTL expires.
 	// v2: title boundaries and year-like titles parse correctly.
-	fmt.Fprint(h, "release-parse-v2|")
+	// v3: cam variants, groups, UHD-sourced 1080p, title words before
+	// the episode marker and remaster years parse correctly.
+	fmt.Fprint(h, "release-parse-v3|")
 	if c.Config().IsBuiltin() && (req.Type == core.TypeEpisode || req.Type == core.TypeShow || req.Season > 0) {
 		// Built-in TV keywords no longer require the series premiere year.
 		// Do not reuse persisted empty answers from that narrower search.
@@ -521,11 +563,11 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 	} else if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		base, err := url.Parse(strings.TrimRight(c.Config().URL, "/") + "/")
 		if err != nil {
-			return nil, err
+			return nil, redactURLError(err)
 		}
 		ref, err := url.Parse(rawURL)
 		if err != nil {
-			return nil, err
+			return nil, redactURLError(err)
 		}
 		rawURL = base.ResolveReference(ref).String()
 	}

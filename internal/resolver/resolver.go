@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -490,15 +491,24 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			preferTried = true
 			pref := cands[prefIdx]
 			idx, nzb, verr := s.validateCandidates(ctx, []candidate{pref}, &trace, rcfg.HealthRace)
-			if verr != nil {
+			switch {
+			case verr != nil:
 				if pin != nil {
 					s.notePin(ctx, t.Key, pinID, PinUnavailable, verr.Error())
 					trace.PinStatus = "unavailable: " + verr.Error()
 				}
-				trace.Err = verr.Error()
-				return nil, verr
-			}
-			if idx >= 0 {
+				if ctx.Err() != nil || len(cands) == 1 {
+					trace.Err = verr.Error()
+					return nil, verr
+				}
+				// A transient failure (its indexer's budget, a provider
+				// outage) must not block the title: fall back to the normal
+				// ranking like an unhealthy pick does, and report the
+				// failure only if nothing else plays.
+				s.log.Info("preferred release temporarily unavailable; falling back to normal ranking",
+					"title", t.Key, "prefer", prefer, "err", verr)
+				optimisticErr = verr
+			case idx >= 0:
 				if pin != nil {
 					s.notePin(ctx, t.Key, pinID, PinHealthy, "")
 					trace.PinStatus = "used"
@@ -506,14 +516,15 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 				s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
 				trace.Winner = pref.rel.ID
 				return s.resolution(t.Key, cands, prefIdx, nzb, &trace), nil
+			default:
+				if pin != nil {
+					reason := candidateReason(&trace, pinID)
+					s.notePin(ctx, t.Key, pinID, PinUnhealthy, reason)
+					trace.PinStatus = "unhealthy: " + reason
+				}
+				s.log.Info("preferred release unhealthy; falling back to normal ranking",
+					"title", t.Key, "prefer", prefer)
 			}
-			if pin != nil {
-				reason := candidateReason(&trace, pinID)
-				s.notePin(ctx, t.Key, pinID, PinUnhealthy, reason)
-				trace.PinStatus = "unhealthy: " + reason
-			}
-			s.log.Info("preferred release unhealthy; falling back to normal ranking",
-				"title", t.Key, "prefer", prefer)
 			cands = append(cands[:prefIdx], cands[prefIdx+1:]...)
 			if len(cands) == 0 {
 				trace.Err = "preferred release unhealthy and no other candidates"
@@ -649,8 +660,14 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 		if reason != "" {
 			ct.Rejected = true
 			switch reason {
-			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later":
+			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later",
+				// Size ranges are per profile: a remux too large for a
+				// download or mobile profile still plays for others.
+				"size too small for runtime", "size too large for runtime":
 				clientRejected = true
+			case "cam not allowed":
+				// Another profile may allow cams when the owner does.
+				clientRejected = clientRejected || rcfg.AllowCam
 			}
 			ct.Reason = reason
 			if trace != nil {
@@ -659,6 +676,17 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 			continue
 		}
 		sc, err := s.scoreRelease(rel, profile, req.Client, t)
+		if errors.Is(err, errFormatTimeout) {
+			// One (possibly hostile) release name must not fail the whole
+			// resolution; it only loses its own place in the ranking.
+			clientRejected = true
+			ct.Rejected = true
+			ct.Reason = err.Error()
+			if trace != nil {
+				trace.Candidates = append(trace.Candidates, ct)
+			}
+			continue
+		}
 		if err != nil {
 			return nil, clientRejected, err
 		}
@@ -722,7 +750,15 @@ func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, ca
 	if scorerErr != nil {
 		return releaseScore{}, scorerErr
 	}
-	formatScore, matches, err := scorer.ScoreWithScores(rel, profile.CustomFormatScores)
+	// An untagged release is in the title's original language (as the
+	// Starr apps assume), so "Language: Not English" does not match every
+	// ordinary English release. A torrent season pack's total size is not
+	// the episode's (sizedForEpisode), so size formats see it as unknown.
+	formatRel := sizedForEpisode(rel)
+	if len(formatRel.Info.Languages) == 0 {
+		formatRel.Info.Languages = []string{assumedLanguage(t)}
+	}
+	formatScore, matches, err := scorer.ScoreWithScores(formatRel, profile.CustomFormatScores)
 	if err != nil {
 		return releaseScore{}, err
 	}
@@ -861,6 +897,9 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	// bypasses it; the absolute implausibility floor below still applies.
 	// A season pack's size is the whole season's, so it is not checked.
 	size := sizedForEpisode(rel).Size
+	if size > 0 && size < 5<<20 {
+		return "implausibly small"
+	}
 	if !preferred && size > 0 && t.Runtime > 0 {
 		mbPerMin := float64(size) / (1 << 20) / t.Runtime.Minutes()
 		if profile.MinSizeMBPerMin > 0 && mbPerMin < profile.MinSizeMBPerMin {
@@ -869,8 +908,6 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		if profile.MaxSizeMBPerMin > 0 && mbPerMin > profile.MaxSizeMBPerMin {
 			return "size too large for runtime"
 		}
-	} else if size > 0 && size < 5<<20 {
-		return "implausibly small"
 	}
 	return ""
 }
@@ -932,16 +969,19 @@ func indexScore[T comparable](list []T, v T, per float64) float64 {
 func (s *Service) score(rel core.Release, profile core.QualityProfile, t *core.Title) float64 {
 	info := rel.Info
 	var sc float64
-	// Resolution fit.
+	// Resolution fit, 0-50 points. An uncapped profile scales against 4K
+	// so height stays one preference among the others, not the only one.
+	maxH := float64(profile.MaxHeight)
+	if maxH <= 0 {
+		maxH = 2160
+	}
 	switch {
 	case info.Height == 0:
 	case profile.MaxHeight > 0 && info.Height == profile.MaxHeight:
 		sc += 50
 	case info.Height >= profile.MinHeight && (profile.MaxHeight == 0 || info.Height <= profile.MaxHeight):
-		maxH := float64(max(profile.MaxHeight, 1))
-		sc += 30 + 20*float64(info.Height)/maxH
+		sc += 30 + 20*min(float64(info.Height)/maxH, 1)
 	default: // below floor
-		maxH := float64(max(profile.MaxHeight, 1))
 		sc += 10 * float64(info.Height) / maxH
 	}
 	// Source / codec / audio preference order.
