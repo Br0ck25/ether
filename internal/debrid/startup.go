@@ -2,6 +2,7 @@ package debrid
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -18,6 +19,10 @@ func (s *Service) reusablePayload(ctx context.Context, rel core.Release) (Payloa
 	if hash := strings.ToLower(rel.InfoHash); hash != "" && hash != p.InfoHash {
 		return Payload{}, false
 	}
+	if !fileIdentityMatches(File{Path: p.Path}, rel.Target) {
+		return Payload{}, false
+	}
+	p.Target = rel.Target
 	return p, true
 }
 
@@ -37,6 +42,9 @@ func (x *Indexer) fetchTorrent(ctx context.Context, rel core.Release) ([]byte, e
 		return x.fetchTorrentOnce(ctx, rel)
 	}
 	key := payloadKey(rel) + "\x00" + strings.ToLower(rel.InfoHash) + "\x00" + rel.MagnetURL
+	if rel.Target != nil {
+		key += fmt.Sprintf("\x00%d|%s", rel.Target.ShowYear, rel.Target.EpisodeTitle)
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err

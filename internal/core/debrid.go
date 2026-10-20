@@ -15,8 +15,10 @@ const (
 // ReleaseTarget is the episode wanted from a multi-file release such as a
 // season pack.
 type ReleaseTarget struct {
-	Season  int `json:"season,omitempty"`
-	Episode int `json:"episode,omitempty"`
+	Season       int    `json:"season,omitempty"`
+	Episode      int    `json:"episode,omitempty"`
+	ShowYear     int    `json:"showYear,omitempty"`
+	EpisodeTitle string `json:"episodeTitle,omitempty"`
 }
 
 // ErrNotCached reports that no debrid provider can serve a torrent release

@@ -204,12 +204,13 @@ type Auth interface {
 // Indexers and resolver (internal/newznab, internal/resolver)
 
 type SearchRequest struct {
-	Type    MediaType // movie or episode
-	IDs     IDs       // movie ids, or the show's ids for episodes
-	Title   string
-	Year    int
-	Season  int
-	Episode int
+	Type         MediaType // movie or episode
+	IDs          IDs       // movie ids, or the show's ids for episodes
+	Title        string
+	Year         int
+	Season       int
+	Episode      int
+	EpisodeTitle string // optional title used to distinguish same-numbered episodes
 }
 
 type Indexer interface {

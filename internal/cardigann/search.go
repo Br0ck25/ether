@@ -76,7 +76,7 @@ func (r *Runner) attempts(req core.SearchRequest, movieCats, tvCats []int) []que
 	isTV := req.Type == core.TypeEpisode || req.Type == core.TypeShow || req.Season > 0
 	base := query{wanted: movieCats, year: req.Year, mode: "movie-search"}
 	if isTV {
-		base = query{wanted: tvCats, mode: "tv-search", season: req.Season, ep: req.Episode}
+		base = query{wanted: tvCats, year: req.Year, mode: "tv-search", season: req.Season, ep: req.Episode}
 	}
 	if len(base.wanted) == 0 {
 		base.wanted = []int{2000}
@@ -118,7 +118,7 @@ func (r *Runner) attempts(req core.SearchRequest, movieCats, tvCats []int) []que
 	if title := sanitizeTitle(req.Title); title != "" {
 		kq := base
 		kq.q = title
-		if !isTV && req.Year > 0 {
+		if req.Year > 0 {
 			kq.q = fmt.Sprintf("%s %d", title, req.Year)
 		}
 		kq.keywords = strings.TrimSpace(kq.q + " " + epString)

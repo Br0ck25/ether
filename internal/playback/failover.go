@@ -38,7 +38,9 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 			res = nil // a picked version wins over the remembered release
 		}
 	}
-	if res != nil && s.title != nil && !releaseparse.SeriesYearMatches(res.Release.Info.Year, s.title.ShowYear) {
+	if res != nil && s.title != nil && (!releaseparse.SeriesYearMatches(releaseparse.EpisodeSeriesYear(res.Release.Name, res.Release.Info.Year), s.title.ShowYear) ||
+		(s.title.Type == core.TypeEpisode && releaseparse.EpisodeSeriesYear(res.Release.Name, res.Release.Info.Year) == 0 && !releaseparse.EpisodeTitleMatches(res.Release.Name, s.title.Title)) ||
+		(s.title.Type == core.TypeEpisode && res.Release.Protocol == core.ProtocolTorrent && s.title.ShowYear > 0 && (res.Release.Target == nil || res.Release.Target.ShowYear != s.title.ShowYear || res.Release.Target.EpisodeTitle != s.title.Title))) {
 		// An older stored/warmed selection may predate the series identity
 		// gate. Do not reuse a same-named reboot for this show's episode.
 		res, cached = nil, nil

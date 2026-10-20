@@ -326,7 +326,7 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 		if title == "" {
 			title = t.Title
 		}
-		return core.SearchRequest{Type: core.TypeEpisode, IDs: ids, Title: title, Year: t.ShowYear, Season: season, Episode: episode}
+		return core.SearchRequest{Type: core.TypeEpisode, IDs: ids, Title: title, Year: t.ShowYear, Season: season, Episode: episode, EpisodeTitle: t.Title}
 	}
 	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, Year: t.Year}
 }
@@ -782,8 +782,12 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		}
 	}
 	if isEpisode {
-		if !releaseparse.SeriesYearMatches(rel.Info.Year, sreq.Year) {
+		releaseYear := releaseparse.EpisodeSeriesYear(rel.Name, rel.Info.Year)
+		if !releaseparse.SeriesYearMatches(releaseYear, sreq.Year) {
 			return "series year mismatch"
+		}
+		if releaseYear == 0 && !releaseparse.EpisodeTitleMatches(rel.Name, sreq.EpisodeTitle) {
+			return "episode title mismatch"
 		}
 		if rel.Info.FullSeason {
 			// Usenet season packs are skipped in v1; a torrent pack streams
@@ -852,10 +856,16 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 // season pack gets a per-episode release ID: health, bad marks, pins and
 // cached bytes then apply to the episode file, not the whole pack.
 func withTarget(rel core.Release, sreq core.SearchRequest) core.Release {
-	if sreq.Type != core.TypeEpisode || rel.Protocol != core.ProtocolTorrent || sreq.Episode <= 0 || rel.Target != nil {
-		return rel // already targeted (cached results, a stored pin): never re-derive the ID
+	if sreq.Type != core.TypeEpisode || rel.Protocol != core.ProtocolTorrent || sreq.Episode <= 0 {
+		return rel
 	}
-	target := core.ReleaseTarget{Season: sreq.Season, Episode: sreq.Episode}
+	if rel.Target != nil {
+		target := *rel.Target
+		target.ShowYear, target.EpisodeTitle = sreq.Year, sreq.EpisodeTitle
+		rel.Target = &target
+		return rel // enrich cached identities without deriving their ID again
+	}
+	target := core.ReleaseTarget{Season: sreq.Season, Episode: sreq.Episode, ShowYear: sreq.Year, EpisodeTitle: sreq.EpisodeTitle}
 	rel.Target = &target
 	if rel.Info.FullSeason {
 		rel.ID = core.TargetReleaseID(rel.ID, target)

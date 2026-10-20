@@ -378,12 +378,22 @@ func isExtra(p string) bool {
 // the largest file whose name matches it, else the largest video.
 func ChooseFile(files []File, target *core.ReleaseTarget) (File, error) {
 	var videos []File
+	identityMismatch := false
 	for _, f := range files {
+		if target != nil && !fileIdentityMatches(f, target) {
+			identityMismatch = identityMismatch || (isVideo(f.Path) && !isExtra(f.Path) && f.Size > 0)
+			continue
+		}
 		if isVideo(f.Path) && !isExtra(f.Path) && f.Size > 0 {
 			videos = append(videos, f)
 		}
 	}
 	if len(videos) == 0 {
+		if identityMismatch {
+			// The torrent may be correct for a different series. A mismatch
+			// must never permanently blacklist it for that title as well.
+			return File{}, fmt.Errorf("debrid: different series or episode title: %w", core.ErrNotAvailable)
+		}
 		return File{}, errNoVideo
 	}
 	sort.SliceStable(videos, func(i, j int) bool { return videos[i].Size > videos[j].Size })
@@ -436,4 +446,14 @@ func sameFile(p Payload) func([]File) (File, error) {
 		}
 		return File{}, fmt.Errorf("%s: %w", p.Name(), errFileMissing)
 	}
+}
+
+func fileIdentityMatches(f File, target *core.ReleaseTarget) bool {
+	if target == nil {
+		return true
+	}
+	full := strings.NewReplacer("/", " ", "\\", " ").Replace(f.Path)
+	info := releaseparse.Parse(full)
+	year := releaseparse.EpisodeSeriesYear(full, info.Year)
+	return releaseparse.SeriesYearMatches(year, target.ShowYear) && (year != 0 || releaseparse.EpisodeTitleMatches(path.Base(strings.ReplaceAll(f.Path, "\\", "/")), target.EpisodeTitle))
 }
