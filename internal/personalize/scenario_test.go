@@ -123,15 +123,34 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 	if share := genreShare(a, "Science Fiction", KindTrending, KindNewReleases, KindPopularServer, KindDifferent); share < 0.5 {
 		t.Fatalf("alice's personal rows are %.0f%% science fiction", share*100)
 	}
-	if r := rowByKind(a, KindFranchise); r == nil || r.Title != "Finish Star Saga Collection" {
-		t.Fatalf("alice should be asked to finish the saga: %v", kindsOf(a))
+	// Her lenses (the saga, her director) live on Movies → Recommended.
+	mp, err := h.e.PreviewHome(ctx, &alice, wednesdayTV, "movies", 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	am := mp.Rows
+	t.Logf("alice, Movies:\n%s", describe(am))
+	if r := rowByKind(am, KindFranchise); r == nil || r.Title != "Finish Star Saga Collection" {
+		t.Fatalf("alice should be asked to finish the saga on Movies: %v", kindsOf(am))
+	}
+	// The fake catalogue has 48 science fiction films and her Home leads
+	// with most of the ones Vera directed, so her director lens shows on a
+	// Movies page that does not hold the Home's titles back.
+	off := false
+	draft := core.HomeLayout{Global: []core.LayoutPage{{Section: "movies", DedupeHome: &off, Rows: []core.RowPolicy{}}}}
+	mp2, err := h.e.PreviewLayout(ctx, &alice, wednesdayTV, "movies", 12, draft)
+	if err != nil {
+		t.Fatal(err)
 	}
 	vera := false
-	for _, r := range a {
-		vera = vera || r.Kind == KindPerson && r.Title == "More from Vera Villeneuve"
+	for _, r := range mp2.Rows {
+		vera = vera || !r.Hidden && r.Kind == KindPerson && r.Title == "More from Vera Villeneuve"
 	}
 	if !vera {
-		t.Fatalf("alice's director row missing: %v", kindsOf(a))
+		t.Fatalf("alice's director row missing from Movies:\n%s", describe(mp2.Rows))
+	}
+	if rowByKind(a, KindFranchise) != nil || rowByKind(a, KindPerson) != nil {
+		t.Fatalf("lens rows on alice's Home by default: %v", kindsOf(a))
 	}
 
 	// Bob: family titles, nothing above PG.

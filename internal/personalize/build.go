@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -541,6 +542,25 @@ func (e *Engine) computeStats(ctx context.Context) (*statsSnapshot, error) {
 			s.global[priorKind(kind)] = g
 		}
 	}
+	// (surface, kind) arms (surfaces.go): the same evidence split by the
+	// screen it was served on.
+	surf, err := e.store.surfaceShows(ctx, since)
+	if err != nil {
+		return nil, err
+	}
+	for uid, keys := range surf {
+		for key, n := range keys {
+			surface, kind, _ := strings.Cut(key, "|")
+			u := user(uid)
+			a := u[key]
+			a.shows += n
+			u[key] = a
+			gk := surfaceKey(surface, priorKind(kind))
+			g := s.global[gk]
+			g.shows += n
+			s.global[gk] = g
+		}
+	}
 	for _, p := range plays {
 		if p.kind == "" {
 			continue
@@ -552,6 +572,15 @@ func (e *Engine) computeStats(ctx context.Context) (*statsSnapshot, error) {
 		g := s.global[priorKind(p.kind)]
 		g.reward += p.reward()
 		s.global[priorKind(p.kind)] = g
+		surface := surfaceOfHub(p.hubID)
+		sk := surfaceKey(surface, p.kind)
+		a = u[sk]
+		a.reward += p.reward()
+		u[sk] = a
+		gk := surfaceKey(surface, priorKind(p.kind))
+		g = s.global[gk]
+		g.reward += p.reward()
+		s.global[gk] = g
 	}
 	// A kind cannot earn more reward than it had row-days (several plays
 	// from one row on one day are one success for the Beta posterior).

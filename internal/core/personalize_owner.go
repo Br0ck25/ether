@@ -106,6 +106,9 @@ type HomePreview struct {
 	Rows        []HomeRow  `json:"rows"`
 	GeneratedAt time.Time  `json:"generatedAt"`
 	Context     HubContext `json:"context"`
+	// HomeDeduped counts the titles kept off a Movies or TV Shows page
+	// because the viewer's Home leads with them (DedupeHome).
+	HomeDeduped int `json:"homeDeduped,omitempty"`
 }
 
 // LayoutWhen restricts a Home layout row to days (0 = Sunday … 6 =

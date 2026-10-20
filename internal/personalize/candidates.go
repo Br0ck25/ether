@@ -42,9 +42,12 @@ type candRow struct {
 	scale float64
 	// collKey is a backing collection ("More" opens it).
 	collKey core.RatingKey
-	// homeOnly / sectionOnly restrict where the row may appear; owner
+	// typed holds type-native item lists for the Movies and TV Shows
+	// pages (rows ranked over a mixed pool keep up to 40 of each type
+	// there, instead of the mixed list's share). Where the row may appear
+	// at all is its kind's surfaces (kinds.go, surfaces.go); owner
 	// collection rows carry their own targeting.
-	homeOnly, sectionOnly bool
+	typed map[core.MediaType][]candItem
 	// hub is set for rows that arrive as finished hubs (owner collections,
 	// Continue Watching); assembly keeps their identity.
 	hub *core.Hub
@@ -302,6 +305,56 @@ func capItems(items []candItem, n int) []candItem {
 		}
 	}
 	return out
+}
+
+// splitTyped keeps the best n films and the best n series of a ranked
+// list, for the Movies and TV Shows pages.
+func splitTyped(items []candItem, n int) map[core.MediaType][]candItem {
+	out := map[core.MediaType][]candItem{}
+	for _, it := range items {
+		t := baseType(it.t.Type)
+		if (t == core.TypeMovie || t == core.TypeShow) && len(out[t]) < n {
+			out[t] = append(out[t], it)
+		}
+	}
+	return out
+}
+
+// withTyped sets a mixed row's type-native lists from its full ranking.
+func withTyped(r *candRow, ranked []candItem) *candRow {
+	r.typed = splitTyped(ranked, 40)
+	return r
+}
+
+// typedPool is the per-type candidate pool for type-native lens rows:
+// titles similar to recent favourites of this type, the type's trending,
+// top rated and most popular titles, and the favourite genres' best of
+// this type.
+func (b *builder) typedPool(t core.MediaType) []core.Title {
+	key := "pool:" + string(t)
+	if v, ok := b.memo[key]; ok {
+		return v
+	}
+	var all []core.Title
+	for _, s := range b.seeds(10) {
+		if baseType(s.Title.Type) != t {
+			continue
+		}
+		for _, x := range b.similar(s.Key, 30) {
+			if x.Type == t {
+				all = append(all, x)
+			}
+		}
+	}
+	all = append(all, b.list("trending_week", t, 40)...)
+	all = append(all, b.list("top_rated", t, 60)...)
+	all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Type: t}, Sort: core.SortPopularity, Desc: true, Limit: 120})...)
+	for _, g := range b.taste.TopGenres(4) {
+		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Type: t, Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 80})...)
+		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Type: t, Genres: []string{g}, MinRating: 7}, Sort: core.SortRating, Desc: true, Limit: 40})...)
+	}
+	b.memo[key] = all
+	return all
 }
 
 // ---- item features -------------------------------------------------------------

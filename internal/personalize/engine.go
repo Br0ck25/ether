@@ -412,33 +412,47 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 	layoutVer := e.layoutVersion()
 	day := dayOf(hc.Now, e.loc)
 	intent, intentVer := e.intentFor(u.ID, hc.Now)
+	tune := resolveTuning(layoutDoc, u.ID, sectionName(section))
+	// Movies / TV Shows pages keep what the Home leads with off the page
+	// (the draft layout's switch and Home in a preview).
+	var lead *homeLead
+	if section != "" && resolveDedupeHome(layoutDoc, u.ID, sectionName(section)) {
+		lead = e.homeLeadFor(ctx, &u, hc, layoutDoc, limit, wait)
+	}
 	key := memoKey{user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
 		layout: layoutVer, stats: stats.at.UnixNano(), owner: ownerVer, cw: progressSig(inprog),
-		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner), intent: intentVer}
+		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner), intent: intentVer, tuning: tune.key()}
+	if lead != nil {
+		key.lead = lead.sig
+	}
 	_, draft := ctx.Value(draftLayoutKey{}).(core.HomeLayout)
-	if rows, ok := e.memoGet(key); ok && !draft {
-		p.Rows = rows
+	if ent, ok := e.memoGet(key); ok && !draft {
+		p.Rows, p.HomeDeduped = ent.rows, ent.deduped
 		return p
 	}
 	a := &assembly{
 		layout: &layoutDoc,
 		model:  m, user: u, hc: hc, section: section, limit: limit, owner: owner,
 		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration, day: day,
-		intent: intent,
+		intent: intent, tune: &tune, lead: lead,
 	}
+	a.explore = clamp(a.explore*tune.exploreScale(), 0, 1)
 	if section == "" {
-		a.maxRows = e.opts.MaxHomeRows
+		a.pageLen = e.opts.MaxHomeRows
 		a.cw = e.continueFrom(ctx, inprog)
 	} else {
-		a.maxRows = e.opts.MaxSectionRows
+		a.pageLen = e.opts.MaxSectionRows
 	}
+	// Every row is assembled (the preview explains the ones the page cuts),
+	// but only the rows that survive the page length claim titles (fill).
 	a.maxRows = 100
 	p.Rows = a.run()
+	p.HomeDeduped = a.homeDeduped
 	for _, r := range p.Rows {
 		e.registerHub(r.HubID, r.Kind)
 	}
 	if !draft {
-		e.memoPut(key, p.Rows)
+		e.memoPut(key, memoEntry{rows: p.Rows, deduped: p.HomeDeduped})
 	}
 	return p
 }
@@ -462,30 +476,34 @@ type memoKey struct {
 	cw      string
 	limits  string
 	intent  uint64 // live session-intent version (#32); 0 = none
+	tuning  string // the page's resolved dials
+	lead    uint64 // what the Home leads with (Movies/TV dedupe); 0 = none
 }
 
 type memoEntry struct {
-	rows []core.HomeRow
-	at   time.Time
+	rows    []core.HomeRow
+	deduped int
+	at      time.Time
 }
 
 // memoTTL bounds how long an assembled screen is reused; clients poll
 // /hubs often and the rows only change when an input does.
 const memoTTL = 2 * time.Minute
 
-func (e *Engine) memoGet(k memoKey) ([]core.HomeRow, bool) {
+func (e *Engine) memoGet(k memoKey) (memoEntry, bool) {
 	e.memoMu.Lock()
 	defer e.memoMu.Unlock()
 	ent, ok := e.memo[k]
 	if !ok || e.now().Sub(ent.at) > memoTTL {
-		return nil, false
+		return memoEntry{}, false
 	}
 	// Callers may append to or reorder the slice; the rows themselves are
 	// read-only.
-	return append([]core.HomeRow(nil), ent.rows...), true
+	return memoEntry{rows: append([]core.HomeRow(nil), ent.rows...), deduped: ent.deduped, at: ent.at}, true
 }
 
-func (e *Engine) memoPut(k memoKey, rows []core.HomeRow) {
+func (e *Engine) memoPut(k memoKey, ent memoEntry) {
+	rows := ent.rows
 	e.memoMu.Lock()
 	defer e.memoMu.Unlock()
 	now := e.now()
@@ -499,7 +517,7 @@ func (e *Engine) memoPut(k memoKey, rows []core.HomeRow) {
 			e.memo = map[memoKey]*memoEntry{}
 		}
 	}
-	e.memo[k] = &memoEntry{rows: append([]core.HomeRow(nil), rows...), at: now}
+	e.memo[k] = &memoEntry{rows: append([]core.HomeRow(nil), rows...), deduped: ent.deduped, at: now}
 }
 
 // progressSig summarises Continue Watching for the memo key.

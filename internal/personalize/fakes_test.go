@@ -39,6 +39,21 @@ func (c *clock) Set(t time.Time) {
 
 var testGenres = []string{"Science Fiction", "Drama", "Comedy", "Horror", "Animation", "Family", "Thriller", "Romance", "Documentary", "Crime"}
 
+// genreThemes are each genre's four themes (TMDB-style keywords); movie j
+// of a genre carries theme j%4.
+var genreThemes = map[string][4]string{
+	"Science Fiction": {"space", "time travel", "dystopia", "artificial intelligence"},
+	"Drama":           {"family relationships", "coming of age", "true story", "grief"},
+	"Comedy":          {"buddy", "satire", "workplace", "road trip"},
+	"Horror":          {"haunted house", "slasher", "supernatural", "zombie"},
+	"Animation":       {"talking animals", "fairy tale", "superhero", "friendship"},
+	"Family":          {"holiday", "pets", "magic", "sports"},
+	"Thriller":        {"heist", "revenge", "conspiracy", "spy"},
+	"Romance":         {"love triangle", "wedding", "second chance", "small town"},
+	"Documentary":     {"nature", "music", "true crime", "history"},
+	"Crime":           {"detective", "mafia", "serial killer", "police"},
+}
+
 // fakeCatalog is a synthetic, deterministic catalogue. Engine background
 // workers read it while tests add titles, so its data is guarded by dataMu
 // (mu only guards call counts).
@@ -79,7 +94,7 @@ func newFakeCatalog(now time.Time) *fakeCatalog {
 				released = now.AddDate(0, 0, -2)
 				year = released.Year()
 			}
-			kws := []string{genreSlug(g) + "-theme", fmt.Sprintf("kw-%d-%d", gi, j%3)}
+			kws := []string{genreSlug(g) + "-theme", genreThemes[g][j%4]}
 			if j%7 == 0 {
 				kws = append(kws, "shared-motif")
 			}

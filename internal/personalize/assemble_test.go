@@ -122,16 +122,16 @@ func TestAssemblyRankingLearnsFromEngagement(t *testing.T) {
 		}
 		return testRow(kind, id, items(cat, keys...))
 	}
-	m := emptyModel(mk(KindTop10, "top10", 0), mk(KindHiddenGems, "hiddengems", 1))
+	m := emptyModel(mk(KindTop10, "top10", 0), mk(KindNewThisWeek, "newthisweek", 1))
 	before := run(m, nil)
 	if before[0].Kind != KindTop10 {
 		t.Fatalf("prior order = %v", kindsOf(before))
 	}
 	// This viewer ignores Top 10 and plays hidden gems constantly.
 	after := run(m, func(a *assembly) {
-		a.arms = map[string]arm{KindTop10: {shows: 60, reward: 0}, KindHiddenGems: {shows: 60, reward: 30}}
+		a.arms = map[string]arm{KindTop10: {shows: 60, reward: 0}, KindNewThisWeek: {shows: 60, reward: 30}}
 	})
-	if after[0].Kind != KindHiddenGems {
+	if after[0].Kind != KindNewThisWeek {
 		t.Fatalf("learned order = %v (scores %v / %v)", kindsOf(after), after[0].Score, after[1].Score)
 	}
 }
@@ -156,8 +156,8 @@ func TestAssemblyExplorationRotatesDaily(t *testing.T) {
 			a.hc = hubContext(day, core.DeviceTV)
 			a.day = dayOf(day, time.UTC)
 		})
-		if got := len(kindsOf(out)); got != 3 {
-			t.Fatalf("because rows capped at 3, got %d", got)
+		if got := len(kindsOf(out)); got != 2 {
+			t.Fatalf("because rows capped at 2 on Home, got %d", got)
 		}
 		key := ""
 		for _, r := range out {
@@ -232,7 +232,7 @@ func TestAssemblyTop10AndContinue(t *testing.T) {
 	top := testRow(KindTop10, "top10", items(cat, keys...))
 	top.maxItems = 10
 	cw := testRow(KindContinue, "continue", nil)
-	cw.keepOrder, cw.homeOnly, cw.minItems, cw.source = true, true, 0, core.RowSourcePlex
+	cw.keepOrder, cw.minItems, cw.source = true, 0, core.RowSourcePlex
 	m := emptyModel(top, cw)
 	rows := run(m, func(a *assembly) {
 		a.limit = 20

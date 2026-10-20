@@ -1,6 +1,7 @@
 package personalize
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
@@ -27,6 +28,22 @@ type assembly struct {
 	explore float64
 	day     int
 	intent  *intentSnapshot // live session intent (#32); nil = none
+
+	// Surfaces, dials and cross-surface dedupe (surfaces.go, tuning.go,
+	// homelead.go).
+	tune *tuning // the page's resolved dials; nil = defaults
+	// pageLen is the page length the final layout pass will truncate to
+	// (0 = unknown: every selected row drafts titles as equals).
+	pageLen int
+	// lead is what the viewer's Home leads with (Movies/TV pages with
+	// DedupeHome); nil = no dedupe.
+	lead    *homeLead
+	weights map[*candRow]float64 // surface prior weight of admitted rows
+	demoted map[*candRow]bool    // rows kept despite repeating the Home
+	// held collects, per row, the Home lead titles kept off it that it
+	// would have shown (homeDeduped).
+	held        map[*candRow][]core.RatingKey
+	homeDeduped int
 }
 
 // rankedRow is a candidate row during assembly.
@@ -53,13 +70,21 @@ func (a *assembly) run() []core.HomeRow {
 	// showcases) and acclaimed section rows on Home: there is little
 	// personal to put there yet.
 	newViewer := a.newViewer()
+	a.weights = map[*candRow]float64{}
+	a.demoted = map[*candRow]bool{}
+	a.held = map[*candRow][]core.RatingKey{}
 	for _, c := range cands {
-		if a.section == "" && c.sectionOnly && !(newViewer && c.coldHome) || a.section != "" && c.homeOnly {
-			continue
-		}
 		if c.coldOnly && !newViewer {
 			continue
 		}
+		if a.section != "" && a.lead != nil && a.lead.rows[c.id] && infoFor(c.kind).dynamic && !a.ownerPlaced(c, a.hubID(c)) {
+			continue // the Home already shows this very row (same seed)
+		}
+		w, ok := a.admit(c, a.hubID(c), newViewer)
+		if !ok {
+			continue
+		}
+		a.weights[c] = w
 		if c.kind == KindContinue {
 			if a.section != "" {
 				continue
@@ -67,6 +92,7 @@ func (a *assembly) run() []core.HomeRow {
 			live := *c
 			live.items = a.cw
 			c = &live
+			a.weights[c] = w
 		}
 		items := a.contextItems(c)
 		if len(items) == 0 && c.kind != KindContinue {
@@ -106,6 +132,7 @@ func (a *assembly) run() []core.HomeRow {
 		}
 		return visible[i].hubID < visible[j].hubID
 	})
+	a.spreadRows(visible) // Variety dial: page-level genre spread
 	// Per-kind caps (pinned rows count but are never dropped).
 	perKind := map[string]int{}
 	groups := map[string]bool{}
@@ -121,8 +148,7 @@ func (a *assembly) run() []core.HomeRow {
 	}
 	capped := visible[:0:0]
 	for _, r := range visible {
-		info := infoFor(r.c.kind)
-		if perKind[r.c.kind] >= info.cap {
+		if perKind[r.c.kind] >= a.kindCap(r.c.kind) {
 			continue
 		}
 		if r.c.group != "" {
@@ -143,6 +169,7 @@ func (a *assembly) run() []core.HomeRow {
 	ordered := placePinned(capped, pinned, func(r *rankedRow) int { return r.d.position })
 
 	out := a.fill(ordered, a.maxRows)
+	a.countHeld(out)
 	for _, r := range hidden {
 		items := r.items
 		if len(items) > a.limit {
@@ -172,9 +199,14 @@ func anchored(c *candRow) bool { return c.keepOrder && c.kind != KindContinue }
 //     Higher rows pick first, but no row is starved by a greedy one above
 //     it (Top 10 cannot swallow every Because-you-watched title).
 //
-// Rows left with fewer than their minimum are dropped and the draft is
-// rerun without them, so their titles go back to the others. maxRows
-// counts engine and owner rows; the next row moves up when one drops.
+// Only rows that will survive the page length (survivors: the same layout
+// pass the front end runs, arrangeLayout) claim titles in steps 2–3; rows
+// the page will cut draft afterwards from what is left, so a row nobody
+// sees never takes a title from one they do.
+//
+// Surviving rows left with fewer than their minimum are dropped and the
+// draft is rerun without them, so their titles go back to the others and
+// the next row moves up. maxRows counts engine and owner rows.
 func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 	excluded := map[*rankedRow]bool{}
 	const attempts = 6
@@ -193,6 +225,7 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 			}
 			sel = append(sel, r)
 		}
+		head := a.survivors(sel)
 		picked := make(map[*rankedRow][]candItem, len(sel))
 		claimed := map[core.RatingKey]bool{}
 		for _, r := range sel {
@@ -207,41 +240,48 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				}
 			}
 		}
-		for _, r := range sel {
-			if r.c.source == core.RowSourcePlex || !anchored(r.c) {
-				continue
-			}
-			for _, it := range r.items {
-				if len(picked[r]) >= a.rowCap(r.c) {
-					break
-				}
-				if !claimed[it.t.Key] {
-					claimed[it.t.Key] = true
-					picked[r] = append(picked[r], it)
-				}
-			}
-		}
-		cursor := make(map[*rankedRow]int, len(sel))
-		for progress := true; progress; {
-			progress = false
+		for _, phase := range []bool{true, false} {
+			inPhase := func(r *rankedRow) bool { return head == nil || head[r] == phase }
 			for _, r := range sel {
-				if r.c.source == core.RowSourcePlex || anchored(r.c) || len(picked[r]) >= a.rowCap(r.c) {
+				if r.c.source == core.RowSourcePlex || !anchored(r.c) || !inPhase(r) {
 					continue
 				}
-				for cursor[r] < len(r.items) {
-					it := r.items[cursor[r]]
-					cursor[r]++
-					if claimed[it.t.Key] {
+				for _, it := range r.items {
+					if len(picked[r]) >= a.rowCap(r.c) {
+						break
+					}
+					if !claimed[it.t.Key] {
+						claimed[it.t.Key] = true
+						picked[r] = append(picked[r], it)
+					}
+				}
+			}
+			cursor := make(map[*rankedRow]int, len(sel))
+			for progress := true; progress; {
+				progress = false
+				for _, r := range sel {
+					if r.c.source == core.RowSourcePlex || anchored(r.c) || !inPhase(r) || len(picked[r]) >= a.rowCap(r.c) {
 						continue
 					}
-					claimed[it.t.Key] = true
-					picked[r] = append(picked[r], it)
-					progress = true
-					break
+					for cursor[r] < len(r.items) {
+						it := r.items[cursor[r]]
+						cursor[r]++
+						if claimed[it.t.Key] {
+							continue
+						}
+						claimed[it.t.Key] = true
+						picked[r] = append(picked[r], it)
+						progress = true
+						break
+					}
 				}
+			}
+			if head == nil {
+				break
 			}
 		}
 		thin := false
+		short := map[*rankedRow]bool{}
 		for _, r := range sel {
 			if r.c.source == core.RowSourcePlex {
 				continue
@@ -251,8 +291,12 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				min = 1
 			}
 			if n := len(picked[r]); n == 0 || n < min {
-				excluded[r] = true
-				thin = true
+				short[r] = true
+				if head == nil || head[r] {
+					// A surviving row too thin to show: drop it and redraft.
+					excluded[r] = true
+					thin = true
+				}
 			}
 		}
 		if thin && attempt < attempts {
@@ -261,13 +305,47 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 		out := make([]core.HomeRow, 0, len(sel))
 		for _, r := range sel {
 			items := picked[r]
-			if r.c.source != core.RowSourcePlex && (len(items) == 0 || excluded[r] && thin) {
+			if r.c.source != core.RowSourcePlex && (len(items) == 0 || short[r]) {
 				continue
 			}
 			out = append(out, a.homeRow(r, items, len(r.items) > len(items)))
 		}
 		return out
 	}
+}
+
+// survivors predicts which selected rows the page keeps: the layout pass
+// the front end runs (arrangeLayout), over these rows plus the front
+// end's own rows above a section's (Continue Watching, Recently Added).
+// nil means unknown (every row is a survivor).
+func (a *assembly) survivors(sel []*rankedRow) map[*rankedRow]bool {
+	if a.pageLen <= 0 {
+		return nil
+	}
+	rows := make([]core.HomeRow, 0, len(sel)+2)
+	if a.section != "" {
+		prefix := sectionPrefix(a.section)
+		sid := fmt.Sprint(a.hc.SectionID)
+		rows = append(rows,
+			core.HomeRow{HubID: prefix + ".inprogress." + sid, Kind: KindContinue, Source: core.RowSourcePlex},
+			core.HomeRow{HubID: prefix + ".recentlyadded." + sid, Kind: KindRecentlyAdded, Source: core.RowSourcePlex})
+	}
+	byID := make(map[string]*rankedRow, len(sel))
+	for _, r := range sel {
+		rows = append(rows, core.HomeRow{HubID: r.hubID, Kind: r.c.kind, Source: r.c.source})
+		byID[r.hubID] = r
+	}
+	var d core.HomeLayout
+	if a.layout != nil {
+		d = *a.layout
+	}
+	out := make(map[*rankedRow]bool, len(sel))
+	for _, hr := range arrangeLayout(rows, d, a.user.ID, a.hc, a.surface(), a.pageLen) {
+		if r := byID[hr.HubID]; r != nil && !hr.Hidden {
+			out[r] = true
+		}
+	}
+	return out
 }
 
 // rowCap is the most items a row shows on this screen.
@@ -327,8 +405,12 @@ func (a *assembly) typeOK(t *core.Title) bool {
 // order is meaningful).
 func (a *assembly) contextItems(c *candRow) []candItem {
 	target := a.model.taste.targetMinutes(a.hc)
-	out := make([]candItem, 0, len(c.items))
-	for _, it := range c.items {
+	src := c.items
+	if l, ok := c.typed[a.section]; ok && a.section != "" {
+		src = l // type-native list for a Movies / TV Shows page
+	}
+	out := make([]candItem, 0, len(src))
+	for _, it := range src {
 		if !a.typeOK(&it.t) {
 			continue
 		}
@@ -348,8 +430,9 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 	if c.maxItems > 0 && c.maxItems < n {
 		n = c.maxItems
 	}
+	out = a.holdBackHomeLead(c, out)
 	// Diversify the head; the tail is slack for cross-row dedupe.
-	return mmr(out, min(len(out), 3*n+6), mmrLambda)
+	return mmr(out, min(len(out), 3*n+6), a.dials().lambda())
 }
 
 // adjust is the context-dependent part of an item's score.
@@ -401,6 +484,7 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 	}
 	// Daily rotation: a small, stable-per-day nudge so near-ties reorder.
 	adj += 0.06 * (unit(a.user.ID, a.day, t.Key) - 0.5)
+	adj += a.tuneItem(it) // owner's page dials (tuning.go)
 	return adj
 }
 
@@ -409,9 +493,8 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 //	score = bandit play rate × context multiplier × content strength
 //	        × row scale × daily rotation
 func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float64) {
-	info := infoFor(c.kind)
 	rng := seeded("row", a.user.ID, a.day, a.hc.Bucket(), c.kind)
-	_, rate := rowRate(info.prior, a.global[priorKind(c.kind)], a.arms[c.kind], a.explore, rng)
+	rate := a.banditRate(c, rng) // (surface, kind) arm with kind fallback (surfaces.go)
 
 	strength = 0.8
 	if c.kind != KindContinue && c.kind != KindUpNext {
@@ -428,6 +511,7 @@ func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float
 		return 0, 0
 	}
 	mult := editorialBoost(c.kind) * ctxMult(c.kind, a.hc) * a.typeMix(items) * (0.7 + 0.6*strength)
+	mult *= a.surfaceMult(c) // surface priors, dials, Home-lead demotion (surfaces.go)
 	if a.newViewer() {
 		mult *= coldBoost(c.kind)
 	} else {

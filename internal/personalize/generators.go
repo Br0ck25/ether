@@ -43,6 +43,21 @@ var generators = []generator{
 	{KindTopRated, (*builder).genTopRated},
 	{KindPopular, (*builder).genPopular},
 	{KindAiringToday, (*builder).genAiringToday},
+	// Movies → Recommended lenses (lenses.go).
+	{KindTasteCluster, (*builder).genTasteClusters},
+	{KindEra, (*builder).genEra},
+	{KindWorld, (*builder).genWorld},
+	{KindOccasion, (*builder).genOccasions},
+	{KindAcclaimed, (*builder).genAcclaimed},
+	{KindTopGenre, (*builder).genTopGenre},
+	// TV Shows → Recommended lenses (lenses_tv.go).
+	{KindNewSeasons, (*builder).genNewSeasons},
+	{KindFinishShow, (*builder).genFinishShow},
+	{KindStartNew, (*builder).genStartNew},
+	{KindBinge, (*builder).genBinge},
+	{KindLimited, (*builder).genLimited},
+	{KindAiringTaste, (*builder).genAiringTaste},
+	{KindNetwork, (*builder).genNetwork},
 }
 
 func newRow(kind, id, title, reason string, items []candItem) *candRow {
@@ -61,7 +76,7 @@ func (b *builder) genContinue() []*candRow {
 	}
 	items := b.e.continueItems(b.ctx, &b.user, 50)
 	r := newRow(KindContinue, "continue", "Continue Watching", "Titles you're part-way through, most recent first.", items)
-	r.keepOrder, r.homeOnly, r.minItems = true, true, 0
+	r.keepOrder, r.minItems = true, 0
 	return []*candRow{r}
 }
 
@@ -332,9 +347,9 @@ func (b *builder) genBecause() []*candRow {
 		} else if s.Kind == EvidenceWatching {
 			verb = "are watching"
 		}
-		r := newRow(KindBecause, fmt.Sprintf("because.%d", int64(s.Key)), "Because You Watched "+seed.Title,
+		r := withTyped(newRow(KindBecause, fmt.Sprintf("because.%d", int64(s.Key)), "Because You Watched "+seed.Title,
 			fmt.Sprintf("You %s %s%s; these are the closest matches you haven't seen.", verb, seed.Title, agoPhrase(s.At, b.now)),
-			capItems(items, 40))
+			capItems(items, 40)), items)
 		r.scale = 1 - 0.07*float64(i)
 		rows = append(rows, r)
 	}
@@ -363,7 +378,7 @@ func (b *builder) genPerson() []*candRow {
 	}
 	var rows []*candRow
 	for _, kv := range sortedByWeight(b.taste.Person, 0) {
-		if len(rows) >= 4 {
+		if len(rows) >= 6 {
 			break
 		}
 		info := b.taste.People[kv.k]
@@ -396,7 +411,7 @@ func (b *builder) genPerson() []*candRow {
 		if credits > 1 {
 			reason = fmt.Sprintf("You've finished %d titles with %s", credits, name)
 		}
-		r := newRow(KindPerson, fmt.Sprintf("person.%d", kv.k), title, reason, capItems(items, 40))
+		r := withTyped(newRow(KindPerson, fmt.Sprintf("person.%d", kv.k), title, reason, capItems(items, 40)), items)
 		r.scale = 0.8 + 0.2*kv.w
 		rows = append(rows, r)
 	}
@@ -456,8 +471,8 @@ func (b *builder) genTrendingTaste() []*candRow {
 			kept = append(kept, it)
 		}
 	}
-	r := newRow(KindTrendingTaste, "trending.taste", "Trending in Your Taste",
-		"This week's trending titles that match what you like.", capItems(kept, 40))
+	r := withTyped(newRow(KindTrendingTaste, "trending.taste", "Trending in Your Taste",
+		"This week's trending titles that match what you like.", capItems(kept, 40)), kept)
 	r.minItems = 5
 	return []*candRow{r}
 }
@@ -510,8 +525,8 @@ func (b *builder) genHiddenGems() []*candRow {
 			kept = append(kept, it)
 		}
 	}
-	r := newRow(KindHiddenGems, "hiddengems", "Hidden Gems for You",
-		"Highly rated titles few people have found, that fit your taste.", capItems(kept, 40))
+	r := withTyped(newRow(KindHiddenGems, "hiddengems", "Hidden Gems for You",
+		"Highly rated titles few people have found, that fit your taste.", capItems(kept, 40)), kept)
 	r.minItems = 5
 	return []*candRow{r}
 }
@@ -656,8 +671,8 @@ func (b *builder) genDifferent() []*candRow {
 			kept = append(kept, it)
 		}
 	}
-	r := newRow(KindDifferent, "different", "Something Different",
-		fmt.Sprintf("Exploration: acclaimed titles outside %s.", strings.Join(top, ", ")), capItems(kept, 40))
+	r := withTyped(newRow(KindDifferent, "different", "Something Different",
+		fmt.Sprintf("Exploration: acclaimed titles outside %s.", strings.Join(top, ", ")), capItems(kept, 40)), kept)
 	r.minItems = 5
 	return []*candRow{r}
 }
@@ -872,7 +887,7 @@ func (b *builder) genTrending() []*candRow {
 	items := b.rank(src, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
 		return 0.75*rankScore(idx, n) + 0.25*fit, "Trending this week"
 	})
-	r := newRow(KindTrending, "trending", "Trending This Week", "What's trending on TMDB this week.", capItems(items, 40))
+	r := withTyped(newRow(KindTrending, "trending", "Trending This Week", "What's trending on TMDB this week.", capItems(items, 40)), items)
 	r.minItems = 5
 	return []*candRow{r}
 }
@@ -949,7 +964,7 @@ func (b *builder) genNewReleases() []*candRow {
 	items := b.rank(recent, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
 		return 0.4*recency(t, b.now) + 0.35*popularity(t) + 0.1*quality(t) + 0.15*fit, "New " + releasedPhrase(t.Released, b.now)
 	})
-	r := newRow(KindNewReleases, "newreleases", "New & Noteworthy", "Notable releases of the last few months, newest and most talked-about first.", capItems(items, 40))
+	r := withTyped(newRow(KindNewReleases, "newreleases", "New & Noteworthy", "Notable releases of the last few months, newest and most talked-about first.", capItems(items, 40)), items)
 	r.minItems = 5
 	return []*candRow{r}
 }
@@ -975,8 +990,8 @@ func (b *builder) listRow(kind, id, title, reason, list, itemReason string, type
 	items := b.rank(src, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
 		return 0.7*rankScore(idx, n) + 0.3*fit, itemReason
 	})
-	r := newRow(kind, id, title, reason, capItems(items, 40))
-	r.sectionOnly, r.minItems = true, 5
+	r := withTyped(newRow(kind, id, title, reason, capItems(items, 40)), items)
+	r.minItems = 5
 	return r
 }
 
@@ -998,8 +1013,8 @@ func (b *builder) genTopRated() []*candRow {
 	items := b.rank(good, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
 		return 0.8*quality(t) + 0.2*fit, fmt.Sprintf("Rated %.1f by %s viewers", t.Rating, votesPhrase(t.VoteCount))
 	})
-	r := newRow(KindTopRated, "toprated", "Top Rated", "The best-rated titles with enough votes to trust the rating.", capItems(items, 40))
-	r.sectionOnly, r.coldHome, r.minItems = true, true, 5
+	r := withTyped(newRow(KindTopRated, "toprated", "Top Rated", "The best-rated titles with enough votes to trust the rating.", capItems(items, 40)), items)
+	r.coldHome, r.minItems = true, 5
 	return []*candRow{r}
 }
 
@@ -1113,8 +1128,8 @@ func (b *builder) genShowcase() []*candRow {
 			if name == "" {
 				name = g
 			}
-			r := newRow(KindShowcase, "showcase."+genreSlug(g), "Acclaimed "+name,
-				fmt.Sprintf("A taste of the best %s, to learn what you like.", strings.ToLower(name)), capItems(items, 40))
+			r := withTyped(newRow(KindShowcase, "showcase."+genreSlug(g), "Acclaimed "+name,
+				fmt.Sprintf("A taste of the best %s, to learn what you like.", strings.ToLower(name)), capItems(items, 40)), items)
 			r.coldOnly, r.group, r.minItems = true, fmt.Sprint(ci), 6
 			rows = append(rows, r)
 		}

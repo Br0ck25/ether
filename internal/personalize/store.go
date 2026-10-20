@@ -281,9 +281,12 @@ type rowStat struct {
 	reward             float64 // sum of play rewards (completion-weighted)
 }
 
-// kindShows counts row-days per (user, kind) since `since`.
+// kindShows counts days each kind was shown per (user, kind) since
+// `since`: several rows of one kind on a day (three Because-you-watched
+// rows), or the kind on Home and in a section, are one day of exposure,
+// matching how plays count (one success per row kind and day).
 func (s *sqlStore) kindShows(ctx context.Context, since time.Time) (map[int64]map[string]float64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT user_id, kind, COUNT(*) FROM personalize_row_impressions
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id, kind, COUNT(DISTINCT day) FROM personalize_row_impressions
 		WHERE last_at >= ? GROUP BY user_id, kind`, ms(since))
 	if err != nil {
 		return nil, err
@@ -301,6 +304,33 @@ func (s *sqlStore) kindShows(ctx context.Context, since time.Time) (map[int64]ma
 			out[uid] = map[string]float64{}
 		}
 		out[uid][kind] = n
+	}
+	return out, rows.Err()
+}
+
+// surfaceShows counts days each kind was shown per (user, surface, kind)
+// since `since`, keyed surfaceKey(surface, kind). The surface is the hub
+// id's screen prefix ("movie.", "tv."; anything else is Home).
+func (s *sqlStore) surfaceShows(ctx context.Context, since time.Time) (map[int64]map[string]float64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id, kind,
+		CASE WHEN hub_id LIKE 'movie.%' THEN 'movies' WHEN hub_id LIKE 'tv.%' THEN 'shows' ELSE 'home' END AS surface,
+		COUNT(DISTINCT day) FROM personalize_row_impressions WHERE last_at >= ? GROUP BY user_id, kind, surface`, ms(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]map[string]float64{}
+	for rows.Next() {
+		var uid int64
+		var kind, surface string
+		var n float64
+		if err := rows.Scan(&uid, &kind, &surface, &n); err != nil {
+			return nil, err
+		}
+		if out[uid] == nil {
+			out[uid] = map[string]float64{}
+		}
+		out[uid][surfaceKey(surface, kind)] = n
 	}
 	return out, rows.Err()
 }
