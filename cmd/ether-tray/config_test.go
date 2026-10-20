@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 func TestOpenServerConfigNeverCreates(t *testing.T) {
@@ -38,5 +40,22 @@ func TestOpenServerConfigNeverWrites(t *testing.T) {
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 {
 		t.Fatalf("tray created files in the data dir: %v", entries)
+	}
+}
+
+func TestServerBaseURLFollowsBindAddress(t *testing.T) {
+	for _, tc := range []struct {
+		srv  config.Server
+		want string
+	}{
+		{config.Server{}, "http://127.0.0.1:32400"},
+		{config.Server{Port: 32401, BindAddress: "0.0.0.0"}, "http://127.0.0.1:32401"},
+		{config.Server{Port: 32400, BindAddress: "::"}, "http://127.0.0.1:32400"},
+		{config.Server{Port: 32400, BindAddress: "192.168.1.20"}, "http://192.168.1.20:32400"},
+		{config.Server{Port: 8080, BindAddress: "fd00::5"}, "http://[fd00::5]:8080"},
+	} {
+		if got := serverBaseURL(tc.srv); got != tc.want {
+			t.Errorf("%+v: %s, want %s", tc.srv, got, tc.want)
+		}
 	}
 }

@@ -11,10 +11,13 @@ import (
 	_ "embed"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -71,8 +74,8 @@ func newApp(log *slog.Logger) *app {
 	cfg := config.Updates{Channel: "stable"}
 	if c, err := openServerConfig(dataDir); err == nil {
 		cfg = c.Updates
-		if c.Server.Port != 0 && os.Getenv("ETHER_URL") == "" {
-			base = fmt.Sprintf("http://127.0.0.1:%d", c.Server.Port)
+		if os.Getenv("ETHER_URL") == "" {
+			base = serverBaseURL(c.Server)
 		}
 	} else {
 		// Expected on Windows: the service's %ProgramData%\Ether is locked
@@ -109,6 +112,21 @@ func newApp(log *slog.Logger) *app {
 		log.Debug("tray: update checks disabled", "err", err)
 	}
 	return a
+}
+
+// serverBaseURL is where the local server listens: its configured port on
+// loopback, or on the bind address when the server is bound to one
+// specific address (it is then unreachable over 127.0.0.1).
+func serverBaseURL(srv config.Server) string {
+	port := srv.Port
+	if port == 0 {
+		port = 32400
+	}
+	host := strings.Trim(strings.TrimSpace(srv.BindAddress), "[]")
+	if ip := net.ParseIP(host); host == "" || host == "localhost" || (ip != nil && ip.IsUnspecified()) {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // openServerConfig reads the server's config without writing anything.

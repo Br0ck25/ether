@@ -263,3 +263,48 @@ func TestLeftoverLeaseReleasedAtStartup(t *testing.T) {
 		t.Fatal("a lease left by this node's previous process was not released")
 	}
 }
+
+// A successful rollback exits straight into the restored binary before the
+// update manager runs; that restored process must still tell the cluster,
+// or the next node takes the lease and installs the bad release too.
+func TestRollbackReportedByRestoredProcess(t *testing.T) {
+	lease := &fakeLease{ttl: 20 * time.Minute}
+	a, _ := coordHarness(t, lease, "a", nil)
+	lease.now = a.clock.Now
+	a.run(DefaultFirstCheckDelay + DefaultTick) // a takes the lease and installs 2.0.0
+	if len(a.applied) != 1 || lease.current() != "a" {
+		t.Fatalf("applied %v holder %q", a.applied, lease.current())
+	}
+	now := a.clock.Now()
+	for i := 0; i <= DefaultMaxStartAttempts; i++ { // crash loop, then rollback
+		startup(t, a.dir, a.target, "2.0.0", now)
+	}
+	res := startup(t, a.dir, a.target, "1.0.0", now) // the restored binary
+	if res.RolledBack != nil || res.Confirming != nil {
+		t.Fatalf("restored start: %+v", res)
+	}
+	a2, _ := coordHarness(t, lease, "a", func(o *ManagerOptions) {
+		o.Dir, o.Target, o.Boot, o.Now = a.dir, a.target, res, a.clock.Now
+	})
+	a.clock.Advance(DefaultTick)
+	a2.m.step(context.Background())
+	if lease.failed != "2.0.0" || lease.current() != "" {
+		t.Fatalf("rollback not reported: failed %q holder %q", lease.failed, lease.current())
+	}
+	var f FailedUpdate
+	if ok, err := readJSON(FailedPath(a.dir), &f); !ok || err != nil || f.ReportPending || f.Version != "2.0.0" {
+		t.Fatalf("failed record %+v ok=%v err=%v", f, ok, err)
+	}
+	// Reported once: a later start does not report it again.
+	lease.mu.Lock()
+	lease.failed = "3.0.0"
+	lease.mu.Unlock()
+	a3, _ := coordHarness(t, lease, "a", func(o *ManagerOptions) {
+		o.Dir, o.Target, o.Now = a.dir, a.target, a.clock.Now
+	})
+	a.clock.Advance(DefaultTick)
+	a3.m.step(context.Background())
+	if lease.failed != "3.0.0" {
+		t.Fatalf("stale rollback re-reported: failed %q", lease.failed)
+	}
+}

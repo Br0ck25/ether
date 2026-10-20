@@ -299,6 +299,42 @@ func TestDownloadRejectsWrongChecksum(t *testing.T) {
 	}
 }
 
+// A file name that is not a plain name ("..", "a/.") must never place the
+// download (or its .part file) outside dir.
+func TestDownloadStaysInsideDir(t *testing.T) {
+	payload := []byte("payload")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+	pub, _, _ := GenerateKeyPair()
+	c, err := NewClient(Options{CurrentVersion: "1.0.0", PublicKey: pub, Logger: quietLog()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, art := range []*Artifact{
+		{Filename: "..", URL: srv.URL + "/x"},
+		{Filename: "sub/..", URL: srv.URL + "/x"},
+		{Filename: "a/.", URL: srv.URL + "/x"},
+		{URL: srv.URL + "/dl/.."},
+	} {
+		art.SHA256, art.Size = shaHex(payload), int64(len(payload))
+		root := t.TempDir()
+		dir := filepath.Join(root, "updates")
+		got, err := c.DownloadArtifact(context.Background(), art, dir, nil)
+		if err != nil {
+			t.Fatalf("%+v: %v", art, err)
+		}
+		if filepath.Dir(got) != dir {
+			t.Fatalf("%+v: downloaded to %s, outside %s", art, got, dir)
+		}
+		entries, _ := os.ReadDir(root)
+		if len(entries) != 1 {
+			t.Fatalf("%+v: files written next to the download dir: %v", art, entries)
+		}
+	}
+}
+
 func TestDownloadCancelled(t *testing.T) {
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
@@ -343,6 +379,50 @@ func TestApplyInstallerLaunches(t *testing.T) {
 	}
 	if !strings.HasSuffix(launched, "EtherSetup.exe") {
 		t.Fatalf("launched = %q", launched)
+	}
+}
+
+// The installer must keep running after the caller's context ends: the tray
+// cancels its context as soon as Apply returns.
+func TestStartDetachedOutlivesContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses /bin/sh")
+	}
+	marker := filepath.Join(t.TempDir(), "installer-ran")
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := startDetached(ctx, "/bin/sh", "-c", `sleep 0.3; echo ok > "$1"`, "sh", marker); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("installer was killed when the caller's context ended")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := startDetached(ctx, "/bin/sh", "-c", "true"); err == nil {
+		t.Fatal("started after the context ended")
+	}
+}
+
+func TestInstallerCommand(t *testing.T) {
+	for _, tc := range []struct {
+		goos, path, name string
+		args             []string
+	}{
+		{"darwin", "/tmp/Ether.dmg", "open", []string{"/tmp/Ether.dmg"}},
+		{"windows", `C:\t\Ether.MSI`, "msiexec", []string{"/i", `C:\t\Ether.MSI`}},
+		{"windows", `C:\t\EtherSetup.exe`, `C:\t\EtherSetup.exe`, nil},
+		{"linux", "/tmp/ether.deb", "xdg-open", []string{"/tmp/ether.deb"}},
+	} {
+		name, args := installerCommand(tc.goos, tc.path)
+		if name != tc.name || fmt.Sprint(args) != fmt.Sprint(tc.args) {
+			t.Errorf("%s %s: %s %v", tc.goos, tc.path, name, args)
+		}
 	}
 }
 

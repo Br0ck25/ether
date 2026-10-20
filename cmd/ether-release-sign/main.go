@@ -70,7 +70,7 @@ func usage() {
 
 func cmdKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ExitOnError)
-	out := fs.String("out", "", "write keys here instead of stdout (0600)")
+	out := fs.String("out", "", "write keys to this new file (0600; never overwritten) instead of stdout")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -86,7 +86,27 @@ func cmdKeygen(args []string) error {
 		fmt.Fprintf(os.Stderr, "  -ldflags \"-X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64=%s\"\n", updater.EncodeKey(pub))
 		return nil
 	}
-	return os.WriteFile(*out, []byte(text), 0o600)
+	return writeNewSecret(*out, []byte(text))
+}
+
+// writeNewSecret creates path with owner-only permissions. It refuses to
+// replace an existing file: overwriting would destroy the current release
+// key, and os.WriteFile would keep a looser mode already on the file.
+func writeNewSecret(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
 }
 
 func loadPrivateKey(spec string) (ed25519.PrivateKey, error) {

@@ -41,6 +41,16 @@ type ref struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Println("FATAL:", err)
+		os.Exit(1)
+	}
+}
+
+// run is the benchmark body. It returns errors instead of exiting so the
+// deferred cleanup (temporary data dir with its segment cache, database,
+// connections) always runs.
+func run() error {
 	refPath := flag.String("ref", "", "usenet-ref.json")
 	tmdbID := flag.Int64("tmdb", 603, "movie tmdb id")
 	imdb := flag.String("imdb", "tt0133093", "imdb id")
@@ -60,17 +70,24 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel}))
 	var r ref
-	b, _ := os.ReadFile(*refPath)
-	json.Unmarshal(b, &r)
+	b, err := os.ReadFile(*refPath)
+	if err != nil {
+		return fmt.Errorf("read -ref: %w", err)
+	}
+	if err := json.Unmarshal(b, &r); err != nil {
+		return fmt.Errorf("parse -ref %s: %w", *refPath, err)
+	}
 
 	dir := *data
 	if dir == "" {
 		var err error
 		dir, err = os.MkdirTemp("", "ether-e2e")
-		must(err)
+		if err != nil {
+			return err
+		}
 		defer os.RemoveAll(dir)
 	} else if err := os.MkdirAll(dir, 0o700); err != nil {
-		must(err)
+		return err
 	}
 	ctx := context.Background()
 	cfg := config.Defaults(dir)
@@ -88,11 +105,17 @@ func main() {
 		cfg.Indexers = append(cfg.Indexers, config.Indexer{ID: fmt.Sprint(i), Name: x.Name, URL: x.URL, APIKey: x.APIKey, DailyLimit: 20, DailyGrabs: 20, Enabled: true})
 	}
 	db, err := store.Open(ctx, dir)
-	must(err)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
 	fetcher := usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log, TraceProtocol: *trace})
 	defer fetcher.Close()
 	cache, err := segcache.Open(filepath.Join(dir, "cache"), 2<<30, log)
-	must(err)
+	if err != nil {
+		return err
+	}
+	defer cache.Close()
 	eng := stream.New(fetcher, cache, stream.OptionsFromConfig(cfg), log)
 	newznabOptions := newznab.Options{Logger: log, NZBDir: filepath.Join(dir, "nzb")}
 	if *freshSearch {
@@ -148,11 +171,16 @@ func main() {
 			fmt.Printf("provider=%s dials=%d tcp=%s tls=%s greeting=%s auth=%s stat_batches=%d stat_batch_time=%s misses=%d avg_rtt=%s\n", s.Name, s.Dials, s.TCPDialTime.Round(time.Millisecond), s.TLSHandshakeTime.Round(time.Millisecond), s.GreetingTime.Round(time.Millisecond), s.AuthTime.Round(time.Millisecond), s.STATBatches, s.STATBatchTime.Round(time.Millisecond), s.Misses, s.AvgLatency.Round(time.Millisecond))
 		}
 	}
-	must(err)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("resolved in %s: %s (%.1f GB) alternates=%d\n", tResolve.Round(time.Millisecond), sol.Release.Name, float64(sol.Release.Size)/1e9, len(sol.Alternates))
 	t0 := time.Now()
 	src, err := eng.Open(ctx, sol.Release.ID, sol.NZB)
-	must(err)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
 	tOpen := time.Since(t0)
 	buf := make([]byte, 4<<20)
 	t1 := time.Now()
@@ -168,10 +196,14 @@ func main() {
 	}))
 	defer srv.Close()
 	tc, err := transcode.New(cfg.Transcode, log, transcode.WithoutHWDetection())
-	must(err)
+	if err != nil {
+		return err
+	}
 	t3 := time.Now()
 	info, err := tc.Probe(ctx, srv.URL+"/"+filepath.Base(src.Name()))
-	must(err)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("probe %s: container=%s duration=%s streams=%d\n", time.Since(t3).Round(time.Millisecond), info.Container, info.Duration.Round(time.Second), len(info.Streams))
 	for _, s := range info.Streams {
 		fmt.Printf("   %s %s %dx%d %s ch=%d lang=%s\n", s.Type, s.Codec, s.Width, s.Height, s.ColorTransfer, s.Channels, s.Language)
@@ -186,11 +218,5 @@ func main() {
 			fmt.Printf("provider %+v\n", s)
 		}
 	}
-}
-
-func must(err error) {
-	if err != nil {
-		fmt.Println("FATAL:", err)
-		os.Exit(1)
-	}
+	return nil
 }

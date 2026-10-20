@@ -76,7 +76,20 @@ func (a *Autostart) LaunchAgentPlist() string {
 
 // DesktopEntry renders the XDG autostart entry.
 func (a *Autostart) DesktopEntry() string {
-	return fmt.Sprintf("[Desktop Entry]\nType=Application\nName=Ether\nComment=Ether media server tray\nExec=%s\nIcon=ether\nTerminal=false\nX-GNOME-Autostart-enabled=true\n", a.ExecPath)
+	return fmt.Sprintf("[Desktop Entry]\nType=Application\nName=Ether\nComment=Ether media server tray\nExec=%s\nIcon=ether\nTerminal=false\nX-GNOME-Autostart-enabled=true\n", desktopExecArg(a.ExecPath))
+}
+
+// desktopExecArg renders one argument of a desktop entry's Exec key per the
+// XDG Desktop Entry spec: an argument holding a reserved character (a
+// space, quote, backslash, ...) is double-quoted with ", `, $ and \
+// backslash-escaped inside the quotes; the key file's own string escaping
+// then doubles every backslash; a literal % becomes %%.
+func desktopExecArg(s string) string {
+	if strings.ContainsAny(s, " \t\n\"'\\><~|&;$*?#()`") {
+		s = `"` + strings.NewReplacer(`"`, `\"`, "`", "\\`", `$`, `\$`, `\`, `\\`).Replace(s) + `"`
+		s = strings.ReplaceAll(s, `\`, `\\`)
+	}
+	return strings.ReplaceAll(s, "%", "%%")
 }
 
 func xmlEscape(s string) string {
@@ -172,5 +185,10 @@ func openCommand(goos, url string) (string, []string) {
 // OpenBrowser opens url in the default browser.
 func OpenBrowser(url string) error {
 	name, args := openCommand(runtime.GOOS, url)
-	return exec.Command(name, args...).Start()
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }() // reap: no zombie per click
+	return nil
 }
