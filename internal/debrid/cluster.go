@@ -514,6 +514,12 @@ func (e *Engine) kickLeases() {
 	}
 }
 
+// RefreshLeases renews this node's streaming leases now (clustered only),
+// e.g. as soon as the database is reachable again after an outage longer
+// than the lease lifetime, so no node removes a torrent this node still
+// streams from.
+func (e *Engine) RefreshLeases() { e.kickLeases() }
+
 func (e *Engine) runLeases(self string) {
 	defer close(e.leaseDone)
 	t := time.NewTicker(leaseRefresh)

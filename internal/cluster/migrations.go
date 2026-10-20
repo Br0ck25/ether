@@ -25,4 +25,21 @@ CREATE TABLE cluster_leader (
 	node_id TEXT NOT NULL,
 	acquired_at INTEGER NOT NULL
 );`)
+	// Rolling updates: a node about to restart for an update heartbeats
+	// draining=1 (the leader drops its addresses from the published
+	// connections), every node heartbeats the schema migrations its binary
+	// knows (component -> highest version, JSON), and one node at a time
+	// holds the update lease. failed_version records a release that rolled
+	// back on some node so the others skip it.
+	store.Register("cluster", 2, `
+ALTER TABLE cluster_nodes ADD COLUMN draining INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE cluster_nodes ADD COLUMN migrations TEXT NOT NULL DEFAULT '';
+CREATE TABLE cluster_update_lease (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	node_id TEXT NOT NULL DEFAULT '',
+	version TEXT NOT NULL DEFAULT '',
+	acquired_at INTEGER NOT NULL DEFAULT 0,
+	expires_at INTEGER NOT NULL DEFAULT 0,
+	failed_version TEXT NOT NULL DEFAULT ''
+);`)
 }

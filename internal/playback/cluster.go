@@ -14,6 +14,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/faillog"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -73,6 +74,10 @@ const admitLockKey = "playback:admit"
 // staleRowAge is when any node may delete another node's forgotten rows.
 const staleRowAge = 10 * time.Minute
 
+// admitTimeout bounds the cluster-wide admission check; past it the
+// stream is admitted (fail open) so a database outage never stalls a play.
+const admitTimeout = 3 * time.Second
+
 // liveNodesTTL caches the cluster's liveness view between reads.
 const liveNodesTTL = 2 * time.Second
 
@@ -94,6 +99,9 @@ type registry struct {
 
 	warnMu   sync.Mutex
 	lastWarn time.Time
+
+	// syncFail rate-limits the heartbeat loop's outage warnings.
+	syncFail *faillog.Tracker
 }
 
 type unitRow struct {
@@ -105,7 +113,8 @@ type unitRow struct {
 
 func newRegistry(m *Manager, db *sql.DB, node clusterbus.Node) *registry {
 	return &registry{m: m, db: db, d: store.DialectOf(db), node: node, self: node.NodeID(), log: m.log,
-		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
+		syncFail: faillog.New(m.log, "playback: cluster session registry: heartbeat sessions")}
 }
 
 // start clears this node's leftovers from a previous run (never another
@@ -152,7 +161,9 @@ func (r *registry) loop() {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		if err := r.sync(ctx); err != nil {
-			r.warn("heartbeat sessions", err)
+			r.syncFail.Fail(err)
+		} else {
+			r.syncFail.OK()
 		}
 		cancel()
 	}
@@ -367,6 +378,14 @@ func (r *registry) admit(ctx context.Context, user *core.User, id identity, clai
 		r.poke()
 		return nil
 	}
+	if r.m.deps.Availability.Down() {
+		// Known outage: fail open at once rather than wait on the database.
+		r.warn("cluster-wide stream limit check skipped (database unreachable); admitting", errors.New("database unreachable"))
+		r.poke()
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, admitTimeout)
+	defer cancel()
 	live := r.liveNodes(ctx)
 	err := func() error {
 		tx, err := r.db.BeginTx(ctx, nil)
@@ -398,6 +417,7 @@ func (r *registry) admit(ctx context.Context, user *core.User, id identity, clai
 	}
 	if err != nil {
 		// Fail open: a database outage must not stop people watching.
+		r.m.deps.Availability.Report(err)
 		r.warn("cluster-wide stream limit check failed; admitting", err)
 	}
 	return nil

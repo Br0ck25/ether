@@ -252,9 +252,18 @@ holds it, and the owner may choose a backup directory that all nodes reach.
 When a node fails, clients reconnect through another published connection.
 Playback resumes from the last reported position; an interrupted response is
 not spliced. Brief database outages do not end active streams; progress reports
-are retained in memory and written once the database returns. Nodes update one
-at a time; a node joins the rotation only after its schema migrations, applied
-under a cluster-wide lock, are compatible with the running cluster.
+are retained in memory and written once the database returns, and the owner's
+status shows the database as unreachable meanwhile. A node that cannot reach
+the database at startup waits for it. Nodes update one at a time under a
+cluster-wide update lease: the updating node first drains — it leaves the
+published connections, hands over leadership and admits no new sessions — and
+installs once its own sessions end or a configurable drain time passes; the
+next node follows after the new version has confirmed its health, and a release
+that rolled back on one node is skipped by the others. A node joins the rotation
+only after its schema migrations, applied under a cluster-wide lock, are
+compatible with the running cluster: migrations are additive, so nodes still on
+the previous release keep working, and an owner may instead have a node wait
+until older nodes have updated.
 
 ## Component contracts and delivery
 

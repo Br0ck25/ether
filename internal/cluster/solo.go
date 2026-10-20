@@ -34,7 +34,7 @@ func (s *Solo) Self() Node {
 	n := Node{
 		ID: s.local.Identity.NodeID, Name: s.local.Identity.Name, Version: s.local.Version,
 		Caps: s.local.caps(), Load: s.local.load(), StartedAt: s.started, LastSeen: time.Now(),
-		Leader: true, Live: true,
+		Leader: true, Live: true, Draining: s.local.draining(), Migrations: s.local.Migrations,
 	}
 	if s.local.Addrs != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -70,4 +70,7 @@ func (s *Solo) Subscribe(topic string, fn func([]byte)) func() { return s.bus.su
 func (s *Solo) Nodes(context.Context) ([]Node, error)    { return []Node{s.Self()}, nil }
 func (s *Solo) AllNodes(context.Context) ([]Node, error) { return []Node{s.Self()}, nil }
 func (s *Solo) Start(context.Context) error              { return nil }
-func (s *Solo) Close() error                             { return nil }
+
+// StepDown is a no-op: a standalone server always leads.
+func (s *Solo) StepDown(context.Context) {}
+func (s *Solo) Close() error             { return nil }

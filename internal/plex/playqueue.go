@@ -197,7 +197,9 @@ func (s *playQueueStore) expire(now time.Time, ttl time.Duration) {
 		ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 		defer cancel()
 		if _, err := s.cl.db.ExecContext(ctx, `DELETE FROM plex_playqueues WHERE updated_at<?`, now.Add(-ttl).UnixMilli()); err != nil {
-			s.cl.warn("expire play queues", err)
+			s.cl.expireFail.Fail(err)
+		} else {
+			s.cl.expireFail.OK()
 		}
 	}
 }

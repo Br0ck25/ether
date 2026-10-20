@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/faillog"
+	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -63,6 +65,12 @@ type Options struct {
 
 	LockKey int32  // DefaultLockKey
 	Channel string // derived from the schema when empty
+
+	// Availability, when set, receives every heartbeat's outcome: the
+	// node's shared view of database reachability, which lets deferrable
+	// writes queue at once during an outage and replay as soon as a
+	// heartbeat succeeds again.
+	Availability *store.Availability
 
 	// OnFatal is called once, from a runtime goroutine, when this node
 	// must stop serving as a cluster member: another live process
@@ -115,6 +123,10 @@ type Postgres struct {
 	inc   string // incarnation: distinguishes this process's own echoes
 	bus   *localBus
 	lead  *leadership
+	// beatFail and busFail rate-limit outage warnings from the heartbeat
+	// and LISTEN loops (first failure, a summary a minute, the recovery).
+	beatFail *faillog.Tracker
+	busFail  *faillog.Tracker
 
 	runMu   sync.Mutex
 	started bool
@@ -125,20 +137,23 @@ type Postgres struct {
 	channel atomic.Pointer[string]
 
 	beatWake chan struct{}
+	stepWake chan struct{} // StepDown: run an election step now
 	busReady chan struct{}
 	busOnce  sync.Once
 
-	mu         sync.Mutex
-	self       Node
-	addrs      []string
-	beatAddrs  []string // addrs in the last successful heartbeat
-	joined     bool
-	lastPrune  time.Time
-	holdUntil  time.Time
-	busUp      bool
-	lastSkew   time.Duration
-	lastBeatOK time.Time
-	fatal      error
+	mu           sync.Mutex
+	self         Node
+	addrs        []string
+	beatAddrs    []string // addrs in the last successful heartbeat
+	beatDraining bool     // draining flag in the last successful heartbeat
+	resigned     bool     // StepDown: never lead again in this process
+	joined       bool
+	lastPrune    time.Time
+	holdUntil    time.Time
+	busUp        bool
+	lastSkew     time.Duration
+	lastBeatOK   time.Time
+	fatal        error
 }
 
 var _ Cluster = (*Postgres)(nil)
@@ -186,7 +201,9 @@ func NewPostgres(o Options) (*Postgres, error) {
 	p := &Postgres{
 		o: o, db: o.DB, local: o.Local, log: log, inc: newID()[:12],
 		bus: newLocalBus(log), lead: newLeadership(),
-		beatWake: make(chan struct{}, 1), busReady: make(chan struct{}),
+		beatWake: make(chan struct{}, 1), stepWake: make(chan struct{}, 1), busReady: make(chan struct{}),
+		beatFail: faillog.New(log, "cluster: heartbeat"),
+		busFail:  faillog.New(log, "cluster: event bus connection"),
 	}
 	p.self = Node{
 		ID: o.Local.Identity.NodeID, Name: o.Local.Identity.Name, Version: o.Local.Version,
@@ -360,6 +377,10 @@ func (p *Postgres) halt() {
 
 // ---- membership --------------------------------------------------------------
 
+// Beat heartbeats now instead of at the next interval (after this node's
+// draining state changed, so the leader republishes promptly).
+func (p *Postgres) Beat() { p.wakeBeat() }
+
 func (p *Postgres) wakeBeat() {
 	select {
 	case p.beatWake <- struct{}{}:
@@ -409,10 +430,17 @@ func (p *Postgres) heartbeatLoop(ctx context.Context) {
 		case <-p.beatWake:
 		}
 		bctx, cancel := context.WithTimeout(ctx, p.o.HeartbeatInterval)
-		if err := p.beat(bctx); err != nil && ctx.Err() == nil {
-			p.log.Warn("cluster: heartbeat failed", "err", err)
-		}
+		err := p.beat(bctx)
 		cancel()
+		switch {
+		case ctx.Err() != nil:
+		case err != nil:
+			p.beatFail.Fail(err)
+			p.o.Availability.Report(err)
+		default:
+			p.beatFail.OK()
+			p.o.Availability.OK()
+		}
 	}
 }
 
@@ -427,9 +455,18 @@ func (p *Postgres) beat(ctx context.Context) error {
 	if addrs == nil {
 		addrs = []string{}
 	}
-	caps, load := p.local.caps(), p.local.load()
+	caps, load, draining := p.local.caps(), p.local.load(), p.local.draining()
 	addrsJSON, _ := json.Marshal(addrs)
 	capsJSON, _ := json.Marshal(caps)
+	migJSON := ""
+	if p.local.Migrations != nil {
+		b, _ := json.Marshal(p.local.Migrations)
+		migJSON = string(b)
+	}
+	drainFlag := 0
+	if draining {
+		drainFlag = 1
+	}
 	id := p.local.Identity.NodeID
 	p.mu.Lock()
 	joined, fatal := p.joined, p.fatal
@@ -441,10 +478,11 @@ func (p *Postgres) beat(ctx context.Context) error {
 		// Once joined, only this process may write the row: an update that
 		// finds another incarnation's row means a second live process
 		// shares our node ID.
-		res, err := p.db.ExecContext(ctx, `UPDATE cluster_nodes SET name=?, version=?, addrs=?, caps=?, active_sessions=?, started_at=?, last_seen=?
+		res, err := p.db.ExecContext(ctx, `UPDATE cluster_nodes SET name=?, version=?, addrs=?, caps=?, active_sessions=?, started_at=?, last_seen=?,
+draining=?, migrations=?
 WHERE id=? AND incarnation=?`,
 			p.local.Identity.Name, p.local.Version, string(addrsJSON), string(capsJSON), load,
-			started.UnixMilli(), now.UnixMilli(), id, p.inc)
+			started.UnixMilli(), now.UnixMilli(), drainFlag, migJSON, id, p.inc)
 		if err != nil {
 			return err
 		}
@@ -464,20 +502,22 @@ WHERE id=? AND incarnation=?`,
 		}
 	}
 	if !joined {
-		_, err := p.db.ExecContext(ctx, `INSERT INTO cluster_nodes(id,name,version,addrs,caps,active_sessions,started_at,last_seen,incarnation)
-VALUES(?,?,?,?,?,?,?,?,?)
+		_, err := p.db.ExecContext(ctx, `INSERT INTO cluster_nodes(id,name,version,addrs,caps,active_sessions,started_at,last_seen,incarnation,draining,migrations)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET name=excluded.name, version=excluded.version, addrs=excluded.addrs, caps=excluded.caps,
-active_sessions=excluded.active_sessions, started_at=excluded.started_at, last_seen=excluded.last_seen, incarnation=excluded.incarnation`,
+active_sessions=excluded.active_sessions, started_at=excluded.started_at, last_seen=excluded.last_seen, incarnation=excluded.incarnation,
+draining=excluded.draining, migrations=excluded.migrations`,
 			id, p.local.Identity.Name, p.local.Version, string(addrsJSON), string(capsJSON), load,
-			started.UnixMilli(), now.UnixMilli(), p.inc)
+			started.UnixMilli(), now.UnixMilli(), p.inc, drainFlag, migJSON)
 		if err != nil {
 			return err
 		}
 	}
 	p.mu.Lock()
 	p.self.Addrs, p.self.Caps, p.self.Load, p.self.LastSeen = addrs, caps, load, now
-	announce := !p.joined || !slices.Equal(addrs, p.beatAddrs)
-	p.joined, p.beatAddrs, p.lastBeatOK = true, addrs, now
+	p.self.Draining, p.self.Migrations = draining, p.local.Migrations
+	announce := !p.joined || !slices.Equal(addrs, p.beatAddrs) || draining != p.beatDraining
+	p.joined, p.beatAddrs, p.lastBeatOK, p.beatDraining = true, addrs, now, draining
 	prune := now.Sub(p.lastPrune) > time.Hour
 	if prune {
 		p.lastPrune = now
@@ -588,7 +628,7 @@ func (p *Postgres) AllNodes(ctx context.Context) ([]Node, error) {
 	if err := p.db.QueryRowContext(ctx, `SELECT node_id FROM cluster_leader WHERE id=1`).Scan(&leaderID); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT id,name,version,addrs,caps,active_sessions,started_at,last_seen FROM cluster_nodes ORDER BY name, id`)
+	rows, err := p.db.QueryContext(ctx, `SELECT id,name,version,addrs,caps,active_sessions,started_at,last_seen,draining,migrations FROM cluster_nodes ORDER BY name, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -599,14 +639,19 @@ func (p *Postgres) AllNodes(ctx context.Context) ([]Node, error) {
 	for rows.Next() {
 		var (
 			n                 Node
-			addrs, caps       string
+			addrs, caps, migs string
 			startedMS, seenMS int64
+			draining          int
 		)
-		if err := rows.Scan(&n.ID, &n.Name, &n.Version, &addrs, &caps, &n.Load, &startedMS, &seenMS); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.Version, &addrs, &caps, &n.Load, &startedMS, &seenMS, &draining, &migs); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(addrs), &n.Addrs)
 		_ = json.Unmarshal([]byte(caps), &n.Caps)
+		if migs != "" {
+			_ = json.Unmarshal([]byte(migs), &n.Migrations)
+		}
+		n.Draining = draining != 0
 		n.StartedAt, n.LastSeen = time.UnixMilli(startedMS), time.UnixMilli(seenMS)
 		n.Live = now.Sub(n.LastSeen) <= p.o.LiveAfter
 		if n.ID == p.local.Identity.NodeID {
@@ -659,6 +704,13 @@ func (p *Postgres) electionLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-p.stepWake:
+			if !t.Stop() {
+				select {
+				case <-t.C:
+				default:
+				}
+			}
 		}
 		conn = p.electionStep(ctx, conn)
 		t.Reset(p.o.ElectionInterval)
@@ -684,6 +736,24 @@ func (p *Postgres) stepDown(conn *pgx.Conn, reason string, err error) {
 // lock connection to keep (nil after a failure).
 func (p *Postgres) electionStep(ctx context.Context, conn *pgx.Conn) *pgx.Conn {
 	leading := p.lead.isLeader()
+	p.mu.Lock()
+	resigned := p.resigned
+	p.mu.Unlock()
+	if resigned {
+		if conn != nil || leading {
+			p.stepDown(conn, "stepping down for shutdown", nil)
+		}
+		return nil
+	}
+	if p.local.draining() && p.othersCanLead(ctx) {
+		// About to restart for an update: let a node that stays up lead
+		// (and publish connections without this node's addresses).
+		if leading {
+			p.stepDown(conn, "draining for an update; handing leadership over", nil)
+			return nil
+		}
+		return conn
+	}
 	if !leading {
 		p.mu.Lock()
 		hold := p.o.Now().Before(p.holdUntil)
@@ -739,6 +809,54 @@ RETURNING epoch`, p.local.Identity.NodeID, p.o.Now().UnixMilli()).Scan(&epoch)
 	return conn
 }
 
+// othersCanLead reports whether another live node that is not draining
+// could take leadership. On a database error it answers false, so a lone
+// or isolated node keeps its role.
+func (p *Postgres) othersCanLead(ctx context.Context) bool {
+	qctx, cancel := context.WithTimeout(ctx, p.o.ProbeTimeout)
+	defer cancel()
+	var n int
+	err := p.db.QueryRowContext(qctx, `SELECT COUNT(*) FROM cluster_nodes WHERE id<>? AND draining=0 AND last_seen>=?`,
+		p.local.Identity.NodeID, p.o.Now().Add(-p.o.LiveAfter).UnixMilli()).Scan(&n)
+	return err == nil && n > 0
+}
+
+// StepDown gives up leadership for good (until the process restarts) and
+// releases the leader lock at once, so another node takes over within an
+// election interval instead of waiting for this node to leave the cluster.
+// Call it at the start of a graceful shutdown. It waits (bounded by ctx)
+// for the lock to be released.
+func (p *Postgres) StepDown(ctx context.Context) {
+	p.mu.Lock()
+	p.resigned = true
+	p.mu.Unlock()
+	if !p.IsLeader() {
+		return
+	}
+	done := make(chan struct{})
+	unsub := p.lead.subscribe(func(leader bool) {
+		if !leader {
+			select {
+			case <-done:
+			default:
+				close(done)
+			}
+		}
+	})
+	defer unsub()
+	select {
+	case p.stepWake <- struct{}{}:
+	default:
+	}
+	if !p.IsLeader() {
+		return
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
 // ---- event bus ---------------------------------------------------------------
 
 func (p *Postgres) setBusUp(up bool) {
@@ -774,7 +892,7 @@ func (p *Postgres) listenLoop(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			p.log.Debug("cluster: event bus connect failed", "err", err, "retry", backoff)
+			p.busFail.Fail(err, "retry", backoff)
 			if !sleep() {
 				return
 			}
@@ -782,8 +900,9 @@ func (p *Postgres) listenLoop(ctx context.Context) {
 		}
 		p.setBusUp(true)
 		p.busOnce.Do(func() { close(p.busReady) })
+		p.busFail.OK()
 		if !first {
-			p.log.Info("cluster: event bus reconnected; resynchronising")
+			p.log.Debug("cluster: event bus reconnected; resynchronising caches")
 			p.bus.deliver(TopicResync, nil)
 		}
 		first = false
@@ -794,7 +913,7 @@ func (p *Postgres) listenLoop(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		p.log.Warn("cluster: event bus connection lost", "err", err)
+		p.busFail.Fail(err)
 		if !sleep() {
 			return
 		}

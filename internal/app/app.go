@@ -76,6 +76,9 @@ type Options struct {
 	Spike bool
 	// SpikeFiles are extra local files for spike mode.
 	SpikeFiles []string
+	// DBRetryMin / DBRetryMax bound the backoff while a clustered node
+	// waits at startup for an unreachable PostgreSQL server (1s / 30s).
+	DBRetryMin, DBRetryMax time.Duration
 }
 
 // App is a running Ether server.
@@ -97,6 +100,13 @@ type App struct {
 	// clusterFatal receives the error that ended this node's cluster
 	// membership (a duplicate node identity); nil on a standalone server.
 	clusterFatal chan error
+	// dbAvail is this node's view of shared-database reachability: the
+	// heartbeat and the outboxes that hold progress, resume and play
+	// records through an outage report to it. Nil on a standalone server.
+	dbAvail *store.Availability
+	// draining is set while this node drains before installing an update
+	// (heartbeated; see rolling.go).
+	draining atomic.Bool
 
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
@@ -197,14 +207,41 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	}
 	dbCfg := cfg.Database.Effective(os.Getenv)
 	var dialect store.Dialect
-	if a.db, dialect, err = store.OpenWith(ctx, store.Options{
+	// A clustered node whose PostgreSQL server is briefly unreachable at
+	// boot waits for it here (logging every attempt) rather than exiting
+	// and being restarted in a tight loop by the service manager. Nothing
+	// listens meanwhile — on purpose: a node that cannot reach the shared
+	// database must not answer Plex clients or GDM discovery, and it is out
+	// of the published connections because it is not heartbeating. The
+	// hang watchdog only starts in Run. Errors retrying cannot fix (bad
+	// password, missing database, invalid URL) still fail at once.
+	var gate store.MigrationGate
+	if dbCfg.IsPostgres() && cfg.Database.DeferMigrations {
+		id, err := cluster.LoadIdentity(opts.DataDir)
+		if err != nil {
+			return nil, fmt.Errorf("cluster: %w", err)
+		}
+		gate = olderNodesGate(id.NodeID, clusterLiveAfter, time.Now)
+	}
+	if a.db, dialect, err = store.OpenWithRetry(ctx, store.Options{
 		DataDir: opts.DataDir, Driver: dbCfg.Driver, URL: dbCfg.URL,
-		Logger: a.log.With("component", "store"),
+		Logger: a.log.With("component", "store"), MigrationGate: gate,
+	}, store.RetryOptions{
+		MinBackoff: a.opts.DBRetryMin, MaxBackoff: a.opts.DBRetryMax,
+		OnRetry: func(attempt int, wait time.Duration, err error) {
+			if errors.Is(err, store.ErrMigrationDeferred) {
+				a.log.Warn("database: waiting before migrating the shared schema", "attempt", attempt, "retry", wait, "reason", err)
+				return
+			}
+			a.log.Error("database: PostgreSQL is unreachable; waiting for it before starting",
+				"url", dbCfg.Redacted().URL, "attempt", attempt, "retry", wait, "err", err)
+		},
 	}); err != nil {
 		return nil, fmt.Errorf("database: %w", err)
 	}
 	if dialect == store.Postgres {
 		a.log.Info("database: using PostgreSQL", "url", dbCfg.Redacted().URL)
+		a.warnNewerSchema(ctx)
 	}
 	a.closers = append(a.closers, func() { a.db.Close() })
 	if err := a.buildCluster(dialect); err != nil {
@@ -253,7 +290,14 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 
 	// Watch state and recommendations.
-	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state")})
+	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state"), Availability: a.dbAvail})
+	a.closers = append(a.closers, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := a.state.Close(ctx); err != nil {
+			a.log.Warn("state: watch progress lost at shutdown", "err", err)
+		}
+	})
 	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
 	a.trakt.SubscribeTo(a.state)
 	a.collections.SetState(a.state)
@@ -389,6 +433,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Logger:        log,
 		Cluster:       a.clusterNode(),
 		DescribeGroup: a.describeLiveGroup,
+		Availability:  a.dbAvail,
 	}, cfg, playback.Options{DataDir: dataDir})
 	if err != nil {
 		return fmt.Errorf("playback: %w", err)
@@ -626,6 +671,9 @@ func (a *App) Run(ctx context.Context) error {
 	case runErr = <-watchdogErr:
 	case runErr = <-a.clusterFatal: // nil channel (never ready) when standalone
 	}
+	// Hand leadership over first: another node takes over singleton work
+	// and plex.tv publication while this one finishes shutting down.
+	a.stepDownForShutdown()
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	_ = srv.Shutdown(shutdown)

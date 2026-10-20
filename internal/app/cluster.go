@@ -25,6 +25,8 @@ const (
 	memberGrace = 60 * time.Second
 	// healthSampleInterval matches notify.Service.Run's health sampling.
 	healthSampleInterval = 30 * time.Second
+	// clusterLiveAfter matches cluster.Options.LiveAfter's default.
+	clusterLiveAfter = 20 * time.Second
 )
 
 // buildCluster loads this node's identity and selects the runtime for the
@@ -35,7 +37,8 @@ func (a *App) buildCluster(dialect store.Dialect) error {
 	if err != nil {
 		return err
 	}
-	local := cluster.Local{Identity: id, Version: a.opts.Version, Addrs: a.nodeAddrs, Caps: a.nodeCaps, Load: a.nodeLoad}
+	local := cluster.Local{Identity: id, Version: a.opts.Version, Addrs: a.nodeAddrs, Caps: a.nodeCaps, Load: a.nodeLoad,
+		Draining: a.nodeDraining, Migrations: store.KnownMigrations()}
 	log := a.log.With("component", "cluster")
 	a.peers = &peerSet{}
 	a.egress = &egressIP{}
@@ -44,8 +47,9 @@ func (a *App) buildCluster(dialect store.Dialect) error {
 		return nil
 	}
 	a.clusterFatal = make(chan error, 1)
+	a.dbAvail = store.NewAvailability(nil)
 	pg, err := cluster.NewPostgres(cluster.Options{
-		DB: a.db, Local: local, Logger: log,
+		DB: a.db, Local: local, Logger: log, Availability: a.dbAvail,
 		IdentityPath: filepath.Join(a.opts.DataDir, cluster.NodeFile),
 		// A clone of this node (copied node.json) is running: stop serving.
 		OnFatal: func(err error) {
@@ -238,13 +242,20 @@ type clusterStatus struct {
 	Error  string          `json:"error,omitempty"`
 	// Warnings are cluster conditions the owner should act on.
 	Warnings []string `json:"warnings,omitempty"`
+	// Database is this node's shared-database connectivity (clustered
+	// nodes only).
+	Database *databaseHealth `json:"database,omitempty"`
 }
 
 func (a *App) clusterHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		st := clusterStatus{Mode: a.cluster.Mode(), Self: a.cluster.Self(), Epoch: a.cluster.Epoch()}
-		nodes, err := a.cluster.AllNodes(r.Context())
+		// Bounded so the page still answers (with the database state)
+		// while the database is unreachable.
+		nctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		nodes, err := a.cluster.AllNodes(nctx)
+		cancel()
 		if err != nil {
 			st.Error = err.Error()
 		}
@@ -260,9 +271,17 @@ func (a *App) clusterHandler() http.Handler {
 		if w := egressWarning(st.Nodes); w != "" {
 			st.Warnings = append(st.Warnings, w)
 		}
+		if w := versionWarning(st.Nodes); w != "" {
+			st.Warnings = append(st.Warnings, w)
+		}
 		if pg, ok := a.cluster.(*cluster.Postgres); ok {
 			h := pg.Health()
 			st.Health = &h
+			db := a.databaseHealth()
+			st.Database = &db
+			if db.Message != "" {
+				st.Warnings = append(st.Warnings, db.Message)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)

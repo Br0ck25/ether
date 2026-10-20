@@ -29,8 +29,10 @@ type ImportBatch struct{ Records, History []ImportRecord }
 func (s *State) ImportTransaction(ctx context.Context, prepare func(*sql.Tx) (ImportBatch, error)) error {
 	var events []Event
 	err := func() error {
-		s.wmu.Lock()
-		defer s.wmu.Unlock()
+		if err := s.lockWrites(ctx); err != nil {
+			return err
+		}
+		defer s.unlockWrites()
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err

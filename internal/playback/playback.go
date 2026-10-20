@@ -24,6 +24,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // Deps are the components playback orchestrates. Resolver, Engine,
@@ -63,6 +64,11 @@ type Deps struct {
 	// DescribeGroup optionally describes a live TV viewing unit reserved
 	// with BeginChannel for other nodes' status pages.
 	DescribeGroup func(group string) *core.PlaySession
+	// Availability, when set (clustered nodes), is the node's view of
+	// database reachability: resume records the database cannot take are
+	// held and written later, and admission skips the cluster-wide check
+	// while the database is down (failing open) instead of waiting on it.
+	Availability *store.Availability
 }
 
 // Options tune the manager. Zero values take the defaults noted.
@@ -193,6 +199,7 @@ type Manager struct {
 	cfg   config.Config
 
 	mu             sync.Mutex
+	draining       bool // SetDraining: refuse new sessions
 	closed         bool
 	sessions       map[string]*session
 	byIdent        map[identity]*session
@@ -316,6 +323,9 @@ func New(deps Deps, cfg config.Config, opts Options) (*Manager, error) {
 		if err != nil {
 			return nil, err
 		}
+		if deps.Availability != nil {
+			rs.hold(deps.Availability, m.log)
+		}
 		m.resume = rs
 	}
 	if deps.Cluster != nil {
@@ -390,8 +400,53 @@ func (m *Manager) Close() error {
 		m.reg.close()
 	}
 	m.titleInval.Close()
+	if m.resume != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if herr := m.resume.close(ctx); herr != nil {
+			m.log.Warn("playback: resume records lost at shutdown", "err", herr)
+		}
+		cancel()
+	}
 	return err
 }
+
+// SetDraining stops (true) or resumes (false) admitting new playback
+// sessions on this node. A draining node — about to restart for an update
+// — keeps serving its existing sessions and their seeks, but a new Prepare
+// or live TV tune fails with core.ErrStreamLimit so the client retries,
+// reaching another node through another published connection.
+func (m *Manager) SetDraining(draining bool) {
+	m.mu.Lock()
+	changed := m.draining != draining
+	m.draining = draining
+	m.mu.Unlock()
+	if changed {
+		if draining {
+			m.log.Info("playback: draining: no new sessions on this node")
+		} else {
+			m.log.Info("playback: no longer draining")
+		}
+	}
+}
+
+// Draining reports whether SetDraining(true) is in effect.
+func (m *Manager) Draining() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.draining
+}
+
+// ResumeOutboxStatus reports resume records held through a database
+// outage; ok is false when records are written synchronously.
+func (m *Manager) ResumeOutboxStatus() (st store.OutboxStatus, ok bool) {
+	if m.resume == nil || m.resume.held == nil {
+		return st, false
+	}
+	return m.resume.held.Status(), true
+}
+
+// errDraining is returned for new sessions while the node drains.
+var errDraining = fmt.Errorf("%w: this server is restarting for an update; try again", core.ErrStreamLimit)
 
 // SetConfig applies a new config snapshot (stream limits).
 func (m *Manager) SetConfig(cfg config.Config) {
@@ -460,6 +515,10 @@ func (m *Manager) reserve(ctx context.Context, user *core.User, id identity) err
 	if m.closed {
 		m.mu.Unlock()
 		return errors.New("playback: shutting down")
+	}
+	if m.draining {
+		m.mu.Unlock()
+		return errDraining
 	}
 	userN, total, children := m.reservationCountsLocked(id)
 	group := m.channelGroups[id]

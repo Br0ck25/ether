@@ -49,12 +49,39 @@ type Options struct {
 	// New closes only this node's unfinished plays. Empty for a standalone
 	// server, which therefore closes every unfinished play as before.
 	NodeID string
+	// Availability, when set (clustered nodes), holds play records the
+	// database cannot take through an outage (the latest per play) and
+	// skips periodic provider snapshots while the database is down; their
+	// counters are cumulative, so nothing is lost. Nil writes synchronously.
+	Availability *store.Availability
 }
 type Service struct {
 	db       *sql.DB
 	opts     Options
 	mu       sync.Mutex
 	previous map[string]usenet.ProviderStats
+	// plays holds play records through a database outage (clustered).
+	plays *store.Outbox[string, playRecord]
+}
+
+// playRecord is one observation of a play, captured when it was made.
+type playRecord struct {
+	p       core.PlaySession
+	at      time.Time
+	ended   bool
+	problem string
+}
+
+// mergePlay keeps the newest observation but never forgets that the play
+// ended or failed.
+func mergePlay(old, nw playRecord) playRecord {
+	if old.ended && !nw.ended {
+		nw.ended, nw.at = true, old.at
+	}
+	if nw.problem == "" {
+		nw.problem = old.problem
+	}
+	return nw
 }
 
 func New(db *sql.DB, opts Options) *Service {
@@ -65,6 +92,12 @@ func New(db *sql.DB, opts Options) *Service {
 		opts.Now = time.Now
 	}
 	svc := &Service{db: db, opts: opts, previous: map[string]usenet.ProviderStats{}}
+	if opts.Availability != nil {
+		svc.plays = store.NewOutbox(store.OutboxOptions[string, playRecord]{
+			Name: "playback stats", Availability: opts.Availability, Logger: opts.Logger, Merge: mergePlay,
+			Apply: func(ctx context.Context, _ string, r playRecord) error { return svc.record(ctx, r) },
+		})
+	}
 	if _, err := db.Exec(`UPDATE stats_plays SET ended=updated WHERE ended=0 AND node_id=?`, opts.NodeID); err != nil {
 		opts.Logger.Warn("close prior playback stats", "err", err)
 	}
@@ -82,11 +115,42 @@ func (s *Service) ObservePlayback(ev playback.Event) {
 		s.opts.Logger.Warn("record playback stats", "err", err)
 	}
 }
+
+// Record upserts a play. On a clustered node a record the database cannot
+// take is held and written when it is back.
 func (s *Service) Record(ctx context.Context, p *core.PlaySession, ended bool, problem string) error {
 	if p == nil || p.ID == "" {
 		return nil
 	}
-	now := s.opts.Now().UTC()
+	r := playRecord{p: *p, at: s.opts.Now().UTC(), ended: ended, problem: problem}
+	r.p.Source, r.p.Resolution = nil, nil
+	if s.plays != nil {
+		_, err := s.plays.Write(ctx, p.ID, r)
+		return err
+	}
+	return s.record(ctx, r)
+}
+
+// Close writes play records still held from a database outage (bounded by
+// ctx); a no-op on a standalone server.
+func (s *Service) Close(ctx context.Context) error {
+	if s.plays == nil {
+		return nil
+	}
+	return s.plays.Close(ctx)
+}
+
+// OutboxStatus reports play records held through a database outage; ok is
+// false on a standalone server.
+func (s *Service) OutboxStatus() (st store.OutboxStatus, ok bool) {
+	if s.plays == nil {
+		return st, false
+	}
+	return s.plays.Status(), true
+}
+
+func (s *Service) record(ctx context.Context, r playRecord) error {
+	p, now, ended, problem := &r.p, r.at, r.ended, r.problem
 	start := p.StartedAt
 	if start.IsZero() {
 		start = now
@@ -147,6 +211,16 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 func (s *Service) Sample(ctx context.Context) {
+	if s.opts.Availability.Down() {
+		// Plays are held by Record; cumulative provider counters and
+		// snapshots simply wait for the next sample after the outage.
+		if s.opts.Playback != nil {
+			for _, p := range s.opts.Playback.Sessions() {
+				_ = s.Record(ctx, p, false, "")
+			}
+		}
+		return
+	}
 	if err := s.MaybeNewsletter(ctx); err != nil {
 		s.opts.Logger.Warn("weekly newsletter queue failed")
 	}
