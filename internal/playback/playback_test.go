@@ -757,9 +757,8 @@ func TestIdleExpiryAndTimeline(t *testing.T) {
 	if _, ok := h.m.Session(ps.ID); ok {
 		t.Fatal("idle session not expired")
 	}
-	if !h.engine.sources[0].closed.Load() {
-		t.Fatal("source not closed")
-	}
+	// The retired generation closes its source asynchronously.
+	eventually(t, "source closed", func() bool { return h.engine.sources[0].closed.Load() })
 	if h.cache.pinned("A", PinReasonLive) {
 		t.Fatal("live pin left")
 	}

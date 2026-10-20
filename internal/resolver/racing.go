@@ -154,7 +154,9 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			}
 			if ct.Healthy {
 				if v.healthChecked && !v.healthCached {
-					s.noteStartup(cands[v.index].rel, v.fetchDuration+v.healthDuration)
+					// A real check always counts, even when a coarse clock
+					// (Windows) measured it as taking no time.
+					s.noteStartup(cands[v.index].rel, max(v.fetchDuration+v.healthDuration, time.Microsecond))
 				}
 				s.recordReputation(ctx, cands[v.index].rel.Indexer, true)
 				winner = v.index
