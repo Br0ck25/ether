@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,11 @@ func TestExecRunnerWithScript(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "fake-resolver")
 	body := "#!/bin/sh\nprintf 'https://cdn.example/from-script.mp4\\n'\n"
+	if runtime.GOOS == "windows" {
+		// Windows runs batch files directly; a shebang script is not executable.
+		script += ".cmd"
+		body = "@echo https://cdn.example/from-script.mp4\r\n"
+	}
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
