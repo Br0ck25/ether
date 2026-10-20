@@ -141,8 +141,8 @@ func (m *Manager) openGeneration(ctx context.Context, s *session, res *core.Reso
 	}
 	src, err := m.deps.Engine.Open(ctx, res.Release.ID, res.NZB)
 	if err != nil {
-		if errors.Is(err, core.ErrArticleMissing) {
-			m.markBad(res.Release.ID, "articles missing on open")
+		if permanentSourceFailure(err) {
+			m.markBad(res.Release.ID, "invalid source on open")
 		}
 		return nil, fmt.Errorf("open %s: %w", res.Release.Name, err)
 	}

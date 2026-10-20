@@ -20,6 +20,12 @@ func (b *builder) planPlain(ctx context.Context, pf *postedFile) (*plan, error) 
 	if err != nil {
 		return nil, err
 	}
+	if seg.begin != 0 {
+		// A numbered first article is not necessarily the file's beginning:
+		// damaged/reindexed NZBs can point it into the middle of the upload.
+		// Reject before publishing a playable plan or caching healthy status.
+		return nil, fmt.Errorf("stream: first article of %s begins at %d, not zero: %w", pf.Name(), seg.begin, ErrCorrupt)
+	}
 	if !pf.SizeKnown() {
 		// No yEnc file size: the last part tells where the file ends.
 		last := pf.numSlots() - 1

@@ -137,6 +137,8 @@ func (s *source) readAtWithPriority(parent context.Context, p []byte, off int64,
 			err = ErrClosed
 		} else if errors.Is(err, context.DeadlineExceeded) {
 			err = fmt.Errorf("stream: read %d bytes at %d of %s timed out: %w", len(want), off, s.plan.name, err)
+		} else if IsRejection(err) {
+			err = fmt.Errorf("%w: %w", core.ErrReleaseRejected, err)
 		}
 		return n, err
 	}

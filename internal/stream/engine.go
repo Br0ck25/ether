@@ -272,6 +272,9 @@ func (e *Engine) Open(ctx context.Context, releaseID string, nzbData []byte) (co
 	p, err := rel.ensurePlan(ctx, core.PriorityLive, releaseID)
 	if err != nil {
 		e.release(rel)
+		if IsRejection(err) {
+			err = fmt.Errorf("%w: %w", core.ErrReleaseRejected, err)
+		}
 		return nil, err
 	}
 	// A health check that found the content not matching its PAR2 index
