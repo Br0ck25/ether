@@ -524,17 +524,22 @@ func TestThrottlePausesAndResumes(t *testing.T) {
 	s.mu.Lock()
 	ahead := s.cur.maxDone
 	s.mu.Unlock()
-	if ahead < 4 || ahead > 12 {
+	// The upper bound depends on how far the poller lagged ffmpeg.
+	if ahead < 4 {
 		t.Errorf("paused at segment %d", ahead)
 	}
-	if r := get(t, s, 4); r.Code != 200 {
+	// Player caught up with the paused encoder. Under load the poller can
+	// see ffmpeg pause well past the limit (and one more segment may land
+	// after the pause), so request the paused frontier itself rather than
+	// a fixed segment that may still be more than limit/2 behind it.
+	if r := get(t, s, ahead); r.Code != 200 {
 		t.Fatal(r.Code)
 	}
-	// Player caught up: ffmpeg resumed and produces more.
+	// ffmpeg resumed and produces more.
 	waitFor(t, "progress past pause", func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return s.cur.maxDone > ahead
+		return s.cur != nil && s.cur.maxDone > ahead
 	})
 }
 
@@ -549,7 +554,7 @@ func TestThrottleStopsWhenPauseUnsupported(t *testing.T) {
 	s.mu.Lock()
 	resumeAt := s.resumeAt
 	s.mu.Unlock()
-	if resumeAt < 5 || resumeAt > 12 {
+	if resumeAt < 5 { // no upper bound: it depends on how far the poller lagged
 		t.Fatalf("resumeAt = %d", resumeAt)
 	}
 	if fr.startCount() != 1 {

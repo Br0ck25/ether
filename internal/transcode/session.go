@@ -410,8 +410,12 @@ func (s *Session) trackDecisionLocked(t int) core.Decision {
 	return s.decision
 }
 
-// vbvRateLocked is track t's VBV rate plan for a new run.
+// vbvRateLocked is track t's VBV rate plan for a new run. A DASH track is
+// not a rung index (track 1 is audio); map it like trackDecisionLocked.
 func (s *Session) vbvRateLocked(t int) rateControl {
+	if s.isDASH() {
+		t = rungForDashTrack(t)
+	}
 	if !s.adapt.VBV || t < 0 || t >= len(s.rungs) {
 		return rateControl{}
 	}

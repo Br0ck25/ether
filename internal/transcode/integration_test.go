@@ -64,8 +64,13 @@ func (e *realEnv) gen(t *testing.T, name string, seconds int, args ...string) {
 		"-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24",
 		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000"}
 	full = append(full, args...)
-	full = append(full, "-t", strconv.Itoa(seconds), filepath.Join(e.dir, name))
-	if out, err := exec.Command(e.ffmpeg, full...).CombinedOutput(); err != nil {
+	// Interleave strictly by timestamp: under load the default 10s
+	// max_interleave_delta lets one encoder fall behind and the fixture's
+	// packet layout (which seeks depend on) then varies between runs.
+	full = append(full, "-max_interleave_delta", "0", "-t", strconv.Itoa(seconds), filepath.Join(e.dir, name))
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute) // bounded under load
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, e.ffmpeg, full...).CombinedOutput(); err != nil {
 		t.Skipf("cannot generate %s (encoder missing?): %v: %s", name, err, out)
 	}
 }
@@ -116,7 +121,11 @@ func startTime(t *testing.T, ps []probedStream, typ string) float64 {
 	t.Helper()
 	for _, s := range ps {
 		if s.CodecType == typ {
-			f, _ := strconv.ParseFloat(s.StartTime, 64)
+			f, err := strconv.ParseFloat(s.StartTime, 64)
+			if err != nil {
+				// "N/A": the stream has no packets in the probed data.
+				t.Fatalf("%s stream has no start time (%q): no packets", typ, s.StartTime)
+			}
 			return f
 		}
 	}
