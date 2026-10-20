@@ -272,9 +272,17 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 
 	sortCands(kept, sp.Sort, sp.SortDesc, randomSeed(opt.seed, sp, ec.now))
 	res.total = len(kept)
+	if anyPersonal {
+		// Unshared members are only candidates for per-viewer rules: the
+		// count and the cap belong to titles meeting a shared rule, which
+		// keep their places ahead of the candidates (each group in sort
+		// order) so a large catalogue cannot crowd real matches out.
+		res.total = len(kept) - len(res.unshared)
+		kept = sharedFirst(kept, res.unshared, maxMembers)
+	}
 	if len(kept) > maxMembers {
 		kept = kept[:maxMembers]
-		if sp.Limit == 0 {
+		if sp.Limit == 0 && res.total > maxMembers {
 			warn("%d titles match; only the first %d are kept", res.total, maxMembers)
 		}
 	}
@@ -283,11 +291,36 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 		res.keys[i] = c.e.key
 	}
 	res.snap = snap
-	if res.total == 0 {
+	if len(kept) == 0 {
 		warn("no titles match; loosen the rules or add a source")
 	}
 	res.hash = buildHash(sp, res.keys, res.unshared)
 	return res, nil
+}
+
+// sharedFirst bounds an any-match build with per-viewer rules to limit
+// members: titles meeting a shared rule first, then the per-viewer
+// candidates, each group in its sorted order. Candidates cut off are
+// forgotten from unshared.
+func sharedFirst(kept []*cand, unshared map[core.RatingKey]bool, limit int) []*cand {
+	if len(kept) <= limit {
+		return kept
+	}
+	ordered := make([]*cand, 0, len(kept))
+	for _, c := range kept {
+		if !unshared[c.e.key] {
+			ordered = append(ordered, c)
+		}
+	}
+	for _, c := range kept {
+		if unshared[c.e.key] {
+			ordered = append(ordered, c)
+		}
+	}
+	for _, c := range ordered[limit:] {
+		delete(unshared, c.e.key)
+	}
+	return ordered
 }
 
 func splitPersonal(rs []*rule, personal *[]*rule) []*rule {

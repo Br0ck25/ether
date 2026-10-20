@@ -58,6 +58,9 @@ CREATE TABLE collections_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
 	// shared=0 marks a member of a match-"any" collection that met none of
 	// the shared rules: it is shown only to viewers a per-user rule admits.
 	store.Register("collections", 3, `ALTER TABLE collections_members ADD COLUMN shared INTEGER NOT NULL DEFAULT 1;`)
+	// Builds stored before v3 mark every member shared; rebuild them all so
+	// match-"any" collections with per-viewer rules serve correctly.
+	store.Register("collections", 4, `UPDATE collections_specs SET build_hash='';`)
 }
 
 // builtinBase keeps shipped collections' ids far above owner ids.
