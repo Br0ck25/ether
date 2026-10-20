@@ -330,7 +330,8 @@ func newHarness(t testing.TB, size int, kinds ...string) *harness {
 		h.provs[id] = newFakeProvider(k, h.media, movieFiles(int64(size)))
 		cfg.Providers = append(cfg.Providers, config.DebridProvider{ID: id, Name: id, Kind: k, APIKey: "k", Priority: i, Enabled: true})
 	}
-	h.svc = NewService(cfg, Options{DB: db, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), NewProvider: func(c config.DebridProvider, _ ProviderOptions) (Provider, error) {
+	// TorBox search never reaches the live service from tests.
+	h.svc = NewService(cfg, Options{DB: db, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), TorBoxSearchURL: "http://127.0.0.1:1", NewProvider: func(c config.DebridProvider, _ ProviderOptions) (Provider, error) {
 		if p := h.provs[c.ID]; p != nil {
 			return p, nil
 		}

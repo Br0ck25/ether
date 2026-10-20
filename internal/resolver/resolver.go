@@ -688,7 +688,7 @@ func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, ca
 	}
 	compatibility, note := compatibilityScore(sizedForEpisode(rel), caps, t)
 	return releaseScore{
-		total:   s.score(rel, profile, t) + float64(formatScore) + compatibility,
+		total:   s.score(sizedForEpisode(rel), profile, t) + float64(formatScore) + compatibility,
 		format:  formatScore,
 		matches: matches,
 		compat:  note,

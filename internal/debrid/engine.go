@@ -265,6 +265,21 @@ func (e *Engine) Check(ctx context.Context, payload []byte) (bool, error) {
 		return false, err
 	}
 	defer e.releaseFile(f)
+	// With the head already cached, a 1-byte range request still proves the
+	// link serves this file (Content-Range carries its size), so a check
+	// never passes on cached bytes alone.
+	f.bmu.Lock()
+	_, inFlight := f.flights[0]
+	cached := !inFlight && f.presentLocked(0)
+	f.bmu.Unlock()
+	if cached {
+		body, _, err := f.rangeGet(ctx, 0, 0, true)
+		if err != nil {
+			return false, err
+		}
+		body.Close()
+		return true, nil
+	}
 	if _, err := f.block(ctx, 0, fetchDurable, 1, nil); err != nil {
 		return false, err
 	}
@@ -316,7 +331,13 @@ func (e *Engine) releaseFile(f *remoteFile) {
 	f.refs--
 	f.lastUsed = e.now()
 	idle := f.refs <= 0
+	// A file replaced while in use (its payload named another file) is no
+	// longer in e.files, so trimming never reaches it: end it here.
+	replaced := idle && e.files[f.id] != f
 	e.mu.Unlock()
+	if replaced {
+		f.cancel()
+	}
 	if idle {
 		f.dropMemory()
 	}
@@ -368,8 +389,8 @@ type remoteFile struct {
 	mu        sync.Mutex
 	pl        Payload
 	gen       int
-	linkFails int
-	failedGen int // gen+1 of the last link counted in linkFails (0 none)
+	linkFails int // link generations that failed in a row
+	failedGen int // last generation counted in linkFails (-1 = none)
 
 	bmu     sync.Mutex
 	flights map[int64]*blockFlight
@@ -390,7 +411,7 @@ type memBlock struct {
 func (e *Engine) newFile(id string, p Payload) *remoteFile {
 	_, conns, _ := e.tuning()
 	f := &remoteFile{e: e, id: id, tag: p.fileTag(), size: p.Size, pl: p,
-		flights: map[int64]*blockFlight{}, mem: map[int64]*list.Element{}, lru: list.New(), stored: map[int64]bool{},
+		flights: map[int64]*blockFlight{}, mem: map[int64]*list.Element{}, lru: list.New(), stored: map[int64]bool{}, failedGen: -1,
 		conns: make(chan struct{}, conns), raSlots: make(chan struct{}, max(1, conns-1))}
 	f.nblocks = (p.Size + e.block - 1) / e.block
 	f.ctx, f.cancel = context.WithCancel(e.ctx)
@@ -402,7 +423,11 @@ func (f *remoteFile) adopt(p Payload) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if p.URL != "" && p.Expires.After(f.pl.Expires) {
+		// The newer link may come from another provider or a re-added
+		// torrent: take its identity with it, so refreshes and timings go
+		// to the right place.
 		f.pl.URL, f.pl.Expires = p.URL, p.Expires
+		f.pl.Provider, f.pl.Kind, f.pl.TorrentID, f.pl.FileID, f.pl.Link = p.Provider, p.Kind, p.TorrentID, p.FileID, p.Link
 		f.gen++
 	}
 }
@@ -493,14 +518,22 @@ func (f *remoteFile) presentLocked(idx int64) bool {
 	if _, ok := f.flights[idx]; ok {
 		return true
 	}
-	if f.stored[idx] {
-		return true
+	// The segment cache evicts on its own, so a block stored earlier may be
+	// gone: ask the cache when it can say.
+	return f.presentOnDiskLocked(idx)
+}
+
+// presentOnDiskLocked reports a block the segment cache still holds.
+func (f *remoteFile) presentOnDiskLocked(idx int64) bool {
+	if h, ok := f.e.cache.(interface{ Has(string, int) bool }); ok {
+		if h.Has(f.id, int(idx)) {
+			f.stored[idx] = true
+			return true
+		}
+		delete(f.stored, idx)
+		return false
 	}
-	if h, ok := f.e.cache.(interface{ Has(string, int) bool }); ok && h.Has(f.id, int(idx)) {
-		f.stored[idx] = true
-		return true
-	}
-	return false
+	return f.stored[idx]
 }
 
 func (f *remoteFile) diskGet(idx int64) ([]byte, bool) {
@@ -509,6 +542,10 @@ func (f *remoteFile) diskGet(idx int64) ([]byte, bool) {
 	}
 	raw, ok := f.e.cache.Get(f.id, int(idx))
 	if !ok || int64(len(raw)) != 8+f.blockLen(idx) || !bytes.Equal(raw[:8], f.tag[:]) {
+		// Evicted, or another file's block: not present for this file.
+		f.bmu.Lock()
+		delete(f.stored, idx)
+		f.bmu.Unlock()
 		return nil, false
 	}
 	return raw[8:], true
@@ -712,7 +749,7 @@ func (f *remoteFile) prefetch(ctx context.Context, ranges [][2]int64) error {
 				// Wait for the whole run, not just its first block.
 				for i := idx; i < idx+n; i++ {
 					f.bmu.Lock()
-					fl, stored := f.flights[i], f.stored[i]
+					fl, stored := f.flights[i], f.presentOnDiskLocked(i)
 					f.bmu.Unlock()
 					if stored {
 						continue
@@ -721,6 +758,11 @@ func (f *remoteFile) prefetch(ctx context.Context, ranges [][2]int64) error {
 						select {
 						case <-fl.done:
 						case <-ctx.Done():
+							select {
+							case errc <- ctx.Err():
+							default:
+							}
+							return
 						}
 						if fl.err == nil {
 							continue
@@ -784,35 +826,26 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 				return nil, tm, err
 			}
 			f.mu.Lock()
-			f.linkFails, f.failedGen = 0, 0
+			f.linkFails = 0
 			f.mu.Unlock()
 			return resp.Body, tm, nil
-		case resp.StatusCode == http.StatusOK && start == 0:
-			if resp.ContentLength > 0 && resp.ContentLength != f.size {
-				resp.Body.Close()
-				return nil, tm, fmt.Errorf("debrid: link serves %d bytes, expected %d: %w", resp.ContentLength, f.size, core.ErrArticleCorrupt)
-			}
+		case resp.StatusCode == http.StatusOK && start == 0 && resp.ContentLength == f.size:
+			// A server that ignores Range but serves exactly this file.
 			return readCloser{Reader: io.LimitReader(resp.Body, end+1), Closer: resp.Body}, tm, nil
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
 			resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone || resp.StatusCode == http.StatusOK:
+			// A 200 that is not this file (hosters answer dead links with an
+			// HTML page) is a dead link too, not corrupt media.
 			drain(resp)
-			// Each link counts once however many concurrent reads see it
-			// fail, and a read that started on a link another read has
-			// since replaced just retries with the new one: a slow refresh
-			// (e.g. over a remote database) must not exhaust the budget on
-			// one revoked link.
+			// Count each link generation once: concurrent requests that
+			// failed on a link someone is already replacing just retry.
 			f.mu.Lock()
-			stale := f.gen != gen
-			if !stale && f.failedGen != gen+1 {
-				f.failedGen = gen + 1
+			if gen != f.failedGen {
+				f.failedGen = gen
 				f.linkFails++
 			}
 			fails := f.linkFails
 			f.mu.Unlock()
-			if stale {
-				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-				continue
-			}
 			if fails > maxLinkFailures {
 				return nil, tm, fmt.Errorf("debrid: link for %s keeps failing (HTTP %d): %w", f.name(), resp.StatusCode, core.ErrArticleMissing)
 			}
@@ -1112,7 +1145,14 @@ func (s *httpSource) read(ctx context.Context, p []byte, off int64, mode fetchMo
 			s.mu.Unlock()
 			return 0, errors.New("debrid: read on closed source")
 		}
+		// A short forward skip onto blocks read-ahead already holds or is
+		// fetching keeps those runs; anything else is a seek.
 		sequential := s.last >= 0 && first >= s.last && first <= s.last+2
+		if !sequential && s.last >= 0 && first > s.last {
+			f.bmu.Lock()
+			sequential = f.presentLocked(first)
+			f.bmu.Unlock()
+		}
 		if !sequential && s.last >= 0 {
 			// A seek: abandon speculative reads for the old position and
 			// serve the new one with a fresh request immediately.

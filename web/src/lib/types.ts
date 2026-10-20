@@ -44,6 +44,8 @@ export interface DebridProvider {
   /** Lower is tried first. */
   priority: number;
   enabled: boolean;
+  /** TorBox only: turn off TorBox's own torrent search. */
+  disableSearch?: boolean;
 }
 
 export interface DebridConfig {
@@ -63,8 +65,18 @@ export interface DebridStatus {
   enabled: boolean;
   cachedOnly: boolean;
   providers: DebridProviderStatus[] | null;
-  /** Streaming engine counters; absent on older servers. */
+  /** Streaming engine counters; absent until the engine is wired. */
   engine?: DebridEngineStatus;
+  /** TorBox search counters. */
+  search?: DebridSearchStatus;
+}
+
+export interface DebridSearchStatus {
+  enabled: boolean;
+  searches: number;
+  failures: number;
+  results: number;
+  averageMs: number;
 }
 
 /** Moving averages (EWMA) of one provider's timings; all 0 until `samples` > 0. */
