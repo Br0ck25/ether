@@ -19,8 +19,11 @@ import (
 )
 
 // DefaultFeedBase is where release manifests live when config has no
-// override: <base>/<channel>.json (+ optional <channel>.json.sig).
-const DefaultFeedBase = "https://github.com/braedonsaunders/ether/releases/latest/download"
+// override: <base>/<channel>.json (+ optional <channel>.json.sig). The
+// release workflow keeps every channel's current manifest on the rolling
+// "channels" release: GitHub's releases/latest never points at a beta, so a
+// beta manifest cannot be found there.
+const DefaultFeedBase = "https://github.com/braedonsaunders/ether/releases/download/channels"
 
 // Options configures a Client. Zero values fall back to build defaults.
 type Options struct {
@@ -149,12 +152,9 @@ func (u *Update) Version() string { return u.Manifest.Version }
 // Check fetches and verifies the channel manifest. It returns (nil, nil)
 // when the feed's version is not newer than the running one.
 func (c *Client) Check(ctx context.Context) (*Update, error) {
-	m, err := c.fetchManifest(ctx)
+	m, err := c.channelManifest(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if m.Channel != c.channel {
-		return nil, fmt.Errorf("updater: feed channel %q, want %q", m.Channel, c.channel)
 	}
 	if m.MinVersion != "" {
 		if cmp, err := CompareVersions(c.current, m.MinVersion); err == nil && cmp < 0 {
@@ -173,8 +173,41 @@ func (c *Client) Check(ctx context.Context) (*Update, error) {
 	return &Update{Manifest: m, Artifact: art}, nil
 }
 
-func (c *Client) fetchManifest(ctx context.Context) (*Manifest, error) {
-	url := c.ManifestURL()
+// channelManifest is the manifest to offer: the channel's own, and for the
+// beta channel the stable manifest too when it is newer (a stable release
+// following a beta must reach beta installs as well). With a single
+// manifest URL configured only that manifest is consulted.
+func (c *Client) channelManifest(ctx context.Context) (*Manifest, error) {
+	m, err := c.fetchChannel(ctx, c.channel)
+	stableURL := manifestURL(c.feedURL, "stable")
+	if c.channel != "beta" || stableURL == c.ManifestURL() {
+		return m, err
+	}
+	stable, serr := c.fetchChannel(ctx, "stable")
+	switch {
+	case err != nil && serr != nil:
+		return nil, err
+	case err != nil:
+		return stable, nil
+	case serr == nil && Newer(stable.Version, m.Version):
+		return stable, nil
+	}
+	return m, nil
+}
+
+// fetchChannel fetches and verifies channel's manifest.
+func (c *Client) fetchChannel(ctx context.Context, channel string) (*Manifest, error) {
+	m, err := c.fetchManifest(ctx, manifestURL(c.feedURL, channel))
+	if err != nil {
+		return nil, err
+	}
+	if m.Channel != channel {
+		return nil, fmt.Errorf("updater: feed channel %q, want %q", m.Channel, channel)
+	}
+	return m, nil
+}
+
+func (c *Client) fetchManifest(ctx context.Context, url string) (*Manifest, error) {
 	body, err := c.get(ctx, url, 1<<20)
 	if err != nil {
 		return nil, fmt.Errorf("updater: fetch manifest: %w", err)
