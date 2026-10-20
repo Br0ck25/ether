@@ -438,6 +438,16 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		return nil, fmt.Errorf("playback: failover: %w", lastErr)
 	}
 
+	// An HLS session restarts ffmpeg on fresh headers; anything else that
+	// swaps to a different-size file must be remuxed. Mark that in the same
+	// critical section as the swap, so no request sees the new release
+	// without the remux requirement.
+	hls, hasHLS := m.deps.HLSLookup(s.id)
+	hasHLS = hasHLS && hls != nil
+	if hasHLS {
+		remuxSwitch = false
+	}
+
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -445,6 +455,9 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		return nil, fmt.Errorf("playback: session %s ended: %w", s.id, core.ErrNotFound)
 	}
 	s.cur = g
+	if remuxSwitch {
+		s.requiresRemux = true
+	}
 	s.failovers++
 	if fo.down {
 		s.downFailovers++
@@ -467,18 +480,12 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	s.resetSpeed(m.now(), m.opts.SpeedGrace)
 
 	newInfo := g.infoSnapshot()
-	if hls, ok := m.deps.HLSLookup(s.id); ok && hls != nil {
+	if hasHLS {
 		target := m.alignForFailover(ctx, s, cur, g, at)
 		if err := hls.SwapInput(ctx, m.urlFor(g), newInfo, target); err != nil {
 			log.Error("hls input swap failed", "err", err)
 			return g, fmt.Errorf("playback: swap hls input: %w", err)
 		}
-		remuxSwitch = false // ffmpeg already restarted on fresh headers
-	}
-	if remuxSwitch {
-		s.mu.Lock()
-		s.requiresRemux = true
-		s.mu.Unlock()
 	}
 	if fo.down {
 		m.emitEvent("downfailover", s, nil)
