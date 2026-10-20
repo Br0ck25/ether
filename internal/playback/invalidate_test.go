@@ -65,3 +65,31 @@ func TestInvalidateTitleShowAndSeasonKeys(t *testing.T) {
 		t.Fatalf("episode dropped %d, want 1", n)
 	}
 }
+
+func TestInvalidateTitleDropsRememberedSourcesForEveryViewer(t *testing.T) {
+	h := newHarness(t, []*fakeRelease{mkv("fresh", 10000, time.Minute)}, []string{"fresh"})
+	ctx := t.Context()
+	caps := defaultCaps("client")
+	old := &core.Resolution{Release: core.Release{ID: "old"}, NZB: []byte("nzb-old")}
+	for _, user := range []*core.User{owner, friend} {
+		if err := h.m.Remember(ctx, user, movieKey, caps, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.m.Remember(ctx, owner, movie2, caps, old); err != nil {
+		t.Fatal(err)
+	}
+	h.m.InvalidateTitle(movieKey)
+	for _, user := range []*core.User{owner, friend} {
+		if p, err := h.m.ResumePoint(ctx, user.ID, movieKey); err != nil || p != nil {
+			t.Fatalf("viewer %d retained stale source: %+v %v", user.ID, p, err)
+		}
+	}
+	if p, err := h.m.ResumePoint(ctx, owner.ID, movie2); err != nil || p == nil {
+		t.Fatalf("unrelated source lost: %+v %v", p, err)
+	}
+	ps := h.prepare(owner, movieKey, "client")
+	if ps.Resolution.Release.ID != "fresh" || h.resolver.callCount() != 1 {
+		t.Fatal("owner release change was bypassed by a remembered source")
+	}
+}
