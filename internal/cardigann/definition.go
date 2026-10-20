@@ -255,6 +255,9 @@ func Parse(data []byte) (*Definition, []string, error) {
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, nil, errors.New("definition must be a YAML mapping")
 	}
+	if expandedNodes(&doc, map[*yaml.Node]int{}, maxExpandedNodes) > maxExpandedNodes {
+		return nil, nil, fmt.Errorf("definition expands to more than %d YAML nodes once its aliases are followed", maxExpandedNodes)
+	}
 	p := &parser{}
 	def := p.definition(doc.Content[0])
 	if p.err != nil {
@@ -318,6 +321,41 @@ func mergeMapping(out [][2]*yaml.Node, n *yaml.Node, depth int, budget *int) [][
 		out = append(out, [2]*yaml.Node{k, v})
 	}
 	return out
+}
+
+// maxExpandedNodes bounds a definition's size with its aliases followed.
+// The walker below copies an aliased block at every reference, so a small
+// document repeating "*anchor" for a large anchor (or aliases of aliases)
+// would otherwise expand quadratically or exponentially while parsing.
+// Real definitions have a few thousand nodes.
+const maxExpandedNodes = 1 << 19
+
+// expandedNodes counts the nodes under n with every alias expanded,
+// stopping once the count passes limit. An alias cycle counts as over the
+// limit.
+func expandedNodes(n *yaml.Node, memo map[*yaml.Node]int, limit int) int {
+	if n == nil {
+		return 0
+	}
+	if n.Kind == yaml.AliasNode {
+		return 1 + expandedNodes(n.Alias, memo, limit)
+	}
+	if v, ok := memo[n]; ok {
+		if v < 0 {
+			return limit + 1 // the anchor contains an alias to itself
+		}
+		return v
+	}
+	memo[n] = -1
+	total := 1
+	for _, c := range n.Content {
+		if total += expandedNodes(c, memo, limit); total > limit {
+			total = limit + 1
+			break
+		}
+	}
+	memo[n] = total
+	return total
 }
 
 func resolveAlias(n *yaml.Node) *yaml.Node {

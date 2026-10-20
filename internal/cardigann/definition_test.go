@@ -183,3 +183,35 @@ func TestYAMLSelfMergeDoesNotRecurseForever(t *testing.T) {
 		t.Fatal("definition without search paths parsed")
 	}
 }
+
+// Every alias is copied by the walker, so a document of many aliases to one
+// large anchor used to expand quadratically: well under the 1 MiB upload
+// limit, this one parsed into millions of filters and gigabytes of memory.
+func TestYAMLAliasFanOutIsBounded(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("id: x\nname: X\nlinks: [\"https://a.example/\"]\nsearch:\n  path: s\n  rows: {selector: tr}\n  fields:\n    title:\n      selector: a\n      filters: &f\n")
+	for i := 0; i < 3000; i++ {
+		b.WriteString("        - {name: trim}\n")
+	}
+	for i := 0; i < 3000; i++ {
+		fmt.Fprintf(&b, "    f%d: {selector: a, filters: *f}\n", i)
+	}
+	b.WriteString("    download: {selector: a}\n")
+	if b.Len() > maxDefinitionBytes {
+		t.Fatalf("test document is %d bytes", b.Len())
+	}
+	def, _, err := Parse([]byte(b.String()))
+	if err == nil || !strings.Contains(err.Error(), "aliases") {
+		n := 0
+		if def != nil {
+			for _, f := range def.Search.Fields {
+				n += len(f.Selector.Filters)
+			}
+		}
+		t.Fatalf("err = %v (parsed %d filters)", err, n)
+	}
+	// A self-referencing anchor is rejected too.
+	if _, _, err := Parse([]byte("id: x\nname: X\nlinks: [\"https://a.example/\"]\nl: &l [*l]\nsearch: {path: s}\n")); err == nil || !strings.Contains(err.Error(), "aliases") {
+		t.Fatalf("cyclic alias: err = %v", err)
+	}
+}

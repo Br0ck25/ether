@@ -508,14 +508,17 @@ func (r *Runner) parseDocument(doc *goquery.Document, base *url.URL, v vars) ([]
 	list := make([]*goquery.Selection, 0, rows.Length())
 	rows.Each(func(_ int, s *goquery.Selection) { list = append(list, s) })
 	if rowsSel.After > 0 {
+		// Clamped: a huge "after" (an int converted from a float the
+		// definition gave) would overflow i below and index out of range.
+		after := min(rowsSel.After, len(list))
 		var merged []*goquery.Selection
 		for i := 0; i < len(list); i++ {
 			cur := list[i]
-			for j := 1; j <= rowsSel.After && i+j < len(list); j++ {
+			for j := 1; j <= after && i+j < len(list); j++ {
 				cur.AppendSelection(list[i+j].Contents())
 			}
 			merged = append(merged, cur)
-			i += rowsSel.After
+			i += after
 		}
 		list = merged
 	}

@@ -322,8 +322,8 @@ func TestGroupSets(t *testing.T) {
 		if !s.Complete() || len(s.Volumes) != 2 {
 			t.Errorf("set %s: %+v", s.Name, s)
 		}
-		if s.Volumes[0].Info.Volume != 0 || s.Volumes[1].Info.Volume != 1 {
-			t.Errorf("set %s volumes not normalised", s.Name)
+		if s.Volumes[0].Info.Volume >= s.Volumes[1].Info.Volume {
+			t.Errorf("set %s volumes out of order", s.Name)
 		}
 	}
 	names = names[:0]
@@ -332,6 +332,36 @@ func TestGroupSets(t *testing.T) {
 	}
 	if !reflect.DeepEqual(names, []string{"rar:movie", "rar:subs", "split:split.mkv", "7z:other"}) {
 		t.Errorf("sets = %v", names)
+	}
+}
+
+// GroupSets used to renumber the files it was given, so grouping the same
+// files twice (the stream planner does, around obfuscation probing) slid a
+// part00 set's reposted duplicate into another volume's slot.
+func TestGroupSetsIsRepeatable(t *testing.T) {
+	files := []*File{
+		fileNamed("m.part00.rar", 50), // loses to the larger repost below
+		fileNamed("m.part00.rar", 100),
+		fileNamed("m.part01.rar", 100),
+		fileNamed("m.part02.rar", 100),
+		fileNamed("m.part02.rar", 60), // a smaller repost of part02
+	}
+	order := func() []*File {
+		sets := GroupSets(files)
+		if len(sets) != 1 || !sets[0].Complete() {
+			t.Fatalf("sets = %+v", sets)
+		}
+		return sets[0].Volumes
+	}
+	first := order()
+	want := []*File{files[1], files[2], files[3]}
+	if !reflect.DeepEqual(first, want) {
+		t.Fatalf("first grouping = %v", first)
+	}
+	for i := 0; i < 3; i++ {
+		if got := order(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("grouping %d differs: %v", i+2, got)
+		}
 	}
 }
 

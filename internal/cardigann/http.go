@@ -26,6 +26,8 @@ const (
 	maxResponseBytes   = 10 << 20
 	maxRedirects       = 10
 	flareMaxTimeout    = 60 * time.Second
+	// maxRequestDelay caps a definition's requestDelay.
+	maxRequestDelay = time.Minute
 )
 
 // ErrCloudflare reports a site behind a Cloudflare (or similar) browser
@@ -71,7 +73,9 @@ func newHTTPSession(def *Definition, hc *http.Client, flare func() string, log *
 	}
 	s := &httpSession{client: c, jar: jar, flare: flare, log: log, ua: defaultUserAgent, site: def.Name, flareHC: &http.Client{Transport: base.Transport, Timeout: flareMaxTimeout + 30*time.Second}}
 	if def.RequestDelay > 0 {
-		s.delay = time.Duration(def.RequestDelay * float64(time.Second))
+		// Bounded before converting: an absurd value (1e30, .inf) would
+		// overflow the Duration and stall or skip pacing.
+		s.delay = time.Duration(min(def.RequestDelay, maxRequestDelay.Seconds()) * float64(time.Second))
 	}
 	if def.Encoding != "" && !strings.EqualFold(def.Encoding, "utf-8") {
 		if e, err := htmlindex.Get(def.Encoding); err == nil {

@@ -371,3 +371,36 @@ func TestDefinitionCacheSeesOtherNodesUpdates(t *testing.T) {
 		t.Fatalf("node b kept a stale definition: %q", sum.Name)
 	}
 }
+
+// The parsed-definition cache read checkedAt outside the lock that its
+// refresh writes it under: concurrent searches past the recheck interval
+// raced (go test -race).
+func TestDefinitionCacheConcurrentRecheck(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := testNow
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(definitionRecheck)
+		return now
+	}
+	s := New(Options{Logger: quietLog(), Now: clock})
+	if _, err := s.Install(ctx, readFixture(t, "public.yml"), "", ""); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				if _, err := s.definition(ctx, "fakepublic"); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
+
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -361,5 +363,34 @@ func TestTVKeywordSearchKeepsCanonicalYearOutsideReleaseKeywords(t *testing.T) {
 	}
 	if vars["Query"].(map[string]string)["Year"] != "1996" {
 		t.Fatal("lost series identity year")
+	}
+}
+
+// rows.after comes from a YAML number converted to int: "after: 1e30"
+// saturates to the largest int on arm64, and stepping past it overflowed
+// the row index into a negative slice index (a panic).
+func TestRowsAfterHugeDoesNotPanic(t *testing.T) {
+	def, _, err := Parse([]byte(`id: after
+name: After
+links: [https://x.invalid/]
+search:
+  path: s
+  rows: {selector: tr, after: 1}
+  fields:
+    title: {selector: a}
+    download: {selector: a, attribute: href}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	def.Search.Rows.After = int(^uint(0) >> 1)
+	r := testRunner(t, def, "https://x.invalid/", runnerSetup{})
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(`<table><tr><td><a href="/a">A</a></td></tr><tr><td>x</td></tr><tr><td>y</td></tr></table>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := r.parseDocument(doc, r.site, r.vars())
+	if err != nil || len(rows) != 1 || rows[0].rel.Name != "A" {
+		t.Fatalf("rows = %+v, err = %v", rows, err)
 	}
 }
