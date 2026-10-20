@@ -656,9 +656,17 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 // acquireOn resolves a torrent on one provider: reuse an existing torrent
 // by hash, else add it; then generate a direct link.
 func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose func([]File) (File, error)) (Payload, error) {
+	wallStarted := time.Now()
+	var queueDuration, findDuration, readyDuration, linkDuration time.Duration
+	defer func() {
+		s.log.Info("debrid acquisition timings", "provider", e.cfg.ID,
+			"queue", queueDuration, "find", findDuration, "ready", readyDuration,
+			"link", linkDuration, "took", time.Since(wallStarted))
+	}()
 	if err := e.acquire(ctx); err != nil {
 		return Payload{}, err
 	}
+	queueDuration = time.Since(wallStarted)
 	defer e.release()
 	ctx, cancel := context.WithTimeout(ctx, providerOpTimeout)
 	defer cancel()
@@ -666,6 +674,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	hash := base.InfoHash
 
 	started := s.now()
+	findStarted := time.Now()
 	_, _, torrentID := s.knownFor(ctx, e.cfg.ID, hash)
 	if torrentID == "" {
 		if id, err := e.p.Find(ctx, hash); err == nil {
@@ -677,6 +686,8 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 			}
 		}
 	}
+	findDuration = time.Since(findStarted)
+	readyStarted := time.Now()
 	if torrentID == "" {
 		// Adding to the account: in a cluster one node adds, the others
 		// wait for its torrent id (no-op standalone).
@@ -702,6 +713,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 			err = cerr
 		}
 	}
+	readyDuration = time.Since(readyStarted)
 	s.observe(e, err)
 	if err != nil {
 		if errors.Is(err, core.ErrNotCached) {
@@ -721,7 +733,9 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	p.Provider, p.Kind = e.cfg.ID, e.cfg.Kind
 	p.TorrentID, p.FileID, p.Path, p.Size, p.Link = acq.TorrentID, acq.File.ID, acq.File.Path, acq.File.Size, acq.File.Link
 	linkStart := s.now()
+	linkWallStarted := time.Now()
 	dl, err := e.p.Link(ctx, p.handle())
+	linkDuration = time.Since(linkWallStarted)
 	s.observe(e, err)
 	if err != nil {
 		return Payload{}, err
