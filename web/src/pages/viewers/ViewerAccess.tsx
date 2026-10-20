@@ -1,7 +1,6 @@
 import { Button, Input, Select, SettingsSection, Switch, toast } from "@braedonsaunders/appkit-ui";
-import { UserPlus } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { ChipGroup, NumberInput } from "../../components/fields";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { SaveBar, useDraft } from "../../components/SaveBar";
@@ -32,7 +31,6 @@ const HOURS = Array.from({ length: 24 }, (_, h) => ({
 export function ViewerAccess({ viewer }: { viewer: Viewer }) {
   const id = viewer.id;
   const name = viewerName(viewer);
-  const navigate = useNavigate();
   const users = useAsync(() => api.users(), []);
   const config = useAsync(() => api.getConfig(), []);
   const policy = useAsync(
@@ -222,19 +220,6 @@ export function ViewerAccess({ viewer }: { viewer: Viewer }) {
                     onChange={(v) => patchPolicy({ blockedKeywords: v })}
                   />
                 </div>
-              }
-            />
-            <SettingsRow
-              title="Invite someone with these controls"
-              description="Start an invitation that gives new friends the saved controls above."
-              control={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate(`/viewers/invitations?copy=${id}`)}
-                >
-                  <UserPlus size={14} /> Invite a friend
-                </Button>
               }
             />
           </SettingsSection>

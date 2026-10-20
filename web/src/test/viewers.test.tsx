@@ -9,7 +9,7 @@ const WAIT = { timeout: 4000 };
 type Route = (method: string, path: string, body: unknown) => unknown;
 
 /**
- * Serve endpoints the shared fake doesn't model (safety policies, invites).
+ * Serve endpoints the shared fake doesn't model (safety policies).
  * The fake still records every call; only its 404s are replaced.
  */
 function extraRoutes(route: Route) {
@@ -152,89 +152,5 @@ describe("Viewers", () => {
     // The user record (stream limit, rating cap) was untouched.
     expect(calls(fake, "PATCH", "/users/3")).toHaveLength(0);
     await waitFor(() => expect(screen.queryByText("You have unsaved changes")).toBeNull());
-  });
-
-  it("creates an invitation with a parental-controls preset", async () => {
-    const invites = [
-      {
-        id: 9,
-        label: "Cousins",
-        expires: "2099-01-01T00:00:00Z",
-        maxUses: 3,
-        uses: 1,
-        revoked: false,
-      },
-    ];
-    const { fake } = renderApp(
-      "/viewers/invitations",
-      {},
-      extraRoutes((method, path, body) => {
-        if (method === "GET" && path === "/safety/invites/") return invites;
-        if (method === "GET" && path === "/safety/policies/presets/kids?age=teens")
-          return { maxContentRating: "PG-13" };
-        if (method === "POST" && path === "/safety/invites/") {
-          const b = body as { label: string; maxUses: number };
-          invites.push({
-            id: 10,
-            label: b.label,
-            expires: "2099-01-01T00:00:00Z",
-            maxUses: b.maxUses,
-            uses: 0,
-            revoked: false,
-          });
-          return { path: "/invite/abc123" };
-        }
-        return undefined;
-      }),
-    );
-    expect(await screen.findByText("Cousins", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText("1 of 3")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Invite a friend/ }));
-    const drawer = await screen.findByRole("dialog", { name: "Invite a friend" }, WAIT);
-    fireEvent.change(within(drawer).getByLabelText("Invitation label"), {
-      target: { value: "Neighbours" },
-    });
-    fireEvent.change(within(drawer).getByLabelText("Maximum people"), { target: { value: "2" } });
-    fireEvent.click(within(drawer).getByRole("radio", { name: "Teens" }));
-    const create = within(drawer).getByRole("button", { name: "Create invitation" });
-    await waitFor(() => expect(create).toBeEnabled());
-    fireEvent.click(create);
-    await waitFor(() => expect(calls(fake, "POST", "/safety/invites/")).toHaveLength(1), WAIT);
-    expect(calls(fake, "POST", "/safety/invites/")[0]!.body).toMatchObject({
-      label: "Neighbours",
-      maxUses: 2,
-      sections: [1, 2],
-      policy: { maxContentRating: "PG-13" },
-      streamLimit: 0,
-    });
-    expect(await within(drawer).findByLabelText("Invitation link", {}, WAIT)).toHaveValue(
-      `${location.origin}/invite/abc123`,
-    );
-    expect(await screen.findByText("Neighbours", {}, WAIT)).toBeInTheDocument();
-  });
-  it("starts an invitation from a viewer's saved parental controls", async () => {
-    const { fake } = renderApp(
-      "/viewers/3/access",
-      {},
-      extraRoutes((method, path) => {
-        if (method === "GET" && path === "/safety/policies/3")
-          return { ...POLICY, maxContentRating: "PG", blockedGenres: ["Horror"] };
-        if (method === "GET" && path === "/safety/invites/") return [];
-        if (method === "POST" && path === "/safety/invites/") return { path: "/invite/kids" };
-        return undefined;
-      }),
-    );
-    fireEvent.click(await screen.findByRole("button", { name: /Invite a friend/ }, WAIT));
-    const drawer = await screen.findByRole("dialog", { name: "Invite a friend" }, WAIT);
-    expect(
-      await within(drawer).findByRole("radio", { name: "Same as The Kids" }, WAIT),
-    ).toHaveAttribute("aria-checked", "true");
-    const create = within(drawer).getByRole("button", { name: "Create invitation" });
-    await waitFor(() => expect(create).toBeEnabled());
-    fireEvent.click(create);
-    await waitFor(() => expect(calls(fake, "POST", "/safety/invites/")).toHaveLength(1), WAIT);
-    expect(calls(fake, "POST", "/safety/invites/")[0]!.body).toMatchObject({
-      policy: { maxContentRating: "PG", blockedGenres: ["Horror"] },
-    });
   });
 });

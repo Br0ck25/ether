@@ -5,7 +5,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/livetv"
-	"github.com/braedonsaunders/ether/internal/safety"
 	"io"
 	"log/slog"
 	"net/http"
@@ -28,7 +27,7 @@ func TestRoadmapOwnerAPIsAreWiredAndPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	paths := []string{"/stats/summary", "/notifications/", "/livetv/channels", "/adoption/backups/", "/safety/invites/", "/stream-preferences/0", "/safety/policies/1", "/discovery/settings", "/discovery/overlays/settings", "/discovery/ratings/settings", "/subtitle-sync/", "/playback/policy", "/status", "/releases/profiles", "/releases/pins", "/releases/blocklist", "/releases/history", "/cluster/"}
+	paths := []string{"/stats/summary", "/notifications/", "/livetv/channels", "/adoption/backups/", "/stream-preferences/0", "/safety/policies/1", "/discovery/settings", "/discovery/overlays/settings", "/discovery/ratings/settings", "/subtitle-sync/", "/playback/policy", "/status", "/releases/profiles", "/releases/pins", "/releases/blocklist", "/releases/history", "/cluster/"}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			r := httptest.NewRequest("GET", "http://localhost/ether/api"+path, nil)
@@ -73,24 +72,6 @@ func TestRoadmapOwnerAPIsAreWiredAndPrivate(t *testing.T) {
 		a.handler.ServeHTTP(w, r)
 		if w.Code != 200 || len(a.livetv.ViewingSessions()) != 0 {
 			t.Fatalf("stop=%d %s", w.Code, w.Body.String())
-		}
-	})
-
-	t.Run("invitation defaults preserve viewer restrictions", func(t *testing.T) {
-		if err := a.safety.Put(context.Background(), 300, safety.Policy{MaxContentRating: "PG", StreamLimit: 1, BlockedGenres: []string{"Horror"}}); err != nil {
-			t.Fatal(err)
-		}
-		u := &core.User{ID: 300, MaxContentRating: "G", StreamLimit: -1, AllowedSections: []int{1}}
-		merged := a.invitedUser(u, []int{1, 2})
-		if merged.MaxContentRating != "G" || merged.StreamLimit != 1 || len(merged.AllowedSections) != 1 || merged.AllowedSections[0] != 1 {
-			t.Fatalf("restrictions widened: %+v", merged)
-		}
-		denied := a.invitedUser(u, []int{2})
-		if len(denied.AllowedSections) != 1 || denied.AllowedSections[0] != 0 {
-			t.Fatalf("disjoint sections became unrestricted: %+v", denied)
-		}
-		if a.safety.Allowed(merged, &core.Title{ContentRating: "G", Genres: []string{"Horror"}}) {
-			t.Fatal("existing genre ban lost")
 		}
 	})
 

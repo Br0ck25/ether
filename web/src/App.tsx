@@ -323,7 +323,6 @@ function Shell() {
             <Route path="/activity/:tab?" element={<Activity />} />
             <Route path="/viewers" element={<ViewersList />} />
             <Route path="/viewers/people" element={<ViewersList tab="people" />} />
-            <Route path="/viewers/invitations" element={<ViewersList tab="invitations" />} />
             <Route path="/viewers/defaults" element={<ViewersList tab="defaults" />} />
             <Route path="/viewers/:id/:tab?" element={<ViewerProfile />} />
             <Route path="/home-screens" element={<Designer />} />

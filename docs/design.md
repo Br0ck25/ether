@@ -259,7 +259,7 @@ other settings are shared.
 PostgreSQL is the single source of shared state. Any node serves any request,
 and every node streams, caches segments and transcodes locally. Shared state
 includes accounts, tokens, watch state and history, playlists, play queues,
-collections, invites, policies, settings, live TV configuration, the indexer
+collections, policies, settings, live TV configuration, the indexer
 result cache and active playback sessions. Segment caches, transcode output and
 local scan state remain on the node. Writes that check and then modify shared
 state are atomic across nodes; an in-process lock never guards a shared

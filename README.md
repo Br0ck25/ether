@@ -128,7 +128,6 @@ Ether isn't a frontend over your existing stack. It replaces most of it with one
 <details open>
 <summary><b>Sharing without the tech-support calls</b></summary>
 
-- **Invite links:** send a link. They sign in with Plex and land on the libraries, limits and rules you chose ahead of time.
 - **Per-person rules:** stream limits, max content rating, blocked genres or keywords, bitrate caps, allowed hours, remote access on or off. One-click kids presets by age. Rules apply to every request, including artwork and search.
 - Plex Home users and PINs work as normal. Revoking a share in Plex removes that person from Ether.
 - **Moving over:** import watch state, history, ratings, collections and playlists from an existing Plex Media Server (read-only on the old server), plus Letterboxd and Trakt CSVs.
@@ -177,7 +176,7 @@ Then open **http://localhost:32400/ether/** and follow the setup wizard:
 2. **Add a source:** a Usenet provider plus a Newznab indexer, or skip those steps and add a debrid account under *Sources › Debrid* afterwards.
 3. **Pick a cache folder and size.** An SSD is best; 50 GiB is plenty to start.
 4. **Paste a free TMDB API key**, plus any optional extras (Trakt, OpenSubtitles, a local LLM).
-5. **Share it** from Plex as usual, or send an invite link from Ether.
+5. **Share it** from Plex as usual.
 
 **You'll need:** a Plex account, a [TMDB API key](https://www.themoviedb.org/settings/api) (free), and at least one Usenet provider + indexer *or* one debrid account + torrent indexer. Ether ships with none of these. For hardware, 2 CPU cores and 2 GB RAM is a reasonable start if your clients direct-play.
 

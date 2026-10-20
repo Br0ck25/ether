@@ -10,13 +10,11 @@ import { formatDateTime, formatNumber, parseTime, relativeTime } from "../../lib
 import { useAsync } from "../../lib/hooks";
 import type { EtherUser } from "../../lib/types";
 import { ViewerDefaults } from "./Defaults";
-import { Invitations } from "./Invitations";
 
-type Tab = "people" | "invitations" | "defaults";
+type Tab = "people" | "defaults";
 
 const TABS: readonly (PageTab & { key: Tab })[] = [
   { key: "people", label: "People" },
-  { key: "invitations", label: "Invitations" },
   { key: "defaults", label: "Defaults" },
 ];
 
@@ -29,13 +27,7 @@ export default function ViewersList({ tab = "people" }: { tab?: Tab } = {}) {
       tabs={TABS}
       active={tab}
     >
-      {tab === "invitations" ? (
-        <Invitations />
-      ) : tab === "defaults" ? (
-        <ViewerDefaults />
-      ) : (
-        <People />
-      )}
+      {tab === "defaults" ? <ViewerDefaults /> : <People />}
     </DomainPage>
   );
 }
@@ -78,7 +70,7 @@ function People() {
         <EmptyState
           icon={<Users />}
           title="No viewers yet"
-          description="Share this server from plex.tv or send an invitation. People appear here after they sign in to Plex."
+          description="Share this server from plex.tv. People appear here after they sign in to Plex."
         />
       }
       labels={{ searchPlaceholder: "Search viewers…" }}

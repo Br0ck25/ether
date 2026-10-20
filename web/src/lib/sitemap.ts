@@ -40,7 +40,6 @@ export const PAGES: PageDef[] = [
     title: "Viewers",
     sections: [
       { key: "people", title: "People", keywords: "users friends accounts" },
-      { key: "invitations", title: "Invitations", keywords: "invite friend share" },
       {
         key: "defaults",
         title: "Defaults",

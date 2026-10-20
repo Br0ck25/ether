@@ -256,16 +256,10 @@ func (s *Service) Handler() http.Handler {
 	return m
 }
 
-// ForUser also recognizes policy staged before a Plex invitation is accepted.
+// ForUser is u's policy.
 func (s *Service) ForUser(u *core.User) Policy {
 	if u == nil {
 		return Policy{}
-	}
-	s.mu.RLock()
-	_, exists := s.policies[u.ID]
-	s.mu.RUnlock()
-	if !exists && u.PlexID > 0 {
-		return s.Get(-u.PlexID)
 	}
 	return s.Get(u.ID)
 }
