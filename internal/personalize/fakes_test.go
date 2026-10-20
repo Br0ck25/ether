@@ -518,6 +518,8 @@ func newHarness(t *testing.T, mutate func(*Options)) *harness {
 		Logger: quietLogger(), Now: clk.Now, Location: time.UTC,
 		RefreshEvery: -1, RebuildDebounce: time.Hour, ColdWait: 5 * time.Second, OwnerRowsWait: 2 * time.Second,
 		FlushEvery: time.Hour, ServerName: func() string { return "Test Server" },
+		// The fake catalogue is small; the row floor has its own test.
+		MinRowItems: -1,
 	}
 	if mutate != nil {
 		mutate(&opts)

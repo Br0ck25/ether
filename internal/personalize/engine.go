@@ -104,6 +104,10 @@ type Options struct {
 	BuildTimeout    time.Duration // one model build (default 3m)
 	MaxHomeRows     int           // default 20 across the complete composed page
 	MaxSectionRows  int           // default 16
+	// MinRowItems is the fewest titles an engine row may show (default 6;
+	// negative disables the floor). Continue Watching and Up Next, and
+	// rows the owner places, are exempt.
+	MinRowItems int
 	// Exploration scales Thompson sampling (0 = pure exploitation, 1 =
 	// full sampling; default 0.5; negative = 0).
 	Exploration      float64
@@ -155,6 +159,9 @@ func (o *Options) defaults() {
 	}
 	if o.MaxHomeRows <= 0 {
 		o.MaxHomeRows = 20
+	}
+	if o.MinRowItems == 0 {
+		o.MinRowItems = minRowItems
 	}
 	if o.MaxSectionRows <= 0 {
 		o.MaxSectionRows = 16
@@ -435,6 +442,7 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 		return p
 	}
 	a := &assembly{
+		minRow: max(e.opts.MinRowItems, 0),
 		layout: &layoutDoc,
 		model:  m, user: u, hc: hc, section: section, limit: limit, owner: owner,
 		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration, day: day,

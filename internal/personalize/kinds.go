@@ -129,8 +129,8 @@ var kinds = []kindInfo{
 		prior: 0.04, slug: "different", context: "different", surfaces: map[string]float64{surfMovies: 0.8, surfShows: 0.8}, group: groupExplore, lean: leanExplore},
 	{kind: KindShortOnTime, title: "Short on Time", description: "Shorter films and episodes, fitted to how long the viewer usually watches in this context.",
 		prior: 0.06, slug: "shortontime", context: "shortontime", surfaces: onHome, group: groupPicks},
-	{kind: KindFranchise, title: "Finish the Franchise", description: "The remaining films of a franchise the viewer has started.",
-		prior: 0.09, slug: "franchise", context: "franchise", cap: 2, dynamic: true, surfaces: onMovies, fits: fitsMovies, group: groupExplore, lean: leanFamiliar},
+	{kind: KindFranchise, title: "Finish the Franchise", description: "The remaining films of a franchise the viewer has started. Off by default: it is usually one or two titles. Add it to a page to use it.",
+		prior: 0.09, slug: "franchise", context: "franchise", cap: 2, dynamic: true, surfaces: map[string]float64{}, fits: fitsMovies, group: groupExplore, lean: leanFamiliar}, // off unless the owner places it: usually one or two titles
 	{kind: KindLLM, title: "Themed Rows (AI)", description: "Natural-language themed rows from the owner's LLM, seeded by recent favourites.",
 		prior: 0.06, slug: "llm", context: "llm", cap: 2, dynamic: true, surfaces: map[string]float64{surfHome: 1, surfMovies: 0.7, surfShows: 0.7}, group: groupPicks},
 	{kind: KindTrending, title: "Trending This Week", description: "What is trending on TMDB this week.",

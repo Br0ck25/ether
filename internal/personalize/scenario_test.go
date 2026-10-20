@@ -130,8 +130,16 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 	}
 	am := mp.Rows
 	t.Logf("alice, Movies:\n%s", describe(am))
-	if r := rowByKind(am, KindFranchise); r == nil || r.Title != "Finish Star Saga Collection" {
-		t.Fatalf("alice should be asked to finish the saga on Movies: %v", kindsOf(am))
+	// Finish the Franchise is usually one or two titles, so it is off
+	// unless the owner adds it to a page.
+	if r := rowByKind(am, KindFranchise); r != nil {
+		t.Fatalf("franchise row shown by default: %v", kindsOf(am))
+	}
+	saga := core.HomeLayout{Global: []core.LayoutPage{{Section: "movies", Rows: []core.RowPolicy{{Row: KindFranchise, Status: "eligible"}}}}}
+	if fp, err := h.e.PreviewLayout(ctx, &alice, wednesdayTV, "movies", 12, saga); err != nil {
+		t.Fatal(err)
+	} else if r := rowByKind(fp.Rows, KindFranchise); r == nil || r.Hidden || r.Title != "Finish Star Saga Collection" {
+		t.Fatalf("an owner policy should bring the saga back on Movies: %v", kindsOf(fp.Rows))
 	}
 	// The fake catalogue has 48 science fiction films and her Home leads
 	// with most of the ones Vera directed, so her director lens shows on a

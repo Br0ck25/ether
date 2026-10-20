@@ -45,6 +45,7 @@ type assembly struct {
 	held        map[*candRow][]core.RatingKey
 	homeDeduped int
 	rk          *rankPass // learned ranker (ranker.go); nil = hand-tuned only
+	minRow      int       // fewest titles an engine row may show (Options.MinRowItems)
 }
 
 // rankedRow is a candidate row during assembly.
@@ -187,6 +188,19 @@ func (a *assembly) run() []core.HomeRow {
 // remaining films, the next episodes, an owner's collection, the viewer's
 // own watchlist): they keep their titles and similarity-driven rows give
 // way.
+// minRowItems is the fewest titles a row may show: a TV screen shows about
+// six posters, and a row of one or two leaves a wall of empty space.
+const minRowItems = 6
+
+// rowFloor is the minimum for a row kind. Continue Watching and Up Next are
+// utility rows: one in-progress title is still worth showing.
+func (a *assembly) rowFloor(kind string) int {
+	if kind == KindContinue || kind == KindUpNext {
+		return 0
+	}
+	return a.minRow
+}
+
 func anchored(c *candRow) bool { return c.keepOrder && c.kind != KindContinue }
 
 // draftsFirst reports rows that take their titles before the round-robin:
@@ -295,6 +309,9 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				continue
 			}
 			min := r.c.minItems
+			if !a.ownerPlaced(r.c, r.hubID) {
+				min = max(min, a.rowFloor(r.c.kind))
+			}
 			if r.d.pinned && min > 1 {
 				min = 1
 			}
