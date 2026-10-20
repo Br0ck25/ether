@@ -133,6 +133,7 @@ dockers:
       - dist/ffmpeg/linux-amd64/ffmpeg
       - dist/ffmpeg/linux-amd64/ffprobe
     build_flag_templates:
+      - --platform=linux/amd64
       - --label=org.opencontainers.image.title=Ether
       - --label=org.opencontainers.image.description=Ether media server (Plex-compatible front end, TMDB catalogue, Usenet streaming)
       - --label=org.opencontainers.image.source=https://github.com/braedonsaunders/ether
@@ -151,6 +152,7 @@ dockers:
       - dist/ffmpeg/linux-arm64/ffmpeg
       - dist/ffmpeg/linux-arm64/ffprobe
     build_flag_templates:
+      - --platform=linux/arm64
       - --label=org.opencontainers.image.title=Ether
       - --label=org.opencontainers.image.version={{ .Version }}
       - --label=org.opencontainers.image.licenses=GPL-3.0

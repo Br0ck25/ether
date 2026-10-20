@@ -17,6 +17,10 @@ COPY ether /usr/lib/ether/ether
 COPY dist/ffmpeg/linux-amd64/ffmpeg dist/ffmpeg/linux-amd64/ffprobe /usr/lib/ether/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/ether/
 
+RUN /usr/lib/ether/ether -h \
+ && /usr/lib/ether/ffmpeg -version \
+ && /usr/lib/ether/ffprobe -version
+
 ENV ETHER_DATA_DIR=/config XDG_CACHE_HOME=/cache
 EXPOSE 32400/tcp 32410-32414/udp
 VOLUME ["/config", "/cache"]
