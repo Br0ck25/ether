@@ -33,6 +33,7 @@ func mustParse(t *testing.T, name string) core.MediaInfo {
 
 func TestParseProbeGolden(t *testing.T) {
 	sec := func(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }
+	boolean := func(v bool) *bool { return &v }
 	tests := []struct {
 		file string
 		want core.MediaInfo
@@ -60,6 +61,7 @@ func TestParseProbeGolden(t *testing.T) {
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Default: true, Width: 3840, Height: 1608,
 						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", DolbyVision: true, DolbyVisionProfile: 8, DolbyVisionLevel: 6, DolbyVisionCompatibilityID: 1,
+						DolbyVisionVersion: "1.0", DolbyVisionBLPresent: boolean(true), DolbyVisionELPresent: boolean(false), DolbyVisionRPUPresent: boolean(true),
 						BitrateKbps: 15876},
 					{Index: 1, Type: "audio", Codec: "eac3", Profile: "Dolby Digital Plus + Dolby Atmos", Language: "eng",
 						Default: true, Channels: 6, ChannelLayout: "5.1(side)", SampleRate: 48000, BitrateKbps: 768},
@@ -165,6 +167,9 @@ func TestDolbyVisionFromCodecTag(t *testing.T) {
 	v := m.Video()
 	if !v.DolbyVision || v.DolbyVisionProfile != 0 {
 		t.Fatalf("got DV=%v profile=%d", v.DolbyVision, v.DolbyVisionProfile)
+	}
+	if v.DolbyVisionVersion != "" || v.DolbyVisionBLPresent != nil || v.DolbyVisionELPresent != nil || v.DolbyVisionRPUPresent != nil {
+		t.Fatal("codec tag alone invented a Dolby Vision configuration record")
 	}
 	if _, ok := dvBaseLayer(v); ok {
 		t.Error("unknown-profile DV without transfer info must not be treated as having a base layer")

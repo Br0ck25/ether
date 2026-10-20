@@ -251,6 +251,23 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 		si.ColorTransfer = s.ColorTransfer
 		si.DolbyVision, si.DolbyVisionProfile = dolbyVision(s)
 		for _, sd := range s.SideDataList {
+			if major, ok := sd["dv_version_major"].(float64); ok {
+				minor, _ := sd["dv_version_minor"].(float64)
+				si.DolbyVisionVersion = fmt.Sprintf("%d.%d", int(major), int(minor))
+			}
+			for _, field := range []struct {
+				key string
+				dst **bool
+			}{
+				{"bl_present_flag", &si.DolbyVisionBLPresent},
+				{"el_present_flag", &si.DolbyVisionELPresent},
+				{"rpu_present_flag", &si.DolbyVisionRPUPresent},
+			} {
+				if value, ok := sd[field.key].(float64); ok {
+					present := value != 0
+					*field.dst = &present
+				}
+			}
 			if level, ok := sd["dv_level"].(float64); ok {
 				si.DolbyVisionLevel = int(level)
 			}

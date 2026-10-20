@@ -665,7 +665,7 @@ func (s *Server) buildStreams(key core.RatingKey, info core.MediaInfo, sel selec
 			}
 			ps.Width, ps.Height = st.Width, st.Height
 			ps.FrameRate = math.Round(st.FrameRate*1000) / 1000
-			ps.BitDepth = st.BitDepth
+			ps.BitDepth, ps.Level = st.BitDepth, st.Level
 			ps.Profile = strings.ToLower(st.Profile)
 			ps.ChromaSubsampling = "4:2:0"
 			switch st.ColorTransfer {
@@ -679,6 +679,12 @@ func (s *Server) buildStreams(key core.RatingKey, info core.MediaInfo, sel selec
 			}
 			if st.DolbyVision {
 				ps.DOVIPresent = model.Ptr(true)
+				ps.DOVIProfile, ps.DOVILevel = st.DolbyVisionProfile, st.DolbyVisionLevel
+				if st.DolbyVisionProfile > 0 {
+					ps.DOVIBLCompatID = model.Ptr(st.DolbyVisionCompatibilityID)
+				}
+				ps.DOVIBLPresent, ps.DOVIELPresent = st.DolbyVisionBLPresent, st.DolbyVisionELPresent
+				ps.DOVIRPUPresent, ps.DOVIVersion = st.DolbyVisionRPUPresent, st.DolbyVisionVersion
 			}
 			ps.DisplayTitle = videoDisplayTitle(st)
 			ps.ExtendedDisplayTitle = ps.DisplayTitle

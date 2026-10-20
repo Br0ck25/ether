@@ -347,6 +347,13 @@ type StreamInfo struct {
 	DolbyVisionLevel           int    `json:"dolbyVisionLevel,omitempty"`
 	DolbyVisionCompatibilityID int    `json:"dolbyVisionCompatibilityId,omitempty"`
 	CodecString                string `json:"codecString,omitempty"` // RFC 6381, derived from the codec configuration
+
+	// Configuration-record facts are optional: codec tags alone do not
+	// establish whether the enhancement/base layers or RPU are present.
+	DolbyVisionVersion    string `json:"dolbyVisionVersion,omitempty"`
+	DolbyVisionBLPresent  *bool  `json:"dolbyVisionBLPresent,omitempty"`
+	DolbyVisionELPresent  *bool  `json:"dolbyVisionELPresent,omitempty"`
+	DolbyVisionRPUPresent *bool  `json:"dolbyVisionRPUPresent,omitempty"`
 }
 
 type Chapter struct {

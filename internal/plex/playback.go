@@ -560,6 +560,8 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 				}
 				st.Profile, st.ChromaSubsampling, st.ScanType = "", "", ""
 				st.DOVIPresent, st.DOVIProfile = nil, 0
+				st.DOVIBLCompatID, st.DOVIBLPresent, st.DOVIELPresent, st.DOVIRPUPresent = nil, nil, nil, nil
+				st.DOVILevel, st.DOVIVersion, st.Level = 0, "", 0
 				if st.Codec == "h264" || dec.ToneMap {
 					st.BitDepth = 8
 				}

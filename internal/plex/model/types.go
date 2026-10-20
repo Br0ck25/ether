@@ -461,8 +461,14 @@ type Stream struct {
 	ColorRange           string  `plex:"colorRange,omitempty"`
 	ColorSpace           string  `plex:"colorSpace,omitempty"`
 	ColorTrc             string  `plex:"colorTrc,omitempty"`
+	DOVIBLCompatID       *int    `plex:"DOVIBLCompatID"`
+	DOVIBLPresent        *bool   `plex:"DOVIBLPresent"`
+	DOVIELPresent        *bool   `plex:"DOVIELPresent"`
+	DOVILevel            int     `plex:"DOVILevel,omitempty"`
 	DOVIPresent          *bool   `plex:"DOVIPresent"`
 	DOVIProfile          int     `plex:"DOVIProfile,omitempty"`
+	DOVIRPUPresent       *bool   `plex:"DOVIRPUPresent"`
+	DOVIVersion          string  `plex:"DOVIVersion,omitempty"`
 	Format               string  `plex:"format,omitempty"`
 	FrameRate            float64 `plex:"frameRate,omitempty"`
 	Height               int     `plex:"height,omitempty"`
