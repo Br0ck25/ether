@@ -10,17 +10,11 @@ import (
 	"github.com/braedonsaunders/ether/internal/backup"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/invites"
-	"github.com/braedonsaunders/ether/internal/localmedia"
 	"github.com/braedonsaunders/ether/internal/migrate"
 	"github.com/braedonsaunders/ether/internal/plextv"
 )
 
 func (a *App) buildAdoption() {
-	var probe localmedia.Prober
-	if a.transcoder != nil {
-		probe = a.transcoder
-	}
-	a.localmedia = localmedia.New(a.db, a.catalog, probe)
 	a.backups = backup.New(a.db, a.cfg.Path(), filepath.Join(a.opts.DataDir, "backups"), 7)
 	if a.clustered() {
 		// Record which node holds each bundle (and allow a shared backup
@@ -91,7 +85,6 @@ func (g *backgroundGroup) start(fn func()) { g.Add(1); go func() { defer g.Done(
 
 func adoptionHandlers(a *App, m map[string]http.Handler) {
 	m["adoption/migration"] = a.migration.Handler()
-	m["adoption/libraries"] = a.localmedia.Handler()
 	m["adoption/backups"] = a.backups.Handler()
 	m["safety/invites"] = a.invites.Handler()
 }

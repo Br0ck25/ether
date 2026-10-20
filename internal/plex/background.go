@@ -96,11 +96,17 @@ func (q *bgQueue) done(key string) {
 // title fetch can queue colour work, so it loops until both are quiet.
 func (s *Server) waitBackground() {
 	if s.titleJobs == nil {
+		if s.d.PlexGUID != nil {
+			s.d.PlexGUID.Wait()
+		}
 		return
 	}
 	for i := 0; i < 4; i++ {
 		s.titleJobs.wait()
 		s.blurJobs.wait()
+		if s.d.PlexGUID != nil {
+			s.d.PlexGUID.Wait()
+		}
 	}
 }
 

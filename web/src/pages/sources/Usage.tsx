@@ -27,6 +27,7 @@ type Budget = {
   hitsRemaining: number;
   grabsUsed: number;
   grabsRemaining: number;
+  retryAt?: number;
 };
 type IndexerUsage = {
   indexer: string;
@@ -121,7 +122,7 @@ function Remaining({ used, remaining, noun }: { used: number; remaining: number;
   if (remaining < 0)
     return (
       <p className="text-xs text-fg-muted">
-        {formatNumber(used, 0)} {noun} today · unlimited
+        {formatNumber(used, 0)} {noun} today · automatic limits
       </p>
     );
   const limit = used + remaining;
@@ -312,7 +313,7 @@ export function SourceUsage() {
 
       <Section
         title="Indexers"
-        description="Today's API and download budgets, and how searches went this month."
+        description="Observed usage today and search results this month. Service limits are handled automatically."
         bodyClassName="divide-y divide-border"
       >
         {indexers.map((ix) => {
@@ -324,6 +325,12 @@ export function SourceUsage() {
             >
               <div className="min-w-0 flex-1 space-y-2">
                 <p className="font-medium text-fg">{ix.indexer}</p>
+                {ix.retryAt && ix.retryAt > Date.now() / 1000 ? (
+                  <p className="text-xs text-fg-muted">
+                    Service limit reached · retries automatically after{" "}
+                    {new Date(ix.retryAt * 1000).toLocaleTimeString()}
+                  </p>
+                ) : null}
                 <div className="grid max-w-xl gap-3 sm:grid-cols-2">
                   <Remaining used={ix.hitsUsed} remaining={ix.hitsRemaining} noun="API hits" />
                   <Remaining used={ix.grabsUsed} remaining={ix.grabsRemaining} noun="grabs" />

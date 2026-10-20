@@ -33,10 +33,10 @@ func plainCaps() core.ClientCaps {
 }
 
 func consoleReleases() []core.Release {
-	pw := rel("pwd", "The.Matrix.1999.1080p.BluRay.x264-PWD", 9000)
+	pw := rel("pwd", "The.Signal.1999.1080p.BluRay.x264-PWD", 9000)
 	pw.Password = true
 	return append(movieReleases(),
-		rel("cam", "The.Matrix.1999.CAM.x264-GRP", 700),
+		rel("cam", "The.Signal.1999.CAM.x264-GRP", 700),
 		pw,
 	)
 }
@@ -134,7 +134,7 @@ func TestPinHonouredAndGated(t *testing.T) {
 		t.Fatal(err)
 	}
 	r720, _ := svc.LookupRelease("sd720")
-	if _, err := svc.Pin(ctx, matrixTitle().Key, "The Matrix (1999)", r720, "the good encode"); err != nil {
+	if _, err := svc.Pin(ctx, matrixTitle().Key, "The Signal (1999)", r720, "the good encode"); err != nil {
 		t.Fatal(err)
 	}
 	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: webCaps()})
@@ -321,7 +321,7 @@ func TestOwnerBlockUnblockPersisted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !e.Manual || e.Source != BlockOwner || e.Name != movieReleases()[1].Name || e.TitleName != "The Matrix (1999)" || e.Indexer != "fake" {
+	if !e.Manual || e.Source != BlockOwner || e.Name != movieReleases()[1].Name || e.TitleName != "The Signal (1999)" || e.Indexer != "fake" {
 		t.Fatalf("entry %+v", e)
 	}
 	// An automatic mark later does not downgrade the owner's block.
@@ -574,7 +574,7 @@ func TestBlockingAPinnedReleaseSurfacesOnThePin(t *testing.T) {
 	if err != nil || res.Release.ID != "hd" {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
-	if tr := svc.Traces()[0]; tr.PinStatus != "skipped: pinned release is blocklisted" || tr.TitleName != "The Matrix (1999)" {
+	if tr := svc.Traces()[0]; tr.PinStatus != "skipped: pinned release is blocklisted" || tr.TitleName != "The Signal (1999)" {
 		t.Fatalf("trace %q %q", tr.PinStatus, tr.TitleName)
 	}
 }

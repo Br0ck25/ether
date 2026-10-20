@@ -32,8 +32,13 @@ import type {
   EtherConfig,
   EtherUser,
   FieldError,
+  CatalogEntry,
   Indexer,
   LogEntry,
+  SiteDefinition,
+  SiteTestResult,
+  SiteTestStatus,
+  SiteUpdateReport,
   SetupStatus,
   SourceStartup,
   TestResult,
@@ -191,6 +196,34 @@ export const api = {
     post<TestResult>("/test/opensubtitles", cfg),
   testLLM: (cfg: EtherConfig["llm"]) => post<TestResult>("/test/llm", cfg),
   testTrakt: (cfg: EtherConfig["trakt"]) => post<TestResult>("/test/trakt", cfg),
+
+  // ---- Built-in indexer sites ------------------------------------------------------
+  sites: {
+    definitions: async () =>
+      (await apiFetch<{ definitions: SiteDefinition[] | null }>("/indexer-sites/definitions"))
+        .definitions ?? [],
+    upload: async (yaml: string) =>
+      (await post<{ definition: SiteDefinition }>("/indexer-sites/definitions", { yaml }))
+        .definition,
+    remove: (id: string) =>
+      apiFetch<{ removed: string }>(`/indexer-sites/definitions/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      }),
+    catalog: async (refresh = false) =>
+      (
+        await apiFetch<{ entries: CatalogEntry[] | null }>(
+          `/indexer-sites/catalog${refresh ? "?refresh=1" : ""}`,
+        )
+      ).entries ?? [],
+    install: async (id: string) =>
+      (await post<{ definition: SiteDefinition }>("/indexer-sites/catalog/install", { id }))
+        .definition,
+    update: () => post<SiteUpdateReport>("/indexer-sites/update"),
+    test: (ix: Indexer) => post<SiteTestResult>("/indexer-sites/test", ix),
+    status: async () =>
+      (await apiFetch<{ statuses: SiteTestStatus[] | null }>("/indexer-sites/status")).statuses ??
+      [],
+  },
 
   // ---- Status ----------------------------------------------------------------
   dashboard: () => apiFetch<DashboardData>("/dashboard"),

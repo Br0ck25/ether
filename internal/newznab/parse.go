@@ -126,7 +126,7 @@ func parseXMLFeed(body []byte, indexer string) ([]core.Release, error) {
 						desc = a.Value
 					}
 				}
-				return nil, apiError(code, desc)
+				return nil, documentError(code, desc)
 			case "item":
 				cur = &rawItem{}
 			case "enclosure":
@@ -252,10 +252,10 @@ func parseJSONFeed(body []byte, indexer string) ([]core.Release, error) {
 				code := 0
 				if cv, ok := em["@attributes"].(map[string]any); ok {
 					code, _ = strconv.Atoi(asString(cv["code"]))
-					return nil, apiError(code, asString(cv["description"]))
+					return nil, documentError(code, asString(cv["description"]))
 				}
 				code, _ = strconv.Atoi(asString(em["code"]))
-				return nil, apiError(code, asString(em["description"]))
+				return nil, documentError(code, asString(em["description"]))
 			}
 		}
 	}

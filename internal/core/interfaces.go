@@ -21,22 +21,21 @@ const (
 
 // Filter narrows a browse or a smart collection. Zero values mean "any".
 type Filter struct {
-	Type              MediaType     `json:"type,omitempty"` // movie or show
-	Genres            []string      `json:"genres,omitempty"`
-	YearFrom          int           `json:"yearFrom,omitempty"`
-	YearTo            int           `json:"yearTo,omitempty"`
-	MinRating         float64       `json:"minRating,omitempty"`
-	MaxRuntime        time.Duration `json:"maxRuntime,omitempty"`
-	MinRuntime        time.Duration `json:"minRuntime,omitempty"`
-	Languages         []string      `json:"languages,omitempty"`
-	Countries         []string      `json:"countries,omitempty"`
-	ContentRatings    []string      `json:"contentRatings,omitempty"`
-	MaxContentRating  string        `json:"maxContentRating,omitempty"` // per-user limit
-	Collection        int64         `json:"collection,omitempty"`
-	Person            int64         `json:"person,omitempty"` // cast or crew TMDB id
-	Studio            string        `json:"studio,omitempty"`
-	Query             string        `json:"query,omitempty"` // title substring
-	IncludeUnreleased bool          `json:"includeUnreleased,omitempty"`
+	Type             MediaType     `json:"type,omitempty"` // movie or show
+	Genres           []string      `json:"genres,omitempty"`
+	YearFrom         int           `json:"yearFrom,omitempty"`
+	YearTo           int           `json:"yearTo,omitempty"`
+	MinRating        float64       `json:"minRating,omitempty"`
+	MaxRuntime       time.Duration `json:"maxRuntime,omitempty"`
+	MinRuntime       time.Duration `json:"minRuntime,omitempty"`
+	Languages        []string      `json:"languages,omitempty"`
+	Countries        []string      `json:"countries,omitempty"`
+	ContentRatings   []string      `json:"contentRatings,omitempty"`
+	MaxContentRating string        `json:"maxContentRating,omitempty"` // per-user limit
+	Collection       int64         `json:"collection,omitempty"`
+	Person           int64         `json:"person,omitempty"` // cast or crew TMDB id
+	Studio           string        `json:"studio,omitempty"`
+	Query            string        `json:"query,omitempty"` // title substring
 }
 
 type BrowseQuery struct {

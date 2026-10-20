@@ -93,7 +93,7 @@ func TestMovieDetailsAndDiscoverParams(t *testing.T) {
 		lastQuery = r.URL.RawQuery
 		switch {
 		case strings.HasPrefix(r.URL.Path, "/movie/550"):
-			fmt.Fprint(w, `{"id":550,"title":"Fight Club","release_date":"1999-10-15","runtime":139,"vote_average":8.4,"vote_count":26280,"popularity":61.4,"imdb_id":"tt0137523","genres":[{"id":18,"name":"Drama"}],"credits":{"cast":[{"id":287,"name":"Brad Pitt","character":"Tyler Durden"}],"crew":[{"id":7467,"name":"David Fincher","job":"Director"}]},"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"R","type":3}]}]}}`)
+			fmt.Fprint(w, `{"id":550,"title":"Fjord Harbor","release_date":"1999-10-15","runtime":139,"vote_average":8.4,"vote_count":26280,"popularity":61.4,"imdb_id":"tt0137523","genres":[{"id":18,"name":"Drama"}],"credits":{"cast":[{"id":287,"name":"Theo Varga","character":"Alex Mercer"}],"crew":[{"id":7467,"name":"Mara Ellison","job":"Director"}]},"release_dates":{"results":[{"iso_3166_1":"US","release_dates":[{"certification":"R","type":3}]}]}}`)
 		case r.URL.Path == "/discover/movie":
 			fmt.Fprint(w, `{"page":2,"results":[{"id":1,"title":"A","genre_ids":[28]}],"total_pages":5,"total_results":99}`)
 		default:
@@ -106,7 +106,7 @@ func TestMovieDetailsAndDiscoverParams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Title != "Fight Club" || d.Runtime != 139 || d.IMDBID != "tt0137523" {
+	if d.Title != "Fjord Harbor" || d.Runtime != 139 || d.IMDBID != "tt0137523" {
 		t.Fatalf("details: %+v", d)
 	}
 	if !strings.Contains(lastQuery, "append_to_response=credits") && !strings.Contains(lastQuery, "append_to_response=credits%2Crelease_dates") {
@@ -286,13 +286,13 @@ func TestEndpointsSmoke(t *testing.T) {
 			if r.URL.Query().Get("external_source") != "imdb_id" {
 				t.Errorf("external_source=%s", r.URL.Query().Get("external_source"))
 			}
-			fmt.Fprint(w, `{"movie_results":[{"id":550,"title":"Fight Club"}]}`)
+			fmt.Fprint(w, `{"movie_results":[{"id":550,"title":"Fjord Harbor"}]}`)
 		case strings.HasPrefix(r.URL.Path, "/person/287"):
-			fmt.Fprint(w, `{"id":287,"name":"Brad Pitt"}`)
+			fmt.Fprint(w, `{"id":287,"name":"Theo Varga"}`)
 		case strings.HasPrefix(r.URL.Path, "/search/multi"):
-			fmt.Fprint(w, `{"page":1,"results":[{"id":550,"media_type":"movie","title":"Fight Club"}],"total_pages":1,"total_results":1}`)
+			fmt.Fprint(w, `{"page":1,"results":[{"id":550,"media_type":"movie","title":"Fjord Harbor"}],"total_pages":1,"total_results":1}`)
 		case strings.HasPrefix(r.URL.Path, "/trending/movie/week"):
-			fmt.Fprint(w, `{"page":1,"results":[{"id":550,"title":"Fight Club"}],"total_pages":1,"total_results":1}`)
+			fmt.Fprint(w, `{"page":1,"results":[{"id":550,"title":"Fjord Harbor"}],"total_pages":1,"total_results":1}`)
 		case strings.HasPrefix(r.URL.Path, "/tv/popular"):
 			fmt.Fprint(w, `{"page":1,"results":[{"id":100,"name":"Show"}],"total_pages":1,"total_results":1}`)
 		default:
@@ -320,11 +320,11 @@ func TestEndpointsSmoke(t *testing.T) {
 		t.Fatalf("find: %+v %v", found, err)
 	}
 	p, err := c.PersonDetails(ctx, 287)
-	if err != nil || p.Name != "Brad Pitt" {
+	if err != nil || p.Name != "Theo Varga" {
 		t.Fatalf("person: %+v %v", p, err)
 	}
 	multi, err := c.SearchMulti(ctx, "fight", 1)
-	if err != nil || len(multi.Results) != 1 || multi.Results[0].AsMovie().Title != "Fight Club" {
+	if err != nil || len(multi.Results) != 1 || multi.Results[0].AsMovie().Title != "Fjord Harbor" {
 		t.Fatalf("multi: %+v %v", multi, err)
 	}
 	tr, err := c.TrendingMovies(ctx, "week", 1)

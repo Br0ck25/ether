@@ -214,7 +214,6 @@ func (s *Session) ServePlaylist(w http.ResponseWriter, r *http.Request) {
 		s.ServeManifest(w, r)
 		return
 	}
-	s.Touch()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -600,7 +599,7 @@ func (s *Session) needsRestartLocked(n int) bool {
 // write it.
 func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 	s.Touch()
-	if s.container != ContainerFMP4 || t < 0 || t >= len(s.done) {
+	if !hasInitSegment(s.container) || t < 0 || t >= len(s.done) {
 		http.NotFound(w, r)
 		return
 	}
@@ -740,7 +739,7 @@ func (s *Session) serveFile(w http.ResponseWriter, r *http.Request, path string,
 	s.setSegmentHeaders(w)
 	name := filepath.Base(path)
 	if n == InitSegment {
-		name = InitSegmentName
+		name = initSegmentName(s.container)
 	}
 	armSegmentDeadline(w)
 	s.serveCounted(w, r, name, st.ModTime(), f, n)
@@ -879,6 +878,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		Protocol:  s.proto,
 		FastStart: rp.fastStart,
 		Rate:      rp.rate,
+	}
+	if s.container == ContainerMatroska {
+		spec.InitName = fmt.Sprintf("header-%d.mkv", s.runSeq)
 	}
 	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
 		return fmt.Errorf("transcode: run dir: %w", err)
@@ -1037,7 +1039,7 @@ func (s *Session) poll(r *run, playlist string) {
 			_ = os.Remove(s.trackSegPath(t, n))
 			continue
 		}
-		if s.container == ContainerFMP4 {
+		if hasInitSegment(s.container) {
 			if _, err := os.Stat(filepath.Join(r.spec.Dir, r.spec.InitName)); err == nil {
 				if rel, err := filepath.Rel(s.dir, filepath.Join(r.spec.Dir, r.spec.InitName)); err == nil {
 					for len(s.initFiles) <= t {
@@ -1182,7 +1184,6 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	if inputURL == "" {
 		return errors.New("transcode: SwapInput: empty input URL")
 	}
-	s.Touch()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {

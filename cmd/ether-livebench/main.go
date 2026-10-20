@@ -44,7 +44,7 @@ func main() {
 	refPath := flag.String("ref", "", "usenet-ref.json")
 	tmdbID := flag.Int64("tmdb", 603, "movie tmdb id")
 	imdb := flag.String("imdb", "tt0133093", "imdb id")
-	title := flag.String("title", "The Matrix", "title")
+	title := flag.String("title", "The Signal", "title")
 	year := flag.Int("year", 1999, "year")
 	runtime := flag.Duration("runtime", 136*time.Minute, "runtime")
 	product := flag.String("product", "Plex Web", "client product")

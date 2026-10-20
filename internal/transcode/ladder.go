@@ -254,7 +254,6 @@ func (s *Session) ServeRungPlaylist(w http.ResponseWriter, r *http.Request, rung
 		s.ServeManifest(w, r)
 		return
 	}
-	s.Touch()
 	s.mu.Lock()
 	t := s.rungTrack(rungID)
 	if t < 0 || s.closed {

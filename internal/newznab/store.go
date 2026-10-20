@@ -35,7 +35,7 @@ CREATE TABLE newznab_caps (
 }
 
 // Remaining reports one indexer's budget state for today (UTC).
-// A remaining value of -1 means unlimited.
+// A remaining value of -1 means there is no personal cap; service limits still apply.
 type Remaining struct {
 	Indexer        string `json:"indexer"`
 	Day            string `json:"day"`
@@ -45,11 +45,13 @@ type Remaining struct {
 	GrabsUsed      int    `json:"grabsUsed"`
 	GrabsLimit     int    `json:"grabsLimit"`
 	GrabsRemaining int    `json:"grabsRemaining"`
+	RetryAt        int64  `json:"retryAt,omitempty"` // service-reported throttling; automatic retry (Unix seconds)
 }
 
 func (c *Client) indexerID() string {
-	if c.cfg.ID != "" {
-		return c.cfg.ID
+	cfg := c.Config()
+	if cfg.ID != "" {
+		return cfg.ID
 	}
 	return c.Name()
 }
@@ -86,11 +88,17 @@ func (c *Client) counts(ctx context.Context) (int, int, error) {
 
 // reserve checks and increments one budget counter ("hit" or "grab").
 func (c *Client) reserve(ctx context.Context, kind string) error {
+	if until, err := c.rateLimitUntil(ctx); err != nil {
+		return err
+	} else if c.now().Before(until) {
+		return fmt.Errorf("indexer %q paused until %s: %w", c.Name(), until.UTC().Format(time.RFC3339), core.ErrBudgetExhausted)
+	}
+	cfg := c.Config()
 	limit := 0
 	if kind == "hit" {
-		limit = c.cfg.DailyLimit
+		limit = cfg.DailyLimit
 	} else {
-		limit = c.cfg.DailyGrabs
+		limit = cfg.DailyGrabs
 	}
 	day := c.today()
 	if c.db == nil {
@@ -147,16 +155,22 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 // Remaining returns today's budget state.
 func (c *Client) Remaining(ctx context.Context) (Remaining, error) {
 	hits, grabs, err := c.counts(ctx)
+	cfg := c.Config()
 	r := Remaining{
 		Indexer: c.Name(), Day: c.today(),
-		HitsUsed: hits, HitsLimit: c.cfg.DailyLimit, HitsRemaining: -1,
-		GrabsUsed: grabs, GrabsLimit: c.cfg.DailyGrabs, GrabsRemaining: -1,
+		HitsUsed: hits, HitsLimit: cfg.DailyLimit, HitsRemaining: -1,
+		GrabsUsed: grabs, GrabsLimit: cfg.DailyGrabs, GrabsRemaining: -1,
 	}
-	if c.cfg.DailyLimit > 0 {
-		r.HitsRemaining = max(0, c.cfg.DailyLimit-hits)
+	if cfg.DailyLimit > 0 {
+		r.HitsRemaining = max(0, cfg.DailyLimit-hits)
 	}
-	if c.cfg.DailyGrabs > 0 {
-		r.GrabsRemaining = max(0, c.cfg.DailyGrabs-grabs)
+	if cfg.DailyGrabs > 0 {
+		r.GrabsRemaining = max(0, cfg.DailyGrabs-grabs)
+	}
+	if until, rateErr := c.rateLimitUntil(ctx); rateErr != nil && err == nil {
+		err = rateErr
+	} else if c.now().Before(until) {
+		r.RetryAt = until.Unix()
 	}
 	return r, err
 }
@@ -167,7 +181,7 @@ func (c *Client) Exhausted(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	return r.HitsRemaining == 0 || r.GrabsRemaining == 0
+	return r.HitsRemaining == 0 || r.GrabsRemaining == 0 || r.RetryAt > c.now().Unix()
 }
 
 // --- result cache ---

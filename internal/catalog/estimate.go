@@ -4,9 +4,8 @@ import "math"
 
 // Estimate is a rough catalogue-size prediction for given thresholds.
 // It is a heuristic from TMDB's documented popularity behaviour (a daily-
-// recomputed, heavily right-skewed score) and public catalogue counts;
-// see docs/catalog-threshold.md. Treat it as order-of-magnitude guidance
-// for the setup UI, not a measurement.
+// recomputed, heavily right-skewed score) and public catalogue counts.
+// Treat it as order-of-magnitude guidance for the setup UI, not a measurement.
 type Estimate struct {
 	Movies int `json:"movies"`
 	Shows  int `json:"shows"`

@@ -57,7 +57,7 @@ func hookFixture(t *testing.T, on bool) (*fixture, *hookRecommender) {
 			friendUser.ID: {{Title: breakingBad, Score: 0.8}},
 		},
 		headers: map[int64]string{
-			ownerUser.ID: "96% Match · Directed by David Fincher · Ends at 10:45 PM",
+			ownerUser.ID: "96% Match · Directed by Mara Ellison · Ends at 10:45 PM",
 		},
 	}
 	f.srv.d.Recommender = rec
@@ -180,11 +180,11 @@ func TestDetailMicroReason(t *testing.T) {
 		t.Fatalf("metadata = %+v", mc.MediaContainer.Metadata)
 	}
 	md := mc.MediaContainer.Metadata[0]
-	// Fight Club has its own tagline, so the header prefixes the summary.
+	// Fjord Harbor has its own tagline, so the header prefixes the summary.
 	if md.Tagline != fightClub.Tagline {
 		t.Errorf("tagline rewritten: %q", md.Tagline)
 	}
-	if !strings.HasPrefix(md.Summary, "96% Match · Directed by David Fincher · Ends at 10:45 PM\n\n") ||
+	if !strings.HasPrefix(md.Summary, "96% Match · Directed by Mara Ellison · Ends at 10:45 PM\n\n") ||
 		!strings.HasSuffix(md.Summary, fightClub.Summary) {
 		t.Errorf("summary = %q", md.Summary)
 	}
@@ -230,7 +230,7 @@ func TestDetailMicroReasonTaglineSlot(t *testing.T) {
 	// Alien has no tagline/summary in the fixture.
 	r := f.get(t, "/library/metadata/"+alien.Key.String(), jsonHdr...)
 	md := decodeMC(t, r.Body.Bytes()).MediaContainer.Metadata[0]
-	if md.Tagline != "96% Match · Directed by David Fincher · Ends at 10:45 PM" {
+	if md.Tagline != "96% Match · Directed by Mara Ellison · Ends at 10:45 PM" {
 		t.Errorf("tagline = %q", md.Tagline)
 	}
 	if md.Summary != "" {

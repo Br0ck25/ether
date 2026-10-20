@@ -114,7 +114,7 @@ func TestConsoleHTTPSearchPinAndUnpin(t *testing.T) {
 	if code := f.do(t, "GET", "/search?key="+key+"&profile=1080p", "", &search); code != 200 {
 		t.Fatalf("search status %d", code)
 	}
-	if search.Winner != "hd" || len(search.Releases) != 3 || search.TitleName != "The Matrix (1999)" {
+	if search.Winner != "hd" || len(search.Releases) != 3 || search.TitleName != "The Signal (1999)" {
 		t.Fatalf("search %+v", search)
 	}
 
@@ -135,7 +135,7 @@ func TestConsoleHTTPSearchPinAndUnpin(t *testing.T) {
 	if code := f.do(t, "POST", "/pins", `{"key":"`+key+`","releaseId":"hd","note":"keeper"}`, &pin); code != 200 {
 		t.Fatalf("pin status %d", code)
 	}
-	if pin.Release.ID != "hd" || pin.TitleName != "The Matrix (1999)" || pin.Note != "keeper" {
+	if pin.Release.ID != "hd" || pin.TitleName != "The Signal (1999)" || pin.Note != "keeper" {
 		t.Fatalf("pin %+v", pin)
 	}
 	if got := f.takeInvalidated(); len(got) != 1 || got[0] != matrixTitle().Key {
@@ -174,7 +174,7 @@ func TestConsoleHTTPBlocklistHealthForgetHistory(t *testing.T) {
 	if code := f.do(t, "POST", "/blocklist", `{"releaseId":"hd","key":"`+key+`","reason":"bad subs"}`, &entry); code != 200 {
 		t.Fatalf("block status %d", code)
 	}
-	if entry.Source != BlockOwner || !entry.Manual || entry.Reason != "bad subs" || entry.TitleName != "The Matrix (1999)" {
+	if entry.Source != BlockOwner || !entry.Manual || entry.Reason != "bad subs" || entry.TitleName != "The Signal (1999)" {
 		t.Fatalf("entry %+v", entry)
 	}
 	if got := f.takeInvalidated(); len(got) != 1 || got[0] != matrixTitle().Key {

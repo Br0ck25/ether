@@ -48,7 +48,7 @@ func (e *Engine) applyRemote(ctx context.Context, hints []string, all bool) {
 		}
 	}
 	if layout {
-		if d, err := e.store.homeLayout(ctx, nil); err == nil {
+		if d, err := e.store.homeLayout(ctx); err == nil {
 			e.mu.Lock()
 			e.homeLayout = cloneLayout(d)
 			e.layoutVer++

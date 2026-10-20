@@ -8,7 +8,6 @@ type HomeLayout struct {
 	Global    []LayoutPage   `json:"global"`
 	Viewers   []ViewerLayout `json:"viewers"`
 	UpdatedAt time.Time      `json:"updatedAt,omitempty"`
-	Notes     []string       `json:"notes,omitempty"`
 }
 type ViewerLayout struct {
 	UserID int64        `json:"userId"`

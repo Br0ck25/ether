@@ -453,10 +453,11 @@ func (p *fakePlayback) Touch(id string) {
 // Transcoder
 
 type fakeHLS struct {
-	id       string
-	req      core.HLSRequest
-	rungs    []core.HLSRung
-	rungReqs []string
+	id           string
+	req          core.HLSRequest
+	rungs        []core.HLSRung
+	rungReqs     []string
+	rungPlaylist string
 }
 
 func (h *fakeHLS) ID() string { return h.id }
@@ -472,6 +473,10 @@ func (h *fakeHLS) Rungs() []core.HLSRung { return h.rungs }
 func (h *fakeHLS) ServeRungPlaylist(w http.ResponseWriter, r *http.Request, rung string) {
 	h.rungReqs = append(h.rungReqs, rung+"/index")
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	if h.rungPlaylist != "" {
+		fmt.Fprint(w, h.rungPlaylist)
+		return
+	}
 	fmt.Fprintf(w, "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\n00000.ts\n# rung %s\n", rung)
 }
 func (h *fakeHLS) ServeRungSegment(w http.ResponseWriter, r *http.Request, rung string, n int) {
@@ -673,13 +678,13 @@ var (
 
 	fightClub = core.Title{
 		Key: core.MovieKey(550), Type: core.TypeMovie, IDs: core.IDs{TMDB: 550, IMDB: "tt0137523"},
-		Title: "Fight Club", Summary: "An insomniac office worker...", Tagline: "Mischief. Mayhem. Soap.",
+		Title: "Fjord Harbor", Summary: "An insomniac office worker...", Tagline: "Quiet waters run deep.",
 		Year: 1999, Released: time.Date(1999, 10, 15, 0, 0, 0, 0, time.UTC), Runtime: 139 * time.Minute,
-		Genres: []string{"Drama", "Thriller"}, Studios: []string{"Fox 2000 Pictures"}, Countries: []string{"United States of America"},
+		Genres: []string{"Drama", "Thriller"}, Studios: []string{"Northlight Pictures"}, Countries: []string{"United States of America"},
 		ContentRating: "R", Rating: 8.43, Popularity: 60, PosterPath: "/poster550.jpg", BackdropPath: "/backdrop550.jpg",
-		Cast:      []core.Person{{TMDB: 287, Name: "Brad Pitt", Role: "Tyler Durden", ThumbPath: "/brad.jpg"}, {TMDB: 819, Name: "Edward Norton", Role: "The Narrator"}},
-		Directors: []core.Person{{TMDB: 7467, Name: "David Fincher"}},
-		Writers:   []core.Person{{TMDB: 7468, Name: "Chuck Palahniuk"}},
+		Cast:      []core.Person{{TMDB: 287, Name: "Theo Varga", Role: "Alex Mercer", ThumbPath: "/brad.jpg"}, {TMDB: 819, Name: "Lucas Brandt", Role: "The Narrator"}},
+		Directors: []core.Person{{TMDB: 7467, Name: "Mara Ellison"}},
+		Writers:   []core.Person{{TMDB: 7468, Name: "Sasha Petrov"}},
 		UpdatedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
 	}
 	alien = core.Title{
@@ -689,21 +694,21 @@ var (
 	}
 	breakingBad = core.Title{
 		Key: core.ShowKey(1396), Type: core.TypeShow, IDs: core.IDs{TMDB: 1396, TVDB: 81189},
-		Title: "Breaking Bad", Year: 2008, Summary: "A chemistry teacher...", ChildCount: 1, LeafCount: 2,
+		Title: "Boundary Bay", Year: 2008, Summary: "A chemistry teacher...", ChildCount: 1, LeafCount: 2,
 		Popularity: 100, PosterPath: "/bb.jpg", BackdropPath: "/bbart.jpg", UpdatedAt: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC),
 	}
 	bbS1 = core.Title{
-		Key: core.SeasonKey(1396, 1), Type: core.TypeSeason, ShowKey: core.ShowKey(1396), ShowTitle: "Breaking Bad",
+		Key: core.SeasonKey(1396, 1), Type: core.TypeSeason, ShowKey: core.ShowKey(1396), ShowTitle: "Boundary Bay",
 		Season: 1, Title: "Season 1", ChildCount: 2, PosterPath: "/bbs1.jpg", UpdatedAt: breakingBad.UpdatedAt,
 	}
 	bbE1 = core.Title{
-		Key: core.EpisodeKey(1396, 1, 1), Type: core.TypeEpisode, ShowKey: core.ShowKey(1396), ShowTitle: "Breaking Bad",
+		Key: core.EpisodeKey(1396, 1, 1), Type: core.TypeEpisode, ShowKey: core.ShowKey(1396), ShowTitle: "Boundary Bay",
 		Season: 1, Episode: 1, Title: "Pilot", Runtime: 58 * time.Minute, StillPath: "/pilot.jpg",
 		Released: time.Date(2008, 1, 20, 0, 0, 0, 0, time.UTC), UpdatedAt: breakingBad.UpdatedAt,
 	}
 	bbE2 = core.Title{
-		Key: core.EpisodeKey(1396, 1, 2), Type: core.TypeEpisode, ShowKey: core.ShowKey(1396), ShowTitle: "Breaking Bad",
-		Season: 1, Episode: 2, Title: "Cat's in the Bag...", Runtime: 48 * time.Minute,
+		Key: core.EpisodeKey(1396, 1, 2), Type: core.TypeEpisode, ShowKey: core.ShowKey(1396), ShowTitle: "Boundary Bay",
+		Season: 1, Episode: 2, Title: "Second Watch...", Runtime: 48 * time.Minute,
 		Released: time.Date(2008, 1, 27, 0, 0, 0, 0, time.UTC), UpdatedAt: breakingBad.UpdatedAt,
 	}
 
@@ -783,7 +788,6 @@ func newFixture(opts ...func(*Deps)) *fixture {
 			c.Plex.Claimed = true
 			c.Plex.OwnerUsername = "owner"
 			c.Transcode.RemoteMaxBitrateKbps = 8000
-			c.Catalog.ShowUnreleased = true
 			return c
 		},
 		Identity: Identity{Version: "1.43.4.10903-e5521bd8c", Platform: "Linux", PlatformVersion: "6.1"},

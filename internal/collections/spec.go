@@ -11,7 +11,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// Field, op, sort and source vocabularies (docs/owner-ui.md).
+// Field, op, sort and source vocabularies.
 const (
 	MediaMovie = "movie"
 	MediaShow  = "show"

@@ -5,9 +5,8 @@ import "time"
 // Extras controls trailers and other clips attached to titles (Plex
 // "Extras" and Cinema Trailers). TMDB only provides YouTube/Vimeo keys,
 // which Plex apps cannot play, so a playable source must be configured by
-// the owner: either a yt-dlp-compatible resolver command, or trailer files
-// in the owner's local libraries. Off by default; with no working source
-// Ether advertises no extras at all.
+// the owner as a yt-dlp-compatible resolver command. Off by default; with no
+// working command Ether advertises no extras at all.
 type Extras struct {
 	// Enabled turns extras (and Cinema Trailers) on.
 	Enabled bool `json:"enabled"`
@@ -22,9 +21,6 @@ type Extras struct {
 	ResolverArgs []string `json:"resolverArgs,omitempty"`
 	// ResolverTimeout bounds one resolver invocation (default 20s).
 	ResolverTimeout Duration `json:"resolverTimeout,omitempty"`
-	// LocalTrailers also exposes trailer files found in the owner's local
-	// libraries ("-trailer" suffix or a Trailers/ folder).
-	LocalTrailers bool `json:"localTrailers"`
 	// PrewarmBytes is how much of the feature to pre-buffer while a
 	// trailer plays (clamped to 32–64 MiB, default 48 MiB).
 	PrewarmBytes int64 `json:"prewarmBytes,omitempty"`

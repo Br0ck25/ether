@@ -266,7 +266,6 @@ describe("layout", () => {
       global: [{ section: "home", rows: [] }],
       viewers: [],
       updatedAt: "2026-10-19T00:00:00Z",
-      notes: ["x"],
     };
     expect(sameLayout(a, empty())).toBe(true);
     expect(

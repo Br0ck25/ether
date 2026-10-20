@@ -46,8 +46,7 @@ Review [proxmox.sh](proxmox.sh), download a Debian 12 template with Proxmox's
 the top of the script. The script creates an unprivileged container, installs
 Debian's Docker package and starts Ether. It refuses an existing CT and never
 changes existing guests. Allow outbound DNS/HTTP/HTTPS and your provider ports.
-Back up the CT and Ether's own snapshots. Give a CT bind mount only read access
-to local media; add a matching read-only Docker volume. GPU passthrough requires
+Back up the CT and Ether's own snapshots. GPU passthrough requires
 host-specific device permissions and is intentionally explicit.
 
 ## Synology DSM
@@ -85,6 +84,5 @@ snapshots use SQLite `VACUUM INTO` plus an integrity check and include config.
 Retention applies only to Ether-created bundle files. Restoring validates hashes,
 config and database integrity, then stages a new data directory. Stop Ether and
 point `ETHER_DATA_DIR` at that directory to activate it; the running database is
-never overwritten. Re-add local media mounts at their original paths or rescan
-after moving to a new machine. Keep the live SQLite database off NFS/SMB; copied
+never overwritten. Keep the live SQLite database off NFS/SMB; copied
 backup bundles can reside there.

@@ -52,7 +52,7 @@ export const PAGES: PageDef[] = [
     href: "/home-screens",
     title: "Home screens",
     sections: [],
-    keywords: "designer rows layout overrides clean home plex home",
+    keywords: "designer rows layout overrides plex home",
   },
   { href: "/collections", title: "Collections", sections: [], keywords: "studio templates rows" },
   {
@@ -82,7 +82,8 @@ export const PAGES: PageDef[] = [
       {
         key: "indexers",
         title: "Indexers",
-        keywords: "newznab torznab torrent prowlarr budget api",
+        keywords:
+          "newznab torznab torrent built-in sites definitions cardigann flaresolverr prowlarr budget api",
       },
       {
         key: "debrid",

@@ -11,6 +11,33 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
+func TestMatroskaNativeRenditionsCannotReplaceActiveEncoderDuringProbes(t *testing.T) {
+	fr := newFakeRunner()
+	m := newTestManager(t, fr, config.Transcode{ABRLadder: true})
+	req := remuxRequest(t, "native-single-rendition", time.Hour)
+	req.Decision.Container = ContainerMatroska
+	if len(buildRungs(req.Info, req.Decision, adaptiveSettings{Ladder: true})) < 2 {
+		t.Fatal("fixture must otherwise produce multiple qualities")
+	}
+	s := startSession(t, m, req)
+	if rungs := s.Rungs(); len(rungs) != 1 || rungs[0].ID != "base" {
+		t.Fatalf("native player can probe speculative encoders: %+v", rungs)
+	}
+	for _, rung := range []string{"1080p8m", "720p4m", "480p1500k", "360p800k"} {
+		rec := httptest.NewRecorder()
+		s.ServeRungSegment(rec, httptest.NewRequest("GET", "/header", nil), rung, InitSegment)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("unadvertised rung %s = %d", rung, rec.Code)
+		}
+	}
+	if fr.startCount() != 1 {
+		t.Fatalf("header probes restarted encoder %d times", fr.startCount())
+	}
+	if rec := get(t, s, 0); rec.Code != 200 {
+		t.Fatalf("base stream interrupted: %d", rec.Code)
+	}
+}
+
 func ladderInfo(h, bitrate int) core.MediaInfo {
 	return core.MediaInfo{
 		Container: "mkv", Duration: 10 * time.Minute, BitrateKbps: bitrate,

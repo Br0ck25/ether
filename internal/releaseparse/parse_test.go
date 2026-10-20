@@ -102,10 +102,10 @@ func TestParseGolden(t *testing.T) {
 		name string
 		e    expect
 	}{
-		{"The.Matrix.1999.1080p.BluRay.x264-GRP", expect{title: "The Matrix", year: 1999, height: 1080, source: core.SourceBluRay, codec: "h264", group: "GRP"}},
+		{"The.Signal.1999.1080p.BluRay.x264-GRP", expect{title: "The Signal", year: 1999, height: 1080, source: core.SourceBluRay, codec: "h264", group: "GRP"}},
 		{"Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos.DV.HDR.H.265-FLUX", expect{title: "Dune Part Two", year: 2024, height: 2160, source: core.SourceWEBDL, codec: "hevc", audio: "eac3", channels: "5.1", dv: true, hdr: true, atmos: true, group: "FLUX"}},
 		{"Oppenheimer.2023.2160p.UHD.BluRay.REMUX.HEVC.TrueHD.7.1-FraMeSToR", expect{title: "Oppenheimer", year: 2023, height: 2160, source: core.SourceRemux, codec: "hevc", audio: "truehd", channels: "7.1", group: "FraMeSToR"}},
-		{"Breaking.Bad.S01E01.Pilot.720p.HDTV.x264-CTU", expect{title: "Breaking Bad", height: 720, source: core.SourceHDTV, codec: "h264", seasons: []int{1}, episodes: []int{1}, group: "CTU"}},
+		{"Boundary.Bay.S01E01.Pilot.720p.HDTV.x264-CTU", expect{title: "Boundary Bay", height: 720, source: core.SourceHDTV, codec: "h264", seasons: []int{1}, episodes: []int{1}, group: "CTU"}},
 		{"Game.of.Thrones.S08E06.1080p.WEB.H264-MEMENTO", expect{title: "Game of Thrones", height: 1080, source: core.SourceWEBDL, codec: "h264", seasons: []int{8}, episodes: []int{6}, group: "MEMENTO"}},
 		{"The.Office.S03E04E05.720p.WEB-DL.AAC2.0.H.264-PLAYWEB", expect{title: "The Office", height: 720, source: core.SourceWEBDL, seasons: []int{3}, episodes: []int{4, 5}, group: "PLAYWEB"}},
 		{"Show.Name.S01E02-E04.1080p.WEB-DL.x265-GRP", expect{title: "Show Name", seasons: []int{1}, episodes: []int{2, 3, 4}, height: 1080, codec: "hevc"}},
@@ -138,7 +138,7 @@ func TestParseGolden(t *testing.T) {
 		{"Movie.2023.1080p.WEB-DL.AV1.Opus-GRP", expect{codec: "av1", audio: "opus"}},
 		{"Movie.2023.1080p.BluRay.x264.FLAC.2.0-GRP", expect{audio: "flac", channels: "2.0"}},
 		{"Movie.2023.1080p.WEB-DL.EAC3.5.1-GRP", expect{audio: "eac3", channels: "5.1"}},
-		{"The.Matrix.1999.1080p.BluRay.x264-GRP.mkv", expect{title: "The Matrix", cont: "mkv", group: "GRP"}},
+		{"The.Signal.1999.1080p.BluRay.x264-GRP.mkv", expect{title: "The Signal", cont: "mkv", group: "GRP"}},
 		{"Spider-Man.No.Way.Home.2021.1080p.WEB-DL.x264-GRP.mp4", expect{title: "Spider-Man No Way Home", cont: "mp4"}},
 		{"Show.S01-S03.COMPLETE.720p.WEB-DL-GRP", expect{title: "Show", seasons: []int{1, 2, 3}, full: true}},
 		{"[HorribleSubs] Some Anime - S01E03 [720p].mkv", expect{group: "HorribleSubs", seasons: []int{1}, episodes: []int{3}, height: 720, cont: "mkv"}},
@@ -204,7 +204,7 @@ func TestParseCombinatorial(t *testing.T) {
 }
 
 func TestTitleMatches(t *testing.T) {
-	if !TitlesMatch("The Matrix", "Matrix") {
+	if !TitlesMatch("The Signal", "Signal") {
 		t.Error("article")
 	}
 	if !TitlesMatch("Amélie", "Amelie") {
@@ -216,11 +216,11 @@ func TestTitleMatches(t *testing.T) {
 	if !TitlesMatch("Spider-Man: No Way Home", "spider man no way home") {
 		t.Error("punctuation/case")
 	}
-	if TitlesMatch("The Matrix", "The Matrix Reloaded") {
+	if TitlesMatch("The Signal", "The Signal Reloaded") {
 		t.Error("different titles matched")
 	}
-	p := Parse("The.Matrix.1999.1080p.BluRay.x264-GRP")
-	if !TitleMatches(p, "Matrix") || !TitleYearMatches(p, "The Matrix", 2000) || TitleYearMatches(p, "The Matrix", 2005) {
+	p := Parse("The.Signal.1999.1080p.BluRay.x264-GRP")
+	if !TitleMatches(p, "Signal") || !TitleYearMatches(p, "The Signal", 2000) || TitleYearMatches(p, "The Signal", 2005) {
 		t.Errorf("title/year match wrong for %+v", p)
 	}
 	ep := Parse("Show.S02E03.720p-GRP")

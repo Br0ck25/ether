@@ -37,8 +37,9 @@ type Config struct {
 	Extras        Extras        `json:"extras"`
 	Debrid        Debrid        `json:"debrid"`
 	// Database is node-local storage selection (SQLite or PostgreSQL).
-	Database      Database `json:"database"`
-	SetupComplete bool     `json:"setupComplete"`
+	Database      Database     `json:"database"`
+	IndexerSites  IndexerSites `json:"indexerSites"`
+	SetupComplete bool         `json:"setupComplete"`
 }
 
 type Server struct {
@@ -60,8 +61,6 @@ type Server struct {
 }
 
 type Plex struct {
-	// DisableCleanHome opts out of automatic account source cleanup.
-	DisableCleanHome           bool   `json:"disableCleanHome"`
 	CompatibilityVersion       string `json:"compatibilityVersion,omitempty"`
 	LatestCompatibilityVersion string `json:"latestCompatibilityVersion,omitempty"`
 	DisableVersionTracking     bool   `json:"disableVersionTracking"`
@@ -119,8 +118,8 @@ type Indexer struct {
 	Name       string `json:"name"`
 	URL        string `json:"url"` // base URL; /api is appended
 	APIKey     string `json:"apiKey"`
-	DailyLimit int    `json:"dailyLimit"` // API hits per day, 0 = unlimited
-	DailyGrabs int    `json:"dailyGrabs"` // NZB downloads per day, 0 = unlimited
+	DailyLimit int    `json:"dailyLimit"` // optional personal API cap per UTC day; 0 = automatic service limits
+	DailyGrabs int    `json:"dailyGrabs"` // optional personal NZB cap per UTC day; 0 = automatic service limits
 	Priority   int    `json:"priority"`
 	Enabled    bool   `json:"enabled"`
 	// Categories override; empty uses Newznab defaults (2000 movies, 5000 TV).
@@ -129,10 +128,31 @@ type Indexer struct {
 	// Protocol is "usenet" (Newznab, the default when empty) or "torrent"
 	// (Torznab; results stream through a debrid provider).
 	Protocol string `json:"protocol,omitempty"`
+	// Kind selects how the indexer is searched: "" or IndexerKindNewznab
+	// for a Newznab/Torznab API at URL, IndexerKindCardigann for a built-in
+	// site run from an owner-installed definition. For a built-in site URL
+	// is the site address and Protocol follows the definition.
+	Kind string `json:"kind,omitempty"`
+	// Definition is the installed definition id of a built-in site.
+	Definition string `json:"definition,omitempty"`
+	// Settings are the definition's setting values by name.
+	Settings map[string]string `json:"settings,omitempty"`
+	// SecretSettings are the definition's password-type settings. They are
+	// sealed at rest and redacted in API responses like API keys.
+	SecretSettings map[string]string `json:"secretSettings,omitempty"`
 }
+
+// Indexer kinds (Indexer.Kind).
+const (
+	IndexerKindNewznab   = "newznab"
+	IndexerKindCardigann = "cardigann"
+)
 
 // IsTorrent reports whether the indexer is a Torznab (torrent) indexer.
 func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
+
+// IsBuiltin reports whether the indexer is a built-in site.
+func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
 
 type Cache struct {
 	Dir         string `json:"dir"`
@@ -159,7 +179,6 @@ type Catalog struct {
 	MinVotes        int      `json:"minVotes"`
 	IncludeAdult    bool     `json:"includeAdult"`
 	RefreshInterval Duration `json:"refreshInterval"`
-	ShowUnreleased  bool     `json:"showUnreleased"` // Legacy field; release dates are always enforced.
 }
 
 type Resolver struct {

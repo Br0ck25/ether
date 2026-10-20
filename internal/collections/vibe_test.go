@@ -117,7 +117,7 @@ func vibeSetup(t *testing.T, now *atomic.Int64, opts ...collections.Option) *col
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	cfg := config.Catalog{Language: "en-US", Region: "US", ShowUnreleased: true}
+	cfg := config.Catalog{Language: "en-US", Region: "US"}
 	cat, err := catalog.New(db, nil, cfg, slog.Default())
 	if err != nil {
 		t.Fatal(err)

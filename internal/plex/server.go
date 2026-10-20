@@ -116,7 +116,7 @@ type Deps struct {
 	// Optional: without it, colours are kept in memory only.
 	DB *sql.DB
 	// DisableEnrichment turns off the background title-detail and
-	// UltraBlurColors work (spike/local libraries have nothing to fetch).
+	// UltraBlurColors work (the spike test library has nothing to fetch).
 	DisableEnrichment bool
 	// Cluster, when set (clustered nodes only; requires DB), shares play
 	// sessions, play queues, terminations and notifications with the other

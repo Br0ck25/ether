@@ -1,6 +1,6 @@
 /**
- * Shapes of the owner-UI API contract (docs/owner-ui.md). Kept in one file so
- * the screens, the fake backend and the tests agree on a single definition.
+ * Shapes of the owner-UI API contract. Kept in one file so the screens, the
+ * fake backend and the tests agree on a single definition.
  */
 
 export type MediaKind = "movie" | "show" | "season" | "episode";
@@ -304,7 +304,6 @@ export interface HomeLayout {
   global: LayoutPage[];
   viewers: ViewerLayout[];
   updatedAt?: string;
-  notes?: string[];
 }
 
 export interface AvailableRow {

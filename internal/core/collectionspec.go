@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// CollectionSpec is an owner-designed collection, as described by the
-// Collection Studio contract in docs/owner-ui.md: candidates gathered from
+// CollectionSpec is an owner-designed collection: candidates gathered from
 // Sources, filtered by Rules, sorted, limited and published to Plex.
 type CollectionSpec struct {
 	ID          string             `json:"id,omitempty"` // server-assigned
@@ -49,7 +48,7 @@ type CollectionSpec struct {
 //	catalog                                   the whole browsable catalogue
 //	tmdbList        List, MediaType           trending_day|trending_week|popular|top_rated|now_playing|upcoming|airing_today|on_the_air
 //	tmdbCollection  ID, Label                 a TMDB franchise
-//	tmdbDiscover    Params                    raw /discover parameters (names allowed for ids, see docs/collections.md)
+//	tmdbDiscover    Params                    raw /discover parameters (names allowed for ids)
 //	tmdbKeyword | tmdbCompany | tmdbNetwork | tmdbPerson   ID, Label (Role for people)
 //	watchProvider   ID, Region, Label         what's streaming on a service
 //	traktList | letterboxdList | mdblist      URL
@@ -71,8 +70,8 @@ type CollectionSource struct {
 	Role string `json:"role,omitempty"`
 }
 
-// CollectionRule is one condition. Value is typed by Field (see
-// docs/collections.md); Label is display text for ids.
+// CollectionRule is one condition. Value is typed by Field; Label is display
+// text for ids.
 type CollectionRule struct {
 	Field string          `json:"field"`
 	Op    string          `json:"op"`

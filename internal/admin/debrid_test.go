@@ -23,7 +23,7 @@ func debridConfig(c *config.Config) {
 
 func TestDebridSecretsRedactedAndPreserved(t *testing.T) {
 	store := newStore(t, debridConfig)
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	r := req(http.MethodGet, "/ether/api/config/debrid", "")
 	r.Header.Set("X-Plex-Token", ownerToken)
 	rec := serve(h, r)
@@ -69,7 +69,7 @@ func TestDebridSecretsRedactedAndPreserved(t *testing.T) {
 func TestDebridTesterUnredacts(t *testing.T) {
 	store := newStore(t, debridConfig)
 	var gotKey string
-	h := admin.New(admin.Deps{Config: store, TestDebrid: func(_ context.Context, p config.DebridProvider) error {
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), TestDebrid: func(_ context.Context, p config.DebridProvider) error {
 		gotKey = p.APIKey
 		return nil
 	}})

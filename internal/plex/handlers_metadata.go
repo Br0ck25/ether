@@ -133,7 +133,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				// Live session intent (#32): a single-item detail open.
 				s.recordDetailIntent(ctx, pr, t)
 			}
-			if len(keys) == 1 && s.d.PlexGUID != nil && (t.Type == core.TypeMovie || t.Type == core.TypeShow) {
+			if len(keys) == 1 && s.d.PlexGUID != nil && (t.Type == core.TypeMovie || t.Type == core.TypeShow || (t.Type == core.TypeSeason && t.Season < 9000) || t.Type == core.TypeEpisode) {
 				matchCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 				_, _ = s.d.PlexGUID.Resolve(matchCtx, t.Key)
 				cancel()

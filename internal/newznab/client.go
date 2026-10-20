@@ -22,6 +22,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/releaseparse"
 )
 
 const (
@@ -40,6 +41,19 @@ type Options struct {
 	MaxNZBBytes    int64
 	Now            func() time.Time // injected clock (tests)
 	MaxParallel    int              // Manager fan-out; 0 = 4
+	// Backend builds the search backend for an indexer whose Kind is not
+	// Newznab (built-in sites, internal/cardigann). Nil disables them.
+	Backend func(config.Indexer) (Backend, error)
+}
+
+// Backend searches a site that is not a Newznab API, such as a built-in
+// site run from an owner-installed definition. The Client keeps budgets,
+// the result cache and events around it: a backend calls reserve with
+// "hit" or "grab" before each request that counts against a daily budget.
+type Backend interface {
+	Search(ctx context.Context, req core.SearchRequest, reserve func(context.Context, string) error) ([]core.Release, error)
+	FetchNZB(ctx context.Context, r core.Release, reserve func(context.Context, string) error) ([]byte, error)
+	ResolveTorrent(ctx context.Context, r core.Release, reserve func(context.Context, string) error) (core.Release, error)
 }
 
 // Client is one configured Newznab indexer. It implements core.Indexer.
@@ -52,9 +66,11 @@ type Client struct {
 	nzbDir   string
 	maxNZB   int64
 	now      func() time.Time
+	backends func(config.Indexer) (Backend, error)
 
 	budgetMu sync.Mutex
 	mem      memBudget
+	rate     rateLimitState
 
 	cacheMu  sync.RWMutex
 	memCache map[string]memCacheEntry
@@ -71,7 +87,7 @@ var _ core.Indexer = (*Client)(nil)
 // New builds a Client for one indexer. db may be nil (budgets and cache
 // then live in memory).
 func New(cfg config.Indexer, db *sql.DB, opts Options) *Client {
-	c := &Client{cfg: cfg, db: db, nzbDir: opts.NZBDir}
+	c := &Client{cfg: cfg, db: db, nzbDir: opts.NZBDir, backends: opts.Backend}
 	c.http = opts.HTTPClient
 	if c.http == nil {
 		c.http = &http.Client{Timeout: defaultHTTPTimeout}
@@ -175,6 +191,11 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// Record throttling before reading the body: even a broken error response
+	// must not cause every new play request to hammer a throttled indexer.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, c.recordRateLimit(ctx, resp.Header.Get("Retry-After"), apiError(429, "too many requests"))
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, err
@@ -182,8 +203,18 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 	if int64(len(body)) > limit {
 		return nil, fmt.Errorf("newznab: response exceeds %d bytes", limit)
 	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, apiError(429, "too many requests")
+	// Newznab quota errors can arrive with HTTP 200, including NZB grabs.
+	// Detect these here so caps, searches and downloads share the same backoff.
+	if bytes.Contains(bytes.ToLower(body[:min(len(body), 4096)]), []byte("error")) {
+		if _, perr := parseFeed(body, c.Name()); perr != nil {
+			var ae *APIError
+			if errors.As(perr, &ae) {
+				if ae.Budget {
+					return nil, c.recordRateLimit(ctx, resp.Header.Get("Retry-After"), perr)
+				}
+				return nil, perr
+			}
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
 		// Indexers often still return a Newznab error document.
@@ -380,6 +411,14 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	if c.Exhausted(ctx) {
 		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
 	}
+	if c.Config().IsBuiltin() {
+		results, err := c.backendSearch(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		c.cachePut(ctx, key, results)
+		return results, nil
+	}
 	caps, _ := c.Caps(ctx) // best effort; failures just mean no param gating
 	attempts := c.searchAttempts(req, caps)
 	if len(attempts) == 0 {
@@ -437,6 +476,18 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			return b, nil
 		}
 	}
+	if c.Config().IsBuiltin() {
+		b, err := c.backend()
+		if err != nil {
+			return nil, err
+		}
+		body, err := b.FetchNZB(ctx, r, c.reserve)
+		if err != nil {
+			return nil, err
+		}
+		c.saveNZB(r.ID, body)
+		return body, nil
+	}
 	if err := c.reserve(ctx, "grab"); err != nil {
 		return nil, err
 	}
@@ -488,7 +539,13 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("newznab: response for %q is not an NZB", r.Name)
 	}
-	if path := c.nzbDiskPath(r.ID); path != "" {
+	c.saveNZB(r.ID, body)
+	return body, nil
+}
+
+// saveNZB keeps a fetched NZB on disk so later plays need no grab.
+func (c *Client) saveNZB(releaseID string, body []byte) {
+	if path := c.nzbDiskPath(releaseID); path != "" {
 		if err := os.MkdirAll(c.nzbDir, 0o755); err == nil {
 			tmp := path + ".tmp"
 			if os.WriteFile(tmp, body, 0o644) == nil {
@@ -496,7 +553,39 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			}
 		}
 	}
-	return body, nil
+}
+
+// backend returns the search backend of a built-in indexer.
+func (c *Client) backend() (Backend, error) {
+	if c.backends == nil {
+		return nil, fmt.Errorf("indexer %q: built-in indexers are not available", c.Name())
+	}
+	return c.backends(c.Config())
+}
+
+// backendSearch runs a built-in indexer's search and stamps the results
+// the way Newznab results are stamped.
+func (c *Client) backendSearch(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	b, err := c.backend()
+	if err != nil {
+		return nil, err
+	}
+	results, err := b.Search(ctx, req, c.reserve)
+	if err != nil {
+		return nil, err
+	}
+	name := c.Name()
+	for i := range results {
+		r := &results[i]
+		r.Indexer = name
+		if r.ID == "" {
+			r.ID = releaseID(name, r.GUID, r.NZBURL+r.MagnetURL+r.Name)
+		}
+		if r.Info.Title == "" && r.Name != "" {
+			r.Info = releaseparse.Parse(r.Name)
+		}
+	}
+	return results, nil
 }
 
 // Test verifies an indexer config for the setup wizard: caps plus one

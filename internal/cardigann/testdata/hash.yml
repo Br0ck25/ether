@@ -1,0 +1,30 @@
+---
+# Synthetic definition for tests: info hash read from the details page.
+id: fakehash
+name: Fake Hash
+links:
+  - https://fakehash.invalid/
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies}
+  modes:
+    search: [q]
+search:
+  paths:
+    - path: s
+  inputs:
+    q: "{{ .Keywords }}"
+  rows:
+    selector: li
+  fields:
+    title:
+      selector: span
+    download:
+      selector: a
+      attribute: href
+download:
+  infohash:
+    hash:
+      selector: code.hash
+    title:
+      selector: h1

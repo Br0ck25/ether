@@ -15,24 +15,6 @@ import (
 )
 
 func init() {
-	store.Register("collections", 1, `
-CREATE TABLE collections_smart (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  summary TEXT NOT NULL DEFAULT '',
-  type TEXT NOT NULL DEFAULT '',
-  filter_json TEXT NOT NULL DEFAULT '{}',
-  sort TEXT NOT NULL DEFAULT 'popularity',
-  owner_user_id INTEGER NOT NULL DEFAULT 0,
-  poster TEXT NOT NULL DEFAULT '',
-  backdrop TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX collections_smart_owner ON collections_smart(owner_user_id, type);
-`)
-	// v2: the CollectionSpec engine. Legacy smart collections are copied
-	// into collections_specs (keeping their ids, so Plex rating keys stay
-	// stable) by Service.migrateLegacy on start-up.
 	store.Register("collections", 2, `
 CREATE TABLE collections_specs (
   id INTEGER PRIMARY KEY,
@@ -379,95 +361,8 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// migrateLegacy copies v1 smart collections (core.Filter + sort) into the
-// spec model, keeping their ids so existing Plex rating keys still resolve.
-func (s *Service) migrateLegacy(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,title,summary,type,filter_json,sort,owner_user_id,created_at FROM collections_smart ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	type legacy struct {
-		id, owner, created int64
-		title, summary     string
-		typ, filter, sort  string
-	}
-	var olds []legacy
-	for rows.Next() {
-		var l legacy
-		if err := rows.Scan(&l.id, &l.title, &l.summary, &l.typ, &l.filter, &l.sort, &l.owner, &l.created); err != nil {
-			rows.Close()
-			return err
-		}
-		olds = append(olds, l)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(olds) == 0 {
-		return nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var maxID int64
-	for _, l := range olds {
-		var f core.Filter
-		if l.filter != "" {
-			if err := json.Unmarshal([]byte(l.filter), &f); err != nil {
-				s.log.Warn("collections: legacy smart collection has an unreadable filter; skipped", "id", l.id, "err", err)
-				continue
-			}
-		}
-		sp := specFromLegacy(core.Collection{Title: l.title, Summary: l.summary, Type: core.MediaType(l.typ),
-			Sort: core.SortOrder(l.sort), OwnerUserID: l.owner, Filter: &f})
-		// The v1 starter collections become their improved definitions
-		// (v1 froze "recently released" to the install year, for example).
-		if l.owner == 0 {
-			for _, d := range defaultSpecs() {
-				if d.Name == l.title {
-					sp = d
-				}
-			}
-		}
-		js, err := specJSON(sp)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at)
-			VALUES(?, '', 0, ?, ?, 1, ?, ?) ON CONFLICT DO NOTHING`, l.id, l.owner, js, l.created, s.now().Unix()); err != nil {
-			return err
-		}
-		if l.id > maxID {
-			maxID = l.id
-		}
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM collections_smart`); err != nil {
-		return err
-	}
-	var v string
-	_ = tx.QueryRowContext(ctx, `SELECT v FROM collections_meta WHERE k='next_id'`).Scan(&v)
-	if next, _ := strconv.ParseInt(v, 10, 64); next <= maxID {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO collections_meta(k,v) VALUES('next_id',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`,
-			strconv.FormatInt(maxID+1, 10)); err != nil {
-			return err
-		}
-	}
-	// A migrated install already had its defaults.
-	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_meta(k,v) VALUES('seeded','1') ON CONFLICT(k) DO NOTHING`); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	s.log.Info("collections: migrated smart collections to the collection engine", "count", len(olds))
-	return nil
-}
-
-// specFromLegacy converts a v1 smart collection (core.Filter) to a spec.
-func specFromLegacy(c core.Collection) core.CollectionSpec {
+// specFromFilter converts a filter-based smart collection (core.Filter) to a spec.
+func specFromFilter(c core.Collection) core.CollectionSpec {
 	f := core.Filter{}
 	if c.Filter != nil {
 		f = *c.Filter

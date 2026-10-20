@@ -196,9 +196,6 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 		s.bases = *s.opts.bases
 	}
 	ctx := context.Background()
-	if err := s.migrateLegacy(ctx); err != nil {
-		return nil, fmt.Errorf("collections: migrate: %w", err)
-	}
 	if err := s.seedBuiltins(ctx); err != nil {
 		return nil, fmt.Errorf("collections: built-ins: %w", err)
 	}
@@ -694,7 +691,7 @@ func (s *Service) Items(ctx context.Context, user *core.User, key core.RatingKey
 	return core.Page{}, core.ErrNotFound
 }
 
-// CreateSmart persists a v1-style smart collection (core.Filter) as a spec.
+// CreateSmart persists a filter-based smart collection (core.Filter) as a spec.
 // OwnerUserID 0 = server-wide; otherwise only that user sees it.
 func (s *Service) CreateSmart(ctx context.Context, c core.Collection) (*core.Collection, error) {
 	if c.Title == "" {
@@ -703,7 +700,7 @@ func (s *Service) CreateSmart(ctx context.Context, c core.Collection) (*core.Col
 	if c.Filter == nil {
 		return nil, fmt.Errorf("collections: smart collection needs a filter")
 	}
-	sp := specFromLegacy(c)
+	sp := specFromFilter(c)
 	if err := Validate(&sp); err != nil {
 		return nil, err
 	}

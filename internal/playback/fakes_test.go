@@ -591,10 +591,10 @@ func newHarness(t *testing.T, rels []*fakeRelease, ids []string, opts ...harness
 		engine:   newFakeEngine(rels...),
 		resolver: newFakeResolver(ids...),
 		catalog: &fakeCatalog{titles: map[core.RatingKey]*core.Title{
-			movieKey: {Key: movieKey, Type: core.TypeMovie, Title: "The Matrix", Year: 1999, Runtime: 136 * time.Minute},
+			movieKey: {Key: movieKey, Type: core.TypeMovie, Title: "The Signal", Year: 1999, Runtime: 136 * time.Minute},
 			movie2:   {Key: movie2, Type: core.TypeMovie, Title: "Reloaded", Year: 2003, Runtime: 138 * time.Minute},
 			movie3:   {Key: movie3, Type: core.TypeMovie, Title: "Revolutions", Year: 2003, Runtime: 129 * time.Minute},
-			epKey:    {Key: epKey, Type: core.TypeEpisode, ShowTitle: "Breaking Bad", Season: 1, Episode: 1, Title: "Pilot", Runtime: 58 * time.Minute},
+			epKey:    {Key: epKey, Type: core.TypeEpisode, ShowTitle: "Boundary Bay", Season: 1, Episode: 1, Title: "Pilot", Runtime: 58 * time.Minute},
 		}},
 		cache:   newFakeCache(),
 		state:   newFakeState(),

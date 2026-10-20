@@ -16,15 +16,6 @@ func (a *App) enrichSubtitles(ctx context.Context, t *core.Title, u *core.User, 
 		u = &copy
 	}
 	a.subtitles.Enrich(ctx, t, u, res, src, info)
-	if !a.cfg.Get().Markers.DetectCached {
-		return
-	}
-	file, err := a.localmedia.PreferredFile(ctx, t.Key)
-	if err != nil {
-		return
-	}
-	// Detection is queued only for a complete owner-selected local source.
-	_ = a.markers.ScheduleCached(ctx, t.Key, file.Info, file.Path)
 }
 
 // markerDialogue is markers.Options.Dialogue: cue times from subtitle text

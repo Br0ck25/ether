@@ -323,54 +323,6 @@ func TestSchedulerRebuildsWhenDue(t *testing.T) {
 	}
 }
 
-func TestLegacySmartCollectionsMigrateWithStableKeys(t *testing.T) {
-	ctx := context.Background()
-	db, err := store.OpenMemory(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO collections_smart(id,title,summary,type,filter_json,sort,owner_user_id,created_at)
-		VALUES(7,'Old Sci-Fi','legacy','movie','{"type":"movie","genres":["Science Fiction"],"yearTo":1990,"maxRuntime":7200000000000}','rating',0,1),
-		      (8,'Recently Released Movies','','movie','{"type":"movie","yearFrom":2025}','released',0,1)`); err != nil {
-		t.Fatal(err)
-	}
-	e := newEnv(t)
-	_ = e
-	// Build a service over the legacy database.
-	svc, err := collections.New(db, e.cat, nil, collections.WithIndexTTL(0), collections.WithoutDefaults())
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := svc.GetSpec(ctx, "7")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Name != "Old Sci-Fi" || got.RatingKey != core.SmartKey(7).String() || got.Sort != "rating" || got.MediaType != "movie" {
-		t.Fatalf("migrated: %+v", got)
-	}
-	fields := map[string]bool{}
-	for _, r := range got.Rules {
-		fields[r.Field+":"+r.Op] = true
-	}
-	if !fields["genre:in"] || !fields["year:lte"] || !fields["runtime:lte"] {
-		t.Fatalf("rules: %+v", got.Rules)
-	}
-	starter, err := svc.GetSpec(ctx, "8")
-	if err != nil || len(starter.Rules) != 1 || starter.Rules[0].Field != "released" || starter.Rules[0].Op != "within" {
-		t.Fatalf("v1 starter collection not upgraded: %+v %v", starter, err)
-	}
-	var left int
-	_ = db.QueryRow(`SELECT COUNT(*) FROM collections_smart`).Scan(&left)
-	if left != 0 {
-		t.Fatal("legacy rows not cleared")
-	}
-	next, err := svc.CreateSpec(ctx, spec("New", "movie", catalogSource()))
-	if err != nil || next.ID == "7" {
-		t.Fatalf("id after migration: %+v %v", next, err)
-	}
-}
-
 func TestDefaultsAreSeededOnce(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenMemory(ctx)

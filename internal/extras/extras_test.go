@@ -3,7 +3,6 @@ package extras
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,19 +27,15 @@ func (f fakeVideos) EpisodeVideos(context.Context, int64, int, int, string) ([]t
 	return f.vs, nil
 }
 
-type fakeLocal struct{ files []LocalFile }
-
-func (f fakeLocal) LocalFiles(context.Context) ([]LocalFile, error) { return f.files, nil }
-
 func lookOK(string) (string, error) { return "/bin/true", nil }
 
 func movie() *core.Title {
-	return &core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Matrix", IDs: core.IDs{TMDB: 603}}
+	return &core.Title{Key: core.MovieKey(603), Type: core.TypeMovie, Title: "The Signal", IDs: core.IDs{TMDB: 603}}
 }
 
 func enabledCfg(cmd string) func() config.Extras {
 	return func() config.Extras {
-		return config.Extras{Enabled: true, ResolverCommand: cmd, LocalTrailers: true}
+		return config.Extras{Enabled: true, ResolverCommand: cmd}
 	}
 }
 
@@ -89,9 +84,9 @@ func TestListOrderingFilteringCap(t *testing.T) {
 
 func TestListHiddenWithoutSource(t *testing.T) {
 	vs := fakeVideos{[]tmdb.Video{{Site: "YouTube", Key: "trlOffEN001", Type: "Trailer", Official: true}}}
-	// Enabled but no command configured and no local lister.
+	// Enabled but no command configured.
 	s := New(Options{Videos: vs, Config: func() config.Extras {
-		return config.Extras{Enabled: true, LocalTrailers: true}
+		return config.Extras{Enabled: true}
 	}, LookPath: lookOK})
 	if s.Enabled() {
 		t.Fatal("should not be enabled without a source")
@@ -132,42 +127,5 @@ func TestListingCachesStayBounded(t *testing.T) {
 	}
 	if len(s.lists) > maxListEntries || len(s.registry) > maxRegistryEntries {
 		t.Fatalf("unbounded list/registry caches: lists=%d registry=%d", len(s.lists), len(s.registry))
-	}
-}
-
-func TestLocalTrailers(t *testing.T) {
-	dir := t.TempDir()
-	feature := filepath.Join(dir, "The Matrix (1999).mkv")
-	trailer := filepath.Join(dir, "The Matrix (1999)-trailer.mp4")
-	sub := filepath.Join(dir, "Trailers", "teaser.mp4")
-	for _, p := range []string{feature, trailer, sub} {
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	files := []LocalFile{
-		{Path: feature, Key: core.MovieKey(603), Container: "mkv"},
-		{Path: trailer, Key: core.MovieKey(603), Container: "mp4", Duration: 2 * time.Minute},
-		{Path: sub, Container: "mp4"},
-		{Path: filepath.Join(dir, "Other-trailer.mp4"), Key: core.MovieKey(999)},
-	}
-	s := New(Options{Local: fakeLocal{files}, Config: enabledCfg(""), LookPath: lookOK,
-		Now: func() time.Time { return testNow }})
-	if !s.Enabled() {
-		t.Fatal("local source should enable extras")
-	}
-	got, err := s.List(context.Background(), movie(), "en")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("local extras %d %+v", len(got), got)
-	}
-	r, err := s.Resolve(context.Background(), got[0])
-	if err != nil || r.LocalPath == "" || r.Input() != r.LocalPath {
-		t.Fatalf("resolve local: %v %+v", err, r)
 	}
 }

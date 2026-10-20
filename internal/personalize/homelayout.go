@@ -48,104 +48,14 @@ func cloneLayout(d core.HomeLayout) core.HomeLayout {
 	}
 	return out
 }
-func migrateLayout(rules []core.LayoutRule) core.HomeLayout {
-	d := core.HomeLayout{Global: []core.LayoutPage{}, Viewers: []core.ViewerLayout{}}
-	for _, r := range rules {
-		sec := r.Section
-		if sec == "" {
-			sec = "home"
-		}
-		p := core.LayoutPage{Section: sec, MaxRows: r.MaxRows, Rows: []core.RowPolicy{}}
-		for _, rr := range r.Rows {
-			q := core.RowPolicy{Row: rr.HubID, Status: "eligible", When: rr.When}
-			switch rr.Action {
-			case core.LayoutPin:
-				q.Status = "always"
-				q.Slot = 1
-				if rr.Position != nil {
-					q.Slot = *rr.Position + 1
-				}
-			case core.LayoutHide:
-				q.Status = "off"
-			case core.LayoutBoost:
-				q.Priority = 1.5
-			case core.LayoutBury:
-				q.Priority = 0.3
-			}
-			p.Rows = append(p.Rows, q)
-		}
-		merge := func(ps *[]core.LayoutPage) {
-			for i := range *ps {
-				if (*ps)[i].Section == sec {
-					(*ps)[i].Rows = append((*ps)[i].Rows, p.Rows...)
-					if p.MaxRows > 0 {
-						(*ps)[i].MaxRows = p.MaxRows
-					}
-					return
-				}
-			}
-			*ps = append(*ps, p)
-		}
-		if r.Scope.All || len(r.Scope.UserIDs) == 0 {
-			merge(&d.Global)
-		} else {
-			for _, id := range r.Scope.UserIDs {
-				i := 0
-				for i < len(d.Viewers) && d.Viewers[i].UserID != id {
-					i++
-				}
-				if i == len(d.Viewers) {
-					d.Viewers = append(d.Viewers, core.ViewerLayout{UserID: id, Pages: []core.LayoutPage{}})
-				}
-				merge(&d.Viewers[i].Pages)
-			}
-		}
-	}
-	// Later legacy rules win; canonicalize duplicate targets and overlapping
-	// anchors so the migrated document is immediately editable by the new UI.
-	canonical := func(ps []core.LayoutPage) {
-		for i := range ps {
-			rows := []core.RowPolicy{}
-			for _, r := range ps[i].Rows {
-				next := rows[:0]
-				for _, prior := range rows {
-					if prior.Row == r.Row {
-						continue
-					}
-					if r.Slot > 0 && prior.Slot == r.Slot {
-						prior.Slot = 0
-					}
-					next = append(next, prior)
-				}
-				rows = append(next, r)
-			}
-			ps[i].Rows = rows
-		}
-	}
-	canonical(d.Global)
-	for i := range d.Viewers {
-		canonical(d.Viewers[i].Pages)
-	}
-	if len(rules) > 0 {
-		d.Notes = []string{"Existing pin, hide, boost and bury rules were converted to global policies and viewer overrides. Slots now start at 1."}
-	}
-	return d
-}
-func (s *sqlStore) homeLayout(ctx context.Context, rules []core.LayoutRule) (core.HomeLayout, error) {
+
+// homeLayout loads the saved document; with none saved the layout is empty
+// and every row is ranked by the engine.
+func (s *sqlStore) homeLayout(ctx context.Context) (core.HomeLayout, error) {
 	var raw string
 	err := s.db.QueryRowContext(ctx, `SELECT document FROM personalize_home_layout WHERE id=1`).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
-		if rules == nil {
-			rules, err = s.layout(ctx)
-			if err != nil {
-				return core.HomeLayout{}, err
-			}
-		}
-		d := migrateLayout(rules)
-		if err := s.setHomeLayout(ctx, d); err != nil {
-			return d, err
-		}
-		return d, nil
+		return cloneLayout(core.HomeLayout{}), nil
 	}
 	if err != nil {
 		return core.HomeLayout{}, err
@@ -159,19 +69,8 @@ func (s *sqlStore) setHomeLayout(ctx context.Context, d core.HomeLayout) error {
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `INSERT INTO personalize_home_layout(id,document) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET document=excluded.document`, string(b)); err != nil {
-		return err
-	}
-	// Legacy rules are consumed once. All subsequent reads and writes use the document.
-	if _, err = tx.ExecContext(ctx, `DELETE FROM personalize_layout`); err != nil {
-		return err
-	}
-	return tx.Commit()
+	_, err = s.db.ExecContext(ctx, `INSERT INTO personalize_home_layout(id,document) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET document=excluded.document`, string(b))
+	return err
 }
 
 func normalizeHomeLayout(d core.HomeLayout) (core.HomeLayout, error) {
@@ -244,10 +143,7 @@ func normalizeHomeLayout(d core.HomeLayout) (core.HomeLayout, error) {
 					r.MaxSlot = 0
 				}
 				if w := r.When; w != nil {
-					_, err := normalizeLayout([]core.LayoutRule{{Rows: []core.LayoutRowRule{{HubID: r.Row, Action: "pin", When: w}}}})
-					if err != nil {
-						ve.add(rf+".when", "%s", err)
-					}
+					validateWhen(ve, rf+".when", w)
 					for _, m := range w.Months {
 						if m < 1 || m > 12 {
 							ve.add(rf+".when.months", "must be 1-12")
@@ -638,46 +534,4 @@ func selectedCollections(d core.HomeLayout, user int64, section string, hc core.
 		}
 	}
 	return ids
-}
-
-// legacyLayoutView is a compatibility projection, never another saved model.
-// The current Designer reads the complete HomeLayout document directly.
-func legacyLayoutView(d core.HomeLayout) []core.LayoutRule {
-	out := []core.LayoutRule{}
-	appendPages := func(pages []core.LayoutPage, userID int64) {
-		for _, p := range pages {
-			r := core.LayoutRule{ID: fmt.Sprintf("layout-%d-%s", userID, p.Section), Section: p.Section, MaxRows: p.MaxRows, Scope: core.LayoutScope{All: userID == 0}}
-			if userID != 0 {
-				r.Scope.UserIDs = []int64{userID}
-			}
-			for _, row := range p.Rows {
-				rr := core.LayoutRowRule{HubID: row.Row, When: row.When}
-				switch {
-				case row.Status == "off":
-					rr.Action = core.LayoutHide
-				case row.Status == "always":
-					rr.Action = core.LayoutPin
-					if row.Slot > 0 {
-						position := row.Slot - 1
-						rr.Position = &position
-					}
-				case row.Priority > 1:
-					rr.Action = core.LayoutBoost
-				case row.Priority > 0 && row.Priority < 1:
-					rr.Action = core.LayoutBury
-				default:
-					continue
-				}
-				r.Rows = append(r.Rows, rr)
-			}
-			if len(r.Rows) > 0 || r.MaxRows > 0 {
-				out = append(out, r)
-			}
-		}
-	}
-	appendPages(d.Global, 0)
-	for _, v := range d.Viewers {
-		appendPages(v.Pages, v.UserID)
-	}
-	return out
 }

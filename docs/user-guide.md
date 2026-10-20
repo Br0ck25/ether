@@ -5,8 +5,8 @@ normal Plex apps to browse and watch.
 
 ## Set up
 
-Sign in to Plex, add your Usenet providers and Newznab indexers, and choose a
-cache folder and budget. Configure quality profiles for your network and remote
+Sign in to Plex, add your Usenet providers and indexers (Newznab/Torznab URLs
+or built-in sites), and choose a cache folder and budget. Configure quality profiles for your network and remote
 connections. Ether supplies no media, provider accounts or indexer access.
 
 You can also stream torrents that your own debrid account (Real-Debrid, TorBox,
@@ -14,8 +14,11 @@ AllDebrid or Premiumize) already holds.
 
 ## Stream torrents through debrid
 
-1. Under **Sources › Indexers**, add a Torznab indexer and set its protocol to
-   **Torrent (Torznab)**, or import torrent indexers from Prowlarr.
+1. Under **Sources › Indexers**, add a torrent source: a built-in site whose
+   definition is a torrent site (see [Built-in indexers](#built-in-indexers)),
+   or a Torznab URL with its protocol set to **Torrent (Torznab)**. If you
+   already run Prowlarr you can import its indexers instead, but you don't
+   need it.
 2. Under **Sources › Debrid**, add your debrid account with its API key and use
    **Test** to check it. Lower priority numbers are tried first.
 
@@ -52,6 +55,62 @@ routing moved a release, and why.
 The debrid integrations were built from each service's public API
 documentation and tested against simulated services, not live accounts. If a
 service misbehaves, check **Logs** and its status on **Sources › Debrid**.
+
+## Built-in indexers
+
+Ether can search sites itself, without a separate indexer manager. Each
+built-in site runs from a *definition*: a YAML file in the Cardigann format
+that Prowlarr and Jackett also use, describing the site's search pages,
+sign-in, settings and categories. **Ether ships no definitions.** Install only
+definitions for sites you have the right to use, and follow those sites'
+rules.
+
+### Install definitions
+
+Under **Sources › Indexers › Built-in sites**:
+
+- **Upload definition** takes a `.yml` file or pasted YAML. Ether checks it
+  before installing and lists anything it does not support (for example a
+  captcha sign-in or an unknown filter) as a warning beside the definition.
+- **Definitions source** (optional) is a folder of definitions you trust: a
+  GitHub folder URL (`https://github.com/<owner>/<repo>/tree/<branch>/<folder>`),
+  the matching raw folder or GitHub contents API URL, or a URL that returns a
+  plain list of definition files. Ether reads the list only when you add a
+  site, and downloads a definition when you pick it.
+- **Update definitions** re-downloads every definition that came from the
+  source and installs the ones that changed. Uploaded definitions are left
+  as they are. A definition that an indexer uses cannot be removed.
+
+### Add a site
+
+1. Choose **Add indexer › Built-in site…**, search, and pick an installed
+   definition, or install one from your definitions source.
+2. The drawer shows the settings the definition asks for, such as a username
+   and password, a cookie, a passkey or a sort order. Passwords are stored
+   encrypted and shown as `••••` afterwards; leave them to keep them.
+3. **Site address** defaults to the definition's first address; alternative
+   addresses are listed under it.
+4. Set daily search and download budgets if the site limits them.
+5. **Test** signs in and runs a sample search, then shows how many results it
+   found and a few titles, or the site's error.
+
+Built-in sites appear in the same list as Newznab and Torznab indexers, with
+a **Built-in** badge, their protocol and their last test result. They share
+the same search order, daily budgets, result cache and failover. Torrent sites
+stream through your debrid account; a definition that serves NZB files
+streams from your Usenet providers.
+
+### Sites behind a browser challenge
+
+Some sites put a Cloudflare challenge in front of their pages. Ether cannot
+pass it alone and reports that the site needs FlareSolverr. If you run
+[FlareSolverr](https://github.com/FlareSolverr/FlareSolverr), enter its
+address (for example `http://localhost:8191`) under **FlareSolverr**. Ether
+asks it to solve the challenge only when a site presents one, then reuses
+the clearance it returns.
+
+Sign-ins that need a captcha are not supported; if the definition offers
+cookie sign-in, paste the cookie from a signed-in browser instead.
 
 ## Share with viewers
 
@@ -98,8 +157,7 @@ file under these names:
 - `downloads`: offline downloads, on for the owner. Set `allowFriends` to let
   viewers download.
 - `extras`: trailers and Cinema Trailers, off until `enabled` is set. Configure
-  `resolverCommand` (a yt-dlp-compatible tool you install) or keep
-  `localTrailers` for trailer files in your local libraries.
+  `resolverCommand`, a yt-dlp-compatible tool you install.
 - `personalize`: post-play ranking, detail-page headers and session-based Home
   changes.
 - `transcode`: `fastStart`, `abrLadder`, `vbvReservoir` and `spikeGovernor`

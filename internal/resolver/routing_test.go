@@ -18,7 +18,7 @@ const hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 // routingReleases: a well-grabbed Usenet 1080p leads on score; a torrent of
 // the same quality tier sits a few points behind.
 func routingReleases(torrentName string) []core.Release {
-	u := rel("usenet", "The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)
+	u := rel("usenet", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)
 	u.Grabs = 5000
 	tr := rel("torrent", torrentName, 8000)
 	tr.Grabs = 0
@@ -49,7 +49,7 @@ func resolveOrder(t *testing.T, svc *Service, title *core.Title) []string {
 }
 
 func TestRoutingPopularTitlePrefersCachedDebridAndHedgesUsenet(t *testing.T) {
-	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+	idx := &fakeIndexer{releases: routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	svc.SetSourceSignals(cachedSet{hashA: true})
 	if got := resolveOrder(t, svc, routingTitle(true)); got[0] != "torrent" || got[1] != "usenet" {
@@ -77,7 +77,7 @@ func TestRoutingLeavesOrderAloneWithoutReason(t *testing.T) {
 		"popular but not known cached": {popular: true, cached: false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+			idx := &fakeIndexer{releases: routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
 			svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 			svc.SetSourceSignals(cachedSet{hashA: tc.cached})
 			if got := resolveOrder(t, svc, routingTitle(tc.popular)); got[0] != "usenet" {
@@ -89,7 +89,7 @@ func TestRoutingLeavesOrderAloneWithoutReason(t *testing.T) {
 
 func TestRoutingNeverTradesQualityForSpeed(t *testing.T) {
 	// The cached torrent is 720p; the Usenet leader is 1080p.
-	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.720p.BluRay.x264-OTHER")}
+	idx := &fakeIndexer{releases: routingReleases("The.Signal.1999.720p.BluRay.x264-OTHER")}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	svc.SetSourceSignals(cachedSet{hashA: true})
 	cfg := testCfg()
@@ -107,7 +107,7 @@ func TestRoutingFollowsMeasuredStartup(t *testing.T) {
 			svc.noteStartup(core.Release{Protocol: core.ProtocolTorrent}, debrid)
 		}
 	}
-	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+	idx := &fakeIndexer{releases: routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
 
 	// Debrid measured faster: wins even for an unpopular title.
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
@@ -138,7 +138,7 @@ func TestRoutingFollowsMeasuredStartup(t *testing.T) {
 }
 
 func TestRoutingOwnerPreferenceUsenet(t *testing.T) {
-	idx := &fakeIndexer{releases: routingReleases("The.Matrix.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
+	idx := &fakeIndexer{releases: routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")}
 	cfg := testCfg()
 	cfg.Resolver.SourcePreference = PreferUsenet
 	svc := New(idx, fakeHealth{}, nil, cfg, Options{})

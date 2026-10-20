@@ -14,7 +14,9 @@ import (
 	"github.com/braedonsaunders/ether/internal/llm"
 	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/plextv"
+	"github.com/braedonsaunders/ether/internal/subtitles"
 	"github.com/braedonsaunders/ether/internal/tmdb"
+	"github.com/braedonsaunders/ether/internal/trakt"
 	"github.com/braedonsaunders/ether/internal/usenet"
 )
 
@@ -22,7 +24,7 @@ func (a *App) buildAdmin() http.Handler {
 	return admin.New(admin.Deps{
 		Config:        a.cfg,
 		Extensions:    a.extensionHandlers(),
-		ValidateExtra: validatePlaybackConfig,
+		ValidateExtra: a.validateExtra,
 		Logger:        a.log.With("component", "admin"),
 		Logs:          a.logs,
 		Version:       a.opts.Version,
@@ -36,6 +38,12 @@ func (a *App) buildAdmin() http.Handler {
 			return usenet.TestProvider(ctx, p)
 		},
 		TestIndexer: func(ctx context.Context, ix config.Indexer) error {
+			if ix.IsBuiltin() {
+				if res := a.sites.Test(ctx, ix, false); !res.OK {
+					return errors.New(res.Error)
+				}
+				return nil
+			}
 			return newznab.Test(ctx, ix)
 		},
 		TestDebrid: func(ctx context.Context, p config.DebridProvider) error {
@@ -47,6 +55,8 @@ func (a *App) buildAdmin() http.Handler {
 			_, err := c.Configuration(ctx)
 			return err
 		},
+		TestOpenSubtitles: subtitles.Test,
+		TestTrakt:         trakt.Test,
 		TestLLM: func(ctx context.Context, c config.LLM) error {
 			_, err := llm.NewClient(llm.ClientOptions{Config: c, Logger: a.log}).Chat(ctx,
 				[]llm.Message{{Role: "user", Content: "Reply with the word ok."}}, false)
@@ -69,8 +79,7 @@ func (a *App) buildAdmin() http.Handler {
 			}
 			return s
 		},
-		RemoteStatus:  func(context.Context) any { return a.registrar.Status() },
-		UpdatesStatus: a.updateStatus,
+		RemoteStatus: func(context.Context) any { return a.registrar.Status() },
 		HWAccelStatus: func(context.Context) any {
 			if a.transcoder == nil {
 				return map[string]string{"error": "ffmpeg not found"}
@@ -84,6 +93,7 @@ func (a *App) buildAdmin() http.Handler {
 			"debrid":   a.debridStatus,
 			"sources":  func(context.Context) any { return map[string]any{"startup": a.resolver.SourceStartups()} },
 			"database": a.databaseStatus,
+			"updates":  a.updateStatus,
 		},
 		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
 		Users:           a.users,

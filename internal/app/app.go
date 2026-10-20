@@ -24,6 +24,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/auth"
 	"github.com/braedonsaunders/ether/internal/backup"
+	"github.com/braedonsaunders/ether/internal/cardigann"
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/cluster"
 	"github.com/braedonsaunders/ether/internal/collections"
@@ -35,7 +36,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/invites"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/llm"
-	"github.com/braedonsaunders/ether/internal/localmedia"
 	"github.com/braedonsaunders/ether/internal/markers"
 	"github.com/braedonsaunders/ether/internal/migrate"
 	"github.com/braedonsaunders/ether/internal/newznab"
@@ -122,6 +122,7 @@ type App struct {
 	cache       *segcache.Cache
 	engine      *stream.Engine
 	indexers    *newznab.Manager
+	sites       *cardigann.Service // built-in indexer sites from owner-installed definitions
 	// Debrid: torrent releases stream through owner debrid accounts. The
 	// wrappers dispatch on the payload and delegate Usenet to engine and
 	// indexers, so every consumer uses media and sources.
@@ -152,13 +153,11 @@ type App struct {
 	livetv            *livetv.Service
 	trackprefs        *trackprefs.Service
 	markers           *markers.Service
-	localmedia        *localmedia.Service
 	extras            *extras.Service
 	backups           *backup.Service
 	migration         *migrate.Service
 	invites           *invites.Service
 	safety            *safety.Service
-	cleanHome         *cleanHomeStatus
 	updates           *updateState
 	plexServer        *plex.Server
 	handler           http.Handler
@@ -357,10 +356,12 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.closers = append(a.closers, func() { a.engine.Close() })
 
 	// Indexers and resolver.
+	a.sites = cardigann.New(cardigann.Options{DB: a.db, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites})
 	a.indexers = newznab.NewManager(a.db, cfg.Indexers, newznab.Options{
 		Logger:         log.With("component", "newznab"),
 		SearchCacheTTL: cfg.Resolver.SearchCacheTTL.D(),
 		NZBDir:         filepath.Join(dataDir, "nzb"),
+		Backend:        a.sites.Backend,
 	})
 	a.debrid = debrid.NewService(cfg.Debrid, debrid.Options{DB: a.db, Logger: log.With("component", "debrid")})
 	a.media = debrid.NewEngine(a.debrid, debrid.EngineOptions{Inner: a.engine, Health: a.engine, Cache: a.cache, Logger: log.With("component", "debrid")})
@@ -389,16 +390,10 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		}
 		return ""
 	}})
-	markerFFmpeg := cfg.Transcode.FFmpegPath
-	if a.transcoder != nil {
-		markerFFmpeg = a.transcoder.FFmpegPath()
-	}
-	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Detector: markers.DetectOptions{FFmpeg: markerFFmpeg}, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
-	a.closers = append(a.closers, func() { a.markers.Close() })
+	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
 	a.buildAdoption()
 	// Playback and prefetch.
 	a.playback, err = playback.New(playback.Deps{
-		LocalMedia:   a.localmedia,
 		AugmentMedia: a.enrichSubtitles,
 		Resolver:     a.resolver,
 		Engine:       a.media,
@@ -528,7 +523,6 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 	a.personalize.SetExtraHomeRows(a.extraHomeRows)
 	a.buildInvites()
-	a.cleanHome = &cleanHomeStatus{app: a}
 	a.cfg.Subscribe(a.applyConfig)
 
 	a.buildExtras()
@@ -552,6 +546,7 @@ func (a *App) applyConfig(c config.Config) {
 	a.tmdb.UpdateConfig(c.Catalog)
 	a.llm.UpdateConfig(c.LLM)
 	a.fetcher.UpdateConfig(c.Usenet)
+	a.sites.ApplyConfig(c)
 	a.indexers.ApplyConfig(c)
 	a.debrid.UpdateConfig(c.Debrid)
 	a.resolver.UpdateConfig(c)
@@ -633,9 +628,6 @@ func (a *App) Run(ctx context.Context) error {
 			a.backups.Run(ctx, func(err error) { a.log.Warn("scheduled backup", "err", err) })
 		})
 	})
-	background.start(func() {
-		a.localmedia.Watch(ctx, time.Minute, func(err error) { a.log.Warn("local library scan", "err", err) })
-	})
 	background.start(func() { a.runUpdates(ctx, cancel) })
 	background.start(func() { a.runClusterSync(ctx) })
 	background.start(func() { a.runBudgets(ctx) })
@@ -688,10 +680,10 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) housekeeping(ctx context.Context) {
 	pins := time.NewTicker(5 * time.Minute)
 	defer pins.Stop()
-	// Clean Home and the PMS release check are cluster-wide: leader only.
-	// Pins and seen-token flushes are this node's own.
+	// The PMS release check is cluster-wide: leader only. Pins and
+	// seen-token flushes are this node's own.
+	lastCompat := time.Now()
 	if a.cluster.IsLeader() {
-		a.cleanHome.run(ctx)
 		a.refreshCompatibility(ctx)
 	}
 	_ = a.playback.ReconcilePins(ctx)
@@ -701,8 +693,8 @@ func (a *App) housekeeping(ctx context.Context) {
 			_ = a.users.FlushSeen(context.Background())
 			return
 		case <-pins.C:
-			if a.cluster.IsLeader() && a.cleanHome.due() {
-				a.cleanHome.run(ctx)
+			if a.cluster.IsLeader() && time.Since(lastCompat) > 6*time.Hour {
+				lastCompat = time.Now()
 				a.refreshCompatibility(ctx)
 			}
 			_ = a.playback.ReconcilePins(ctx)

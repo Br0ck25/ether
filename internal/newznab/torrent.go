@@ -316,6 +316,13 @@ func (c *Client) ResolveTorrent(ctx context.Context, r core.Release) (core.Relea
 	if known, ok := knownTorrent(r); ok {
 		return known, nil
 	}
+	if c.Config().IsBuiltin() {
+		b, err := c.backend()
+		if err != nil {
+			return r, err
+		}
+		return b.ResolveTorrent(ctx, r, c.reserve)
+	}
 	if r.NZBURL == "" {
 		return r, fmt.Errorf("newznab: torrent %q has no info hash, magnet or download URL: %w", r.Name, core.ErrReleaseRejected)
 	}

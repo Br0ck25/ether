@@ -26,11 +26,6 @@ var errRequireRemux = errors.New("playback: failover requires remux")
 // resume release when it was resolved for the same profile, else the
 // resolver's answer, moving to the next candidate when a release fails.
 func (m *Manager) openInitial(ctx context.Context, s *session, profile core.QualityProfile) (*generation, error) {
-	if s.prefer == "" {
-		if g, err := m.openLocal(ctx, s, profile); g != nil || err != nil {
-			return g, err
-		}
-	}
 	var res *core.Resolution
 	var cached *probeCache
 	if warm := m.takeWarmResolution(ctx, s.ident, profile, s.caps, s.prefer); warm != nil {

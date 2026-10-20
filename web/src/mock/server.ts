@@ -1,8 +1,8 @@
 /**
- * In-memory fake of the Ether admin API (docs/owner-ui.md plus the existing
- * endpoints). Used by `vite --mode mock` and by the tests; never shipped.
- * It evaluates collection rules against a generated catalogue and builds
- * context-aware Home rows so every screen behaves realistically offline.
+ * In-memory fake of the Ether admin API. Used by `vite --mode mock` and by the
+ * tests; never shipped. It evaluates collection rules against a generated
+ * catalogue and builds context-aware Home rows so every screen behaves
+ * realistically offline.
  */
 import type {
   ActivityDay,
@@ -47,6 +47,7 @@ import {
   type FakeTitle,
 } from "./data";
 import { createReleaseConsoleMock } from "./releases";
+import { createSitesMock } from "./sites";
 import { TEMPLATES } from "./templates";
 
 const NOW = () => new Date();
@@ -205,7 +206,6 @@ function defaultConfig(): EtherConfig {
       minVotes: 100,
       includeAdult: false,
       refreshInterval: "24h0m0s",
-      showUnreleased: false,
     },
     resolver: {
       allowCam: false,
@@ -340,6 +340,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const catalog = buildCatalog();
   const byKey = new Map(catalog.map((t) => [t.key, t]));
   const releaseConsole = createReleaseConsoleMock(catalog);
+  const sites = createSitesMock();
   const state = {
     boot: {
       ok: true,
@@ -347,8 +348,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
       setupComplete: true,
       authenticated: true,
       authRequired: false,
-      localTrusted: true,
-      signIn: true,
       serverName: "Living Room Ether",
       ...opts.bootstrap,
     } as Bootstrap,
@@ -1541,6 +1540,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const seg = p.split("/").filter(Boolean);
     const route = `${method} /${seg.join("/")}`;
 
+    const site = sites.handle(method, seg, body, state.config);
+    if (site) return json(site.body, site.status);
+
     const rc = releaseConsole.handle(method, seg, q, body);
     if (rc)
       return rc.status === 204 ? new Response(null, { status: 204 }) : json(rc.body, rc.status);
@@ -2092,7 +2094,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return handle(method, url, body);
   }
 
-  return { fetch: fetchImpl, state, catalog, evaluate, homeFor, releaseConsole };
+  return { fetch: fetchImpl, state, catalog, evaluate, homeFor, releaseConsole, sites };
 }
 
 export type FakeServer = ReturnType<typeof createFakeServer>;

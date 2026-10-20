@@ -131,8 +131,8 @@ func TestLiveTVDVRGuideProviderAndTuneShapes(t *testing.T) {
 		t.Fatalf("live decision %d %s", decision.Code, decision.Body.String())
 	}
 	start := f.request(t, "GET", "/video/:/transcode/universal/start.m3u8?path="+sessionPath, nil)
-	if start.Code != 307 || !strings.Contains(start.Header().Get("Location"), sessionID+"/0/index.m3u8") {
-		t.Fatalf("live start %d %s", start.Code, start.Header().Get("Location"))
+	if start.Code != 200 || !strings.Contains(start.Body.String(), "#EXTM3U") || start.Header().Get("Location") != "" {
+		t.Fatalf("live start %d %s", start.Code, start.Body.String())
 	}
 	playlist := f.request(t, "GET", sessionPath+"/0/index.m3u8", nil)
 	if playlist.Code != 200 || !strings.Contains(playlist.Body.String(), "/resource/") {
@@ -200,8 +200,8 @@ func (t *liveProbeTranscoder) Decide(info core.MediaInfo, caps core.ClientCaps, 
 	return transcode.Decide(info, caps, opts, transcode.Policy{})
 }
 
-// Cardinality and element names here follow the saved PMS tune handler and its
-// rolling-subscription/grab serializers, rather than the OpenAPI sample.
+// Current publisher native-client tune parsing reads nonempty subscription/grab
+// arrays, grab.Metadata, and a Media array. The older PMS serializer differs.
 func TestNativeTuneReturnsRollingSubscription(t *testing.T) {
 	tc := &liveProbeTranscoder{fakeTranscoder: newFakeTranscoder(core.Decision{}), info: sampleInfo}
 	f, service, c := liveFixture(t, tc)
@@ -224,13 +224,13 @@ func TestNativeTuneReturnsRollingSubscription(t *testing.T) {
 				mc := decodeJSON(t, tune)
 				sub := mc["MediaSubscription"].([]any)[0].(map[string]any)
 				op := sub["MediaGrabOperation"].([]any)[0].(map[string]any)
-				video := op["Video"].(map[string]any)
-				media := video["Media"].(map[string]any)
+				video := op["Metadata"].(map[string]any)
+				media := video["Media"].([]any)[0].(map[string]any)
 				if sub["type"] != float64(4) || sub["channelIdentifier"] != c.ID || op["status"] != "inprogress" || video["genuineMediaAnalysis"] != true {
 					t.Fatal(body)
 				}
 				subID, ok := op["mediaSubscriptionID"].(float64)
-				if !ok || subID <= 0 || sub["key"] != fmt.Sprintf("%.0f", subID) || op["Metadata"] != nil || mc["Metadata"] != nil {
+				if !ok || subID <= 0 || sub["key"] != fmt.Sprintf("%.0f", subID) || op["Video"] != nil || mc["Metadata"] != nil || op["provider"] != f.srv.identity().MachineIdentifier {
 					t.Fatal(body)
 				}
 				uuid := media["uuid"].(string)
@@ -261,9 +261,9 @@ func TestNativeLiveSubscriptionOwnershipAndPlayback(t *testing.T) {
 	}
 	sub := decodeJSON(t, tune)["MediaSubscription"].([]any)[0].(map[string]any)
 	op := sub["MediaGrabOperation"].([]any)[0].(map[string]any)
-	video := op["Video"].(map[string]any)
+	video := op["Metadata"].(map[string]any)
 	path := video["key"].(string)
-	id := video["Media"].(map[string]any)["uuid"].(string)
+	id := video["Media"].([]any)[0].(map[string]any)["uuid"].(string)
 	subPath := "/media/subscriptions/" + sub["key"].(string)
 	opPath := op["key"].(string)
 	for _, target := range []string{subPath, opPath} {
@@ -293,11 +293,8 @@ func TestNativeLiveSubscriptionOwnershipAndPlayback(t *testing.T) {
 		t.Fatalf("selected live item cannot reach MDE: %d %s", decision.Code, decision.Body.String())
 	}
 	start := f.request(t, "GET", "/video/:/transcode/universal/start.m3u8?path="+url.QueryEscape(path), headers)
-	if start.Code != http.StatusTemporaryRedirect || !strings.Contains(start.Header().Get("Location"), id+"/0/index.m3u8") {
+	if start.Code != http.StatusOK || !strings.Contains(start.Body.String(), "#EXTM3U") || start.Header().Get("Location") != "" {
 		t.Fatalf("live playback bootstrap did not reach media: %d %s", start.Code, start.Body.String())
-	}
-	if media := f.request(t, "GET", start.Header().Get("Location"), headers); media.Code != 200 || !strings.Contains(media.Body.String(), "#EXTM3U") {
-		t.Fatalf("live subscription cannot obtain a media playlist: %d %s", media.Code, media.Body.String())
 	}
 	for _, state := range []string{"playing", "stopped"} {
 		timeline := f.request(t, "GET", "/:/timeline?key="+url.QueryEscape(path)+"&ratingKey="+id+"&state="+state, headers)

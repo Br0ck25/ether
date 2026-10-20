@@ -96,6 +96,9 @@ func (s *Service) ServeDASHPart(w http.ResponseWriter, r *http.Request, id strin
 		writeStreamError(w, core.ErrNotFound)
 		return
 	}
+	if !init && r.Method != http.MethodHead {
+		s.touchMedia(ss)
+	}
 	if init {
 		ds.ServeInit(w, r, rep)
 	} else {

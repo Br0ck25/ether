@@ -1,0 +1,64 @@
+---
+# Synthetic definition for tests: a JSON API tracker.
+id: fakejson
+name: Fake JSON
+description: A synthetic JSON API tracker
+language: en-US
+type: private
+links:
+  - https://fakejson.invalid/
+
+caps:
+  categorymappings:
+    - {id: movies, cat: Movies, desc: Movies}
+    - {id: tv, cat: TV, desc: TV}
+  modes:
+    search: [q]
+    movie-search: [q, imdbid, tmdbid]
+
+settings:
+  - name: apikey
+    type: password
+    label: API key
+
+search:
+  headers:
+    X-Api-Key: ["{{ .Config.apikey }}"]
+  paths:
+    - path: api/search
+      response:
+        type: json
+        noResultsMessage: '{"data":null}'
+  inputs:
+    q: "{{ .Keywords }}"
+    imdb: "{{ .Query.IMDBIDShort }}"
+    tmdb: "{{ .Query.TMDBID }}"
+    cat: "{{ join .Categories \",\" }}"
+  rows:
+    selector: data.torrents:has(cached:contains(True))
+    count:
+      selector: data.count
+  fields:
+    title:
+      selector: name
+    infohash:
+      selector: hash
+    size:
+      selector: size
+    seeders:
+      selector: stats.seeders
+    leechers:
+      selector: stats.leechers
+    date:
+      selector: added
+      filters:
+        - name: dateparse
+          args: "yyyy-MM-ddTHH:mm:ss"
+    category:
+      selector: cat
+    imdbid:
+      selector: imdb
+    freeleech:
+      selector: free
+    downloadvolumefactor:
+      text: "{{ if eq .Result.freeleech \"True\" }}0{{ else }}1{{ end }}"

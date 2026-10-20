@@ -198,8 +198,6 @@ export const PLEX: FieldGroup[] = [
         help: "Leave empty to use the tracked public PMS version.",
       },
       { key: "latestCompatibilityVersion", label: "Latest public PMS version", kind: "readonly" },
-      // Edited at Home screens › Clean Home.
-      { key: "disableCleanHome", label: "Clean Home", kind: "hidden" },
     ],
   },
 ];
@@ -278,7 +276,7 @@ export const CATALOG: FieldGroup[] = [
         key: "tmdbKey",
         label: "Your TMDB API key",
         kind: "secret",
-        help: "Optional. Leave empty to use the key bundled with Ether.",
+        help: "Your personal TMDB v3 API key or v4 read-access token.",
       },
       {
         key: "language",
@@ -302,8 +300,6 @@ export const CATALOG: FieldGroup[] = [
       { key: "minPopularity", label: "Minimum popularity", kind: "number", min: 0, step: 1 },
       { key: "minVotes", label: "Minimum votes", kind: "number", min: 0, step: 10 },
       { key: "includeAdult", label: "Include adult titles", kind: "bool" },
-      // Legacy: the server always enforces release dates.
-      { key: "showUnreleased", label: "Show unreleased titles", kind: "hidden" },
     ],
   },
 ];
@@ -544,12 +540,6 @@ export const MARKERS: FieldGroup[] = [
         help: "Use the public TheIntroDB lookup, cached per episode and runtime.",
       },
       { key: "apiKey", label: "Optional TheIntroDB key", kind: "secret" },
-      {
-        key: "detectCached",
-        label: "Detect markers from local media",
-        kind: "bool",
-        help: "Analyze complete local files in the background. Detection is bounded and does not download entire Usenet releases.",
-      },
     ],
   },
 ];

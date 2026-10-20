@@ -30,7 +30,6 @@ import (
 // Deps are the components playback orchestrates. Resolver, Engine,
 // Transcoder, Catalog and SelectProfile are required.
 type Deps struct {
-	LocalMedia   LocalMedia                                                                                          // optional adopted files, tried before Usenet
 	AugmentMedia func(context.Context, *core.Title, *core.User, *core.Resolution, core.MediaSource, *core.MediaInfo) // synchronous enrichment before publishing a generation
 	Resolver     core.Resolver
 	Engine       core.Engine
@@ -75,7 +74,7 @@ type Deps struct {
 type Options struct {
 	// DataDir is where NZBs of resumable releases are kept (DataDir/playback/nzb).
 	DataDir string
-	// IdleTimeout ends sessions nobody read from (default 15m).
+	// IdleTimeout ends sessions without viewer activity (default 2m).
 	IdleTimeout time.Duration
 	// WriteStallTimeout fails a direct-play write that makes no progress
 	// for this long, so a client that stopped reading releases its source
@@ -137,7 +136,7 @@ func (o *Options) defaults() {
 			*d = v
 		}
 	}
-	def(&o.IdleTimeout, 15*time.Minute)
+	def(&o.IdleTimeout, 2*time.Minute)
 	def(&o.WriteStallTimeout, o.IdleTimeout)
 	def(&o.StoppedGrace, time.Minute)
 	def(&o.PrepareTimeout, 90*time.Second)
@@ -865,9 +864,8 @@ func (m *Manager) RequiresRemux(sessionID string) bool {
 	return s.requiresRemux
 }
 
-// Timeline feeds a client's timeline state into session liveness: playing,
-// paused and buffering keep the user's sessions for the title alive;
-// stopped ends them after Options.StoppedGrace.
+// Timeline renews a viewer's lease while playing or paused. Buffering alone
+// cannot preserve a failed stream; stopped ends it after Options.StoppedGrace.
 func (m *Manager) Timeline(userID int64, key core.RatingKey, state string) {
 	now := m.now()
 	m.mu.Lock()
@@ -883,7 +881,7 @@ func (m *Manager) Timeline(userID int64, key core.RatingKey, state string) {
 			s.mu.Lock()
 			s.stopAt = now.Add(m.opts.StoppedGrace)
 			s.mu.Unlock()
-		} else {
+		} else if state == "playing" || state == "paused" {
 			s.touch(now)
 		}
 	}

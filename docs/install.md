@@ -125,7 +125,10 @@ outside your LAN:
 - LAN discovery additionally uses UDP 32410–32414 (GDM) — only relevant
   inside your network, never forward it.
 - Behind a reverse proxy/TLS terminator, keep the path and `X-Plex-*`
-  headers intact and point *Custom connection URLs* at the proxy.
+  headers intact and point *Custom connection URLs* (or *Public host* on
+  port 443 with *Secure connections* set to *Required*) at your `https://`
+  domain; Ether publishes that HTTPS endpoint directly to plex.tv without
+  requiring a `plex.direct` certificate.
 
 ## Running a cluster
 
@@ -158,8 +161,6 @@ tokens new nodes use.
 - **A port forward per node** for remote access: each node needs its own
   external port (for example 32400 to the first node, 32401 to the second),
   or UPnP. Set the public port on each node's *Plex & remote access* page.
-- **The same mount paths for local media.** Local media folders are a shared
-  setting, so mount them at the same path on every node.
 - **One public IP for debrid.** Debrid services may flag one account used
   from several addresses at once. Keep every node behind the same internet
   connection; the Cluster page warns you when nodes reach the internet from

@@ -20,12 +20,12 @@ func Defaults(dataDir string) Config {
 	return Config{
 		Usenet:   Usenet{MinIdle: 2},
 		Debrid:   Debrid{CachedOnly: true, RemoveUncached: true},
-		Markers:  Markers{TheIntroDB: true, DetectCached: true},
+		Markers:  Markers{TheIntroDB: true},
 		Database: Database{Driver: DatabaseSQLite},
 		Personalize: Personalize{
 			PostPlay: true, PostPlayPrebuffer: true, MicroReasons: true, SessionIntent: true,
 		},
-		Extras: Extras{LocalTrailers: true, PrewarmBytes: 48 << 20, ResolverTimeout: Duration(20 * time.Second)},
+		Extras: Extras{PrewarmBytes: 48 << 20, ResolverTimeout: Duration(20 * time.Second)},
 		Server: Server{
 			Port:               32400,
 			BindAddress:        "0.0.0.0",
@@ -55,7 +55,6 @@ func Defaults(dataDir string) Config {
 			MinPopularity:   5,
 			MinVotes:        100,
 			RefreshInterval: Duration(24 * time.Hour),
-			ShowUnreleased:  false,
 		},
 		Resolver: Resolver{
 			HealthSamples:      12,

@@ -1,12 +1,11 @@
-# Ether — developer makefile. See docs/development.md.
+# Ether — developer makefile.
 GO ?= go
 VERSION ?= dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
 LDFLAGS := -s -w \
 	-X github.com/braedonsaunders/ether/internal/updater.Version=$(VERSION) \
 	-X github.com/braedonsaunders/ether/internal/updater.Commit=$(COMMIT) \
-	-X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64=$(ETHER_UPDATE_PUBLIC_KEY) \
-	-X github.com/braedonsaunders/ether/internal/tmdb.BundledAPIKey=$(ETHER_TMDB_KEY)
+	-X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64=$(ETHER_UPDATE_PUBLIC_KEY)
 
 .PHONY: build test lint vet web spike run tray ffmpeg icons release-snapshot keys clean
 
@@ -32,7 +31,7 @@ vet:
 web:
 	@if [ -f web/package.json ]; then cd web && npm ci && npm run build; else echo "web/ not present yet"; fi
 
-## spike: run the server in spike mode (local files library; see docs/development.md)
+## spike: run the server in spike mode (local files library)
 spike:
 	CGO_ENABLED=0 $(GO) run ./cmd/ether
 

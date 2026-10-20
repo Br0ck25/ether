@@ -7,7 +7,6 @@ name: Release
 # degrade to unsigned artifacts and are called out in the job summary):
 #   ETHER_UPDATE_PRIVATE_KEY  base64 ed25519 (cmd/ether-release-sign keygen)
 #   ETHER_UPDATE_PUBLIC_KEY   base64 ed25519 public half (baked into builds)
-#   ETHER_TMDB_KEY            bundled TMDB API key
 #   MACOS_CERT_P12            base64 Developer ID .p12
 #   MACOS_CERT_PASSWORD       its password
 #   MACOS_SIGN_IDENTITY       "Developer ID Application: ... (TEAMID)"
@@ -65,7 +64,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ETHER_UPDATE_PUBLIC_KEY: ${{ secrets.ETHER_UPDATE_PUBLIC_KEY }}
-          ETHER_TMDB_KEY: ${{ secrets.ETHER_TMDB_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: goreleaser-dist
@@ -100,7 +98,6 @@ jobs:
           VERSION: ${{ needs.goreleaser.outputs.version }}
           COMMIT: ${{ github.sha }}
           ETHER_UPDATE_PUBLIC_KEY: ${{ secrets.ETHER_UPDATE_PUBLIC_KEY }}
-          ETHER_TMDB_KEY: ${{ secrets.ETHER_TMDB_KEY }}
           SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
@@ -145,7 +142,6 @@ jobs:
           VERSION: ${{ needs.goreleaser.outputs.version }}
           COMMIT: ${{ github.sha }}
           ETHER_UPDATE_PUBLIC_KEY: ${{ secrets.ETHER_UPDATE_PUBLIC_KEY }}
-          ETHER_TMDB_KEY: ${{ secrets.ETHER_TMDB_KEY }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
           $env:Path += ";C:\Program Files (x86)\NSIS"

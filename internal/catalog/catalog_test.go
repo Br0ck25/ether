@@ -18,13 +18,13 @@ func TestGetMovieOnDemand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Title != "Fight Club" || m.IDs.IMDB != "tt0137523" || m.ContentRating != "R" || m.Runtime != 139*time.Minute {
+	if m.Title != "Fjord Harbor" || m.IDs.IMDB != "tt0137523" || m.ContentRating != "R" || m.Runtime != 139*time.Minute {
 		t.Fatalf("movie: %+v", m)
 	}
 	if m.CollectionID != 10 || m.CollectionName != "Saga Collection" || m.LogoPath != "/logo.png" {
 		t.Fatalf("collection/logo: %+v", m)
 	}
-	if len(m.Cast) != 1 || m.Cast[0].Name != "Brad Pitt" || len(m.Directors) != 1 || m.Directors[0].Name != "David Fincher" || len(m.Writers) != 1 {
+	if len(m.Cast) != 1 || m.Cast[0].Name != "Theo Varga" || len(m.Directors) != 1 || m.Directors[0].Name != "Mara Ellison" || len(m.Writers) != 1 {
 		t.Fatalf("credits: cast=%v dir=%v wr=%v", m.Cast, m.Directors, m.Writers)
 	}
 	if len(m.Genres) != 1 || m.Genres[0] != "Drama" || len(m.Studios) != 1 || len(m.Countries) != 1 {
@@ -33,7 +33,7 @@ func TestGetMovieOnDemand(t *testing.T) {
 	if len(m.Keywords) != 2 || m.Keywords[0] != "dual identity" {
 		t.Fatalf("keywords: %v", m.Keywords)
 	}
-	if m.SortTitle != "fight club" {
+	if m.SortTitle != "fjord harbor" {
 		t.Fatalf("sort title %q", m.SortTitle)
 	}
 	// Cached in mirror: browsable because it meets thresholds.
@@ -118,7 +118,7 @@ func TestSyncBuildsBrowsableSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Movies: Fight Club (pop+votes), Family Fun (pop), Old Classic (votes). Not Obscure Nothing.
+	// Movies: Fjord Harbor (pop+votes), Family Fun (pop), Old Classic (votes). Not Obscure Nothing.
 	if stats.BrowsableMovies != 3 || stats.BrowsableShows != 1 {
 		t.Fatalf("stats: %+v", stats)
 	}
@@ -150,16 +150,16 @@ func TestBrowseFiltersSortPaging(t *testing.T) {
 		want []string
 	}{
 		{"genre", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Genres: []string{"Family"}}}, []string{"Family Fun"}},
-		{"year", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, YearFrom: 1990, YearTo: 1999}}, []string{"Fight Club"}},
+		{"year", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, YearFrom: 1990, YearTo: 1999}}, []string{"Fjord Harbor"}},
 		{"minRating", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, MinRating: 8.5}, Sort: core.SortRating, Desc: true}, []string{"Old Classic"}},
 		{"maxRuntime", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, MaxRuntime: 2 * time.Hour}}, []string{"Family Fun"}},
-		{"person", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 287}}, []string{"Fight Club"}},
-		{"studio", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Studio: "Fox 2000"}}, []string{"Fight Club"}},
-		{"country", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Countries: []string{"United States of America"}}}, []string{"Fight Club"}},
+		{"person", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Person: 287}}, []string{"Fjord Harbor"}},
+		{"studio", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Studio: "Northlight"}}, []string{"Fjord Harbor"}},
+		{"country", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Countries: []string{"United States of America"}}}, []string{"Fjord Harbor"}},
 		{"contentRatings", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, ContentRatings: []string{"PG"}}}, []string{"Family Fun"}},
 		{"maxContentRating PG excludes R", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, MaxContentRating: "PG"}}, []string{"Family Fun"}}, // Old Classic unrated -> allowed
-		{"collection", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Collection: 10}}, []string{"Fight Club"}},
-		{"query", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Query: "fight"}}, []string{"Fight Club"}},
+		{"collection", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Collection: 10}}, []string{"Fjord Harbor"}},
+		{"query", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Query: "fjord"}}, []string{"Fjord Harbor"}},
 		{"language", core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Languages: []string{"fr"}}}, []string{}},
 	}
 	for _, tc := range cases {
@@ -196,7 +196,7 @@ func TestBrowseFiltersSortPaging(t *testing.T) {
 	if err != nil || page.Total != 3 || len(page.Items) != 2 {
 		t.Fatalf("page1: %+v %v", page, err)
 	}
-	if page.Items[0].Title != "Family Fun" || page.Items[1].Title != "Fight Club" {
+	if page.Items[0].Title != "Family Fun" || page.Items[1].Title != "Fjord Harbor" {
 		t.Fatalf("title sort: %v", []string{page.Items[0].Title, page.Items[1].Title})
 	}
 	page2, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie}, Sort: core.SortTitle, Limit: 2, Offset: 2})
@@ -205,7 +205,7 @@ func TestBrowseFiltersSortPaging(t *testing.T) {
 	}
 	// Popularity desc.
 	pop, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie}, Sort: core.SortPopularity, Desc: true})
-	if err != nil || pop.Items[0].Title != "Fight Club" {
+	if err != nil || pop.Items[0].Title != "Fjord Harbor" {
 		t.Fatalf("pop sort: %+v %v", pop, err)
 	}
 }
@@ -267,7 +267,7 @@ func TestListSimilarCollectionByExternal(t *testing.T) {
 	ctx := context.Background()
 	c := newTestCatalog(t, fakeTMDB(t))
 	items, err := c.List(ctx, "trending_day", core.TypeMovie, 10)
-	if err != nil || len(items) != 1 || items[0].Title != "Fight Club" {
+	if err != nil || len(items) != 1 || items[0].Title != "Fjord Harbor" {
 		t.Fatalf("list: %v %v", items, err)
 	}
 	all, err := c.List(ctx, "trending_week", "", 10)
@@ -282,7 +282,7 @@ func TestListSimilarCollectionByExternal(t *testing.T) {
 		t.Fatalf("recommendations first: %v", sim)
 	}
 	name, parts, err := c.Collection(ctx, 10)
-	if err != nil || name != "Saga Collection" || len(parts) != 2 || parts[0].Title != "Fight Club" {
+	if err != nil || name != "Saga Collection" || len(parts) != 2 || parts[0].Title != "Fjord Harbor" {
 		t.Fatalf("collection: %q %v %v", name, parts, err) // sorted by release
 	}
 	byIMDB, err := c.ByExternalID(ctx, "imdb", "tt0137523")
@@ -324,8 +324,8 @@ func TestRatingRankOrdering(t *testing.T) {
 
 func TestUnreleasedVisibility(t *testing.T) {
 	ctx := context.Background()
-	for _, legacyFlag := range []bool{false, true} {
-		c := newTestCatalogCfg(t, nil, config.Catalog{ShowUnreleased: legacyFlag})
+	{
+		c := newTestCatalogCfg(t, nil, config.Catalog{})
 		for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
 			for i, date := range []time.Time{time.Now().AddDate(1, 0, 0), {}} {
 				key := core.MovieKey(int64(9000 + i))
@@ -339,16 +339,14 @@ func TestUnreleasedVisibility(t *testing.T) {
 				if _, err := c.Get(ctx, key); !errors.Is(err, core.ErrNotFound) {
 					t.Fatalf("Get returned unreleased title: %v", err)
 				}
-				if catalog.MeetsThreshold(config.Catalog{ShowUnreleased: legacyFlag}, title, time.Now()) {
-					t.Fatal("legacy flag bypassed release gate")
+				if catalog.MeetsThreshold(config.Catalog{}, title, time.Now()) {
+					t.Fatal("unreleased title met the catalogue threshold")
 				}
 			}
 		}
-		for _, override := range []bool{false, true} {
-			page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{IncludeUnreleased: override}})
-			if err != nil || page.Total != 0 || len(page.Items) != 0 {
-				t.Fatalf("browse %+v: %v", page, err)
-			}
+		page, err := c.Browse(ctx, core.BrowseQuery{})
+		if err != nil || page.Total != 0 || len(page.Items) != 0 {
+			t.Fatalf("browse %+v: %v", page, err)
 		}
 		titles, err := c.Search(ctx, "Unreleased", nil, 20)
 		if err != nil || len(titles) != 0 {

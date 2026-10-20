@@ -389,6 +389,7 @@ func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sa
 				statReceived++
 			}
 			if ev.missing {
+				out.err = nil // a confirmed miss takes precedence over another sample's timeout
 				out.missing = 1
 				out.failFast = decided < len(refs)
 				kind := "STAT"
@@ -404,7 +405,8 @@ func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sa
 			}
 			if ev.err != nil && parent.Err() == nil {
 				out.err = ev.err
-				return out
+				// Another sample may still prove the release is missing.
+				// Preserve this transient error, but let a confirmed miss win.
 			}
 		}
 	}

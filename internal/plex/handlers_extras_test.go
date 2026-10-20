@@ -75,13 +75,13 @@ func (p *warmingPlayback) count() int {
 var (
 	fightClubTrailer = extras.Extra{
 		Key: core.ExtraKey(101), ParentKey: fightClub.Key, ParentTitle: fightClub.Title,
-		Title: "Fight Club Trailer", Subtype: "trailer", ExtraType: 1,
+		Title: "Fjord Harbor Trailer", Subtype: "trailer", ExtraType: 1,
 		Site: "YouTube", SiteKey: "vKQi3bBA1y8", Language: "en", Official: true,
 		Size: 1080, Duration: 2 * time.Minute, Source: extras.SourceCommand,
 	}
 	fightClubFeaturette = extras.Extra{
 		Key: core.ExtraKey(102), ParentKey: fightClub.Key, ParentTitle: fightClub.Title,
-		Title: "Making Fight Club", Subtype: "featurette", ExtraType: 6,
+		Title: "Making Fjord Harbor", Subtype: "featurette", ExtraType: 6,
 		Site: "Vimeo", SiteKey: "123456789", Language: "en", Source: extras.SourceCommand,
 	}
 	alienTrailer = extras.Extra{
@@ -128,7 +128,7 @@ func TestExtrasListAndDetailXML(t *testing.T) {
 	}
 	// extraTypes filter.
 	rec = f.get(t, "/library/metadata/"+fightClub.Key.String()+"?includeExtras=1&extraTypes=1")
-	if body = rec.Body.String(); !strings.Contains(body, `<Extras size="1">`) || strings.Contains(body, "Making Fight Club") {
+	if body = rec.Body.String(); !strings.Contains(body, `<Extras size="1">`) || strings.Contains(body, "Making Fjord Harbor") {
 		t.Fatalf("extraTypes filter\n%s", body)
 	}
 	// The extra itself resolves as metadata.
@@ -143,7 +143,7 @@ func TestExtrasListAndDetailXML(t *testing.T) {
 		t.Fatalf("disabled extras advertised\n%s", rec.Body.String())
 	}
 	rec = f.get(t, "/library/metadata/"+fightClub.Key.String()+"/extras")
-	if strings.Contains(rec.Body.String(), "Fight Club Trailer") {
+	if strings.Contains(rec.Body.String(), "Fjord Harbor Trailer") {
 		t.Fatalf("disabled extras listed\n%s", rec.Body.String())
 	}
 }

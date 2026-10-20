@@ -65,7 +65,6 @@ var mixedSections = map[string]map[string]Scope{
 		"clusterWeight": Local,
 	},
 	"plex": {
-		"disableCleanHome":           Shared,
 		"compatibilityVersion":       Shared,
 		"latestCompatibilityVersion": Shared,
 		"disableVersionTracking":     Shared,
@@ -125,10 +124,15 @@ var mixedSections = map[string]map[string]Scope{
 		"maxConcurrent":   Local,
 		"diskBudgetBytes": Local,
 	},
+	"indexerSites": {
+		// One trusted definitions source for the cluster; FlareSolverr
+		// usually runs beside each node (http://localhost:8191).
+		"definitionsUrl":  Shared,
+		"flareSolverrUrl": Local,
+	},
 	"extras": {
-		"enabled":       Shared,
-		"localTrailers": Shared,
-		"prewarmBytes":  Shared,
+		"enabled":      Shared,
+		"prewarmBytes": Shared,
 		// The resolver tool is a binary on this node's disk.
 		"resolverCommand": Local,
 		"resolverArgs":    Local,

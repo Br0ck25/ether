@@ -52,7 +52,7 @@ func defaultOptions() options {
 	return options{
 		runner:         ExecRunner{},
 		detectHW:       true,
-		idleTimeout:    10 * time.Minute,
+		idleTimeout:    2 * time.Minute,
 		segmentTimeout: 45 * time.Second,
 		restartAhead:   24 * time.Second,
 		maxAhead:       2 * time.Minute,
@@ -70,7 +70,7 @@ func WithRunner(r Runner) Option { return func(o *options) { o.runner = r } }
 // WithoutHWDetection skips the startup hardware probe and encodes on CPU.
 func WithoutHWDetection() Option { return func(o *options) { o.detectHW = false } }
 
-// WithIdleTimeout sets how long an unrequested session lives (default 10m).
+// WithIdleTimeout sets how long an unrequested session lives (default 2m).
 func WithIdleTimeout(d time.Duration) Option { return func(o *options) { o.idleTimeout = d } }
 
 // WithSegmentTimeout bounds how long ServeSegment waits for ffmpeg
@@ -366,6 +366,14 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	adapt := adaptiveFromConfig(m.cfg)
 	m.mu.Unlock()
 	rungs := buildRungs(req.Info, d, adapt)
+	if proto == core.ProtocolHLS && d.Container == ContainerMatroska && len(rungs) > 1 {
+		// Plex's native player probes every rendition's initialization and
+		// early segments concurrently. These rungs share one encoder, so
+		// those probes would repeatedly stop the active run. Advertise the
+		// selected quality alone until rungs can produce independently.
+		// Explicit Plex quality changes still start a separate decision.
+		rungs = rungs[:1]
+	}
 
 	// HLS playlists start at the offset; a DASH MPD always spans the whole
 	// title and the first run starts at the offset's segment.
@@ -395,9 +403,14 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		if d.VideoCopy {
 			steadyMode = ModeCopy
 		}
+		// Pure copy output cannot force the short opening GOPs. Chaining a
+		// run at the nominal ramp boundary can seek back to an earlier source
+		// keyframe and replay it. TS ramps encode their opening GOPs; other
+		// copy containers keep one continuous run.
+		fastStart := adapt.FastStart && v != nil && (!d.VideoCopy || d.Container == ContainerMPEGTS)
 		plan = buildTimeline(span, segDur, timelineOptions{
 			steadyMode: steadyMode,
-			fastStart:  adapt.FastStart && v != nil,
+			fastStart:  fastStart,
 			rampSegs:   adapt.RampSegs,
 			rampDur:    adapt.RampDur,
 			keyframes:  req.Info.Keyframes,

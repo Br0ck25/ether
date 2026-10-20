@@ -7,6 +7,41 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
+const failedHealthTTL = 2 * time.Minute
+
+// Failed sources are skipped briefly, so retries reach lower-ranked releases
+// instead of probing the same DMCA'd articles again. This is not MarkBad: a new
+// provider, a repair or a recovered feed can make the source usable later.
+func (s *Service) noteFailedHealth(releaseID string) {
+	if releaseID == "" {
+		return
+	}
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failedHealth == nil {
+		s.failedHealth = make(map[string]time.Time)
+	}
+	if len(s.failedHealth) >= 10_000 {
+		for id, at := range s.failedHealth {
+			if now.Sub(at) >= failedHealthTTL {
+				delete(s.failedHealth, id)
+			}
+		}
+		if len(s.failedHealth) >= 10_000 {
+			clear(s.failedHealth)
+		}
+	}
+	s.failedHealth[releaseID] = now
+}
+
+func (s *Service) recentlyFailedHealth(releaseID string) bool {
+	s.mu.RLock()
+	at, ok := s.failedHealth[releaseID]
+	s.mu.RUnlock()
+	return ok && s.now().Sub(at) < failedHealthTTL
+}
+
 func init() {
 	store.Register("resolver", 2, `
 CREATE TABLE resolver_verified (

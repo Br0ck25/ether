@@ -80,33 +80,30 @@ func TestLayeredValidation(t *testing.T) {
 		t.Fatalf("validation = %v", err)
 	}
 }
-func TestLegacyLayoutMigrationPersistsAndDraftDoesNotWrite(t *testing.T) {
+func TestEmptyLayoutByDefaultAndDraftDoesNotWrite(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
-	rules := []core.LayoutRule{{Scope: core.LayoutScope{All: true}, MaxRows: 8, Rows: []core.LayoutRowRule{{HubID: KindTrending, Action: core.LayoutPin, Position: ip(2)}}}, {Scope: core.LayoutScope{UserIDs: []int64{1}}, Rows: []core.LayoutRowRule{{HubID: KindTop10, Action: core.LayoutHide}}}}
-	raw, _ := json.Marshal(rules)
-	if _, err := h.db.Exec(`INSERT INTO personalize_layout(id,rules,updated_at) VALUES(1,?,?)`, string(raw), testNow.UnixMilli()); err != nil {
+	empty, err := h.e.store.homeLayout(ctx)
+	if err != nil || len(empty.Global) != 0 || len(empty.Viewers) != 0 || empty.Global == nil || empty.Viewers == nil {
+		t.Fatalf("unsaved layout = %+v %v", empty, err)
+	}
+	var stored int
+	if err := h.db.QueryRow(`SELECT COUNT(*) FROM personalize_home_layout`).Scan(&stored); err != nil || stored != 0 {
+		t.Fatal("reading the default layout wrote a document", stored, err)
+	}
+	doc := core.HomeLayout{
+		Global:  []core.LayoutPage{{Section: "home", MaxRows: 8, Rows: []core.RowPolicy{{Row: KindTrending, Status: "always", Slot: 3}}}},
+		Viewers: []core.ViewerLayout{{UserID: 1, Pages: []core.LayoutPage{{Section: "home", Rows: []core.RowPolicy{{Row: KindTop10, Status: "off"}}}}}},
+	}
+	if _, err := h.e.SetHomeLayout(ctx, doc); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.e.store.db.Exec(`DELETE FROM personalize_home_layout`); err != nil {
-		t.Fatal(err)
-	}
-	migrated, err := h.e.store.homeLayout(ctx, rules)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := normalizeHomeLayout(migrated); err != nil {
-		t.Fatalf("migrated document cannot be edited: %v", err)
-	}
-	if _, err := h.e.SetLayout(ctx, rules); err != nil {
-		t.Fatal(err)
-	}
-	d, err := h.e.store.homeLayout(ctx, nil)
+	d, err := h.e.store.homeLayout(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d.Global[0].Rows[0].Slot != 3 || d.Viewers[0].Pages[0].Rows[0].Status != "off" {
-		t.Fatalf("migration = %+v", d)
+		t.Fatalf("saved layout = %+v", d)
 	}
 	var rawBefore string
 	if err := h.e.store.db.QueryRow(`SELECT document FROM personalize_home_layout WHERE id=1`).Scan(&rawBefore); err != nil {
@@ -300,13 +297,6 @@ func TestPreviewRechecksCurrentViewerPolicyForEveryProducer(t *testing.T) {
 func TestDesignerHasOnePersistentLayout(t *testing.T) {
 	h := newHarness(t, nil)
 	ctx := context.Background()
-	if _, err := h.e.SetLayout(ctx, []core.LayoutRule{{Scope: core.LayoutScope{All: true}, Rows: []core.LayoutRowRule{{HubID: KindTrending, Action: core.LayoutHide}}}}); err != nil {
-		t.Fatal(err)
-	}
-	var count int
-	if err := h.db.QueryRow(`SELECT COUNT(*) FROM personalize_layout`).Scan(&count); err != nil || count != 0 {
-		t.Fatal("legacy model still written", count, err)
-	}
 	d, _ := h.e.HomeLayout(ctx)
 	d.Viewers = []core.ViewerLayout{{UserID: 1, Pages: []core.LayoutPage{{Section: "home", DeviceMaxRows: map[string]int{"tv": 8}, Rows: []core.RowPolicy{{Row: KindTrending, Status: "always", Slot: 2, MaxDaysPerWeek: 4}}}}}}
 	if _, err := h.e.SetHomeLayout(ctx, d); err != nil {
@@ -320,9 +310,5 @@ func TestDesignerHasOnePersistentLayout(t *testing.T) {
 	loaded, err := e2.HomeLayout(ctx)
 	if err != nil || len(loaded.Viewers) != 1 || loaded.Viewers[0].Pages[0].Rows[0].MaxDaysPerWeek != 4 || loaded.Viewers[0].Pages[0].DeviceMaxRows["tv"] != 8 {
 		t.Fatal("canonical layout lost advanced viewer constraints", loaded, err)
-	}
-	legacy, err := e2.Layout(ctx)
-	if err != nil || len(legacy) != 2 {
-		t.Fatal("compatibility view did not reflect document", legacy, err)
 	}
 }
