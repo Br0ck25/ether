@@ -152,7 +152,12 @@ export const PAGES: PageDef[] = [
     sections: [],
     keywords: "restore migrate csv letterboxd snapshot",
   },
-  { href: "/updates", title: "Updates", sections: [], keywords: "version channel beta" },
+  {
+    href: "/updates",
+    title: "Updates",
+    sections: [],
+    keywords: "version channel beta maintenance window update now install",
+  },
   {
     href: "/troubleshooting",
     title: "Troubleshooting",

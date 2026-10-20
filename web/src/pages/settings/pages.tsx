@@ -1,4 +1,4 @@
-import { SettingsSection, toast } from "@braedonsaunders/appkit-ui";
+import { toast } from "@braedonsaunders/appkit-ui";
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../../app-context";
@@ -6,7 +6,6 @@ import { ConfigSection } from "../../components/ConfigSection";
 import { ErrorPanel } from "../../components/feedback";
 import { DomainPage } from "../../components/layout";
 import { RemoteDiagnostics } from "../../components/RemoteDiagnostics";
-import { SettingsRow } from "../../components/SettingsRow";
 import { api } from "../../lib/api";
 import { humanizeKey, isPlainObject } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
@@ -14,7 +13,7 @@ import { BackupsAndImport } from "./Backups";
 import { ConnectedServices } from "./ConnectedServices";
 import { inferField } from "./SchemaForm";
 import * as S from "./schema";
-import { PlexStatus } from "./sections";
+import { PlexStatus, UpdatesStatus } from "./sections";
 
 /**
  * config.json sections with a home somewhere in the UI. Any other object the
@@ -145,11 +144,10 @@ export function BackupsPage() {
 }
 
 export function UpdatesPage() {
-  const { boot } = useApp();
   return (
     <DomainPage
       title="Updates"
-      description="Release channel and automatic updates."
+      description="Release channel, maintenance window and automatic updates."
       base="/updates"
     >
       <ConfigSection
@@ -157,18 +155,7 @@ export function UpdatesPage() {
         endpoint="updates"
         groups={S.UPDATES}
         label="Updates"
-        before={() => (
-          <SettingsSection title="This server">
-            <SettingsRow
-              title="Installed version"
-              control={
-                <code className="rounded bg-bg-subtle px-2 py-1 text-xs text-fg-muted">
-                  {boot.version || "—"}
-                </code>
-              }
-            />
-          </SettingsSection>
-        )}
+        before={() => <UpdatesStatus />}
       />
     </DomainPage>
   );

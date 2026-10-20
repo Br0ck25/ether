@@ -213,6 +213,22 @@ export const CACHE: FieldGroup[] = [
         kind: "bool",
         help: "Keeps the resume point of unfinished titles cached.",
       },
+      {
+        key: "inProgressPinMaxAge",
+        label: "Stop keeping a title warm after",
+        kind: "duration",
+        placeholder: "720h",
+        help: "An unfinished title nobody has watched for this long loses its cache pin. Empty uses 30 days.",
+      },
+      {
+        key: "inProgressPinPercent",
+        label: "Share of the cache for in-progress titles",
+        kind: "number",
+        min: 0,
+        max: 100,
+        step: 5,
+        help: "Percent of the disk budget unfinished titles may keep pinned; the least recently watched lose their pin first. 0 uses 50.",
+      },
     ],
   },
 ];
