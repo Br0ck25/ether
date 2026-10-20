@@ -2,6 +2,7 @@ package playback
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -490,6 +492,8 @@ type harness struct {
 	cfg      config.Config
 	dataDir  string
 	noCache  bool // build the Manager without a segment cache
+	db       *sql.DB         // shared database (two-node tests); nil opens a fresh one
+	node     clusterbus.Node // cluster membership; nil = standalone
 }
 
 var (
@@ -532,11 +536,15 @@ func newHarness(t *testing.T, rels []*fakeRelease, ids []string, opts ...harness
 	for _, f := range opts {
 		f(h, &o)
 	}
-	db, err := store.OpenMemory(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	db := h.db
+	if db == nil {
+		var err error
+		db, err = store.OpenMemory(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
 	}
-	t.Cleanup(func() { db.Close() })
 	quality := config.DefaultQuality()
 	var cache core.SegmentCache = h.cache
 	if h.noCache {
@@ -555,7 +563,8 @@ func newHarness(t *testing.T, rels []*fakeRelease, ids []string, opts ...harness
 			}
 			return quality.Profiles[1]
 		},
-		DB: db,
+		DB:      db,
+		Cluster: h.node,
 	}, h.cfg, o)
 	if err != nil {
 		t.Fatal(err)

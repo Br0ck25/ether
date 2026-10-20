@@ -109,6 +109,9 @@ type PlaySession struct {
 	SpeedBps       int64        // recent delivery rate, bytes per second
 	LastActive     time.Time
 	Failovers      int // mid-stream release swaps so far
+	// Node is the cluster node serving a session reported by another node
+	// (empty for this node's own sessions and on a standalone server).
+	Node string `json:"node,omitempty"`
 }
 
 type Playback interface {
