@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/cluster"
+	"github.com/braedonsaunders/ether/internal/clusterbus"
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -65,6 +67,30 @@ func (a *App) clusterNodeID() string {
 		return ""
 	}
 	return a.cluster.Self().ID
+}
+
+// clusterNode is the cluster surface handed to components that share
+// sessions, queues, notifications and cache invalidations; nil (an untyped
+// nil interface) on a standalone server, which keeps them in-process.
+func (a *App) clusterNode() clusterbus.Node {
+	if !a.clustered() {
+		return nil
+	}
+	return clusterbus.FromCluster(a.cluster)
+}
+
+// describeLiveGroup describes a live TV viewing unit for other nodes'
+// status pages.
+func (a *App) describeLiveGroup(group string) *core.PlaySession {
+	if a.livetv == nil {
+		return nil
+	}
+	for _, s := range a.livetv.ViewingSessions() {
+		if s.ID == group {
+			return s
+		}
+	}
+	return nil
 }
 
 // nodeAddrs is this node's own publishable connection URIs (heartbeated).

@@ -78,6 +78,9 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 	deps.Logger = a.log.With("component", "plex")
 	deps.Identity = identity
 	deps.Hooks = hooks
+	if node := a.clusterNode(); node != nil && deps.DB != nil {
+		deps.Cluster = node
+	}
 	srv := plex.NewServer(deps)
 	a.plexServer = srv
 	a.closers = append(a.closers, func() { srv.Close() })
