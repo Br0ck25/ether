@@ -173,3 +173,26 @@ func TestFromClusterSolo(t *testing.T) {
 		t.Fatal(v)
 	}
 }
+
+// A hint within MaxPayload whose encoded envelope is too large for NOTIFY
+// (escaped quotes here) must still reach peers, as a full reload.
+func TestInvalidatorOversizedEncodedHintFallsBackToAll(t *testing.T) {
+	bus := cluster.NewSolo(cluster.Local{Identity: cluster.Identity{NodeID: "n1"}}, quiet())
+	var writer, peer recorder
+	a := NewInvalidator(bus, "c", quiet(), writer.apply)
+	b := NewInvalidator(bus, "c", quiet(), peer.apply)
+	defer a.Close()
+	defer b.Close()
+	hint := strings.Repeat(`"`, MaxPayload-64)
+	if err := bus.Publish(context.Background(), "probe", Tag("x", []byte(hint))); err == nil {
+		t.Fatal("test hint is not oversized once encoded")
+	}
+	a.Notify(hint)
+	waitFor(t, "peer reload", func() bool { return len(peer.get()) == 1 })
+	if got := peer.get(); got[0] != "*" {
+		t.Fatalf("peer applied %q, want a full reload", got)
+	}
+	if len(writer.get()) != 0 {
+		t.Fatalf("writer applied its own event: %q", writer.get())
+	}
+}

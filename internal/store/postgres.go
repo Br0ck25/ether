@@ -23,7 +23,7 @@ const minServerVersion = 140000
 // schemas (test runs) do not serialise on each other.
 const migrationLockKey int32 = 0x45746872
 
-var reURLPassword = regexp.MustCompile(`(://[^:/@]*:)[^@]*@`)
+var reQueryPassword = regexp.MustCompile(`(?i)((?:^|[?&])(?:ssl)?password=)[^&]*`)
 
 func isPostgresURL(u string) bool {
 	u = strings.ToLower(strings.TrimSpace(u))
@@ -37,7 +37,10 @@ func RedactURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" {
+	// A database URL has no fragment: one means a password holding an
+	// unencoded '#' (or '@' and '#') that url.Parse split off, leaving
+	// part or all of the password outside the userinfo it would mask.
+	if u, err := url.Parse(raw); err == nil && u.Scheme != "" && u.Fragment == "" && !strings.Contains(raw, "#") {
 		if u.User != nil {
 			if _, has := u.User.Password(); has {
 				u.User = url.UserPassword(u.User.Username(), "xxxxx")
@@ -52,8 +55,16 @@ func RedactURL(raw string) string {
 		u.RawQuery = q.Encode()
 		return u.String()
 	}
-	if strings.Contains(raw, "://") {
-		return reURLPassword.ReplaceAllString(raw, "${1}xxxxx@")
+	if i := strings.Index(raw, "://"); i >= 0 {
+		// Unparseable: mask everything between the user name's ':' and the
+		// last '@', which may itself be part of the password.
+		rest := raw[i+3:]
+		if at := strings.LastIndexByte(rest, '@'); at >= 0 {
+			if c := strings.IndexByte(rest[:at], ':'); c >= 0 && !strings.ContainsAny(rest[:c], "/?#") {
+				rest = rest[:c+1] + "xxxxx" + rest[at:]
+			}
+		}
+		return raw[:i+3] + reQueryPassword.ReplaceAllString(rest, "${1}xxxxx")
 	}
 	fields := strings.Fields(raw)
 	for i, f := range fields {

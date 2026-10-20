@@ -65,6 +65,7 @@ type Outbox[K comparable, V any] struct {
 	dropped int64
 	lastErr string
 	closed  bool
+	seq     uint64 // orders Write calls
 
 	kick chan struct{}
 	stop chan struct{}
@@ -75,6 +76,7 @@ type outboxEntry[K comparable, V any] struct {
 	key    K
 	val    V
 	gen    uint64 // bumped on every merge, so a replay never drops a newer value
+	seq    uint64 // newest Write merged into val
 	queued time.Time
 }
 
@@ -115,11 +117,13 @@ func NewOutbox[K comparable, V any](o OutboxOptions[K, V]) *Outbox[K, V] {
 // an immediate write.
 func (ob *Outbox[K, V]) Write(ctx context.Context, key K, v V) (queued bool, err error) {
 	ob.mu.Lock()
+	ob.seq++
+	seq := ob.seq
 	_, pending := ob.entries[key]
 	closed := ob.closed
 	if !closed && (pending || ob.avail.Down()) {
 		// Keep per-key order: a value already waiting is replayed first.
-		ob.enqueueLocked(key, v)
+		ob.enqueueLocked(key, v, seq)
 		ob.mu.Unlock()
 		ob.wake()
 		return true, nil
@@ -139,19 +143,29 @@ func (ob *Outbox[K, V]) Write(ctx context.Context, key K, v V) (queued bool, err
 	ob.avail.Fail(err)
 	ob.mu.Lock()
 	ob.lastErr = err.Error()
-	ob.enqueueLocked(key, v)
+	// A later Write for key may have been queued while this one was in
+	// flight; enqueueLocked keeps that newer value on top.
+	ob.enqueueLocked(key, v, seq)
 	ob.mu.Unlock()
 	ob.wake()
 	return true, nil
 }
 
-func (ob *Outbox[K, V]) enqueueLocked(key K, v V) {
+// enqueueLocked holds v, the value of Write number seq, for key. Writes are
+// merged in call order: a direct write that failed after a later Write for
+// the same key was queued is merged underneath that newer value.
+func (ob *Outbox[K, V]) enqueueLocked(key K, v V, seq uint64) {
 	if el, ok := ob.entries[key]; ok {
 		e := el.Value.(*outboxEntry[K, V])
-		if ob.o.Merge != nil {
-			e.val = ob.o.Merge(e.val, v)
-		} else {
-			e.val = v
+		switch {
+		case seq >= e.seq && ob.o.Merge != nil:
+			e.val, e.seq = ob.o.Merge(e.val, v), seq
+		case seq >= e.seq:
+			e.val, e.seq = v, seq
+		case ob.o.Merge != nil:
+			e.val = ob.o.Merge(v, e.val)
+		default:
+			return // the queued value is newer
 		}
 		e.gen++
 		return
@@ -166,7 +180,7 @@ func (ob *Outbox[K, V]) enqueueLocked(key K, v V) {
 			ob.log.Warn("store: outbox full; dropping the oldest held write", "cap", ob.o.Cap, "dropped", ob.dropped)
 		}
 	}
-	ob.entries[key] = ob.order.PushBack(&outboxEntry[K, V]{key: key, val: v, queued: time.Now()})
+	ob.entries[key] = ob.order.PushBack(&outboxEntry[K, V]{key: key, val: v, seq: seq, queued: time.Now()})
 }
 
 func (ob *Outbox[K, V]) wake() {

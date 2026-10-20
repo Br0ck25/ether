@@ -19,7 +19,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/cluster"
 )
 
-// TopicResync is delivered locally after the bus reconnected: events may
+// TopicResync is delivered locally after the bus (re)connected: events may
 // have been missed, so every bus-maintained cache must be dropped.
 const TopicResync = cluster.TopicResync
 
