@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -267,7 +268,7 @@ func TestOutboxFailedDirectWriteDoesNotOverwriteNewerQueued(t *testing.T) {
 	blocked := false // Apply runs one call at a time here
 	ob := NewOutbox(OutboxOptions[string, int]{
 		Name: "t", Availability: avail, Timeout: time.Minute,
-		MinBackoff: time.Hour, MaxBackoff: time.Hour,
+		MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond, // replays fail until avail.OK below
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Apply: func(ctx context.Context, k string, v int) error {
 			if v == 1 && !blocked {
@@ -314,5 +315,66 @@ func TestOutboxFailedDirectWriteDoesNotOverwriteNewerQueued(t *testing.T) {
 	defer mu.Unlock()
 	if db["k"] != 2 {
 		t.Fatalf("replayed value %d, want the newer 2", db["k"])
+	}
+}
+
+// A direct write that fails only after a newer value for its key was queued
+// and already replayed must not be queued (and replayed) on top of it.
+func TestOutboxFailedDirectWriteAfterNewerReplayIsDropped(t *testing.T) {
+	avail := NewAvailability(nil)
+	var mu sync.Mutex
+	db := map[string]int{}
+	writes := 0
+	inFlight := make(chan struct{})
+	release := make(chan struct{})
+	var blocked atomic.Bool
+	ob := NewOutbox(OutboxOptions[string, int]{
+		Name: "t", Availability: avail, Timeout: time.Minute,
+		MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Apply: func(ctx context.Context, k string, v int) error {
+			if v == 1 && blocked.CompareAndSwap(false, true) {
+				close(inFlight)
+				<-release
+				return syscall.ECONNREFUSED
+			}
+			if avail.Down() {
+				return syscall.ECONNREFUSED
+			}
+			mu.Lock()
+			db[k] = v
+			writes++
+			mu.Unlock()
+			return nil
+		},
+	})
+	defer ob.Close(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = ob.Write(context.Background(), "k", 1)
+	}()
+	<-inFlight
+	avail.Fail(syscall.ECONNREFUSED)
+	if queued, err := ob.Write(context.Background(), "k", 2); !queued || err != nil {
+		t.Fatalf("second write: queued=%v err=%v", queued, err)
+	}
+	avail.OK() // 2 is replayed while 1 is still in flight
+	deadline := time.Now().Add(5 * time.Second)
+	for ob.Depth() > 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("held write not replayed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release) // 1 now fails as unavailable
+	<-done
+	avail.OK()
+	time.Sleep(50 * time.Millisecond) // give any wrongly queued replay time to run
+	mu.Lock()
+	defer mu.Unlock()
+	if db["k"] != 2 || ob.Depth() != 0 {
+		t.Fatalf("value %d (depth %d), want 2: the stale write was replayed over the newer one", db["k"], ob.Depth())
 	}
 }
