@@ -41,6 +41,8 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 | `github.com/andybalholm/cascadia` | CSS selector engine used with goquery, `internal/cardigann` | BSD-2-Clause (© Andy Balholm) |
 | `golang.org/x/net` (`html`) | HTML parsing for built-in indexer definitions, `internal/cardigann` | BSD-3-Clause |
 | `go.yaml.in/yaml/v3` | Reading owner-supplied indexer definitions, `internal/cardigann` | MIT and Apache-2.0 (© Canonical Ltd. and the YAML maintainers) |
+| `github.com/shirou/gopsutil/v4` | CPU, memory, network and process load on the Overview, `internal/sysload` | BSD-3-Clause (© WAKAYAMA Shirou and contributors) |
+| `github.com/ebitengine/purego`, `github.com/tklauser/go-sysconf` (+ `numcpus`), `github.com/yusufpapurcu/wmi`, `github.com/go-ole/go-ole`, `github.com/lufia/plan9stats`, `github.com/power-devops/perfstat` | gopsutil internals: macOS system calls without cgo, Linux sysconf, Windows WMI (indirect) | Apache-2.0 / BSD-3-Clause / MIT / MIT / BSD-3-Clause / MIT respectively |
 | `fyne.io/systray` | Tray/menu-bar icon, `cmd/ether-tray` | Apache-2.0 |
 | `github.com/godbus/dbus/v5` | Linux StatusNotifier (systray transport) | BSD-2-Clause |
 | `github.com/google/uuid` | IDs (via modernc / components) | BSD-3-Clause |

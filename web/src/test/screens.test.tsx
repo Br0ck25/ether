@@ -30,6 +30,36 @@ describe("Overview", () => {
     expect(screen.getByRole("button", { name: /Server health/ })).toBeInTheDocument();
   });
 
+  it("shows live server load: CPU, memory, network and GPU", async () => {
+    const { fake } = renderApp("/");
+    const load = await screen.findByRole("region", { name: "Server load" }, WAIT);
+    expect(await within(load).findByText("CPU", {}, WAIT)).toBeInTheDocument();
+    expect(within(load).getByText(/of 24.0 GiB/)).toBeInTheDocument();
+    expect(within(load).getByText(/12 cores/)).toBeInTheDocument();
+    expect(within(load).getByText(/↓ .*Mbit\/s/)).toBeInTheDocument();
+    expect(within(load).getByText(/↑ .*Mbit\/s up/)).toBeInTheDocument();
+    expect(within(load).getByText("GPU · RTX 4080")).toBeInTheDocument();
+    expect(within(load).getByText("enc 18% · dec 11%")).toBeInTheDocument();
+    expect(within(load).getByText(/Ether uses \d+% CPU and 412\.0 MiB/)).toBeInTheDocument();
+    expect(within(load).getByRole("img", { name: "CPU use, last 5 minutes" })).toBeInTheDocument();
+    expect(calls(fake, "GET", "/system/load").length).toBeGreaterThan(0);
+  });
+
+  it("says when this hardware reports no GPU", async () => {
+    renderApp("/", {}, (fake) => {
+      const original = fake.fetch;
+      fake.fetch = async (input, init) => {
+        const res = await original(input, init);
+        if (!String(input).endsWith("/system/load")) return res;
+        const body = await res.json();
+        body.gpus = [];
+        return new Response(JSON.stringify(body), { status: 200 });
+      };
+    });
+    const load = await screen.findByRole("region", { name: "Server load" }, WAIT);
+    expect(await within(load).findByText("Not reported here", {}, WAIT)).toBeInTheDocument();
+  });
+
   it("lists problems first, each linking to the screen that fixes it", async () => {
     renderApp("/", {}, (fake) => {
       const original = fake.fetch;

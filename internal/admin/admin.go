@@ -128,6 +128,9 @@ type Deps struct {
 	CatalogStatus   StatusFunc // "catalog" — catalogue sync/stats
 	RemoteStatus    StatusFunc // "remote" — remote access
 	HWAccelStatus   StatusFunc // "hwaccel" — transcoding hardware
+	// SystemLoad is this machine's recent CPU, memory, network and GPU
+	// load, served on its own route because only the Overview polls it.
+	SystemLoad StatusFunc
 	// ExtraStatus adds/overrides named status providers generically. The
 	// "widget" entry is required: it backs GET /ether/api/status.
 	ExtraStatus map[string]StatusFunc
@@ -263,6 +266,7 @@ func (h *Handler) routes() *http.ServeMux {
 	api("POST /api/test/trakt", h.handleTestTrakt)
 
 	api("GET /api/dashboard", h.handleDashboard)
+	api("GET /api/system/load", h.handleSystemLoad)
 	api("GET /api/status", h.handleWidget)
 	api("GET /api/status/{name}", h.handleStatus)
 	api("GET /api/traces", h.handleTraces)
