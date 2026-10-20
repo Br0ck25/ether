@@ -80,3 +80,37 @@ func TestLeafCountsMatchListedEpisodes(t *testing.T) {
 	}
 	check("season detail", out.MediaContainer.Metadata[0])
 }
+
+// A show's totals are its regular episodes on the detail page, as on every
+// list (the catalogue leaves Specials out): an unwatched special neither
+// changes the badge nor keeps a fully watched show unwatched.
+func TestShowLeafCountsLeaveOutSpecials(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	specials := core.Title{Key: core.SeasonKey(1396, 0), Type: core.TypeSeason, ShowKey: breakingBad.Key, Season: 0, Title: "Specials", ChildCount: 1}
+	special := core.Title{Key: core.EpisodeKey(1396, 0, 1), Type: core.TypeEpisode, ShowKey: breakingBad.Key, Season: 0, Episode: 1, Title: "Special", Released: bbE1.Released}
+	f.catalog.titles[specials.Key] = specials
+	f.catalog.titles[special.Key] = special
+	f.catalog.children[breakingBad.Key] = append([]core.RatingKey{specials.Key}, f.catalog.children[breakingBad.Key]...)
+	f.catalog.children[specials.Key] = []core.RatingKey{special.Key}
+	for _, k := range []core.RatingKey{bbE1.Key, bbE2.Key} {
+		f.state.set(ownerUser.ID, core.WatchStatus{Key: k, ViewCount: 1, LastViewedAt: fixedNow, UpdatedAt: fixedNow})
+	}
+	rec := f.get(t, "/library/metadata/"+breakingBad.Key.String(), "Accept", "application/json")
+	var out struct {
+		MediaContainer struct {
+			Metadata []struct {
+				LeafCount       *int `json:"leafCount"`
+				ViewedLeafCount *int `json:"viewedLeafCount"`
+				ViewCount       int  `json:"viewCount"`
+			} `json:"Metadata"`
+		} `json:"MediaContainer"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || len(out.MediaContainer.Metadata) != 1 {
+		t.Fatalf("show detail: %v %s", err, rec.Body.String())
+	}
+	m := out.MediaContainer.Metadata[0]
+	if m.LeafCount == nil || *m.LeafCount != 2 || m.ViewedLeafCount == nil || *m.ViewedLeafCount != 2 || m.ViewCount == 0 {
+		t.Fatalf("show detail counts: %+v %s", m, rec.Body.String())
+	}
+}
