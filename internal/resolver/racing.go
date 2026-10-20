@@ -88,7 +88,8 @@ func (s *Service) resolution(key core.RatingKey, cands []candidate, winner int, 
 }
 
 // validateCandidates races bounded groups when enabled. Ranked mode still starts
-// two checks together, but returns as soon as the preferred result succeeds.
+// two checks together, preferring rank order during a short grace. A healthy
+// equivalent can then bypass a stalled preferred source without losing quality.
 // Every worker is cancelled and joined before this function returns.
 func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr *Trace, race int) (int, []byte, error) {
 	ctx, cancelBudget := context.WithTimeout(ctx, validationBudget)
@@ -129,12 +130,19 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				results <- v
 			}(j)
 		}
+		margin := s.resolverCfg().SourceScoreMargin
+		if margin <= 0 {
+			margin = defaultSourceScoreMargin
+		}
+		hedge := race == 0 && count == 2 && equivalentHedge(cands[base], cands[base+1], margin)
 		winner := -1
 		var nzb []byte
 		for j := 0; j < count; j++ {
 			var v validation
 			if race > 0 {
 				v = <-results
+			} else if hedge && j == 0 {
+				v = waitRankedValidation(ordered[0], ordered[1], rankedSourceGrace)
 			} else {
 				v = <-ordered[j]
 			}
@@ -150,6 +158,11 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				return -1, nil, ctx.Err()
 			}
 			if ct.Healthy {
+				if hedge && j == 0 && v.index == base+1 {
+					ct.Route = strings.TrimSpace(ct.Route + "; healthy equivalent after preferred source exceeded grace")
+					ct.Route = strings.TrimPrefix(ct.Route, "; ")
+					tr.Candidates[cands[base].trace].Attempted = true
+				}
 				if v.healthChecked && !v.healthCached {
 					// A real check always counts, even when a coarse clock
 					// (Windows) measured it as taking no time.
