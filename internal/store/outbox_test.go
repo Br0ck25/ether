@@ -428,3 +428,38 @@ func TestOutboxFailedDirectWriteAfterNewerDirectApplyIsDropped(t *testing.T) {
 		t.Fatalf("value %d (depth %d), want 2", db["k"], ob.Depth())
 	}
 }
+
+// A direct write that fails as unavailable after Close ran meanwhile is
+// reported as failed, not queued for a replay loop that no longer exists.
+func TestOutboxWriteFailingAfterCloseIsNotQueued(t *testing.T) {
+	inFlight := make(chan struct{})
+	release := make(chan struct{})
+	ob := NewOutbox(OutboxOptions[string, int]{
+		Name: "t", Availability: NewAvailability(nil), Timeout: time.Minute,
+		MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Apply: func(ctx context.Context, k string, v int) error {
+			close(inFlight)
+			<-release
+			return syscall.ECONNREFUSED
+		},
+	})
+	type result struct {
+		queued bool
+		err    error
+	}
+	res := make(chan result, 1)
+	go func() {
+		q, err := ob.Write(context.Background(), "k", 1)
+		res <- result{q, err}
+	}()
+	<-inFlight
+	if err := ob.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	r := <-res
+	if r.queued || r.err == nil || ob.Depth() != 0 {
+		t.Fatalf("after Close: queued=%v err=%v depth=%d; want the write reported failed", r.queued, r.err, ob.Depth())
+	}
+}
