@@ -52,6 +52,7 @@ builds:
     goarch: [amd64, arm64]
     flags: [-trimpath]
     ldflags:
+      - '{{ if eq .Os "windows" }}-H=windowsgui{{ end }}'
       - -s -w
       - -X github.com/braedonsaunders/ether/internal/updater.Version={{ .Version }}
       - -X github.com/braedonsaunders/ether/internal/updater.Commit={{ .Commit }}

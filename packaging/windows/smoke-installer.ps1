@@ -26,7 +26,12 @@ try {
   }
   if (-not $Ready) { throw "Installed server did not become ready" }
 
-  $Tray = Start-Process -FilePath (Join-Path $Installed "ether-tray.exe") -PassThru
+  $TrayPath = Join-Path $Installed "ether-tray.exe"
+  $PE = [IO.File]::ReadAllBytes($TrayPath)
+  $Header = [BitConverter]::ToInt32($PE, 0x3c)
+  $Subsystem = [BitConverter]::ToUInt16($PE, $Header + 24 + 68)
+  if ($Subsystem -ne 2) { throw "Desktop launcher has a console subsystem: $Subsystem" }
+  $Tray = Start-Process -FilePath $TrayPath -PassThru
   Start-Sleep -Seconds 3
   if ($Tray.HasExited) { throw "Desktop launcher exited $($Tray.ExitCode)" }
   Write-Host "Installed service serves Plex identity; desktop launcher stays running."

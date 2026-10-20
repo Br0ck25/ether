@@ -14,6 +14,15 @@
 # local builds run with a right-click > Open the first time.
 set -eu
 
+# Clang otherwise targets the build host's macOS version. Keep the GUI
+# launcher compatible with the minimum advertised by Info.plist.
+export MACOSX_DEPLOYMENT_TARGET=13.0
+# Explicit flags also invalidate CGO objects cached for a newer deployment
+# target; MACOSX_DEPLOYMENT_TARGET alone is not part of Go's build-cache key.
+export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=13.0"
+export CGO_CXXFLAGS="${CGO_CXXFLAGS:-} -mmacosx-version-min=13.0"
+export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=13.0"
+
 # shellcheck disable=SC1007
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 VERSION=${VERSION:-dev}
@@ -65,6 +74,19 @@ cp LICENSE THIRD_PARTY_NOTICES.md "$RES/"
 [ -f packaging/macos/Ether.icns ] && cp packaging/macos/Ether.icns "$RES/"
 chmod +x "$MACOS/ether-tray" "$RES/ether"
 rm -rf dist/tmp-mac
+
+python3 - "$MACOS/ether-tray" "$RES/ether" "$RES/ffmpeg" "$RES/ffprobe" <<'PY'
+import re, subprocess, sys
+for binary in sys.argv[1:]:
+    commands = subprocess.check_output(["otool", "-l", binary], text=True)
+    versions = re.findall(r"\bminos\s+([\d.]+)", commands)
+    if not versions:
+        raise SystemExit(f"Missing minimum OS metadata: {binary}")
+    for version in versions:
+        if tuple(map(int, version.split(".")[:2])) > (13, 0):
+            raise SystemExit(f"{binary} requires macOS {version}; bundle advertises 13.0")
+print("All bundled architectures have a macOS deployment target <= 13.0")
+PY
 
 if [ -n "${SIGN_IDENTITY:-}" ]; then
   echo "==> codesigning ($SIGN_IDENTITY)"

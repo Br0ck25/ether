@@ -21,7 +21,7 @@ $env:CGO_ENABLED = "0"; $env:GOOS = "windows"; $env:GOARCH = $Arch
 Push-Location $Root
 go build -trimpath -ldflags $ldflags -o "$Staging\ether.exe" ./cmd/ether
 if ($LASTEXITCODE -ne 0) { throw "Server build failed" }
-go build -trimpath -ldflags $ldflags -o "$Staging\ether-tray.exe" ./cmd/ether-tray
+go build -trimpath -ldflags "$ldflags -H=windowsgui" -o "$Staging\ether-tray.exe" ./cmd/ether-tray
 if ($LASTEXITCODE -ne 0) { throw "Tray build failed" }
 Pop-Location
 
