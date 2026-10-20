@@ -234,8 +234,9 @@ func (f *fakeTorBox) handler(t *testing.T) http.Handler {
 	mux.HandleFunc("GET /torrents/checkcached", auth(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.cachedQ = r.URL.Query().Get("hash")
+		cached := f.cached
 		f.mu.Unlock()
-		if f.cached {
+		if cached {
 			ok(w, fmt.Sprintf(`{"%s":{"name":"Show.S01","size":9000000000,"hash":"%s"}}`, testHash, testHash))
 			return
 		}
@@ -246,17 +247,25 @@ func (f *fakeTorBox) handler(t *testing.T) http.Handler {
 			t.Errorf("createtorrent form: %v", err)
 		}
 		f.mu.Lock()
+		if r.FormValue("add_only_if_cached") == "true" && !f.cached {
+			f.mu.Unlock()
+			fmt.Fprint(w, `{"success":false,"error":"TORRENT_NOT_CACHED","detail":"not cached","data":null}`)
+			return
+		}
 		f.created++
 		f.mu.Unlock()
 		ok(w, `{"torrent_id":77,"hash":"x","auth_id":"y"}`)
 	}))
 	mux.HandleFunc("GET /torrents/mylist", auth(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		cached := f.cached
+		f.mu.Unlock()
 		files := `[{"id":0,"name":"Show.S01/Show.S01E01.mkv","size":1500000000},{"id":1,"name":"Show.S01/Show.S01E02.mkv","size":1400000000},{"id":2,"name":"Show.S01/Show.S01E02.nfo","size":100}]`
 		if r.URL.Query().Get("id") == "" {
-			ok(w, fmt.Sprintf(`[{"id":77,"hash":"%s","download_present":%v,"files":%s}]`, testHash, f.cached, files))
+			ok(w, fmt.Sprintf(`[{"id":77,"hash":"%s","download_present":%v,"files":%s}]`, testHash, cached, files))
 			return
 		}
-		ok(w, fmt.Sprintf(`{"id":77,"hash":"%s","download_present":%v,"download_finished":%v,"files":%s}`, testHash, f.cached, f.cached, files))
+		ok(w, fmt.Sprintf(`{"id":77,"hash":"%s","download_present":%v,"download_finished":%v,"files":%s}`, testHash, cached, cached, files))
 	}))
 	mux.HandleFunc("GET /torrents/requestdl", auth(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -296,6 +305,9 @@ func TestTorBoxFlow(t *testing.T) {
 	if err != nil || acq.TorrentID != "77" || acq.File.ID != "1" || acq.File.Size != 1400000000 {
 		t.Fatalf("acquire %+v %v", acq, err)
 	}
+	if f.cachedQ != testHash+","+other {
+		t.Fatal("Acquire repeated the bulk cache check on the Play path")
+	}
 	dl, err := p.Link(ctx, Handle{TorrentID: "77", FileID: "1", Size: 1400000000})
 	if err != nil || dl.URL != "https://cdn.torbox.example/1" {
 		t.Fatalf("link %+v %v", dl, err)
@@ -305,6 +317,28 @@ func TestTorBoxFlow(t *testing.T) {
 	}
 	if a, err := p.Account(ctx); err != nil || !a.Premium {
 		t.Fatalf("account %+v %v", a, err)
+	}
+}
+
+func TestTorBoxCacheExpiryBeforeCreateCannotStartDownload(t *testing.T) {
+	f := &fakeTorBox{cached: true}
+	srv := httptest.NewServer(f.handler(t))
+	defer srv.Close()
+	p := newTorBox(testKey, fastOpts(srv.URL))
+	cached, err := p.CheckCached(t.Context(), []string{testHash})
+	if err != nil || !cached[testHash] {
+		t.Fatalf("initial cache check: %v %v", cached, err)
+	}
+	f.mu.Lock()
+	f.cached = false
+	f.mu.Unlock()
+	if _, err := p.Acquire(t.Context(), acquireReq(true)); !errors.Is(err, core.ErrNotCached) {
+		t.Fatalf("expired cache returned %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.created != 0 {
+		t.Fatal("an uncached torrent was created after its cached result expired")
 	}
 }
 

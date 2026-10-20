@@ -164,12 +164,10 @@ func (p *torBox) torrent(ctx context.Context, id string) (*tbTorrent, error) {
 func (p *torBox) Acquire(ctx context.Context, req AcquireRequest) (*Acquired, error) {
 	id, added := req.TorrentID, false
 	if id == "" {
-		if req.CachedOnly {
-			cached, err := p.CheckCached(ctx, []string{req.InfoHash})
-			if err == nil && !cached[strings.ToLower(req.InfoHash)] {
-				return nil, fmt.Errorf("torbox: %w", core.ErrNotCached)
-			}
-		}
+		// createtorrent enforces add_only_if_cached atomically. An extra
+		// checkcached here repeats the shortlist's bulk query, adds a network
+		// round trip and still cannot protect against cache expiry between
+		// that check and creation. Keep the server-side guard authoritative.
 		var body bytes.Buffer
 		mw := multipart.NewWriter(&body)
 		_ = mw.WriteField("magnet", req.Magnet)
