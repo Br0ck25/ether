@@ -68,3 +68,24 @@ func TestCoalescedWaiterSurvivesLeaderCancel(t *testing.T) {
 		t.Fatal("waiter hung")
 	}
 }
+
+func TestInvalidJSONDoesNotPoisonResponseCache(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			fmt.Fprint(w, `<html>temporary gateway error</html>`)
+			return
+		}
+		fmt.Fprint(w, `{"genres":[{"id":28,"name":"Action"}]}`)
+	}))
+	defer srv.Close()
+	c := New("fixture-key", nil, WithBaseURL(srv.URL), WithMaxRetries(0))
+	defer c.Close()
+	if _, err := c.Genres(context.Background(), "movie"); err == nil {
+		t.Fatal("invalid body accepted")
+	}
+	genres, err := c.Genres(context.Background(), "movie")
+	if err != nil || len(genres) != 1 || genres[0].Name != "Action" || hits.Load() != 2 {
+		t.Fatalf("bad response poisoned cache: genres=%+v err=%v hits=%d", genres, err, hits.Load())
+	}
+}

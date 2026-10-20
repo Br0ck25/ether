@@ -236,13 +236,18 @@ func (c *Client) doWithRetry(ctx context.Context, full, etag string, cfg clientS
 				return nil, "", false, ctx.Err()
 			}
 		} else {
-			b, rerr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+			b, rerr := io.ReadAll(io.LimitReader(resp.Body, (32<<20)+1))
 			resp.Body.Close()
 			if rerr != nil {
 				lastErr = rerr
 			} else if resp.StatusCode == http.StatusNotModified {
 				return nil, etag, true, nil
 			} else if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				// Validate before caching: a gateway's malformed 200 response
+				// must not keep failing metadata reads for the entire cache TTL.
+				if len(b) > 32<<20 || !json.Valid(b) {
+					return nil, "", false, errors.New("tmdb: invalid or oversized JSON response")
+				}
 				return b, resp.Header.Get("ETag"), false, nil
 			} else {
 				he := parseHTTPError(resp.StatusCode, b)
