@@ -48,8 +48,10 @@ export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-fg-muted">
-        Connect your existing Usenet (Newznab) and torrent (Torznab) indexers. Ether applies its own
-        search and download budgets. Torrent indexers stream through a debrid account.
+        Bring in the Usenet (Newznab) and torrent (Torznab) indexers a Prowlarr instance manages.
+        Ether applies its own search and download budgets. Torrent indexers stream through a debrid
+        account. You don't need Prowlarr: built-in sites and Newznab/Torznab URLs can be added
+        directly.
       </p>
       <SettingsSection title="Prowlarr">
         <SettingsRow

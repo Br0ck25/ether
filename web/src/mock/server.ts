@@ -39,6 +39,7 @@ import {
   type FakeTitle,
 } from "./data";
 import { createReleaseConsoleMock } from "./releases";
+import { createSitesMock } from "./sites";
 import { TEMPLATES } from "./templates";
 
 const NOW = () => new Date();
@@ -324,6 +325,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const catalog = buildCatalog();
   const byKey = new Map(catalog.map((t) => [t.key, t]));
   const releaseConsole = createReleaseConsoleMock(catalog);
+  const sites = createSitesMock();
   const state = {
     boot: {
       ok: true,
@@ -1369,6 +1371,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const seg = p.split("/").filter(Boolean);
     const route = `${method} /${seg.join("/")}`;
 
+    const site = sites.handle(method, seg, body, state.config);
+    if (site) return json(site.body, site.status);
+
     const rc = releaseConsole.handle(method, seg, q, body);
     if (rc)
       return rc.status === 204 ? new Response(null, { status: 204 }) : json(rc.body, rc.status);
@@ -1832,7 +1837,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return handle(method, url, body);
   }
 
-  return { fetch: fetchImpl, state, catalog, evaluate, homeFor, releaseConsole };
+  return { fetch: fetchImpl, state, catalog, evaluate, homeFor, releaseConsole, sites };
 }
 
 export type FakeServer = ReturnType<typeof createFakeServer>;

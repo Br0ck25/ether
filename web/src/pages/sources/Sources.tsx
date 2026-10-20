@@ -46,7 +46,7 @@ export default function Sources() {
         open={importing}
         onClose={() => setImporting(false)}
         title="Import from Prowlarr"
-        description="Reuse the Usenet and torrent indexers you already manage."
+        description="Optional: add the indexers a Prowlarr instance already manages, searched through Prowlarr's Newznab and Torznab endpoints."
         size="lg"
       >
         <ProwlarrImport onImported={() => setVersion((v) => v + 1)} />
