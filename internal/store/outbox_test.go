@@ -378,3 +378,53 @@ func TestOutboxFailedDirectWriteAfterNewerReplayIsDropped(t *testing.T) {
 		t.Fatalf("value %d (depth %d), want 2: the stale write was replayed over the newer one", db["k"], ob.Depth())
 	}
 }
+
+// A newer Write that applies directly while an older direct write for the
+// same key is still in flight wins: the older one failing afterwards is
+// dropped, not queued over it.
+func TestOutboxFailedDirectWriteAfterNewerDirectApplyIsDropped(t *testing.T) {
+	avail := NewAvailability(nil)
+	var mu sync.Mutex
+	db := map[string]int{}
+	inFlight := make(chan struct{})
+	release := make(chan struct{})
+	var blocked atomic.Bool
+	ob := NewOutbox(OutboxOptions[string, int]{
+		Name: "t", Availability: avail, Timeout: time.Minute,
+		MinBackoff: time.Millisecond, MaxBackoff: time.Millisecond,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Apply: func(ctx context.Context, k string, v int) error {
+			if v == 1 && blocked.CompareAndSwap(false, true) {
+				close(inFlight)
+				<-release
+				return syscall.ECONNREFUSED
+			}
+			if avail.Down() {
+				return syscall.ECONNREFUSED
+			}
+			mu.Lock()
+			db[k] = v
+			mu.Unlock()
+			return nil
+		},
+	})
+	defer ob.Close(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = ob.Write(context.Background(), "k", 1)
+	}()
+	<-inFlight
+	if queued, err := ob.Write(context.Background(), "k", 2); queued || err != nil {
+		t.Fatalf("second write: queued=%v err=%v", queued, err)
+	}
+	close(release)
+	<-done
+	avail.OK()
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if db["k"] != 2 || ob.Depth() != 0 {
+		t.Fatalf("value %d (depth %d), want 2", db["k"], ob.Depth())
+	}
+}
