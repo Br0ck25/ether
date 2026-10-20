@@ -1,6 +1,7 @@
 /dist/
 /bin/
 node_modules/
+.pnpm-store/
 *.db
 *.db-*
 .DS_Store
