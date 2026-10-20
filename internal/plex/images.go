@@ -199,7 +199,7 @@ func (s *Server) artPath(ctx context.Context, key core.RatingKey, element string
 		if s.d.Collections == nil {
 			return "", 0, core.ErrNotFound
 		}
-		c, err := s.d.Collections.Get(ctx, FromContext(ctx).User, key)
+		c, err := s.collection(ctx, FromContext(ctx).User, key)
 		if err != nil {
 			return "", 0, err
 		}
@@ -207,9 +207,15 @@ func (s *Server) artPath(ctx context.Context, key core.RatingKey, element string
 			return c.BackdropPath, 1280, nil
 		}
 		if c.PosterPath == "" {
-			// Fall back to the first item's poster.
-			if p, err := s.d.Collections.Items(ctx, FromContext(ctx).User, key, 0, 1); err == nil && len(p.Items) > 0 {
-				return p.Items[0].PosterPath, 500, nil
+			// Fall back to the first item's poster the viewer may see:
+			// collection items are not filtered by the viewer's policy.
+			u := FromContext(ctx).User
+			if p, err := s.d.Collections.Items(ctx, u, key, 0, 20); err == nil {
+				for i := range p.Items {
+					if p.Items[i].PosterPath != "" && s.titleVisible(u, &p.Items[i]) {
+						return p.Items[i].PosterPath, 500, nil
+					}
+				}
 			}
 		}
 		return c.PosterPath, 500, nil

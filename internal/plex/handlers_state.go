@@ -374,7 +374,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	for i, h := range hist {
 		t, ok := byKey[h.Key]
-		if !ok {
+		// History is rendered by hand, not through renderTitles: apply the
+		// same visibility guard so titles restricted after they were
+		// watched stay hidden.
+		if !ok || !s.titleVisible(pr.User, t) {
 			continue
 		}
 		md := model.Metadata{
@@ -453,21 +456,42 @@ func (s *Server) terminateLocal(sid, reason string) bool {
 	return false
 }
 
+// termination is an owner stream kill awaiting the client's next timeline.
+type termination struct {
+	reason string
+	at     time.Time
+}
+
+// terminationTTL bounds how long a kill waits for its client: one that
+// never reports again (closed app, lost network) would otherwise keep its
+// entry forever.
+const terminationTTL = 10 * time.Minute
+
 func (s *Server) setTermination(tid, reason string) {
 	s.termMu.Lock()
 	defer s.termMu.Unlock()
 	if s.terms == nil {
-		s.terms = map[string]string{}
+		s.terms = map[string]termination{}
 	}
-	s.terms[tid] = reason
+	s.terms[tid] = termination{reason: reason, at: s.now()}
 }
 
 func (s *Server) takeTermination(tid string) (string, bool) {
 	s.termMu.Lock()
 	defer s.termMu.Unlock()
-	reason, ok := s.terms[tid]
+	t, ok := s.terms[tid]
 	if ok {
 		delete(s.terms, tid)
 	}
-	return reason, ok
+	return t.reason, ok
+}
+
+func (s *Server) expireTerminations(now time.Time, ttl time.Duration) {
+	s.termMu.Lock()
+	defer s.termMu.Unlock()
+	for tid, t := range s.terms {
+		if now.Sub(t.at) > ttl {
+			delete(s.terms, tid)
+		}
+	}
 }

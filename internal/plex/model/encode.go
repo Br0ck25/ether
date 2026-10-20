@@ -335,7 +335,14 @@ func encodeXMLElement(w *bufio.Writer, v reflect.Value, name string, root bool) 
 	p.attrs = sortAttrs(v, p.attrs, func(a Attr) string { return a.Name })
 	w.WriteByte('<')
 	w.WriteString(name)
+	seen := make(map[string]bool, len(p.attrs))
 	for _, a := range p.attrs {
+		// A repeated attribute makes the document ill-formed (strict
+		// parsers reject it); keep the first, as the JSON encoder does.
+		if seen[a.Name] {
+			continue
+		}
+		seen[a.Name] = true
 		w.WriteByte(' ')
 		w.WriteString(a.Name)
 		w.WriteString(`="`)

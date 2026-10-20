@@ -476,13 +476,17 @@ func sortFor(key, dir string) (core.SortOrder, bool) {
 	return so, def
 }
 
+// maxPageSize bounds an explicit X-Plex-Container-Size handed to backends:
+// far above any real client page, far below where offset+size overflows.
+const maxPageSize = 10_000
+
 // pageOf returns the page window the client asked for.
 func (pr *Request) pageOf(limit int) (offset, size int) {
 	offset, size = 0, defaultUnpagedLimit
 	if pr.HasPage {
 		offset = pr.Start
 		if pr.Size >= 0 {
-			size = pr.Size
+			size = min(pr.Size, maxPageSize)
 		}
 	}
 	if limit > 0 {
@@ -658,7 +662,7 @@ func (s *Server) sectionSearch(w http.ResponseWriter, r *http.Request, sec Secti
 	if strings.TrimSpace(query) != "" {
 		limit := 50
 		if n, _ := strconv.Atoi(r.URL.Query().Get("limit")); n > 0 {
-			limit = n
+			limit = min(n, 200)
 		}
 		res, err := s.d.Catalog.Search(ctx, query, []core.MediaType{t}, limit)
 		if err != nil {
@@ -824,6 +828,9 @@ func (s *Server) handleOnDeck(w http.ResponseWriter, r *http.Request) {
 // episodes in full (tag ids, Guid, Rating, streams), every item led by its
 // sync flag and section UUID.
 func (s *Server) onDeckItems(ctx context.Context, pr *Request, items []core.Title, state map[core.RatingKey]core.WatchStatus) []model.Metadata {
+	// Filter first: renderTitles drops hidden titles, and the loop below
+	// pairs its output with items by index.
+	items = s.visibleTitles(pr.User, items)
 	md := s.renderTitles(ctx, pr, items, renderOpts{media: true, detailEpisodes: true, state: state})
 	for i := range md {
 		md[i].AllowSync = model.Ptr(s.downloadsAllowed(pr.User) && isPlayable(items[i].Type))

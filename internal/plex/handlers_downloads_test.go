@@ -504,3 +504,57 @@ func TestDownloadQueueRejectsEpisodeOfBlockedShow(t *testing.T) {
 		t.Fatalf("blocked episode queued: %v", items)
 	}
 }
+
+// A restart must not leave the new job on the old job's playback session:
+// the old job's deferred Stop would cut the new remux's input.
+func TestDownloadRestartGetsOwnPlaybackSession(t *testing.T) {
+	f := newDownloadFixture(t, true)
+	f.remux.block = make(chan struct{})
+	qid := f.queue(t)
+	key := "/library/metadata/" + fightClub.Key.String()
+	f.do(t, http.MethodPost, "/downloadQueue/"+itoa(qid)+"/add?keys="+key, ownerToken, nil)
+	reqCount := func() int {
+		f.remux.mu.Lock()
+		defer f.remux.mu.Unlock()
+		return len(f.remux.requests)
+	}
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("timed out waiting for %s", what)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	waitFor("first remux", func() bool { return reqCount() == 1 })
+	itemID := int64(f.items(t, qid)[0]["id"].(float64))
+	rec := f.do(t, http.MethodPost, "/downloadQueue/"+itoa(qid)+"/items/"+itoa(itemID)+"/restart", ownerToken, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restart: %d", rec.Code)
+	}
+	waitFor("second remux", func() bool { return reqCount() == 2 })
+	f.remux.mu.Lock()
+	first := strings.TrimPrefix(f.remux.requests[0].InputURL, "http://127.0.0.1:1/source/")
+	second := strings.TrimPrefix(f.remux.requests[1].InputURL, "http://127.0.0.1:1/source/")
+	f.remux.mu.Unlock()
+	if first == second {
+		t.Fatalf("restarted job reuses playback session %q", first)
+	}
+	waitFor("old session stop", func() bool {
+		f.playback.mu.Lock()
+		defer f.playback.mu.Unlock()
+		for _, id := range f.playback.stopped {
+			if id == first {
+				return true
+			}
+		}
+		return false
+	})
+	if _, ok := f.playback.Session(second); !ok {
+		t.Fatalf("new job's session %q was stopped by the old job", second)
+	}
+	close(f.remux.block)
+	f.waitStatus(t, qid, downloadAvailable)
+}

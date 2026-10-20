@@ -631,7 +631,11 @@ func unshuffleQueue(p *playQueue) {
 	if !p.shuffled {
 		return
 	}
-	sel := p.items[p.selected].id
+	var sel int64
+	if p.selected < len(p.items) {
+		// Removing every item leaves no selection to restore.
+		sel = p.items[p.selected].id
+	}
 	present := map[int64]bool{}
 	for _, it := range p.items {
 		present[it.id] = true

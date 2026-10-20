@@ -255,10 +255,24 @@ func acceptsGzip(r *http.Request) bool {
 	for _, v := range r.Header.Values("Accept-Encoding") {
 		for _, p := range strings.Split(v, ",") {
 			name, params, _ := strings.Cut(strings.TrimSpace(p), ";")
-			if strings.EqualFold(strings.TrimSpace(name), "gzip") && !strings.Contains(strings.ReplaceAll(params, " ", ""), "q=0") {
+			if strings.EqualFold(strings.TrimSpace(name), "gzip") && !zeroQuality(params) {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+// zeroQuality reports whether Accept-Encoding parameters carry q=0 (the
+// coding is refused); "q=0.5" still accepts it.
+func zeroQuality(params string) bool {
+	for _, p := range strings.Split(params, ";") {
+		k, v, ok := strings.Cut(strings.TrimSpace(p), "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(k), "q") {
+			continue
+		}
+		q, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return err == nil && q == 0
 	}
 	return false
 }

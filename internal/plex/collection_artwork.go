@@ -25,6 +25,11 @@ func (s *Server) serveCollectionArtwork(w http.ResponseWriter, r *http.Request, 
 	if !ok {
 		return false
 	}
+	// Same visibility as the collection itself; on failure the TMDB path
+	// below answers (404 for a collection the viewer may not see).
+	if _, err := s.collection(r.Context(), FromContext(r.Context()).User, key); err != nil {
+		return false
+	}
 	data, ct, ok, err := art.CollectionArtwork(r.Context(), FromContext(r.Context()).User, key, element, width)
 	if err != nil || !ok || len(data) == 0 {
 		return false

@@ -13,13 +13,18 @@ import (
 	"github.com/braedonsaunders/ether/internal/plex/model"
 )
 
-// parseKeys parses a {key} path parameter that may be a comma list.
+// parseKeys parses a {key} path parameter that may be a comma list. Lists
+// stop at maxExpand keys: every key costs a catalogue lookup (possibly a
+// TMDB fetch), and hub keys never list more than a hub's 200 items.
 func parseKeys(s string) ([]core.RatingKey, error) {
 	var out []core.RatingKey
 	for _, p := range strings.Split(s, ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
+		}
+		if len(out) == maxExpand {
+			break
 		}
 		k, err := core.ParseRatingKey(p)
 		if err != nil {
@@ -366,6 +371,9 @@ func (s *Server) handleAllLeaves(w http.ResponseWriter, r *http.Request) {
 	mc.ViewGroup = "episode"
 	mc.ViewMode = viewModeList
 	mc.Mixed = model.Ptr(true)
+	// Filter before paging, as handleChildren does, so the window and
+	// totalSize count only episodes the viewer may see.
+	eps = s.visibleTitles(pr.User, eps)
 	lo, hi := pr.window(len(eps))
 	mc.Metadata = s.renderTitles(ctx, pr, eps[lo:hi], renderOpts{media: true, inSection: true})
 	mc.Size = len(mc.Metadata)
@@ -419,7 +427,7 @@ func (s *Server) handleSimilar(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	k, err := keyParam(r)
-	if err != nil {
+	if err != nil || !s.relatedSourceVisible(ctx, pr, k) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
@@ -449,6 +457,14 @@ func (s *Server) handleItemOnDeck(w http.ResponseWriter, r *http.Request) {
 	}
 	mc := libraryContainer()
 	if k.Kind() == core.KindShow {
+		show, err := s.metadataTitle(ctx, pr, k)
+		if err == nil && !s.visibleTitle(ctx, pr.User, show) {
+			err = core.ErrNotFound
+		}
+		if err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
 		if ep, st := s.showOnDeck(ctx, pr, k); ep != nil {
 			mc.Metadata = s.renderTitles(ctx, pr, []core.Title{*ep}, renderOpts{media: true, state: st})
 		}
@@ -464,7 +480,24 @@ func (s *Server) collection(ctx context.Context, u *core.User, k core.RatingKey)
 	if s.d.Collections == nil {
 		return nil, core.ErrNotFound
 	}
-	return s.d.Collections.Get(ctx, u, k)
+	c, err := s.d.Collections.Get(ctx, u, k)
+	if err != nil {
+		return nil, err
+	}
+	if !s.collectionVisible(u, c) {
+		return nil, core.ErrNotFound
+	}
+	return c, nil
+}
+
+// collectionVisible reports whether u may see the section a movie or show
+// collection belongs to (mixed collections have no single section).
+func (s *Server) collectionVisible(u *core.User, c *core.Collection) bool {
+	if c.Type != core.TypeMovie && c.Type != core.TypeShow {
+		return true
+	}
+	sec, ok := s.sectionFor(c.Type)
+	return !ok || s.canSeeSection(u, sec.ID)
 }
 
 func (s *Server) collectionMetadata(c *core.Collection) model.Metadata {

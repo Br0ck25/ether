@@ -160,3 +160,43 @@ func TestAlphabeticalDecisionOrder(t *testing.T) {
 		}
 	}
 }
+
+// An Extra attribute sharing a typed field's name must not repeat the
+// attribute: a duplicate makes the XML ill-formed.
+func TestEncodeXMLDedupesAttributes(t *testing.T) {
+	mc := MediaContainer{Size: 1, Title1: "Typed", Extra: []Attr{{"title1", "Extra"}, {"size", 9}, {"x", 1}, {"x", 2}}}
+	b, err := Marshal(mc, XML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := xml.NewDecoder(strings.NewReader(string(b)))
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			if err.Error() == "EOF" {
+				break
+			}
+			t.Fatalf("ill-formed XML %s: %v", b, err)
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			seen := map[string]bool{}
+			for _, a := range se.Attr {
+				if seen[a.Name.Local] {
+					t.Fatalf("duplicate attribute %q in %s", a.Name.Local, b)
+				}
+				seen[a.Name.Local] = true
+			}
+		}
+	}
+	j, err := Marshal(mc, JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ MediaContainer map[string]any }
+	if err := json.Unmarshal(j, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `title1="`+got.MediaContainer["title1"].(string)+`"`) {
+		t.Errorf("XML and JSON keep different values: %s vs %s", b, j)
+	}
+}

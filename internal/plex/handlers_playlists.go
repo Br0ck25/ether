@@ -149,6 +149,9 @@ func (s *Server) resolveURI(ctx context.Context, pr *Request, uri string) ([]cor
 				return nil, err
 			}
 			out = append(out, sub...)
+			if len(out) >= maxExpand {
+				break
+			}
 		}
 		return capKeys(out), nil
 	case reCollectionPath.MatchString(path):
@@ -521,7 +524,8 @@ func (s *Server) handlePlaylistMove(w http.ResponseWriter, r *http.Request) {
 	to := 0
 	if after, err := strconv.Atoi(r.URL.Query().Get("after")); err == nil && after >= 1 && after <= len(pl.Items) {
 		a := after - 1
-		if from < a {
+		// Moving an item after itself leaves it where it is.
+		if from <= a {
 			to = a
 		} else {
 			to = a + 1

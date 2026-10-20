@@ -87,6 +87,10 @@ type downloadItem struct {
 	progress float64 // 0..1
 	started  bool
 	cancel   context.CancelFunc
+	// run numbers each start of the item, so a restarted job gets its own
+	// playback session instead of sharing (and later stopping) the
+	// previous run's.
+	run int64
 
 	path       string
 	size       int64
@@ -110,6 +114,7 @@ type downloadStore struct {
 	byClient  map[string]int64 // "userID\x00clientID" -> queue id
 	nextQueue int64
 	nextItem  int64
+	nextRun   int64
 }
 
 func newDownloadStore() *downloadStore {
@@ -761,6 +766,7 @@ func (s *Server) scheduleDownloads() {
 	type job struct {
 		it  *downloadItem
 		ctx context.Context
+		run int64
 	}
 	var jobs []job
 	s.downloads.mu.Lock()
@@ -782,11 +788,13 @@ func (s *Server) scheduleDownloads() {
 				continue
 			}
 			ctx, cancel := context.WithCancel(s.ctx)
+			s.downloads.nextRun++
 			it.cancel = cancel
 			it.started = true
 			it.status = downloadDeciding
+			it.run = s.downloads.nextRun
 			active[it.user.ID]++
-			jobs = append(jobs, job{it, ctx})
+			jobs = append(jobs, job{it, ctx, it.run})
 		}
 	}
 	s.downloads.mu.Unlock()
@@ -794,12 +802,12 @@ func (s *Server) scheduleDownloads() {
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
-			s.processDownloadItem(j.ctx, j.it)
+			s.processDownloadItem(j.ctx, j.it, j.run)
 		}()
 	}
 }
 
-func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem) {
+func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem, run int64) {
 	defer s.scheduleDownloads()
 	fail := func(msg string) {
 		s.downloads.mu.Lock()
@@ -815,8 +823,12 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem) {
 	// A dedicated client identity keeps the download's playback session
 	// from colliding with a live stream of the same title on this
 	// device; it still counts against stream limits (it holds Usenet
-	// connections for the whole file).
-	caps.ClientID = it.caps.ClientID + "/download"
+	// connections for the whole file). The run number keeps each job on
+	// its own session: Playback reuses a session per (user, client,
+	// title), so a restarted job, or a second queued copy of the title at
+	// another quality, would otherwise share it and be cut off by the
+	// other job's deferred Stop.
+	caps.ClientID = it.caps.ClientID + "/download/" + strconv.FormatInt(run, 10)
 	ps, err := s.d.Playback.Prepare(ctx, it.user, it.key, caps)
 	if err != nil {
 		fail(playbackMessage(err))
@@ -825,6 +837,12 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem) {
 	defer s.d.Playback.Stop(ps.ID)
 
 	s.downloads.mu.Lock()
+	if ctx.Err() != nil {
+		// Deleted or restarted while preparing: the item belongs to the
+		// next run now.
+		s.downloads.mu.Unlock()
+		return
+	}
 	it.status = downloadWaiting
 	it.duration = ps.Info.Duration
 	if v := ps.Info.Video(); v != nil {
@@ -844,6 +862,10 @@ func (s *Server) processDownloadItem(ctx context.Context, it *downloadItem) {
 		AudioStream: -1,
 	}, func(f float64) {
 		s.downloads.mu.Lock()
+		if ctx.Err() != nil {
+			s.downloads.mu.Unlock()
+			return
+		}
 		it.progress = f
 		if it.status == downloadWaiting {
 			it.status = downloadProcessing
