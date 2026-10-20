@@ -196,6 +196,7 @@ func (m *PortMapper) mapUPnP(ctx context.Context, igd *IGD, now time.Time) error
 		lease = 0
 		err = igd.AddPortMapping(ctx, "TCP", m.external, m.internal, igd.LocalIP, m.o.Description, 0)
 	}
+	adopted := false
 	if errors.As(err, &ue) && ue.Code == UPnPErrConflictInMappingEntry {
 		// Another host (or a stale entry of ours) holds the port. If it is
 		// ours, replace it; otherwise report the conflict.
@@ -203,7 +204,18 @@ func (m *PortMapper) mapUPnP(ctx context.Context, igd *IGD, now time.Time) error
 			_ = igd.DeletePortMapping(ctx, "TCP", m.external)
 			err = igd.AddPortMapping(ctx, "TCP", m.external, m.internal, igd.LocalIP, m.o.Description, lease)
 		} else if gerr == nil {
-			err = fmt.Errorf("upnp: external port %d already mapped to %s:%d", m.external, e.InternalClient, e.InternalPort)
+			err = fmt.Errorf("upnp: external port %d already mapped to %s:%d (another device, or another Ether node: give each node its own public port)",
+				m.external, e.InternalClient, e.InternalPort)
+		}
+	}
+	if err != nil && errors.As(err, &ue) {
+		// Some gateways refuse to add, replace or delete an entry that
+		// already exists, even one of ours (left by an earlier run of this
+		// node, or a crash). An entry that already forwards the external
+		// port to this host and port is exactly what we want: adopt it.
+		if e, gerr := igd.GetSpecificPortMapping(ctx, "TCP", m.external); gerr == nil &&
+			net.ParseIP(e.InternalClient).Equal(igd.LocalIP) && e.InternalPort == m.internal {
+			err, adopted, lease = nil, true, e.Lease
 		}
 	}
 	if err != nil {
@@ -217,15 +229,30 @@ func (m *PortMapper) mapUPnP(ctx context.Context, igd *IGD, now time.Time) error
 	if ip, err := igd.ExternalIP(ctx); err == nil {
 		st.ExternalIP = ip.String()
 	}
-	if lease == 0 {
+	switch {
+	case adopted:
+		// Not ours to renew on the usual schedule: check it again soon.
+		st.Lease = "existing"
+		if lease > 0 {
+			st.Lease = lease.String()
+		}
+		m.renewAt = now.Add(15 * time.Minute)
+		if lease > 0 {
+			m.renewAt = now.Add(min(15*time.Minute, max(lease/2, time.Minute)))
+		}
+	case lease == 0:
 		st.Lease = "permanent"
 		m.renewAt = now.Add(time.Hour) // re-assert periodically; routers reboot
-	} else {
+	default:
 		st.Lease = lease.String()
 		m.renewAt = now.Add(lease / 2)
 	}
 	st.RenewAt = m.renewAt
 	m.status = st
+	if adopted {
+		m.o.Logger.Info("port mapping already present on the gateway; using it", "gateway", igd.FriendlyName, "external", m.external, "internal", fmt.Sprintf("%s:%d", igd.LocalIP, m.internal))
+		return nil
+	}
 	m.o.Logger.Info("port mapped", "method", MethodUPnP, "gateway", igd.FriendlyName, "external", m.external, "internal", fmt.Sprintf("%s:%d", igd.LocalIP, m.internal), "lease", st.Lease)
 	return nil
 }

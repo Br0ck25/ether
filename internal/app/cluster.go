@@ -140,8 +140,9 @@ func (a *App) refreshPeers(ctx context.Context) bool {
 }
 
 // runRegistrarAsLeader runs the plex.tv registrar (publication, presence,
-// friend sync, certificate renewal, port mapping, reachability) only on
-// the leader. GDM discovery and the HTTP listener stay on every node.
+// friend sync, certificate renewal, reachability) only on the leader. GDM
+// discovery, the HTTP listener and port mapping (Registrar.RunPortMapping:
+// each node is reached through its own port forward) stay on every node.
 func (a *App) runRegistrarAsLeader(ctx context.Context) {
 	a.cluster.RunAsLeader(ctx, "plex.tv registrar", func(ctx context.Context) {
 		a.refreshPeers(ctx)

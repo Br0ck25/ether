@@ -392,6 +392,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 	if a.clustered() {
 		ropts.PeerURIs = a.peers.get // publish the union of every live node
+		ropts.NodeMapping = true     // every node maps its own port (runRegistrarAsLeader)
 	}
 	if a.registrar, err = plextv.NewRegistrar(ropts); err != nil {
 		return fmt.Errorf("registrar: %w", err)
@@ -511,6 +512,7 @@ func (a *App) Run(ctx context.Context) error {
 	go a.trakt.Start(ctx)
 	if a.clustered() {
 		background.start(func() { a.runRegistrarAsLeader(ctx) })
+		background.start(func() { a.registrar.RunPortMapping(ctx) })
 	} else if err := a.registrar.Start(ctx); err != nil {
 		a.log.Warn("plex.tv registrar", "err", err)
 	}
