@@ -280,6 +280,29 @@ export interface EtherConfig {
     maintenanceEnd?: string;
   };
   spike: { enabled: boolean; localFiles: string[] | null };
+  downloads?: {
+    enabled: boolean;
+    allowFriends: boolean;
+    maxConcurrent: number;
+    maxConcurrentPerUser: number;
+    diskBudgetBytes: number;
+    expiry: string;
+    maxHeight: number;
+  };
+  personalize?: {
+    postPlay: boolean;
+    postPlayPrebuffer: boolean;
+    microReasons: boolean;
+    sessionIntent: boolean;
+    clockFormat: string;
+  };
+  extras?: {
+    enabled: boolean;
+    resolverCommand?: string;
+    resolverArgs?: string[] | null;
+    resolverTimeout?: string;
+    prewarmBytes?: number;
+  };
   setupComplete: boolean;
 }
 

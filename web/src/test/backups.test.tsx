@@ -47,7 +47,7 @@ async function choose(label: string, option: string) {
 describe("Backups & import", () => {
   it("previews a Plex import inline and waits for the explicit import", async () => {
     const calls = backend();
-    render(<BackupsAndImport />);
+    render(<BackupsAndImport tab="import" />);
     await waitFor(() => expect(calls.some((c) => c.url.endsWith("/users"))).toBe(true));
     await choose("Ether viewer", "Alex");
     fireEvent.change(screen.getByLabelText("Plex server URL"), {
@@ -72,7 +72,7 @@ describe("Backups & import", () => {
 
   it("chooses a CSV viewer independently of the Plex import", async () => {
     backend();
-    render(<BackupsAndImport />);
+    render(<BackupsAndImport tab="import" />);
     await choose("CSV viewer", "Alex");
     expect(screen.getByRole("button", { name: "CSV viewer" })).toHaveTextContent("Alex");
     expect(screen.getByRole("button", { name: "Ether viewer" })).toHaveTextContent("Sam");
@@ -94,6 +94,21 @@ describe("Backups & import", () => {
     const save = calls.find((c) => c.url.endsWith("/adoption/backups/settings"))!;
     expect(save.init?.method).toBe("POST");
     expect(JSON.parse(String(save.init?.body))).toEqual({ intervalHours: 12, retain: 7 });
+  });
+
+  it("keeps snapshots and imports on separate tabs", async () => {
+    backend();
+    const { rerender } = render(<BackupsAndImport />);
+    expect(await screen.findByLabelText("Back up every")).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Import from Plex" })).toBeNull();
+    fireEvent.change(screen.getByLabelText("Plex server URL"), {
+      target: { value: "http://half-typed:32400" },
+    });
+    rerender(<BackupsAndImport tab="import" />);
+    expect(screen.getByRole("heading", { name: "Import from Plex" })).toBeVisible();
+    expect(screen.getByLabelText("Back up every")).not.toBeVisible();
+    // Switching tabs keeps what was typed.
+    expect(screen.getByLabelText("Plex server URL")).toHaveValue("http://half-typed:32400");
   });
 
   it("has no local library tools", async () => {

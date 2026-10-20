@@ -1,12 +1,13 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { calls, renderApp } from "./harness";
+import { renderAppWith } from "./routes";
 
 const WAIT = { timeout: 4000 };
 
 describe("Settings", () => {
   it("round-trips redacted secrets and saves only the changed service", async () => {
-    const { fake } = renderApp("/services", {}, (f) => {
+    const { fake } = renderApp("/services/opensubtitles", {}, (f) => {
       f.state.config.openSubtitles = {
         enabled: true,
         apiKey: "••••",
@@ -35,20 +36,88 @@ describe("Settings", () => {
     );
   });
 
-  it("lists every other integration with a link to where it is configured", async () => {
+  it("opens on an overview of every integration, essentials first", async () => {
     renderApp("/services");
-    const directory = (await screen.findByText("Other integrations", {}, WAIT)).closest("section")!;
+    const essentials = await screen.findByRole("region", { name: "Essentials" }, WAIT);
+    const optional = screen.getByRole("region", { name: "Optional" });
+    expect(
+      essentials.compareDocumentPosition(optional) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     for (const [name, href] of [
-      ["Metadata › Catalogue", "/metadata/catalogue"],
-      ["Metadata › Ratings", "/metadata/ratings"],
-      ["Playback › Markers", "/playback/markers"],
-      ["Sources › Indexers", "/sources/indexers"],
-      ["Plex & remote access", "/remote-access"],
-    ])
-      expect(within(directory).getByRole("link", { name })).toHaveAttribute("href", href);
-    expect(screen.getByRole("button", { name: "Test Trakt" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Test endpoint" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Test OpenSubtitles" })).toBeInTheDocument();
+      [/Plex & remote access/, "/remote-access"],
+      [/Metadata › Catalogue/, "/metadata/catalogue"],
+      [/Sources › Debrid/, "/sources/debrid"],
+    ] as const)
+      expect(within(essentials).getByRole("link", { name })).toHaveAttribute("href", href);
+    for (const [name, href] of [
+      [/Set up Trakt/, "/services/trakt"],
+      [/Manage language model/, "/services/llm"],
+      [/Set up OpenSubtitles/, "/services/opensubtitles"],
+      [/Metadata › Ratings/, "/metadata/ratings"],
+      [/Playback › Markers/, "/playback/markers"],
+      [/Sources › Indexers/, "/sources/indexers"],
+    ] as const)
+      expect(within(optional).getByRole("link", { name })).toHaveAttribute("href", href);
+    expect(within(screen.getByRole("listitem", { name: "Language model" })).getByText("On"));
+    // Credential forms live on their own tabs, not under the overview.
+    expect(screen.queryByRole("button", { name: "Test Trakt" })).toBeNull();
+  });
+
+  it("gives each service its own tab with its connection test", async () => {
+    renderApp("/services/trakt");
+    expect(await screen.findByRole("button", { name: "Test Trakt" }, WAIT)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Test endpoint" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Language model" }));
+    expect(await screen.findByRole("button", { name: "Test endpoint" }, WAIT)).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Language model features" }, WAIT),
+    ).toBeVisible();
+  });
+
+  it("keeps unsaved edits across tabs and saves them together", async () => {
+    const { fake } = renderApp("/services/trakt");
+    fireEvent.change(await screen.findByLabelText("Client ID", {}, WAIT), {
+      target: { value: "my-client" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "OpenSubtitles" }));
+    fireEvent.change(await screen.findByLabelText("Username", {}, WAIT), {
+      target: { value: "sam" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Trakt" }));
+    expect(await screen.findByLabelText("Client ID", {}, WAIT)).toHaveValue("my-client");
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/opensubtitles")).toHaveLength(1), WAIT);
+    expect(calls(fake, "PUT", "/config/trakt")[0]!.body).toMatchObject({ clientId: "my-client" });
+  });
+
+  it("jumps to the tab holding a field the server rejected", async () => {
+    renderAppWith("/services/trakt", (method, path) =>
+      method === "PUT" && path === "/config/trakt"
+        ? new Response(
+            JSON.stringify({
+              error: {
+                code: "validation",
+                message: "configuration is invalid",
+                fields: [{ field: "trakt.clientId", message: "looks malformed" }],
+              },
+            }),
+            { status: 400 },
+          )
+        : undefined,
+    );
+    fireEvent.change(await screen.findByLabelText("Client ID", {}, WAIT), {
+      target: { value: "bad id" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    await screen.findByRole("region", { name: "Essentials" }, WAIT);
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
+    await waitFor(
+      () =>
+        expect(screen.getByRole("tab", { name: "Trakt" })).toHaveAttribute("aria-selected", "true"),
+      WAIT,
+    );
+    expect(await screen.findByLabelText("Client ID", {}, WAIT)).toHaveValue("bad id");
+    expect(screen.getAllByText("looks malformed").length).toBeGreaterThan(0);
   });
 
   it("shows server validation errors next to the field", async () => {
@@ -82,19 +151,55 @@ describe("Settings", () => {
     expect(screen.getAllByText("is required").length).toBeGreaterThan(0);
   });
 
-  it("lists config sections the UI has no page for on General, and saves them whole", async () => {
+  it("gives config sections the UI has no page for their own General tab, and saves them whole", async () => {
     const { fake } = renderApp("/server", {}, (f) => {
-      f.state.config = { ...f.state.config, personalize: { enabled: true, explore: 0.2 } } as never;
+      f.state.config = {
+        ...f.state.config,
+        experiments: { enabled: true, explore: 0.2 },
+      } as never;
     });
-    expect(await screen.findByRole("heading", { name: "Personalize" }, WAIT)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: "Experiments" }, WAIT));
+    expect(await screen.findByRole("heading", { name: "Experiments" }, WAIT)).toBeInTheDocument();
     fireEvent.change(await screen.findByLabelText("Explore", {}, WAIT), {
       target: { value: "0.4" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
     await waitFor(() => expect(calls(fake, "PUT", "/config")).toHaveLength(1), WAIT);
     expect(
-      (calls(fake, "PUT", "/config")[0]!.body as { personalize: unknown }).personalize,
+      (calls(fake, "PUT", "/config")[0]!.body as { experiments: unknown }).experiments,
     ).toEqual({ enabled: true, explore: 0.4 });
+  });
+
+  it("edits downloads, personalization and trailers on General tabs without losing other edits", async () => {
+    const { fake } = renderApp("/server");
+    fireEvent.change(await screen.findByLabelText("Server name", {}, WAIT), {
+      target: { value: "Den Ether" },
+    });
+    fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
+    fireEvent.click(await screen.findByLabelText("Friends can download", {}, WAIT));
+    expect(screen.queryByLabelText("Server name")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/server")).toHaveLength(1), WAIT);
+    const wholeSaves = () => calls(fake, "PUT", "/config").filter((c) => c.path === "/config");
+    await waitFor(() => expect(wholeSaves()).toHaveLength(1), WAIT);
+    const whole = wholeSaves()[0]!.body as {
+      server: { friendlyName: string };
+      downloads: { allowFriends: boolean };
+    };
+    expect(whole.downloads.allowFriends).toBe(true);
+    // The whole-config save merges into the live config, so it can't undo the server save.
+    expect(whole.server.friendlyName).toBe("Den Ether");
+  });
+
+  it("opens Plex & remote access on status and connection checks", async () => {
+    renderApp("/remote-access");
+    expect(await screen.findByRole("heading", { name: "Connection checks" }, WAIT)).toBeVisible();
+    expect(screen.getByText("Plex account")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Allow remote access")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Remote access" }));
+    expect(await screen.findByLabelText("Allow remote access", {}, WAIT)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Connection checks" })).toBeNull();
+    expect(screen.queryByText("Owner token")).toBeNull();
   });
 
   it("puts every server page in the main sidebar, with no separate settings menu", async () => {

@@ -134,20 +134,40 @@ export const PAGES: PageDef[] = [
   {
     href: "/server",
     title: "General",
-    sections: [],
-    keywords: "settings server name port log level stream limit",
+    sections: [
+      { key: "server", title: "Server", keywords: "name port listen log level stream limit" },
+      { key: "downloads", title: "Downloads", keywords: "offline sync friends remux" },
+      {
+        key: "personalize",
+        title: "Personalization",
+        keywords: "post-play up next match finish time clock",
+      },
+      { key: "extras", title: "Trailers & extras", keywords: "cinema trailers yt-dlp resolver" },
+    ],
+    keywords: "settings",
   },
   {
     href: "/remote-access",
     title: "Plex & remote access",
-    sections: [],
-    keywords: "settings plex claim remote upnp certificate",
+    sections: [
+      { key: "status", title: "Plex status", keywords: "claim connection checks reachability" },
+      { key: "remote", title: "Remote access", keywords: "upnp port forward public" },
+      { key: "secure", title: "Secure connections", keywords: "certificate plex.direct tls" },
+      { key: "account", title: "Plex account", keywords: "owner token claimed" },
+      { key: "compatibility", title: "Compatibility", keywords: "pms version" },
+    ],
+    keywords: "settings plex",
   },
   {
     href: "/services",
     title: "Connected services",
-    sections: [],
-    keywords: "settings integrations trakt llm language model opensubtitles",
+    sections: [
+      { key: "overview", title: "Integrations", keywords: "status tmdb debrid prowlarr ratings" },
+      { key: "trakt", title: "Trakt", keywords: "sync history" },
+      { key: "llm", title: "Language model", keywords: "llm ollama openai recaps search" },
+      { key: "opensubtitles", title: "OpenSubtitles", keywords: "subtitles" },
+    ],
+    keywords: "settings integrations",
   },
   {
     href: "/cluster",
@@ -158,8 +178,10 @@ export const PAGES: PageDef[] = [
   {
     href: "/backups",
     title: "Backups & import",
-    sections: [],
-    keywords: "restore migrate csv letterboxd snapshot",
+    sections: [
+      { key: "backups", title: "Backups", keywords: "snapshot restore schedule" },
+      { key: "import", title: "Import & export", keywords: "migrate plex csv letterboxd trakt" },
+    ],
   },
   {
     href: "/updates",

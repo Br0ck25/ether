@@ -25,6 +25,13 @@
   --color-on-scrim: var(--on-scrim);
 }
 
+/* The page scroller is the containing block for absolutely positioned content
+ * (sr-only file inputs, visually hidden labels). Without it they resolve
+ * against the document and stretch it past the shell into blank scroll. */
+.app-scroll {
+  position: relative;
+}
+
 @layer utilities {
   /* Horizontal poster rows: scroll-snap like a TV shelf, no visible scrollbar. */
   .shelf {
