@@ -478,6 +478,15 @@ var boundaryKeywords = []string{
 	"INTERNAL", "LIMITED", "SUBBED", "DUBBED",
 }
 
+// titleWordKeywords are boundary keywords that are also ordinary title
+// words ("The French Dispatch", "Internal Affairs", "Charlottes Web",
+// "Cam"); before the release year or episode marker they stay in the title.
+var titleWordKeywords = map[string]bool{
+	"COMPLETE": true, "SEASON": true, "MULTI": true, "FRENCH": true, "GERMAN": true,
+	"SPANISH": true, "ITALIAN": true, "INTERNAL": true, "LIMITED": true,
+	"SUBBED": true, "DUBBED": true, "CAM": true, "WEB": true,
+}
+
 func extractTitle(spaced string, yearAt, floor int, info *core.ReleaseInfo) string {
 	cut := len(spaced)
 	consider := func(idx int) {
@@ -506,7 +515,10 @@ func extractTitle(spaced string, yearAt, floor int, info *core.ReleaseInfo) stri
 		// not CAM), and words before the release year or episode marker
 		// belong to the title ("Charlottes Web 2006", "Internal Affairs
 		// 1990", "The Spanish Princess S01E01").
-		if idx := tokenIndex(spaced, kw); idx > 0 && (idx > floor || kw == "COMPLETE" && namesPack(spaced[idx+len(kw):])) {
+		// Only words that also occur in titles get that protection:
+		// resolutions, sources, codecs and PROPER/REPACK always end the
+		// title ("Show.Name.720p.S01E01").
+		if idx := tokenIndex(spaced, kw); idx > 0 && (idx > floor || !titleWordKeywords[kw] || kw == "COMPLETE" && namesPack(spaced[idx+len(kw):])) {
 			consider(idx)
 		}
 	}
