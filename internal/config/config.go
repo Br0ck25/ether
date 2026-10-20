@@ -113,8 +113,8 @@ type Indexer struct {
 	Name       string `json:"name"`
 	URL        string `json:"url"` // base URL; /api is appended
 	APIKey     string `json:"apiKey"`
-	DailyLimit int    `json:"dailyLimit"` // API hits per day, 0 = unlimited
-	DailyGrabs int    `json:"dailyGrabs"` // NZB downloads per day, 0 = unlimited
+	DailyLimit int    `json:"dailyLimit"` // optional personal API cap per UTC day; 0 = automatic service limits
+	DailyGrabs int    `json:"dailyGrabs"` // optional personal NZB cap per UTC day; 0 = automatic service limits
 	Priority   int    `json:"priority"`
 	Enabled    bool   `json:"enabled"`
 	// Categories override; empty uses Newznab defaults (2000 movies, 5000 TV).
@@ -167,7 +167,6 @@ type Catalog struct {
 	MinVotes        int      `json:"minVotes"`
 	IncludeAdult    bool     `json:"includeAdult"`
 	RefreshInterval Duration `json:"refreshInterval"`
-	ShowUnreleased  bool     `json:"showUnreleased"` // Legacy field; release dates are always enforced.
 }
 
 type Resolver struct {

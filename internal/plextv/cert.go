@@ -161,9 +161,8 @@ func csrUploadBody(csrPEM []byte) (body []byte, contentType string, err error) {
 //  3. GET  /api/v2/devices/{id}/certificate/download  (202 while pending,
 //     200 with a PEM chain: leaf first, then the intermediate)
 //
-// The request formats follow the PMS 1.43.4 executable (see
-// docs/plextv-notes.md §6); downloads are still parsed liberally (PEM, DER
-// or JSON-wrapped PEM).
+// The request formats follow the PMS 1.43.4 executable; downloads are still
+// parsed liberally (PEM, DER or JSON-wrapped PEM).
 // plex.tv rate-limits step 2 (HTTP 429, code 1003) per device, so callers
 // must not retry quickly: see CertManager.
 //

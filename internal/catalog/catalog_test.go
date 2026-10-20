@@ -324,8 +324,8 @@ func TestRatingRankOrdering(t *testing.T) {
 
 func TestUnreleasedVisibility(t *testing.T) {
 	ctx := context.Background()
-	for _, legacyFlag := range []bool{false, true} {
-		c := newTestCatalogCfg(t, nil, config.Catalog{ShowUnreleased: legacyFlag})
+	{
+		c := newTestCatalogCfg(t, nil, config.Catalog{})
 		for _, typ := range []core.MediaType{core.TypeMovie, core.TypeShow} {
 			for i, date := range []time.Time{time.Now().AddDate(1, 0, 0), {}} {
 				key := core.MovieKey(int64(9000 + i))
@@ -339,16 +339,14 @@ func TestUnreleasedVisibility(t *testing.T) {
 				if _, err := c.Get(ctx, key); !errors.Is(err, core.ErrNotFound) {
 					t.Fatalf("Get returned unreleased title: %v", err)
 				}
-				if catalog.MeetsThreshold(config.Catalog{ShowUnreleased: legacyFlag}, title, time.Now()) {
-					t.Fatal("legacy flag bypassed release gate")
+				if catalog.MeetsThreshold(config.Catalog{}, title, time.Now()) {
+					t.Fatal("unreleased title met the catalogue threshold")
 				}
 			}
 		}
-		for _, override := range []bool{false, true} {
-			page, err := c.Browse(ctx, core.BrowseQuery{Filter: core.Filter{IncludeUnreleased: override}})
-			if err != nil || page.Total != 0 || len(page.Items) != 0 {
-				t.Fatalf("browse %+v: %v", page, err)
-			}
+		page, err := c.Browse(ctx, core.BrowseQuery{})
+		if err != nil || page.Total != 0 || len(page.Items) != 0 {
+			t.Fatalf("browse %+v: %v", page, err)
 		}
 		titles, err := c.Search(ctx, "Unreleased", nil, 20)
 		if err != nil || len(titles) != 0 {

@@ -19,7 +19,7 @@ import (
 
 const (
 	defaultMaxTraces      = 50
-	maxHealthAttempts     = 8
+	maxHealthAttempts     = 32
 	defaultSearchCacheTTL = 6 * time.Hour
 	defaultUnavailableTTL = 24 * time.Hour
 	defaultMaxCandidates  = 3
@@ -115,6 +115,7 @@ type Service struct {
 	searchCache   map[string]searchCacheEntry
 	retentionDays int
 	verified      map[string]time.Time // release id -> last passed health check
+	failedHealth  map[string]time.Time // confirmed source failures, briefly skipped on subsequent resolves
 	healthTTL     time.Duration
 
 	tracesMu  sync.Mutex
@@ -387,7 +388,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 
 	rcfg := s.resolverCfg()
-	cands, clientRejected, err := s.rankCandidates(req, sreq, profile, results, &trace, pinID)
+	cands, clientRejected, err := s.rankCandidates(ctx, req, sreq, profile, results, &trace, pinID)
 	if err != nil {
 		trace.Err = err.Error()
 		return nil, err
@@ -405,7 +406,8 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 			s.notePin(ctx, t.Key, pinID, PinRejected, candidateReason(&trace, pinID))
 			trace.PinStatus = "rejected: " + candidateReason(&trace, pinID)
 		}
-		// Client/profile rejection is not proof that the title is unavailable for everyone.
+		// Client/profile restrictions and temporary source skips do not prove
+		// that the title is unavailable for everyone.
 		if !clientRejected && len(req.Exclude) == 0 && searchErr == nil {
 			s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
 		}
@@ -512,7 +514,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, failed(nil)
 	}
 	if !clientRejected && len(req.Exclude) == 0 && len(cands) <= maxHealthAttempts {
-		s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
+		s.setAvailability(ctx, int64(t.Key), false, min(s.cooloff(), failedHealthTTL))
 	}
 	trace.Err = "no healthy candidates"
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
@@ -560,15 +562,15 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 // scoreCandidates filters and ranks search results for a request and
 // profile. trace may be nil (the variants path); candidate.trace is then
 // -1 and no trace rows are written.
-func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace) ([]candidate, bool, error) {
-	return s.rankCandidates(req, sreq, profile, results, trace, "")
+func (s *Service) scoreCandidates(ctx context.Context, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace) ([]candidate, bool, error) {
+	return s.rankCandidates(ctx, req, sreq, profile, results, trace, "")
 }
 
 // rankCandidates is scoreCandidates with the owner's pinned release id
 // (pinID, "" for none): the pin is judged by pinRejectReason's hard gates
 // instead of the profile and identity rules, and is otherwise scored and
 // traced like every other result. Interactive search reads the same trace.
-func (s *Service) rankCandidates(req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, error) {
+func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace, pinID string) ([]candidate, bool, error) {
 	t := req.Title
 	exclude := map[string]bool{}
 	for _, id := range req.Exclude {
@@ -592,7 +594,7 @@ func (s *Service) rankCandidates(req core.ResolveRequest, sreq core.SearchReques
 		if reason != "" {
 			ct.Rejected = true
 			switch reason {
-			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile":
+			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later":
 				clientRejected = true
 			}
 			ct.Reason = reason
@@ -618,14 +620,26 @@ func (s *Service) rankCandidates(req core.ResolveRequest, sreq core.SearchReques
 		ct.CompatibilityReason = sc.compat
 		rel.Score = sc.total
 		ct.Score = rel.Score
+		verified := s.recentlyVerified(ctx, rel.ID)
+		if verified {
+			ct.CompatibilityReason = strings.TrimSpace(sc.compat + "; source recently verified playable")
+			ct.CompatibilityReason = strings.TrimPrefix(ct.CompatibilityReason, "; ")
+		}
 		tr := -1
 		if trace != nil {
 			trace.Candidates = append(trace.Candidates, ct)
 			tr = len(trace.Candidates) - 1
 		}
-		cands = append(cands, candidate{rel: rel, trace: tr})
+		cands = append(cands, candidate{rel: rel, trace: tr, verified: verified})
 	}
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rel.Score > cands[j].rel.Score })
+	sort.SliceStable(cands, func(i, j int) bool {
+		// Availability wins over soft quality preferences, after all hard
+		// profile/client gates above. Keep ranking within each group.
+		if cands[i].verified != cands[j].verified {
+			return cands[i].verified
+		}
+		return cands[i].rel.Score > cands[j].rel.Score
+	})
 	cands = s.routeSources(cands, req.Title, trace)
 	return cands, clientRejected, nil
 }
@@ -684,6 +698,9 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	}
 	if s.isBad(rel.ID) {
 		return "marked bad"
+	}
+	if s.recentlyFailedHealth(rel.ID) {
+		return "source recently failed health check; retrying later"
 	}
 	lowerName := strings.ToLower(rel.Name)
 	for _, term := range rcfg.BlockedTerms {

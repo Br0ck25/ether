@@ -3,10 +3,10 @@
 // settings, logs, resolver traces) served under /ether/.
 //
 // The package deliberately depends only on internal/config, internal/core
-// (for types) and the small interfaces/funcs declared in Deps. Every other
-// component is built concurrently; the integrator wires real implementations
-// into Deps. Nil deps degrade gracefully (endpoints answer 501) so the UI
-// can run against a partially wired server.
+// (for types) and the small interfaces/funcs declared in Deps; internal/app
+// wires the real implementations. The SPA is embedded in the same binary,
+// so every endpoint it calls is always present: the component deps in Deps
+// are required, and a handler only reaches the deps its routes use.
 //
 // Mounting:
 //
@@ -19,7 +19,7 @@
 //
 //	buf := admin.NewLogBuffer(2000)
 //	logger := slog.New(admin.TeeHandler(slog.NewTextHandler(os.Stderr, nil), buf))
-//	h := admin.New(admin.Deps{Config: store, Logs: buf, Logger: logger})
+//	h := admin.New(admin.Deps{Config: store, Logs: buf, Logger: logger, ...})
 package admin
 
 import (
@@ -81,8 +81,11 @@ type StatusFunc func(ctx context.Context) any
 // StatusFuncE is a StatusFunc that can fail.
 type StatusFuncE func(ctx context.Context) (any, error)
 
-// Deps are the dependencies of the admin handler. Config is required;
-// everything else is optional and degrades to 501/empty responses.
+// Deps are the dependencies of the admin handler. The component
+// dependencies (Plex sign-in, testers, traces, users, personalization,
+// collections, catalogue helper, image proxy) are required. Only the
+// tuning knobs, Logger/Logs, the dashboard status providers, Extensions,
+// ValidateExtra and DiskUsage have defaults or may be left empty.
 type Deps struct {
 	// Extensions are owner-authenticated API subtrees keyed by relative path.
 	Extensions    map[string]http.Handler
@@ -98,19 +101,16 @@ type Deps struct {
 	// Version is reported by /ether/api/bootstrap ("dev" when empty).
 	Version string
 
-	// PlexAuth drives wizard step 1. Nil → pinned endpoints answer 501.
+	// PlexAuth drives wizard step 1 (plex.tv PIN sign-in and claim).
 	PlexAuth PlexAuth
 
-	// SignIn powers "Sign in with Plex" on the admin login screen. Nil
-	// leaves only the token form.
+	// SignIn powers "Sign in with Plex" on the admin login screen.
 	SignIn SignIn
 
 	// IsOwnerToken reports whether a bearer token belongs to the owner.
-	// When nil, the stored Plex owner token (config.Plex.Token) is the
-	// only accepted credential.
 	IsOwnerToken func(ctx context.Context, token string) bool
 
-	// Provider/integration testers used by the wizard. Nil → 501.
+	// Provider/integration testers used by the wizard and settings pages.
 	TestUsenet        func(ctx context.Context, p config.UsenetProvider) error
 	TestIndexer       func(ctx context.Context, ix config.Indexer) error
 	TestDebrid        func(ctx context.Context, p config.DebridProvider) error
@@ -128,16 +128,14 @@ type Deps struct {
 	CatalogStatus   StatusFunc // "catalog" — catalogue sync/stats
 	RemoteStatus    StatusFunc // "remote" — remote access
 	HWAccelStatus   StatusFunc // "hwaccel" — transcoding hardware
-	UpdatesStatus   StatusFunc // "updates" — update feed state
-	TracesStatus    StatusFunc // "traces" — recent resolver traces
-	// ExtraStatus adds/overrides named status providers generically.
+	// ExtraStatus adds/overrides named status providers generically. The
+	// "widget" entry is required: it backs GET /ether/api/status.
 	ExtraStatus map[string]StatusFunc
 
-	// ResolverTraces, when set, backs GET /ether/api/traces with a typed
-	// error path (preferred over TracesStatus for the traces page).
+	// ResolverTraces backs GET /ether/api/traces.
 	ResolverTraces StatusFuncE
 
-	// Users backs the user-administration endpoints. Nil → 501.
+	// Users backs the user-administration and viewer endpoints.
 	Users UserStore
 
 	// TestTimeout bounds each wizard test call (default 20s).
@@ -152,19 +150,15 @@ type Deps struct {
 
 	// Personalization backs /api/viewers/*, /api/layout and
 	// /api/insights/* (internal/personalize.Engine). Viewers are listed
-	// from Users. Nil → 501.
+	// from Users.
 	Personalization Personalization
-	// ---- Collections work package: Collection Studio, catalogue helpers,
-	// image proxy (collections_api.go, catalog_api.go). ----
 
-	// Collections backs /api/collections*. Nil → 501.
+	// Collections backs /api/collections* (Collection Studio).
 	Collections CollectionStudio
-	// CatalogHelper backs /api/catalog/*. Nil → 501.
+	// CatalogHelper backs /api/catalog/*.
 	CatalogHelper CatalogHelper
-	// Images backs the TMDB image proxy at /api/image. Nil → 501.
+	// Images backs the TMDB image proxy at /api/image.
 	Images ImageProxy
-
-	// ---- end Collections work package ----
 }
 
 // Handler is the admin HTTP handler. Use NewHandler when you need access

@@ -28,4 +28,3 @@ pct exec "$VMID" -- docker run -d --name ether --network host \
   --restart unless-stopped -e ETHER_DATA_DIR=/config \
   -v /var/lib/ether:/config -v /var/cache/ether:/cache "$IMAGE"
 echo "Ether is running in CT $VMID. Open http://<container-ip>:32400/ether/."
-echo "Use a read-only Proxmox bind mount + Docker volume for optional local media."

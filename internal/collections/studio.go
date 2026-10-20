@@ -11,7 +11,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// The Collection Studio API (docs/owner-ui.md), used by internal/admin.
+// The Collection Studio API, used by internal/admin.
 
 // ListSpecs returns every collection, owner-made first, then built-ins.
 func (s *Service) ListSpecs(ctx context.Context) ([]core.CollectionSpec, error) {

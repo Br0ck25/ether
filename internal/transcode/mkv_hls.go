@@ -1,10 +1,11 @@
 package transcode
 
 import (
-	"github.com/braedonsaunders/ether/internal/core"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // HLSContainer preserves explicit client targets separately from the formats
@@ -22,12 +23,16 @@ func HLSContainer(caps core.ClientCaps, videoCodec, audioCodec string) string {
 	return segmentContainer(videoCodec, audioCodec)
 }
 
-// The segment muxer closes each independent Matroska file before publishing
-// it in its M3U8 list. Each file contains codec headers, without an MP4 map.
+// Plex's enhanced player joins an initialization header and Matroska clusters.
+// Repeating complete MKVs corrupts its virtual stream's Segment/SeekHead offsets.
+// Use the stream segment muxer's separate header, continuous timestamps and
+// cluster-only fragments; the playlist advertises the header with EXT-X-MAP.
 func matroskaHLSMuxArgs(s runSpec, segDur time.Duration) []string {
 	return []string{
 		"-avoid_negative_ts", "disabled", "-max_muxing_queue_size", "4096",
-		"-f", "segment", "-segment_format", "matroska",
+		"-f", "ssegment", "-segment_format", "matroska", "-flags", "+global_header",
+		"-individual_header_trailer", "0", "-reset_timestamps", "0",
+		"-segment_header_filename", filepath.Join(s.Dir, s.InitName),
 		"-segment_time", secs(segDur), "-segment_start_number", strconv.Itoa(s.StartSeg),
 		"-segment_list_type", "m3u8", "-segment_list_size", "0",
 		"-segment_list", filepath.Join(s.Dir, s.Playlist), filepath.Join(s.Dir, "%05d.mkv"),

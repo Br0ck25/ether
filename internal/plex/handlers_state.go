@@ -59,7 +59,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			if state != "stopped" {
 				s.ensureTrickplay(ctx, p, offset)
 			}
-			if t, ok := s.d.Playback.(SessionToucher); ok && state != "stopped" {
+			if t, ok := s.d.Playback.(SessionToucher); ok && (state == "playing" || state == "paused") {
 				t.Touch(p.ID)
 			}
 		}

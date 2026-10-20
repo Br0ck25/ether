@@ -12,8 +12,9 @@ import (
 )
 
 type candidate struct {
-	rel   core.Release
-	trace int
+	rel      core.Release
+	trace    int
+	verified bool
 }
 type validation struct {
 	index                         int
@@ -23,6 +24,13 @@ type validation struct {
 	healthCached                  bool // answered by the verified cache, not a check
 	fetchDuration, healthDuration time.Duration
 }
+
+const (
+	validationBudget = 25 * time.Second
+	candidateBudget  = 8 * time.Second
+)
+
+var errHealthBudget = errors.New("source validation limit reached; more releases remain to try")
 
 // Close cancels and joins optimistic checks. Owners should close before the DB.
 func (s *Service) Close() error {
@@ -80,14 +88,21 @@ func (s *Service) resolution(key core.RatingKey, cands []candidate, winner int, 
 // two checks together, but returns as soon as the preferred result succeeds.
 // Every worker is cancelled and joined before this function returns.
 func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr *Trace, race int) (int, []byte, error) {
+	ctx, cancelBudget := context.WithTimeout(ctx, validationBudget)
+	defer cancelBudget()
 	width := 2
 	if race > 0 {
 		width = min(max(race, 1), 4)
 	}
 	limit := min(len(cands), maxHealthAttempts)
 	var transient error
-	for base := 0; base < limit; base += width {
+	for base := 0; base < limit; {
 		count := min(width, limit-base)
+		if cands[base].verified {
+			// Reusing a known working release must not start speculative
+			// downloads and health checks for other releases alongside it.
+			count = 1
+		}
 		workCtx, cancel := context.WithCancel(ctx)
 		results := make(chan validation, count)
 		ordered := make([]chan validation, count)
@@ -97,17 +112,19 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			wg.Add(1)
 			go func(j int) {
 				defer wg.Done()
+				checkCtx, cancelCheck := context.WithTimeout(workCtx, candidateBudget)
+				defer cancelCheck()
 				i := base + j
 				v := validation{index: i}
 				phase := time.Now()
-				v.nzb, v.err = s.indexer.FetchNZB(workCtx, cands[i].rel)
+				v.nzb, v.err = s.indexer.FetchNZB(checkCtx, cands[i].rel)
 				v.fetchDuration = time.Since(phase)
 				if v.err == nil {
 					v.healthy = true
 					if s.health != nil {
 						v.healthChecked = true
 						phase = time.Now()
-						v.healthy, v.healthCached, v.err = s.checkHealthCached(workCtx, cands[i].rel.ID, v.nzb)
+						v.healthy, v.healthCached, v.err = s.checkHealthCached(checkCtx, cands[i].rel.ID, v.nzb)
 						v.healthDuration = time.Since(phase)
 					}
 				}
@@ -152,6 +169,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 			if v.err != nil && !permanentFailure(v.err) {
 				transient = errors.Join(transient, v.err)
 			} else {
+				s.noteFailedHealth(cands[v.index].rel.ID)
 				s.recordReputation(ctx, cands[v.index].rel.Indexer, false)
 			}
 		}
@@ -160,6 +178,10 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 		if winner >= 0 {
 			return winner, nzb, nil
 		}
+		base += count
+	}
+	if transient == nil && len(cands) > limit {
+		return -1, nil, errHealthBudget
 	}
 	return -1, nil, transient
 }

@@ -1,16 +1,12 @@
 package core
 
 import (
-	"bytes"
-	"encoding/json"
-	"fmt"
 	"time"
 )
 
-// Owner-facing personalization shapes (docs/owner-ui.md, "Viewers and
-// personalization", "Home Designer", "Insights"). The personalization
-// engine produces them; internal/admin serves them. JSON tags follow the
-// API contract.
+// Owner-facing personalization shapes ("Viewers and personalization",
+// "Home Designer", "Insights"). The personalization engine produces them;
+// internal/admin serves them. JSON tags follow the API contract.
 
 // TasteWeight is one named affinity, weight in -1..1.
 type TasteWeight struct {
@@ -112,61 +108,7 @@ type HomePreview struct {
 	Context     HubContext `json:"context"`
 }
 
-// LayoutScope is who a layout rule applies to: everyone ("all" in JSON) or
-// specific local user ids ({"userIds":[…]}).
-type LayoutScope struct {
-	All     bool
-	UserIDs []int64
-}
-
-// MarshalJSON encodes "all" or {"userIds":[…]}.
-func (s LayoutScope) MarshalJSON() ([]byte, error) {
-	if s.All || len(s.UserIDs) == 0 {
-		return []byte(`"all"`), nil
-	}
-	return json.Marshal(struct {
-		UserIDs []int64 `json:"userIds"`
-	}{s.UserIDs})
-}
-
-// UnmarshalJSON accepts "all" or {"userIds":[…]}.
-func (s *LayoutScope) UnmarshalJSON(b []byte) error {
-	b = bytes.TrimSpace(b)
-	if len(b) > 0 && b[0] == '"' {
-		var v string
-		if err := json.Unmarshal(b, &v); err != nil {
-			return err
-		}
-		if v != "all" {
-			return fmt.Errorf("layout scope %q: want \"all\" or {\"userIds\":[…]}", v)
-		}
-		*s = LayoutScope{All: true}
-		return nil
-	}
-	var v struct {
-		UserIDs []int64 `json:"userIds"`
-	}
-	if err := json.Unmarshal(b, &v); err != nil {
-		return fmt.Errorf("layout scope: %w", err)
-	}
-	*s = LayoutScope{UserIDs: v.UserIDs}
-	return nil
-}
-
-// AppliesTo reports whether the scope covers a user.
-func (s LayoutScope) AppliesTo(userID int64) bool {
-	if s.All || len(s.UserIDs) == 0 {
-		return true
-	}
-	for _, id := range s.UserIDs {
-		if id == userID {
-			return true
-		}
-	}
-	return false
-}
-
-// LayoutWhen restricts a layout row rule to days (0 = Sunday … 6 =
+// LayoutWhen restricts a Home layout row to days (0 = Sunday … 6 =
 // Saturday), an hour window [FromHour, ToHour) in server local time (wraps
 // past midnight when FromHour > ToHour) and device classes.
 type LayoutWhen struct {
@@ -180,35 +122,8 @@ type LayoutWhen struct {
 	Devices   []string `json:"devices,omitempty"`
 }
 
-// Layout actions for LayoutRowRule.Action.
-const (
-	LayoutPin   = "pin"   // always show, at Position (0 = top)
-	LayoutHide  = "hide"  // never show
-	LayoutBoost = "boost" // rank higher
-	LayoutBury  = "bury"  // rank below every unburied row
-)
-
-// LayoutRowRule is one owner instruction about a row. HubID matches a row's
-// hub id or kind ("short-on-time", "collection:<id>"); "*" globs are
-// allowed ("because.*").
-type LayoutRowRule struct {
-	HubID    string      `json:"hubId"`
-	Action   string      `json:"action"`
-	Position *int        `json:"position,omitempty"`
-	When     *LayoutWhen `json:"when,omitempty"`
-}
-
-// LayoutRule is a set of row instructions for a scope and section.
-type LayoutRule struct {
-	ID      string          `json:"id,omitempty"`
-	Scope   LayoutScope     `json:"scope"`
-	Section string          `json:"section,omitempty"` // "home" (default), "movies", "shows"
-	Rows    []LayoutRowRule `json:"rows"`
-	MaxRows int             `json:"maxRows,omitempty"`
-}
-
-// RowDescriptor describes a kind of row the owner can target in layout
-// rules.
+// RowDescriptor describes a kind of row the owner can place in the Home
+// layout.
 type RowDescriptor struct {
 	HubID       string `json:"hubId"`
 	Title       string `json:"title"`

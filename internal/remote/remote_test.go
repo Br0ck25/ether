@@ -118,6 +118,15 @@ func TestBuildConnections(t *testing.T) {
 	if len(self) != 1 || self[0] != "https://192.168.1.5:32400" {
 		t.Fatalf("self-signed: %v", self)
 	}
+	// Custom HTTPS URL satisfies SecureRequired without a plex.direct certificate hash.
+	byo := URIs(BuildConnections(BuildOptions{
+		LAN:        lan,
+		Secure:     SecureRequired,
+		CustomURLs: []string{"https://plex.example.com", "http://plex.example.com:32400"},
+	}))
+	if len(byo) != 1 || byo[0] != "https://plex.example.com" {
+		t.Fatalf("byo https required: %v", byo)
+	}
 }
 
 func TestWANDetector(t *testing.T) {

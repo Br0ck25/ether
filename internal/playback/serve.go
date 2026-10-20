@@ -55,7 +55,13 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 	vpos := vstart
 	g := s.current()
 	srcpos := s.toSource(g, vpos)
-	count := func(n int) { s.addBytes(n, m.now()) }
+	count := func(n int) {
+		now := m.now()
+		s.addBytes(n, now)
+		if n > 0 {
+			s.touch(now)
+		}
+	}
 	for vpos < vend {
 		n, rerr, werr := m.copyFrom(ctx, w, g, srcpos, vend-vpos, count, false)
 		vpos += n
@@ -241,9 +247,8 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	registered := s.registered
 	s.mu.Unlock()
-	if registered {
-		s.touch(m.now())
-	}
+	// ffmpeg and background probes are producers, not viewers. Their reads
+	// must not keep an abandoned playback alive.
 	size := g.src.Size()
 	sum := g.releaseID()
 	rep := representation{

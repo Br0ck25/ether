@@ -2,6 +2,7 @@ package plex
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -52,5 +53,100 @@ func TestStartHLSLadderMasterAndRungs(t *testing.T) {
 	// Unknown rungs 404 via the legacy path not finding a segment.
 	if rec := f.get(t, "/video/:/transcode/universal/session/lad-1/999p/index.m3u8"); rec.Code == http.StatusOK && strings.Contains(rec.Body.String(), "# rung") {
 		t.Errorf("unknown rung served: %s", rec.Body.String())
+	}
+}
+
+// Native Android/Apple media loaders authenticate start.m3u8, then follow
+// playlist URLs without retaining Plex headers. Exercise that exact traversal,
+// including the independent stream grant on every rung, init and segment URL.
+func TestLadderPlaylistTraversalWithoutPlexHeaders(t *testing.T) {
+	for _, container := range []string{"fmp4", "mkv"} {
+		t.Run(container, func(t *testing.T) { testLadderPlaylistTraversalWithoutPlexHeaders(t, container) })
+	}
+}
+
+func testLadderPlaylistTraversalWithoutPlexHeaders(t *testing.T, container string) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.trans.decision = core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true, Container: container}
+	f.trans.rungs = []core.HLSRung{
+		{ID: "base", Bandwidth: 8_000_000},
+		{ID: "720p4m", Bandwidth: 4_000_000},
+	}
+	startPath := "/video/:/transcode/universal/start.m3u8?path=%2Flibrary%2Fmetadata%2F1000000000000550&session=ladder-private"
+	start := f.get(t, startPath)
+	if start.Code != http.StatusOK {
+		t.Fatalf("start: %d", start.Code)
+	}
+	f.trans.sessions["ladder-private"].rungPlaylist = "#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:4.0,\n00000.m4s\n"
+	if container == "mkv" {
+		f.trans.sessions["ladder-private"].rungPlaylist = "#EXTM3U\n#EXT-X-MAP:URI=\"header\"\n#EXTINF:4.0,\n00000.mkv\n"
+	}
+	resolve := func(base, relative string) string {
+		t.Helper()
+		u, err := url.Parse(base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, err := url.Parse(relative)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u.ResolveReference(ref).String()
+	}
+	var manifests []string
+	for _, line := range strings.Split(start.Body.String(), "\n") {
+		if line != "" && !strings.HasPrefix(line, "#") {
+			manifests = append(manifests, resolve(startPath, line))
+		}
+	}
+	if len(manifests) != 2 {
+		t.Fatalf("rung count=%d", len(manifests))
+	}
+	var mediaPaths []string
+	for _, manifest := range manifests {
+		rec := f.request(t, http.MethodGet, manifest, map[string]string{"X-Plex-Token": ""})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("headerless rung playlist: %d", rec.Code)
+		}
+		for _, line := range strings.Split(rec.Body.String(), "\n") {
+			if strings.HasPrefix(line, "#EXT-X-MAP:URI=\"") {
+				mediaPaths = append(mediaPaths, resolve(manifest, strings.SplitN(line, "\"", 3)[1]))
+			} else if line != "" && !strings.HasPrefix(line, "#") {
+				mediaPaths = append(mediaPaths, resolve(manifest, line))
+			}
+		}
+	}
+	if len(mediaPaths) != 4 {
+		t.Fatalf("init + segment URLs=%d", len(mediaPaths))
+	}
+	for _, path := range append(manifests, mediaPaths...) {
+		rec := f.request(t, http.MethodGet, path, map[string]string{"X-Plex-Token": ""})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("headerless granted media: %d", rec.Code)
+		}
+		// The grant is still scoped to the owner and stream: do not make the
+		// ladder public or let another authenticated viewer use its URLs.
+		rec = f.request(t, http.MethodGet, path, map[string]string{"X-Plex-Token": friendToken})
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("foreign viewer: %d", rec.Code)
+		}
+		u, _ := url.Parse(path)
+		q := u.Query()
+		q.Del(streamGrantParam)
+		u.RawQuery = q.Encode()
+		rec = f.request(t, http.MethodGet, u.String(), map[string]string{"X-Plex-Token": ""})
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("unguarded media: %d", rec.Code)
+		}
+	}
+	// Removing the viewer revokes every rung and segment capability.
+	a := f.srv.d.Auth.(*fakeAuth)
+	delete(a.users, ownerToken)
+	for _, path := range append(manifests, mediaPaths...) {
+		rec := f.request(t, http.MethodGet, path, map[string]string{"X-Plex-Token": ""})
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("revoked ladder grant: %d", rec.Code)
+		}
 	}
 }

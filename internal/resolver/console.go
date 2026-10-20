@@ -360,7 +360,7 @@ func (s *Service) SearchReleases(ctx context.Context, t *core.Title, opts Search
 		results = withRelease(results, pin.Release)
 	}
 	var trace Trace
-	cands, _, err := s.rankCandidates(req, sreq, profile, results, &trace, pinID)
+	cands, _, err := s.rankCandidates(ctx, req, sreq, profile, results, &trace, pinID)
 	if err != nil {
 		return nil, err
 	}

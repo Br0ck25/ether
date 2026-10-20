@@ -1,4 +1,4 @@
-# Ether — developer makefile. See docs/development.md.
+# Ether — developer makefile.
 GO ?= go
 VERSION ?= dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
@@ -32,7 +32,7 @@ vet:
 web:
 	@if [ -f web/package.json ]; then cd web && npm ci && npm run build; else echo "web/ not present yet"; fi
 
-## spike: run the server in spike mode (local files library; see docs/development.md)
+## spike: run the server in spike mode (local files library)
 spike:
 	CGO_ENABLED=0 $(GO) run ./cmd/ether
 

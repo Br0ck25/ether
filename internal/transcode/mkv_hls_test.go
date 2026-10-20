@@ -1,15 +1,19 @@
 package transcode
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -30,18 +34,69 @@ func TestHLSTargetIsSeparateFromDirectPlayContainers(t *testing.T) {
 	}
 }
 
+func TestIntegrationMatroskaCopyRampNeverReplaysEarlierKeyframes(t *testing.T) {
+	e := newRealEnv(t, WithoutHWDetection())
+	e.m.UpdateConfig(config.Transcode{FastStart: true, FastStartSegments: 2})
+	// Eight-second GOPs cannot satisfy a two-second copy ramp. The old
+	// nominal 4s restart sought backwards and replayed the opening frames.
+	e.gen(t, "long-gop.mkv", 24, "-c:v", "libx264", "-preset", "ultrafast", "-g", "192", "-keyint_min", "192", "-sc_threshold", "0", "-c:a", "aac")
+	info, err := e.m.Probe(t.Context(), e.url("long-gop.mkv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := core.Decision{Kind: core.DecisionRemux, Container: ContainerMatroska, VideoCopy: true, AudioCopy: true, AudioStream: 1}
+	hs, err := e.m.StartHLS(t.Context(), core.HLSRequest{SessionID: "long-gop", InputURL: e.url("long-gop.mkv"), Info: *info, Decision: d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := fetch(t, hs, InitSegment)
+	for n := 0; n < 3; n++ {
+		joined = append(joined, fetch(t, hs, n)...)
+	}
+	file := e.writeTemp(t, "long-gop-joined.mkv", joined)
+	out, err := exec.Command(e.ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", file).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frames struct {
+		Frames []struct {
+			Time string `json:"best_effort_timestamp_time"`
+		} `json:"frames"`
+	}
+	if err := json.Unmarshal(out, &frames); err != nil {
+		t.Fatal(err)
+	}
+	if len(frames.Frames) < 500 {
+		t.Fatalf("only decoded %d frames across three GOPs", len(frames.Frames))
+	}
+	last := -1.0
+	for _, frame := range frames.Frames {
+		at, err := strconv.ParseFloat(frame.Time, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if at < last {
+			t.Fatalf("copied media jumped backwards: %.3f -> %.3f", last, at)
+		}
+		last = at
+	}
+}
+
 func TestMatroskaHLSArgsAndPlaylist(t *testing.T) {
 	d := core.Decision{Kind: core.DecisionRemux, Container: ContainerMatroska, VideoCopy: true, AudioCopy: true, AudioStream: 1}
 	s := baseSpec(mustParse(t, "mkv_hevc_hdr10.json"), d)
 	args := buildArgs(s)
-	mustContain(t, args, "-f segment", "-segment_format matroska", "-segment_start_number 50", "-segment_list_type m3u8", "%05d.mkv")
+	mustContain(t, args, "-f ssegment", "-segment_format matroska", "-individual_header_trailer 0", "-segment_header_filename", "-reset_timestamps 0", "-segment_start_number 50", "-segment_list_type m3u8", "%05d.mkv")
 	mustNotContain(t, args, "-hls_segment_type", "-tag:v hvc1", "-hls_fmp4_init_filename")
 	b := string(mediaPlaylist(20*time.Second, 4*time.Second, ContainerMatroska, func(n int) string { return SegmentName(n, ContainerMatroska) }))
-	if strings.Contains(b, "EXT-X-MAP") || !strings.Contains(b, "00000.mkv") {
+	if !strings.Contains(b, `#EXT-X-MAP:URI="header"`) || !strings.Contains(b, "00000.mkv") || !strings.Contains(b, "#EXT-X-VERSION:7") {
 		t.Fatal(b)
 	}
 	if n, ok := ParseSegmentName("00050.mkv"); !ok || n != 50 {
 		t.Fatalf("segment name: %d %v", n, ok)
+	}
+	if n, ok := ParseSegmentName("header"); !ok || n != InitSegment {
+		t.Fatalf("header route: %d %v", n, ok)
 	}
 }
 
@@ -74,10 +129,14 @@ func TestIntegrationMatroskaHLSDecodeSeekAndSwap(t *testing.T) {
 			t.Fatalf("segment %d: %d %s", n, r.Code, r.Body.String())
 		}
 		b := r.Body.Bytes()
-		if len(b) < 4 || string(b[:4]) != "\x1a\x45\xdf\xa3" {
-			t.Fatalf("segment %d has no independent Matroska header", n)
+		if len(b) < 4 || string(b[:4]) != "\x1f\x43\xb6\x75" {
+			t.Fatalf("segment %d is not a Matroska Cluster", n)
 		}
-		path := e.writeTemp(t, name, b)
+		header := fetch(t, hs, InitSegment)
+		if !bytes.HasPrefix(header, []byte{0x1a, 0x45, 0xdf, 0xa3}) {
+			t.Fatal("initialization resource lacks EBML header")
+		}
+		path := e.writeTemp(t, name, append(header, b...))
 		streams := e.probeFile(t, path)
 		if got := startTime(t, streams, "video"); math.Abs(got-wantStart) > 1.1 {
 			t.Fatalf("segment %d starts %.3f, want %.3f", n, got, wantStart)
@@ -87,6 +146,16 @@ func TestIntegrationMatroskaHLSDecodeSeekAndSwap(t *testing.T) {
 		}
 	}
 	decode(0, "first.mkv", 0)
+	// Native Plex joins EXT-X-MAP and successive fragments into one demuxer
+	// input. Decode across boundaries, rather than only the first few frames.
+	joined := fetch(t, hs, InitSegment)
+	for n := 0; n < 3; n++ {
+		joined = append(joined, fetch(t, hs, n)...)
+	}
+	path := e.writeTemp(t, "continuous.mkv", joined)
+	if out, err := exec.Command(e.ffmpeg, "-v", "warning", "-xerror", "-i", path, "-map", "0:v:0", "-f", "null", "-").CombinedOutput(); err != nil || bytes.Contains(out, []byte("File extends beyond end of segment")) || bytes.Contains(out, []byte("EBML number")) {
+		t.Fatalf("continuous Matroska decode: %v %s", err, out)
+	}
 	decode(4, "seek.mkv", 16)
 	other, err := e.m.Probe(ctx, e.url("mkv-b.mkv"))
 	if err != nil {

@@ -118,7 +118,9 @@ describe("Sources › Indexers built-in sites", () => {
       id: "site-1",
       secretSettings: { password: "••••" },
     });
-    fireEvent.change(within(drawer).getByLabelText("Daily searches"), { target: { value: "80" } });
+    fireEvent.change(within(drawer).getByLabelText("Searches per day"), {
+      target: { value: "80" },
+    });
     fireEvent.click(within(drawer).getByRole("button", { name: "Save indexer" }));
     await waitFor(() => expect(calls(fake, "PUT", "/config/indexers")).toHaveLength(1));
     const body = calls(fake, "PUT", "/config/indexers")[0]!.body as Indexer[];

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -569,21 +568,6 @@ func (s *Server) handleExtraPart(w http.ResponseWriter, r *http.Request) bool {
 	if err != nil {
 		s.log.Info("extra part resolve failed", "key", e.Key, "err", err)
 		writeHTTPError(w, http.StatusNotFound)
-		return true
-	}
-	if resolved.LocalPath != "" {
-		f, err := os.Open(resolved.LocalPath)
-		if err != nil {
-			writeHTTPError(w, http.StatusNotFound)
-			return true
-		}
-		defer f.Close()
-		st, err := f.Stat()
-		if err != nil || !st.Mode().IsRegular() {
-			writeHTTPError(w, http.StatusNotFound)
-			return true
-		}
-		http.ServeContent(w, r, st.Name(), st.ModTime(), f)
 		return true
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, resolved.URL, nil)

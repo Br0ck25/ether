@@ -104,7 +104,6 @@ func dashDecision(info core.MediaInfo, d core.Decision) core.Decision {
 // The first request waits (bounded) for ffmpeg's init segments so the MPD
 // carries exact codecs strings; until then they are estimated.
 func (s *Session) ServeManifest(w http.ResponseWriter, r *http.Request) {
-	s.Touch()
 	if !s.isDASH() {
 		http.NotFound(w, r)
 		return

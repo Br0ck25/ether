@@ -48,7 +48,7 @@ func playbackMessage(err error) string {
 	case errors.Is(err, core.ErrStreamLimit):
 		return msgStreamLimit
 	case errors.Is(err, core.ErrBudgetExhausted):
-		return "Daily indexer limit reached. Ask the server owner to check indexer limits; previously cached releases may still play."
+		return "Indexers are temporarily at their limit. Ether will retry automatically; previously cached releases may still play."
 	}
 	return msgPlayFailed
 }
@@ -674,6 +674,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, sessionID string, hs core.HLSSession, info core.MediaInfo, dec core.Decision) {
+	entry, _ := s.transcodes.get(sessionID)
 	// A ladder-capable session advertises every rung; the client's native
 	// ABR (AVPlayer, hls.js) steps between them and the session starts a
 	// rung's encoder lazily on its first segment request. The primary
@@ -696,7 +697,8 @@ func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, ses
 				if rg.FrameRate > 0 {
 					line += fmt.Sprintf(",FRAME-RATE=%.3f", rg.FrameRate)
 				}
-				b.WriteString(line + "\nsession/" + sessionID + "/" + rg.ID + "/index.m3u8\n")
+				uri := streamGrantURL("session/"+sessionID+"/"+rg.ID+"/index.m3u8", entry.streamToken)
+				b.WriteString(line + "\n" + uri + "\n")
 			}
 			body := b.String()
 			h := w.Header()
@@ -729,7 +731,6 @@ func (s *Server) writeMasterPlaylist(w http.ResponseWriter, r *http.Request, ses
 		}
 	}
 	line += transcode.HLSVariantAttributes(info, dec)
-	entry, _ := s.transcodes.get(sessionID)
 	body := "#EXTM3U\n" + line + "\n" + streamGrantURL("session/"+sessionID+"/base/index.m3u8", entry.streamToken) + "\n"
 	h := w.Header()
 	h.Set("Content-Type", "application/vnd.apple.mpegurl")
@@ -769,7 +770,9 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 					continue
 				}
 				if strings.HasSuffix(name, ".m3u8") {
-					ls.ServeRungPlaylist(w, r, rungID)
+					s.serveStreamManifest(w, r, id, func(w http.ResponseWriter, r *http.Request) {
+						ls.ServeRungPlaylist(w, r, rungID)
+					})
 					return
 				}
 				n, ok := segmentNumber(name)
@@ -797,7 +800,7 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 // segmentNumber extracts the segment index from names like "00012.ts",
 // "12.ts", "segment-12.m4s".
 func segmentNumber(name string) (int, bool) {
-	if name == transcode.InitSegmentName {
+	if name == transcode.InitSegmentName || name == transcode.MatroskaHeaderName {
 		return transcode.InitSegment, true
 	}
 	base := strings.TrimSuffix(name, filepath.Ext(name))
@@ -829,6 +832,22 @@ func (s *Server) handleTranscodeStop(w http.ResponseWriter, r *http.Request) {
 	id := sanitizeSessionID(r.URL.Query().Get("session"))
 	if id != "" {
 		if e, ok := s.transcodes.get(id); ok && e.userID == FromContext(r.Context()).User.ID {
+			// A seek may have opened a replacement transcode against the same
+			// source. Only release the source when its last consumer stops.
+			shared := false
+			if s.d.Transcoder != nil && e.playID != "" {
+				for _, other := range s.transcodes.byPlayID(e.playID) {
+					if other != id {
+						if _, active := s.d.Transcoder.Session(other); active {
+							shared = true
+							break
+						}
+					}
+				}
+			}
+			if !shared && e.playID != "" && s.d.Playback != nil {
+				s.d.Playback.Stop(e.playID)
+			}
 			if s.d.Transcoder != nil {
 				s.d.Transcoder.Stop(id)
 			}

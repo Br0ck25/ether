@@ -39,8 +39,8 @@ it as a personal collection. Generated collections are viewer-owned, in memory a
 expire. Plain title searches behave as before.
 
 When the owner enables extras, trailers appear as extras, and before a feature as
-Cinema Trailers, only when a source can play them: an owner-configured resolver
-for TMDB trailer videos, or a local trailer file. While a trailer plays, the
+Cinema Trailers, only when an owner-configured resolver can play their TMDB
+trailer videos. While a trailer plays, the
 feature is warmed so it can start without a resolution delay. Preview thumbnails for scrubbing are generated progressively
 during playback. Permitted viewers can download titles for offline viewing; the
 Download button also depends on plex.tv entitlements that Ether does not control.
@@ -61,6 +61,13 @@ Owners configure quality profiles, audio and subtitle preferences, local folders
 providers, indexers, caching, sharing restrictions and integrations. Changes to
 TMDB credentials, locale and model settings apply to new requests without a
 restart. Secrets are redacted in ordinary configuration responses.
+
+Indexer setup requires a URL and API key, not knowledge of an account's quotas.
+Ether follows service limit responses, honors Retry-After when supplied, and
+otherwise pauses briefly before allowing another attempt. Pauses survive server
+restarts and do not prevent cached playback or use of another indexer. Daily
+usage is still recorded. Optional personal caps live under Advanced; an unset
+cap does not imply that the upstream account has an unlimited allowance.
 
 ## Accounts and access
 
@@ -126,6 +133,15 @@ first-16 KiB MD5 and any slice checksums it covers; a mismatch marks the release
 unhealthy as wrong or damaged content, and Play rejects it too. A missing,
 oversize, unparseable or foreign PAR2 never fails or delays a release; the engine
 falls back to probing articles.
+
+Source validation continues past missing top-ranked releases, within a bounded
+candidate count and time budget. Confirmed source failures are skipped briefly
+on retries, without permanently banning the release. An exhausted validation
+budget does not establish that untried releases are unavailable. Within a health
+sample, a confirmed missing article takes precedence over another sample's
+transient error; a timeout alone never proves absence.
+Recently verified working releases are preferred within the viewer's and
+client's permitted profile, including after a restart.
 
 The media decision chooses direct play, copy-only remux, or transcoding. HLS and
 DASH use output containers appropriate to the selected codecs. Apple HLS includes
@@ -202,8 +218,8 @@ popular titles prefer torrents known to be cached; an owner may instead always
 prefer one source. The best candidate of the other source is validated alongside
 and both remain failover alternates.
 
-Local media can supplement the catalogue and takes precedence when selected.
-Owners may supply M3U playlists and XMLTV guides or assemble virtual channels.
+Ether does not index local media; owners who keep their own files run a Plex
+Media Server alongside it. Owners may supply M3U playlists and XMLTV guides or assemble virtual channels.
 Source URLs, channel access, availability and account entitlements remain the
 owner's responsibility. A successful tune response alone does not establish that
 a particular physical client has played the stream.

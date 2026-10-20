@@ -266,7 +266,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
       ) : null}
       <Section
         title="Indexers"
-        description="Searched in order. Daily budgets keep Ether inside each site's limits."
+        description="Searched in order. Ether handles service limits automatically."
         actions={
           <ActionMenu
             label="Add indexer"
@@ -319,10 +319,10 @@ export function IndexerList({ version = 0 }: { version?: number }) {
                     site ? `Built-in site: ${def?.name ?? ix.definition ?? "unknown"}` : "",
                     ix.dailyLimit > 0
                       ? s
-                        ? `${hits} of ${ix.dailyLimit} searches used today`
-                        : `${ix.dailyLimit} searches a day`
-                      : "Unlimited searches",
-                    ix.dailyGrabs > 0 ? `${ix.dailyGrabs} downloads a day` : "",
+                        ? `${hits} of ${ix.dailyLimit} API requests used today`
+                        : `${ix.dailyLimit} API requests a day`
+                      : "Automatic limits",
+                    ix.dailyGrabs > 0 ? `${ix.dailyGrabs} NZB downloads a day` : "",
                   ]
                     .filter(Boolean)
                     .join(" · ")}
@@ -348,8 +348,12 @@ export function IndexerList({ version = 0 }: { version?: number }) {
                         <Badge variant="outline">{protocolLabel(ix)}</Badge>
                       ) : null}
                       {!ix.enabled ? <Badge variant="secondary">Off</Badge> : null}
-                      {s && ix.dailyLimit > 0 && hits >= ix.dailyLimit ? (
-                        <Badge variant="destructive">Out of searches</Badge>
+                      {s && Number(s.retryAt ?? 0) > Date.now() / 1000 ? (
+                        <Badge variant="warning">Waiting for service · retries automatically</Badge>
+                      ) : s &&
+                        ((ix.dailyLimit > 0 && hits >= ix.dailyLimit) ||
+                          (ix.dailyGrabs > 0 && Number(s.grabsUsed ?? 0) >= ix.dailyGrabs)) ? (
+                        <Badge variant="warning">Personal cap reached</Badge>
                       ) : null}
                     </>
                   }
@@ -449,7 +453,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
             {stat && draft.dailyLimit > 0 ? (
               <Meter
                 value={used / draft.dailyLimit}
-                label={`${used} searches used today`}
+                label={`${used} API requests used today`}
                 valueLabel={`${Number(stat.hitsRemaining ?? 0)} left of ${draft.dailyLimit}`}
                 tone={
                   used >= draft.dailyLimit
@@ -541,28 +545,40 @@ export function IndexerList({ version = 0 }: { version?: number }) {
             {builtin && draftDef ? (
               <SiteSettingsFields def={draftDef} draft={draft} onChange={set} errors={errors} />
             ) : null}
-            <SettingsSection title="Daily budget">
-              <NumRow
-                label="Daily searches"
-                value={draft.dailyLimit}
-                min={0}
-                help={
+            <details className="space-y-3">
+              <summary className="cursor-pointer text-sm font-medium">
+                Advanced: personal caps
+              </summary>
+              <SettingsSection
+                title="Optional daily caps"
+                description={
                   builtin
-                    ? "Searches Ether may run on this site per day. 0 = unlimited."
-                    : "Your plan's API limit. 0 = unlimited."
+                    ? "Sites report no limits to Ether. Add a cap if the site restricts how often you search or download."
+                    : "Ether follows service limit responses automatically. Add a lower personal cap only if you want one."
                 }
-                error={errors.dailyLimit}
-                onChange={(n) => set({ dailyLimit: n })}
-              />
-              <NumRow
-                label="Daily downloads"
-                value={draft.dailyGrabs}
-                min={0}
-                help={`${isTorrent(draft) ? "Torrent" : "NZB"} downloads allowed per day. 0 = unlimited.`}
-                error={errors.dailyGrabs}
-                onChange={(n) => set({ dailyGrabs: n })}
-              />
-            </SettingsSection>
+              >
+                <NumRow
+                  label={builtin ? "Searches per day" : "API requests per day"}
+                  value={draft.dailyLimit}
+                  min={0}
+                  help={
+                    builtin
+                      ? "0 = no cap."
+                      : "0 = automatic. Includes searches and capability checks."
+                  }
+                  error={errors.dailyLimit}
+                  onChange={(n) => set({ dailyLimit: n })}
+                />
+                <NumRow
+                  label={`${isTorrent(draft) ? "Torrent" : "NZB"} downloads per day`}
+                  value={draft.dailyGrabs}
+                  min={0}
+                  help={builtin ? "0 = no cap." : "0 = automatic. Counts files, not movie data."}
+                  error={errors.dailyGrabs}
+                  onChange={(n) => set({ dailyGrabs: n })}
+                />
+              </SettingsSection>
+            </details>
             {builtin ? null : (
               <SettingsSection title="Categories">
                 <SettingsRow

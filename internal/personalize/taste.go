@@ -16,8 +16,6 @@ import (
 // watch history, plays, ratings and impressions, with owner overrides on
 // top. It is deterministic for a given input and clock, and explains
 // itself (Fit returns a reason; Profile lists the weights).
-//
-// See docs/personalization.md for the full model.
 type Taste struct {
 	UserID     int64
 	BuiltAt    time.Time

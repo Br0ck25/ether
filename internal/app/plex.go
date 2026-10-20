@@ -35,7 +35,9 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 	hooks := plex.Hooks{
 		OnTimeline: func(u *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
 			if u != nil {
-				a.playback.Timeline(u.ID, key, state)
+				// Plex renews/stops the requesting client's exact session.
+				// A title-wide renewal here would preserve abandoned streams
+				// on another device watching the same title.
 				// Session intent (#32): a detail open that just turned
 				// into this playback was a conversion, not browsing.
 				if state == "playing" {
@@ -74,7 +76,11 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		}
 	}
 	deps.Variants = a.resolver // "Play Version" release picker (cache-only)
-	deps.PlexGUID = plexguid.New(a.db, plexguid.Options{Token: func() string { return a.cfg.Get().Plex.Token }})
+	deps.PlexGUID = plexguid.New(a.db, plexguid.Options{
+		Token:      func() string { return a.cfg.Get().Plex.Token },
+		Background: true,
+	})
+	a.closers = append(a.closers, deps.PlexGUID.Close)
 	deps.EpisodeOrder = a.episodeorder
 	deps.Discovery = a.plexDiscovery
 	deps.LiveTV = a.livetv

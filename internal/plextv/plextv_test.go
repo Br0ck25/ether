@@ -898,6 +898,37 @@ func TestRegistrar(t *testing.T) {
 	}
 }
 
+func TestRegistrarBYODomainHTTPSWithoutPlexDirectCert(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("server-token-42", owner())
+	cfg := testConfig()
+	cfg.Plex.Token = "server-token-42"
+	cfg.Plex.Claimed = true
+	cfg.Plex.RemoteAccess = true
+	cfg.Plex.UseUPnP = false
+	cfg.Plex.PublicHost = "plex.example.com"
+	cfg.Plex.PublicPort = 443
+	cfg.Plex.SecureConnections = "required"
+	store := &memConfig{cfg: cfg}
+	r, err := NewRegistrar(RegistrarOptions{
+		Config: store,
+		Client: newServerClient(t, f),
+		WAN:    &fakeWAN{},
+		Mapper: &fakeMapper{},
+		LAN:    func() ([]net.IP, error) { return []net.IP{net.ParseIP("192.168.1.5")}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.PublishNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	st := r.Status()
+	if got := strings.Join(st.PublishedURIs, ","); got != "https://plex.example.com" {
+		t.Fatalf("published URIs = %q, want https://plex.example.com", got)
+	}
+}
+
 func TestRegistrarPublishBackoff(t *testing.T) {
 	f := newFakePlexTV(t, testMachineID)
 	cfg := testConfig()

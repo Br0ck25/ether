@@ -52,6 +52,15 @@ func seededConfig(c *config.Config) {
 	c.Trakt.ClientSecret = "trakt-secret"
 }
 
+// storedOwner is an IsOwnerToken that accepts the owner token stored in
+// config, standing in for internal/auth.
+func storedOwner(store *config.Store) func(context.Context, string) bool {
+	return func(_ context.Context, tok string) bool {
+		stored := store.Get().Plex.Token
+		return stored != "" && tok == stored
+	}
+}
+
 // req builds a request as the SPA would: LAN peer, CSRF header, JSON.
 func req(method, target, body string) *http.Request {
 	var rdr io.Reader
@@ -82,7 +91,7 @@ func decode(t *testing.T, rec *httptest.ResponseRecorder, dst any) {
 
 func TestRedactionRoundTrip(t *testing.T) {
 	store := newStore(t, func(c *config.Config) { seededConfig(c); c.SetupComplete = true })
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 
 	r := req(http.MethodGet, "/ether/api/config", "")
 	r.Header.Set("X-Plex-Token", ownerToken)
@@ -159,7 +168,7 @@ func TestAuthMatrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			h := admin.New(admin.Deps{Config: tc.store})
+			h := admin.New(admin.Deps{Config: tc.store, IsOwnerToken: storedOwner(tc.store)})
 			r := req(http.MethodGet, "/ether/api/setup/status", "")
 			r.RemoteAddr = tc.remoteAddr
 			if tc.token != "" {
@@ -171,7 +180,7 @@ func TestAuthMatrix(t *testing.T) {
 		})
 	}
 
-	// Custom IsOwnerToken wins over the stored token.
+	// IsOwnerToken alone decides; the stored token is not consulted.
 	h := admin.New(admin.Deps{Config: doneStore, IsOwnerToken: func(_ context.Context, tok string) bool {
 		return tok == "custom-owner"
 	}})
@@ -180,11 +189,16 @@ func TestAuthMatrix(t *testing.T) {
 	if rec := serve(h, r); rec.Code != 200 {
 		t.Fatalf("custom owner token rejected: %d", rec.Code)
 	}
+	r = req(http.MethodGet, "/ether/api/config", "")
+	r.Header.Set("X-Plex-Token", ownerToken)
+	if rec := serve(h, r); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("stored token accepted without IsOwnerToken: %d", rec.Code)
+	}
 }
 
 func TestCSRFHeaderRequiredForMutations(t *testing.T) {
 	store := newStore(t, seededConfig)
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	r := req(http.MethodPost, "/ether/api/setup/complete", `{"force":true}`)
 	r.Header.Del("X-Ether-Request")
 	if rec := serve(h, r); rec.Code != http.StatusForbidden {
@@ -200,7 +214,7 @@ func TestSetupStatusAndGating(t *testing.T) {
 		c.Usenet.Providers = []config.UsenetProvider{{ID: "p1", Host: "n", Port: 563, Enabled: true}}
 		// no plex claim, no indexer → required steps incomplete
 	})
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 
 	rec := serve(h, req(http.MethodGet, "/ether/api/setup/status", ""))
 	var st struct {
@@ -231,7 +245,7 @@ func TestSetupStatusAndGating(t *testing.T) {
 
 func TestValidationErrors(t *testing.T) {
 	store := newStore(t, nil)
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	body := `{"port":70000,"friendlyName":""}`
 	rec := serve(h, req(http.MethodPatch, "/ether/api/config/server", body))
 	if rec.Code != http.StatusBadRequest {
@@ -259,7 +273,7 @@ func TestValidationErrors(t *testing.T) {
 
 func TestSectionPatchPreservesUnsetAndSecrets(t *testing.T) {
 	store := newStore(t, seededConfig)
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	rec := serve(h, req(http.MethodPatch, "/ether/api/config/catalog", `{"minVotes":42,"tmdbKey":"`+admin.RedactedSecret+`"}`))
 	if rec.Code != 200 {
 		t.Fatalf("patch: %d %s", rec.Code, rec.Body)
@@ -288,9 +302,9 @@ func (f *fakePlex) PollPIN(_ context.Context, id string) (bool, error) {
 func (f *fakePlex) Claim(context.Context) error { return nil }
 func (f *fakePlex) Status() any                 { return map[string]any{"claimed": true} }
 
-func TestPlexPINFlowAndNotWired(t *testing.T) {
+func TestPlexPINFlow(t *testing.T) {
 	store := newStore(t, nil)
-	h := admin.New(admin.Deps{Config: store, PlexAuth: &fakePlex{}})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), PlexAuth: &fakePlex{}})
 	rec := serve(h, req(http.MethodPost, "/ether/api/plex/pin", `{}`))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"ABCD"`) {
 		t.Fatalf("pin start: %d %s", rec.Code, rec.Body)
@@ -299,10 +313,9 @@ func TestPlexPINFlowAndNotWired(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"done":true`) {
 		t.Fatalf("pin poll: %d %s", rec.Code, rec.Body)
 	}
-	// Nil dep degrades to 501, not a panic.
-	h2 := admin.New(admin.Deps{Config: store})
-	if rec := serve(h2, req(http.MethodPost, "/ether/api/plex/pin", `{}`)); rec.Code != http.StatusNotImplemented {
-		t.Fatalf("unwired plex: got %d want 501", rec.Code)
+	rec = serve(h, req(http.MethodGet, "/ether/api/plex/status", ""))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"detail":{"claimed":true}`) {
+		t.Fatalf("plex status: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -310,7 +323,7 @@ func TestTestersUnredactAndReport(t *testing.T) {
 	store := newStore(t, seededConfig)
 	var gotPassword string
 	h := admin.New(admin.Deps{
-		Config: store,
+		Config: store, IsOwnerToken: storedOwner(store),
 		TestUsenet: func(_ context.Context, p config.UsenetProvider) error {
 			gotPassword = p.Password
 			return errors.New("connection refused")
@@ -343,11 +356,6 @@ func TestTestersUnredactAndReport(t *testing.T) {
 	if !res.OK {
 		t.Fatalf("tmdb test with stored key: %+v", res)
 	}
-	// Unwired tester → 501.
-	rec = serve(h, req(http.MethodPost, "/ether/api/test/llm", `{}`))
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("unwired tester: got %d want 501", rec.Code)
-	}
 }
 
 type fakeUsers struct {
@@ -375,7 +383,7 @@ func (f *fakeUsers) UpdateUser(_ context.Context, u core.User) error {
 func TestUsersEndpoints(t *testing.T) {
 	store := newStore(t, nil)
 	us := &fakeUsers{users: []core.User{{ID: 7, Username: "kid", Title: "Kid"}}}
-	h := admin.New(admin.Deps{Config: store, Users: us})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Users: us})
 
 	rec := serve(h, req(http.MethodPatch, "/ether/api/users/7", `{"streamLimit":1,"maxContentRating":"PG","subtitleLanguages":["en"]}`))
 	if rec.Code != 200 {
@@ -391,9 +399,9 @@ func TestUsersEndpoints(t *testing.T) {
 	if rec := serve(h, req(http.MethodPatch, "/ether/api/users/7", `{"streamLimit":-2}`)); rec.Code != 400 {
 		t.Fatalf("negative limit: got %d want 400", rec.Code)
 	}
-	h2 := admin.New(admin.Deps{Config: store})
-	if rec := serve(h2, req(http.MethodGet, "/ether/api/users", "")); rec.Code != 501 {
-		t.Fatalf("unwired users: got %d want 501", rec.Code)
+	rec = serve(h, req(http.MethodGet, "/ether/api/users", ""))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"streamLimit":1`) {
+		t.Fatalf("list users: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -405,12 +413,14 @@ func TestDashboardDiskAndLogs(t *testing.T) {
 	log.Warn("cache nearly full")
 
 	h := admin.New(admin.Deps{
-		Config: store, Logs: buf,
+		Config: store, IsOwnerToken: storedOwner(store), Logs: buf,
 		CacheStatus: func(context.Context) any { return map[string]any{"used": 40, "budget": 100} },
 		ExtraStatus: map[string]admin.StatusFunc{
-			"boom": func(context.Context) any { panic("kaput") },
+			"boom":   func(context.Context) any { panic("kaput") },
+			"widget": func(context.Context) any { return map[string]any{"streams": 2} },
 		},
-		DiskUsage: func(string) (int64, int64, error) { return 1000, 250, nil },
+		ResolverTraces: func(context.Context) (any, error) { return []string{"trace-1"}, nil },
+		DiskUsage:      func(string) (int64, int64, error) { return 1000, 250, nil },
 	})
 	rec := serve(h, req(http.MethodGet, "/ether/api/dashboard", ""))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"budget":100`) {
@@ -418,6 +428,14 @@ func TestDashboardDiskAndLogs(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "kaput") {
 		t.Fatal("panicking status provider was not contained")
+	}
+	rec = serve(h, req(http.MethodGet, "/ether/api/status", ""))
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"streams":2}` {
+		t.Fatalf("widget status: %d %s", rec.Code, rec.Body)
+	}
+	rec = serve(h, req(http.MethodGet, "/ether/api/traces", ""))
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"traces":["trace-1"]}` {
+		t.Fatalf("traces: %d %s", rec.Code, rec.Body)
 	}
 	rec = serve(h, req(http.MethodGet, "/ether/api/disk?path=/tmp/cache", ""))
 	var disk struct {
@@ -440,7 +458,7 @@ func TestDashboardDiskAndLogs(t *testing.T) {
 
 func TestSPAFallbackAndAssets(t *testing.T) {
 	store := newStore(t, func(c *config.Config) { c.SetupComplete = true })
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	// Deep client route with no token: SPA shell is public so the login
 	// prompt can render; API data stays gated.
 	rec := serve(h, req(http.MethodGet, "/ether/settings/providers", ""))
@@ -489,7 +507,7 @@ func TestLogBufferRingAndConcurrency(t *testing.T) {
 
 func TestArraySectionPut(t *testing.T) {
 	store := newStore(t, seededConfig)
-	h := admin.New(admin.Deps{Config: store})
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
 	body := `[{"id":"i1","name":"Idx","url":"https://idx.example.com","apiKey":"` + admin.RedactedSecret + `","dailyLimit":100,"dailyGrabs":0,"priority":0,"enabled":true,"movieCategories":null,"tvCategories":null},{"id":"i2","name":"Two","url":"https://two.example.com","apiKey":"k2","dailyLimit":0,"dailyGrabs":0,"priority":1,"enabled":true,"movieCategories":null,"tvCategories":null}]`
 	rec := serve(h, req(http.MethodPut, "/ether/api/config/indexers", body))
 	if rec.Code != 200 {

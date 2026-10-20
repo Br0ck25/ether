@@ -14,7 +14,9 @@ import (
 	"github.com/braedonsaunders/ether/internal/llm"
 	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/plextv"
+	"github.com/braedonsaunders/ether/internal/subtitles"
 	"github.com/braedonsaunders/ether/internal/tmdb"
+	"github.com/braedonsaunders/ether/internal/trakt"
 	"github.com/braedonsaunders/ether/internal/usenet"
 )
 
@@ -53,6 +55,8 @@ func (a *App) buildAdmin() http.Handler {
 			_, err := c.Configuration(ctx)
 			return err
 		},
+		TestOpenSubtitles: subtitles.Test,
+		TestTrakt:         trakt.Test,
 		TestLLM: func(ctx context.Context, c config.LLM) error {
 			_, err := llm.NewClient(llm.ClientOptions{Config: c, Logger: a.log}).Chat(ctx,
 				[]llm.Message{{Role: "user", Content: "Reply with the word ok."}}, false)
