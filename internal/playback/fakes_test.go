@@ -447,6 +447,15 @@ func newFakeCache() *fakeCache {
 
 func (c *fakeCache) Get(releaseID string, segment int) ([]byte, bool)     { return nil, false }
 func (c *fakeCache) Put(releaseID string, segment int, data []byte) error { return nil }
+
+// setSizes sets the budget and per-release byte counts; safe while the
+// manager's pin loop reads them.
+func (c *fakeCache) setSizes(budget int64, bytes map[string]int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.budget, c.bytes = budget, bytes
+}
+
 func (c *fakeCache) Usage() (int64, int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

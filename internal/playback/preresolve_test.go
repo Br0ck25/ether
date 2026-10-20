@@ -8,6 +8,11 @@ import (
 
 func TestPreResolveReusedWithoutLiveSessionOrHistory(t *testing.T) {
 	h := newHarness(t, []*fakeRelease{mkv("r1", 2<<30, 90*time.Minute)}, []string{"r1"})
+	// Keep the first warm in flight while the second asks: the per-user
+	// budget counts warms that are still running.
+	h.resolver.mu.Lock()
+	h.resolver.delay = 200 * time.Millisecond
+	h.resolver.mu.Unlock()
 	caps := defaultCaps("client")
 	if !h.m.PreResolve(context.Background(), owner, movieKey, caps) {
 		t.Fatal("first warm skipped")
