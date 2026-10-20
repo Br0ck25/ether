@@ -250,7 +250,18 @@ func (s *Service) expand(ctx context.Context, c *Channel) error {
 		if s.o.Catalog == nil {
 			return fmt.Errorf("catalogue unavailable")
 		}
-		page, err = s.o.Catalog.Browse(ctx, core.BrowseQuery{Filter: *c.Filter, Sort: core.SortTitle, Limit: 2000})
+		// The catalogue caps one Browse page well below 2000; page through.
+		for len(page.Items) < 2000 {
+			var p core.Page
+			if p, err = s.o.Catalog.Browse(ctx, core.BrowseQuery{Filter: *c.Filter, Sort: core.SortTitle, Offset: len(page.Items), Limit: 2000 - len(page.Items)}); err != nil {
+				break
+			}
+			page.Total = p.Total
+			page.Items = append(page.Items, p.Items...)
+			if len(p.Items) == 0 || len(page.Items) >= p.Total {
+				break
+			}
+		}
 	}
 	if err != nil {
 		return err

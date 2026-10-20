@@ -2,12 +2,15 @@ package collections
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 // builtin is a collection Ether ships: a live TMDB list. Owners can
@@ -71,8 +74,9 @@ func (s *Service) seedBuiltins(ctx context.Context) error {
 			return err
 		}
 		now := s.now().Unix()
+		// Another node starting at the same time may insert it first.
 		if _, err := s.db.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at)
-			VALUES(?,?,1,0,?,1,?,?)`, b.id, b.slug, js, now, now); err != nil {
+			VALUES(?,?,1,0,?,1,?,?) ON CONFLICT(id) DO NOTHING`, b.id, b.slug, js, now, now); err != nil {
 			return err
 		}
 	}
@@ -92,23 +96,43 @@ func mergeBuiltin(fixed, edited core.CollectionSpec) core.CollectionSpec {
 	return out
 }
 
-// seedDefaults creates the starter collections on a fresh install.
+// seedDefaults creates the starter collections on a fresh install. Nodes
+// starting together on a fresh cluster database take turns, so only the
+// first seeds.
 func (s *Service) seedDefaults(ctx context.Context) error {
 	if s.meta(ctx, "seeded") != "" {
 		return nil
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := store.LockKey(ctx, store.DialectOf(s.db), tx, "collections:seed"); err != nil {
+		return err
+	}
+	var seeded string
+	if err := tx.QueryRowContext(ctx, `SELECT v FROM collections_meta WHERE k='seeded'`).Scan(&seeded); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if seeded != "" {
+		return nil
+	}
 	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM collections_specs WHERE builtin=0`).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM collections_specs WHERE builtin=0`).Scan(&n); err != nil {
 		return err
 	}
 	if n == 0 {
 		for _, sp := range defaultSpecs() {
-			if _, err := s.insertRow(ctx, sp, 0); err != nil {
+			if _, err := s.insertSpecTx(ctx, tx, sp, 0); err != nil {
 				return err
 			}
 		}
 	}
-	return s.setMeta(ctx, "seeded", "1")
+	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_meta(k,v) VALUES('seeded','1') ON CONFLICT(k) DO UPDATE SET v=excluded.v`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func mkRule(field, op string, v any) core.CollectionRule {

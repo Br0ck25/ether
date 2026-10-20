@@ -158,7 +158,7 @@ func (s *Service) Preview(ctx context.Context, sp core.CollectionSpec, n int) (*
 			owner, _ = auth.Owner(ctx)
 		}
 		if owner != nil {
-			keys = s.filterForUser(ctx, keys, res.personal, res.personalX, &core.User{ID: owner.ID}, res.snap)
+			keys = s.filterForUser(ctx, keys, personalRules{include: res.personal, exclude: res.personalX, any: res.spec.Match == MatchAny, unshared: res.unshared}, &core.User{ID: owner.ID}, res.snap)
 			warnings = append(warnings, "watched and in-progress rules are shown for "+firstNonEmpty(owner.Title, owner.Username, "the owner")+"; each viewer sees their own")
 		} else {
 			warnings = append(warnings, "watched and in-progress rules are applied per viewer in Plex")
@@ -246,7 +246,26 @@ func (s *Service) CollectionArtwork(ctx context.Context, user *core.User, key co
 	return data, ct, true, nil
 }
 
+// posterWidths are the widths collection posters are rendered at. Requests
+// snap up to one of them, so a client asking for every width from 150 to
+// 1200 shares a handful of cached renders instead of filling the poster
+// cache (and the CPU) with one render per width.
+var posterWidths = []int{150, 300, 450, 600, 900, 1200}
+
+func posterWidth(w int) int {
+	if w <= 0 {
+		return 0 // the renderer's default
+	}
+	for _, b := range posterWidths {
+		if w <= b {
+			return b
+		}
+	}
+	return posterWidths[len(posterWidths)-1]
+}
+
 func (s *Service) artworkFor(ctx context.Context, row *specRow, keys []core.RatingKey, w int) ([]byte, string, time.Time, error) {
+	w = posterWidth(w)
 	stamp := row.stamp()
 	art := row.spec.Artwork
 	if s.images != nil {

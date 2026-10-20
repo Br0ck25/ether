@@ -614,3 +614,21 @@ func TestXMLTVMissingStopAndCompactOffset(t *testing.T) {
 		t.Fatalf("compact offset parse wrong: %+v", b)
 	}
 }
+
+// One zero-length or inverted programme (common in provider feeds) and one
+// without a channel are skipped instead of rejecting the whole guide.
+func TestXMLTVSkipsUnairableProgrammes(t *testing.T) {
+	guide := `<tv><channel id="one"><display-name>One</display-name></channel>` +
+		`<programme channel="one" start="20261019090000 +0000" stop="20261019100000 +0000"><title>A</title></programme>` +
+		`<programme channel="one" start="20261019100000 +0000" stop="20261019100000 +0000"><title>Marker</title></programme>` +
+		`<programme channel="one" start="20261019110000 +0000" stop="20261019103000 +0000"><title>Inverted</title></programme>` +
+		`<programme start="20261019100000 +0000" stop="20261019110000 +0000"><title>Orphan</title></programme>` +
+		`<programme channel="one" start="20261019100000 +0000" stop="20261019110000 +0000"><title>B</title></programme></tv>`
+	g, err := ParseXMLTV(strings.NewReader(guide))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Programmes) != 2 || g.Programmes[0].Item.Title != "A" || g.Programmes[1].Item.Title != "B" {
+		t.Fatalf("programmes = %+v", g.Programmes)
+	}
+}

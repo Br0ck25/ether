@@ -7,7 +7,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// Titles returns hydrated, released mirror entries in requested order. It never
+// Titles returns hydrated, released, non-adult mirror entries in requested order. It never
 // fetches remote metadata, so collection serving stays bounded and offline.
 func (m *Mirror) Titles(ctx context.Context, keys []core.RatingKey) ([]core.Title, error) {
 	if len(keys) == 0 {
@@ -28,7 +28,7 @@ func (m *Mirror) Titles(ctx context.Context, keys []core.RatingKey) ([]core.Titl
 		ph := placeholders(len(part))
 		rows, err := m.db.QueryContext(ctx, `SELECT key,type,tmdb_id,imdb,tvdb,title,original_title,sort_title,tagline,summary,year,
 			released_ts,runtime_sec,status,language,content_rating,rating,vote_count,popularity,poster,backdrop,logo,
-			collection_id,collection_name,child_count,leaf_count,fetched_at
+			collection_id,collection_name,child_count,leaf_count,fetched_at,adult
 			FROM catalog_titles WHERE key IN (`+ph+`)`, args...)
 		if err != nil {
 			return nil, err
@@ -36,16 +36,18 @@ func (m *Mirror) Titles(ctx context.Context, keys []core.RatingKey) ([]core.Titl
 		for rows.Next() {
 			var t core.Title
 			var key, released, runtime, fetched int64
+			var adult int
 			var typ string
 			if err := rows.Scan(&key, &typ, &t.IDs.TMDB, &t.IDs.IMDB, &t.IDs.TVDB, &t.Title, &t.OriginalTitle, &t.SortTitle,
 				&t.Tagline, &t.Summary, &t.Year, &released, &runtime, &t.Status, &t.Language, &t.ContentRating,
 				&t.Rating, &t.VoteCount, &t.Popularity, &t.PosterPath, &t.BackdropPath, &t.LogoPath,
-				&t.CollectionID, &t.CollectionName, &t.ChildCount, &t.LeafCount, &fetched); err != nil {
+				&t.CollectionID, &t.CollectionName, &t.ChildCount, &t.LeafCount, &fetched, &adult); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			t.Key = core.RatingKey(key)
 			t.Type = core.MediaType(typ)
+			t.Adult = adult != 0
 			if released != 0 {
 				t.Released = time.Unix(released, 0).UTC()
 			}
@@ -122,7 +124,7 @@ func (m *Mirror) Titles(ctx context.Context, keys []core.RatingKey) ([]core.Titl
 	}
 	out := make([]core.Title, 0, len(keys))
 	for _, k := range keys {
-		if t := byKey[k]; t != nil && t.IsReleased(m.now()) {
+		if t := byKey[k]; t != nil && !t.Adult && t.IsReleased(m.now()) {
 			out = append(out, *t)
 		}
 	}

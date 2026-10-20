@@ -164,51 +164,85 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	// Series identity for seasons/episodes, including its original name.
-	// Reuse one row per show within this slice rather than repeating the
-	// same lookup for every episode in a season.
+	// Series identity for seasons/episodes, including its original name and
+	// keywords: one batched read for every show in this slice rather than
+	// repeating the lookups for every episode.
 	type seriesIdentity struct {
 		imdb, original string
 		tvdb           int64
 		year           int
 		keywords       []string
 	}
-	shows := make(map[core.RatingKey]seriesIdentity)
+	shows := make(map[core.RatingKey]*seriesIdentity)
+	var showArgs []any
 	for i := range items {
-		if items[i].ShowKey != 0 {
-			show, ok := shows[items[i].ShowKey]
-			if !ok {
-				if err := c.db.QueryRowContext(ctx, `SELECT imdb,tvdb,year,original_title FROM catalog_titles WHERE key=?`, int64(items[i].ShowKey)).Scan(&show.imdb, &show.tvdb, &show.year, &show.original); err != nil && !errors.Is(err, sql.ErrNoRows) {
-					return err
-				}
-				// Seasons and episodes carry the show's keywords (as they do
-				// its genres and rating) so keyword policies and rules that
-				// hide a show also hide its children.
-				showIdx := map[core.RatingKey]int{items[i].ShowKey: 0}
-				var kws []string
-				if err := c.scanPairs(ctx, `SELECT key,keyword FROM catalog_keywords WHERE key=? ORDER BY keyword`, []any{int64(items[i].ShowKey)}, func(_ int, v string) {
-					kws = append(kws, v)
-				}, showIdx); err != nil {
-					return err
-				}
-				show.keywords = kws
-				shows[items[i].ShowKey] = show
-			}
-			if len(items[i].Keywords) == 0 && len(show.keywords) > 0 && (items[i].Type == core.TypeSeason || items[i].Type == core.TypeEpisode) {
-				items[i].Keywords = append([]string(nil), show.keywords...)
-			}
-			if items[i].ShowYear == 0 {
-				items[i].ShowYear = show.year
-			}
-			if show.original != "" {
-				items[i].ShowOriginalTitle = show.original
-			}
-			if items[i].ShowIDs.IMDB == "" {
-				items[i].ShowIDs.IMDB = show.imdb
-			}
-			if items[i].ShowIDs.TVDB == 0 {
-				items[i].ShowIDs.TVDB = show.tvdb
-			}
+		if k := items[i].ShowKey; k != 0 && shows[k] == nil {
+			shows[k] = &seriesIdentity{}
+			showArgs = append(showArgs, int64(k))
+		}
+	}
+	if len(shows) == 0 {
+		return nil
+	}
+	showPH := placeholders(len(showArgs))
+	srows, err := c.db.QueryContext(ctx, `SELECT key,imdb,tvdb,year,original_title FROM catalog_titles WHERE key IN (`+showPH+`)`, showArgs...)
+	if err != nil {
+		return err
+	}
+	defer srows.Close()
+	for srows.Next() {
+		var k int64
+		var id seriesIdentity
+		if err := srows.Scan(&k, &id.imdb, &id.tvdb, &id.year, &id.original); err != nil {
+			return err
+		}
+		if show := shows[core.RatingKey(k)]; show != nil {
+			*show = id
+		}
+	}
+	if err := srows.Err(); err != nil {
+		return err
+	}
+	// Seasons and episodes carry the show's keywords (as they do its genres
+	// and rating) so keyword policies and rules that hide a show also hide
+	// its children.
+	krows, err := c.db.QueryContext(ctx, `SELECT key,keyword FROM catalog_keywords WHERE key IN (`+showPH+`) ORDER BY keyword`, showArgs...)
+	if err != nil {
+		return err
+	}
+	defer krows.Close()
+	for krows.Next() {
+		var k int64
+		var v string
+		if err := krows.Scan(&k, &v); err != nil {
+			return err
+		}
+		if show := shows[core.RatingKey(k)]; show != nil {
+			show.keywords = append(show.keywords, v)
+		}
+	}
+	if err := krows.Err(); err != nil {
+		return err
+	}
+	for i := range items {
+		show := shows[items[i].ShowKey]
+		if show == nil {
+			continue
+		}
+		if len(items[i].Keywords) == 0 && len(show.keywords) > 0 && (items[i].Type == core.TypeSeason || items[i].Type == core.TypeEpisode) {
+			items[i].Keywords = append([]string(nil), show.keywords...)
+		}
+		if items[i].ShowYear == 0 {
+			items[i].ShowYear = show.year
+		}
+		if show.original != "" {
+			items[i].ShowOriginalTitle = show.original
+		}
+		if items[i].ShowIDs.IMDB == "" {
+			items[i].ShowIDs.IMDB = show.imdb
+		}
+		if items[i].ShowIDs.TVDB == 0 {
+			items[i].ShowIDs.TVDB = show.tvdb
 		}
 	}
 	return nil
@@ -330,7 +364,7 @@ ON CONFLICT(key) DO UPDATE SET
  sort_title=CASE WHEN excluded.sort_title<>'' THEN excluded.sort_title ELSE catalog_titles.sort_title END,
  tagline=CASE WHEN excluded.tagline<>'' THEN excluded.tagline ELSE catalog_titles.tagline END,
  summary=CASE WHEN excluded.summary<>'' THEN excluded.summary ELSE catalog_titles.summary END,
- year=CASE WHEN excluded.year<>0 THEN excluded.year ELSE catalog_titles.year END,
+ year=CASE WHEN excluded.detail=1 OR (catalog_titles.detail=0 AND excluded.year<>0) THEN excluded.year ELSE catalog_titles.year END,
  released_ts=CASE WHEN excluded.detail=1 OR (catalog_titles.detail=0 AND excluded.released_ts<>0) THEN excluded.released_ts ELSE catalog_titles.released_ts END,
  runtime_sec=CASE WHEN excluded.runtime_sec<>0 THEN excluded.runtime_sec ELSE catalog_titles.runtime_sec END,
  status=CASE WHEN excluded.status<>'' THEN excluded.status ELSE catalog_titles.status END,

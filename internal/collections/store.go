@@ -55,6 +55,9 @@ CREATE TABLE collections_external (
 );
 CREATE TABLE collections_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');
 `)
+	// shared=0 marks a member of a match-"any" collection that met none of
+	// the shared rules: it is shown only to viewers a per-user rule admits.
+	store.Register("collections", 3, `ALTER TABLE collections_members ADD COLUMN shared INTEGER NOT NULL DEFAULT 1;`)
 }
 
 // builtinBase keeps shipped collections' ids far above owner ids.
@@ -235,28 +238,37 @@ func specJSON(sp core.CollectionSpec) (string, error) {
 }
 
 func (s *Service) insertRow(ctx context.Context, sp core.CollectionSpec, owner int64) (*specRow, error) {
-	js, err := specJSON(sp)
-	if err != nil {
-		return nil, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	id, err := s.nextID(ctx, tx)
+	id, err := s.insertSpecTx(ctx, tx, sp, owner)
 	if err != nil {
-		return nil, err
-	}
-	now := s.now().Unix()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at)
-		VALUES(?, '', 0, ?, ?, ?, ?, ?)`, id, owner, js, boolInt(sp.Enabled), now, now); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return s.rowByID(ctx, strconv.FormatInt(id, 10))
+}
+
+// insertSpecTx stores a new owner collection inside tx and returns its id.
+func (s *Service) insertSpecTx(ctx context.Context, tx *sql.Tx, sp core.CollectionSpec, owner int64) (int64, error) {
+	js, err := specJSON(sp)
+	if err != nil {
+		return 0, err
+	}
+	id, err := s.nextID(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	now := s.now().Unix()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO collections_specs(id,slug,builtin,owner_user_id,spec_json,enabled,created_at,updated_at)
+		VALUES(?, '', 0, ?, ?, ?, ?, ?)`, id, owner, js, boolInt(sp.Enabled), now, now); err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 func (s *Service) updateRow(ctx context.Context, id int64, sp core.CollectionSpec) error {
@@ -295,7 +307,7 @@ func (s *Service) deleteRow(ctx context.Context, id int64) error {
 }
 
 // saveBuild persists a build's members and report.
-func (s *Service) saveBuild(ctx context.Context, id int64, keys []core.RatingKey, itemCount int, warnings []string, hash string, at time.Time) error {
+func (s *Service) saveBuild(ctx context.Context, id int64, keys []core.RatingKey, unshared map[core.RatingKey]bool, itemCount int, warnings []string, hash string, at time.Time) error {
 	wj, _ := json.Marshal(warnings)
 	if warnings == nil {
 		wj = []byte("[]")
@@ -308,13 +320,13 @@ func (s *Service) saveBuild(ctx context.Context, id int64, keys []core.RatingKey
 	if _, err := tx.ExecContext(ctx, `DELETE FROM collections_members WHERE spec_id=?`, id); err != nil {
 		return err
 	}
-	stmt, err := tx.PrepareContext(ctx, `INSERT INTO collections_members(spec_id,pos,key) VALUES(?,?,?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO collections_members(spec_id,pos,key,shared) VALUES(?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for i, k := range keys {
-		if _, err := stmt.ExecContext(ctx, id, i, int64(k)); err != nil {
+		if _, err := stmt.ExecContext(ctx, id, i, int64(k), boolInt(!unshared[k])); err != nil {
 			return err
 		}
 	}
@@ -326,21 +338,29 @@ func (s *Service) saveBuild(ctx context.Context, id int64, keys []core.RatingKey
 	return tx.Commit()
 }
 
-func (s *Service) loadMembers(ctx context.Context, id int64) ([]core.RatingKey, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT key FROM collections_members WHERE spec_id=? ORDER BY pos`, id)
+func (s *Service) loadMembers(ctx context.Context, id int64) ([]core.RatingKey, map[core.RatingKey]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key,shared FROM collections_members WHERE spec_id=? ORDER BY pos`, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	var out []core.RatingKey
+	var unshared map[core.RatingKey]bool
 	for rows.Next() {
 		var k int64
-		if err := rows.Scan(&k); err != nil {
-			return nil, err
+		var shared int
+		if err := rows.Scan(&k, &shared); err != nil {
+			return nil, nil, err
 		}
 		out = append(out, core.RatingKey(k))
+		if shared == 0 {
+			if unshared == nil {
+				unshared = map[core.RatingKey]bool{}
+			}
+			unshared[core.RatingKey(k)] = true
+		}
 	}
-	return out, rows.Err()
+	return out, unshared, rows.Err()
 }
 
 func (s *Service) meta(ctx context.Context, k string) string {

@@ -27,8 +27,11 @@ type buildResult struct {
 	total     int              // matches (may exceed len(keys) when capped)
 	warnings  []string
 	snap      *snapshot
-	personal  []*rule // per-user rules (all must hold), applied when serving
+	personal  []*rule // per-user rules, applied when serving
 	personalX []*rule // per-user exclusions, applied when serving
+	// unshared (only for match "any" with per-user rules) lists members that
+	// met none of the shared rules; they need a per-user rule to hold.
+	unshared  map[core.RatingKey]bool
 	spec      core.CollectionSpec
 	builtAt   time.Time
 	hash      string
@@ -220,6 +223,10 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	}
 	// Release dates are mandatory, including explicit upcoming sources.
 	nowUnix := ec.now.Unix()
+	// With match "any", per-user rules are alternatives to the shared ones:
+	// a title failing every shared rule may still match for some viewer, so
+	// the build keeps it and serving decides.
+	anyPersonal := sp.Match == MatchAny && len(res.personal) > 0
 
 	// Filter.
 	want := func(e *entry) bool {
@@ -239,7 +246,10 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 		if c.e.released == 0 || c.e.released > nowUnix {
 			continue
 		}
-		if !matchesRules(c, rules, sp.Match, ec) {
+		shared := true
+		if anyPersonal {
+			shared = len(rules) > 0 && matchesRules(c, rules, sp.Match, ec)
+		} else if !matchesRules(c, rules, sp.Match, ec) {
 			continue
 		}
 		excluded := false
@@ -251,6 +261,12 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 		}
 		if !excluded {
 			kept = append(kept, c)
+			if !shared {
+				if res.unshared == nil {
+					res.unshared = map[core.RatingKey]bool{}
+				}
+				res.unshared[c.e.key] = true
+			}
 		}
 	}
 
@@ -270,7 +286,7 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	if res.total == 0 {
 		warn("no titles match; loosen the rules or add a source")
 	}
-	res.hash = buildHash(sp, res.keys)
+	res.hash = buildHash(sp, res.keys, res.unshared)
 	return res, nil
 }
 
@@ -359,12 +375,15 @@ func sortCands(cs []*cand, mode string, desc bool, seed uint64) {
 	})
 }
 
-func buildHash(sp core.CollectionSpec, keys []core.RatingKey) string {
+func buildHash(sp core.CollectionSpec, keys []core.RatingKey, unshared map[core.RatingKey]bool) string {
 	h := sha1.New()
 	js, _ := specJSON(sp)
 	h.Write([]byte(js))
 	for _, k := range keys {
 		h.Write([]byte(strconv.FormatInt(int64(k), 10)))
+		if unshared[k] {
+			h.Write([]byte{'?'})
+		}
 		h.Write([]byte{','})
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
@@ -825,13 +844,23 @@ func (s *Service) providerSet(ctx context.Context, sp *core.CollectionSpec, r *r
 	return set, all
 }
 
+// personalRules are the per-user parts of a built collection.
+type personalRules struct {
+	include, exclude []*rule
+	// any: the spec matches "any", so a member passes when it met a shared
+	// rule at build time (it is not in unshared) or meets any include rule.
+	any      bool
+	unshared map[core.RatingKey]bool
+}
+
 // filterForUser applies a user's content-rating limit and personal rules
 // (watched, in progress) to built members.
-func (s *Service) filterForUser(ctx context.Context, keys []core.RatingKey, include, exclude []*rule, user *core.User, snap *snapshot) []core.RatingKey {
+func (s *Service) filterForUser(ctx context.Context, keys []core.RatingKey, pr personalRules, user *core.User, snap *snapshot) []core.RatingKey {
 	max := ""
 	if user != nil {
 		max = user.MaxContentRating
 	}
+	include, exclude := pr.include, pr.exclude
 	personal := len(include)+len(exclude) > 0
 	if max == "" && !personal {
 		return keys
@@ -854,7 +883,9 @@ func (s *Service) filterForUser(ctx context.Context, keys []core.RatingKey, incl
 		if snap != nil {
 			e = snap.entries[k]
 		}
-		if max != "" && e != nil && catalog.RatingExceeds(e.crating, max) {
+		// A member the index no longer knows has no known rating, and an
+		// unknown rating exceeds every limit.
+		if max != "" && (e == nil || catalog.RatingExceeds(e.crating, max)) {
 			continue
 		}
 		if personal {
@@ -862,10 +893,20 @@ func (s *Service) filterForUser(ctx context.Context, keys []core.RatingKey, incl
 				e = &entry{key: k}
 			}
 			ok := true
-			for _, r := range include {
-				if !r.match(e, ec) {
-					ok = false
-					break
+			if pr.any {
+				ok = !pr.unshared[k]
+				for _, r := range include {
+					if ok {
+						break
+					}
+					ok = r.match(e, ec)
+				}
+			} else {
+				for _, r := range include {
+					if !r.match(e, ec) {
+						ok = false
+						break
+					}
 				}
 			}
 			for _, r := range exclude {
