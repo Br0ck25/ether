@@ -35,6 +35,7 @@ type track struct {
 type session struct {
 	inputURL        string // selected upstream, immutable once the tune is ready
 	inputSource     StreamSource
+	inputHeaders    http.Header
 	consumed        bool
 	mediaStarted    bool
 	startupCancel   context.CancelFunc // immutable after publication; cancels I/O before locking
@@ -609,7 +610,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	c := ss.info.Channel
 	c.StreamURL = ss.inputURL
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.StreamURL, nil)
-	res, err := s.upstream(ctx, c.StreamURL, req)
+	res, err := s.upstreamWithHeaders(ctx, c.StreamURL, req, ss.inputHeaders)
 	if err != nil {
 		return err
 	}
@@ -627,7 +628,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if isHLS && !c.Transcode {
 		analyze := len(ss.caps.VideoCodecs) > 0 || len(ss.caps.AudioCodecs) > 0 || strings.Contains(strings.ToLower(ss.caps.Product), "apple") || strings.EqualFold(ss.caps.Platform, "tvos") || strings.EqualFold(ss.caps.Platform, "ios")
 		if s.o.Transcoder != nil && analyze {
-			info, err = s.probeLiveInput(ctx, c.StreamURL)
+			info, err = s.probeLiveInputWithHeaders(ctx, c.StreamURL, ss.inputHeaders)
 			if err != nil {
 				return err
 			}
@@ -651,7 +652,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if s.o.Transcoder == nil {
 		return core.ErrNotAvailable
 	}
-	info, err = s.probeLiveInput(ctx, c.StreamURL)
+	info, err = s.probeLiveInputWithHeaders(ctx, c.StreamURL, ss.inputHeaders)
 	if err != nil {
 		return err
 	}

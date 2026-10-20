@@ -30,7 +30,7 @@ func (s *Service) ServeDASH(w http.ResponseWriter, r *http.Request, id string, u
 		info := ss.info.MediaInfo
 		var e error
 		if info == nil {
-			info, e = s.probeLiveInput(r.Context(), ss.inputURL)
+			info, e = s.probeLiveInputWithHeaders(r.Context(), ss.inputURL, ss.inputHeaders)
 		}
 		if e != nil {
 			ss.mu.Unlock()
@@ -47,7 +47,7 @@ func (s *Service) ServeDASH(w http.ResponseWriter, r *http.Request, id string, u
 			dec.VideoCopy = true
 			dec.AudioCopy = true
 		}
-		hs, e := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: ss.inputURL, Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
+		hs, e := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: ss.inputURL, InputHeaders: flattenInputHeaders(ss.inputHeaders), Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
 		if e != nil {
 			ss.mu.Unlock()
 			writeStreamError(w, e)

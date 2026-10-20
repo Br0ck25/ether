@@ -32,18 +32,19 @@ import (
 // track per representation (video, audio); ffmpeg's dash muxer writes short
 // chunks that the session regroups into numbered segments by timestamp.
 type Session struct {
-	id        string
-	m         *Manager
-	dir       string
-	watchers  sync.WaitGroup // running watch goroutines; Close waits for them
-	removals  pendingRemovals
-	segDur    time.Duration
-	base      time.Duration
-	total     int // segments in the playlist; 0 = unknown duration
-	container string
-	proto     string // core.ProtocolHLS or core.ProtocolDASH
-	log       *slog.Logger
-	created   time.Time
+	inputHeaders map[string]string
+	id           string
+	m            *Manager
+	dir          string
+	watchers     sync.WaitGroup // running watch goroutines; Close waits for them
+	removals     pendingRemovals
+	segDur       time.Duration
+	base         time.Duration
+	total        int // segments in the playlist; 0 = unknown duration
+	container    string
+	proto        string // core.ProtocolHLS or core.ProtocolDASH
+	log          *slog.Logger
+	created      time.Time
 
 	lastAccess atomic.Int64 // unix nanos
 
@@ -848,21 +849,22 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	rp := s.runPlanLocked(seg)
 	s.seekRampSeg = -1
 	spec := runSpec{
-		Input:     s.input,
-		Info:      s.info,
-		Decision:  rp.decision,
-		Start:     s.segStart(seg),
-		SegDur:    rp.hlsDur,
-		StartSeg:  seg,
-		Dir:       s.runDirLocked(),
-		Playlist:  fmt.Sprintf("run-%d.m3u8", s.runSeq),
-		InitName:  fmt.Sprintf("init-%d.mp4", s.runSeq),
-		Accel:     accel,
-		Features:  s.m.feat,
-		BigProbe:  bigProbe,
-		Protocol:  s.proto,
-		FastStart: rp.fastStart,
-		Rate:      rp.rate,
+		InputHeaders: s.inputHeaders,
+		Input:        s.input,
+		Info:         s.info,
+		Decision:     rp.decision,
+		Start:        s.segStart(seg),
+		SegDur:       rp.hlsDur,
+		StartSeg:     seg,
+		Dir:          s.runDirLocked(),
+		Playlist:     fmt.Sprintf("run-%d.m3u8", s.runSeq),
+		InitName:     fmt.Sprintf("init-%d.mp4", s.runSeq),
+		Accel:        accel,
+		Features:     s.m.feat,
+		BigProbe:     bigProbe,
+		Protocol:     s.proto,
+		FastStart:    rp.fastStart,
+		Rate:         rp.rate,
 	}
 	if s.container == ContainerMatroska {
 		spec.InitName = fmt.Sprintf("header-%d.mkv", s.runSeq)
@@ -943,7 +945,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	s.cur = r
 	runLog.Info("ffmpeg started", "segment", seg, "at", spec.Start, "kind", s.decision.Kind,
 		"videoCopy", s.decision.VideoCopy, "audioCopy", s.decision.AudioCopy, "hw", r.hw)
-	runLog.Debug("ffmpeg args", "args", strings.Join(args, " "))
+	runLog.Debug("ffmpeg args", "args", strings.Join(redactedInputArgs(args), " "))
 	s.watchers.Add(1)
 	go s.watch(r)
 	s.broadcastLocked()
@@ -1215,6 +1217,11 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 			nd.MaxHeight, nd.BitrateKbps = old.MaxHeight, old.BitrateKbps
 			s.rungs[i].decision = nd
 		}
+	}
+	if s.input != inputURL {
+		// SwapInput has no replacement-credential parameter. Never carry an
+		// old provider's credentials onto an independently resolved URL.
+		s.inputHeaders = nil
 	}
 	s.input = inputURL
 	s.info = info

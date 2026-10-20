@@ -301,6 +301,10 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	if req.InputURL == "" {
 		return nil, errors.New("transcode: StartHLS: empty input URL")
 	}
+	inputHeaders, headerErr := validatedInputHeaders(req.InputHeaders)
+	if headerErr != nil {
+		return nil, headerErr
+	}
 	proto := req.Protocol
 	switch proto {
 	case "":
@@ -458,31 +462,32 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
 	}
 	s := &Session{
-		id:          id,
-		m:           m,
-		dir:         dir,
-		segDur:      segDur,
-		base:        base,
-		total:       total,
-		container:   d.Container,
-		proto:       proto,
-		log:         m.log.With("session", id),
-		created:     time.Now(),
-		input:       req.InputURL,
-		info:        req.Info,
-		decision:    d,
-		done:        make([]map[int]bool, tracks),
-		lastReq:     startSeg,
-		endSeg:      -1,
-		resumeAt:    -1,
-		changed:     make(chan struct{}),
-		plan:        plan,
-		adapt:       adapt,
-		rungs:       rungs,
-		initFiles:   make([]string, tracks),
-		seekRampSeg: -1,
-		segSizes:    map[int]int64{},
-		governorOn:  adapt.Governor && proto == core.ProtocolHLS && d.VideoCopy && v != nil,
+		id:           id,
+		m:            m,
+		dir:          dir,
+		segDur:       segDur,
+		base:         base,
+		total:        total,
+		container:    d.Container,
+		proto:        proto,
+		log:          m.log.With("session", id),
+		created:      time.Now(),
+		input:        req.InputURL,
+		inputHeaders: inputHeaders,
+		info:         req.Info,
+		decision:     d,
+		done:         make([]map[int]bool, tracks),
+		lastReq:      startSeg,
+		endSeg:       -1,
+		resumeAt:     -1,
+		changed:      make(chan struct{}),
+		plan:         plan,
+		adapt:        adapt,
+		rungs:        rungs,
+		initFiles:    make([]string, tracks),
+		seekRampSeg:  -1,
+		segSizes:     map[int]int64{},
+		governorOn:   adapt.Governor && proto == core.ProtocolHLS && d.VideoCopy && v != nil,
 	}
 	for t := range s.done {
 		s.done[t] = map[int]bool{}

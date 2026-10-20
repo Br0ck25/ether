@@ -12,9 +12,10 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	Input    string
-	Info     core.MediaInfo
-	Decision core.Decision
+	InputHeaders map[string]string
+	Input        string
+	Info         core.MediaInfo
+	Decision     core.Decision
 	// Start is the media timestamp of the run's first segment (StartSeg).
 	Start    time.Duration
 	SegDur   time.Duration
@@ -121,6 +122,7 @@ func buildCodecArgs(s runSpec) []string {
 
 	// ---- input
 	args = append(args, httpInputArgs(s.Input, true)...)
+	args = appendInputHeaders(args, s.InputHeaders)
 	if s.BigProbe {
 		args = append(args, "-probesize", "50000000", "-analyzeduration", "10000000")
 	} else {

@@ -62,11 +62,19 @@ func rewriteHLS(body []byte, base *url.URL, rewrite func(string) string) ([]byte
 	return []byte(strings.Join(lines, "\n")), nil
 }
 func (s *Service) upstream(ctx context.Context, raw string, r *http.Request) (*http.Response, error) {
+	return s.upstreamWithHeaders(ctx, raw, r, nil)
+}
+
+func (s *Service) upstreamWithHeaders(ctx context.Context, raw string, r *http.Request, headers http.Header) (*http.Response, error) {
 	var last error
 	for attempt := 0; attempt < 3; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 		if err != nil {
 			return nil, err
+		}
+		req.Header = headers.Clone()
+		if req.Header == nil {
+			req.Header = make(http.Header)
 		}
 		for _, name := range []string{"Range", "If-Range", "If-None-Match", "If-Modified-Since"} {
 			if v := r.Header.Get(name); v != "" {
@@ -114,7 +122,7 @@ func (s *Service) ServeResource(w http.ResponseWriter, r *http.Request, id, key 
 	// Buffer one bounded HLS object before publishing headers. A dropped
 	// connection can then be retried without corrupting the client response.
 	for attempt := 0; attempt < 3; attempt++ {
-		res, err = s.upstream(r.Context(), raw, r)
+		res, err = s.upstreamWithHeaders(r.Context(), raw, r, ss.inputHeaders)
 		if err != nil {
 			s.recordStreamFailure(ss, r.Context(), err)
 			writeStreamError(w, err)

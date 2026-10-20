@@ -232,9 +232,16 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 			attemptCtx, cancel = context.WithTimeout(ctx, 5*time.Second)
 		}
 		ss.inputURL, ss.inputSource = src.URL, src
+		headers, err := s.upstreamHeaders(attemptCtx, c, src)
+		if err != nil {
+			cancel()
+			last = err
+			continue
+		}
+		ss.inputHeaders = headers.Clone()
 		ss.info.MediaInfo, ss.relayInfo = nil, nil
 		ss.resources = map[string]string{}
-		err := s.startIPTVSource(attemptCtx, ss)
+		err = s.startIPTVSource(attemptCtx, ss)
 		cancel()
 		if err == nil {
 			ss.info.ActiveSourceID = src.ID
