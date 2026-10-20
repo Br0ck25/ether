@@ -55,6 +55,24 @@ function role(p: UsenetProvider, i: number) {
   return i === 0 ? "Tried first" : p.backfill ? "Backfill" : `Priority ${i + 1}`;
 }
 
+/**
+ * Connection use for a provider row. In a cluster the account's connections
+ * are divided among the nodes (nodeShare), so busy counts are out of this
+ * node's share.
+ */
+export function connectionText(stat: Record<string, unknown> | undefined, configured: number) {
+  if (!stat) return [`${configured} connections`];
+  const total = Number(stat.configuredConnections ?? configured);
+  const share = Number(stat.nodeShare ?? 0);
+  const active = Number(stat.activeConnections ?? 0);
+  if (share > 0)
+    return [
+      `${active} of ${share} connections busy`,
+      `this node: ${share} of ${total} connections`,
+    ];
+  return [`${active} of ${total} connections busy`];
+}
+
 /** Usenet providers in priority order; each provider is edited in a drawer. */
 export function UsenetProviders() {
   const { dashboard, refreshDashboard } = useApp();
@@ -185,9 +203,7 @@ export function UsenetProviders() {
                   description={[
                     role(p, i),
                     p.host ? `${p.host}:${p.port}` : "No host",
-                    stat
-                      ? `${Number(stat.activeConnections ?? 0)} of ${Number(stat.configuredConnections ?? p.connections)} connections busy`
-                      : `${p.connections} connections`,
+                    ...connectionText(stat, p.connections),
                     stat?.bytes ? `${formatBytes(stat.bytes)} fetched` : "",
                   ]
                     .filter(Boolean)

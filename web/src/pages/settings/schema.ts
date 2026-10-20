@@ -67,6 +67,41 @@ export const SERVER: FieldGroup[] = [
   },
 ];
 
+/** server.* keys each cluster node keeps for itself (internal/config/scope.go). */
+const NODE_LOCAL_SERVER_KEYS = new Set(["port", "bindAddress", "logLevel"]);
+
+/**
+ * General's server groups on a cluster node: settings shared by every node
+ * stay in their groups, and this node's own settings (listener, logging and
+ * its weight) gather under "This node".
+ */
+export function clusterServerGroups(): FieldGroup[] {
+  const shared = SERVER.map((g) => ({
+    ...g,
+    fields: g.fields.filter((f) => !NODE_LOCAL_SERVER_KEYS.has(f.key)),
+  }));
+  const local = SERVER.flatMap((g) => g.fields.filter((f) => NODE_LOCAL_SERVER_KEYS.has(f.key)));
+  return [
+    ...shared,
+    {
+      title: "This node",
+      description: "These apply only to this node; every other setting is shared by the cluster.",
+      fields: [
+        ...local,
+        {
+          key: "clusterWeight",
+          label: "Node weight",
+          kind: "number",
+          min: 0,
+          max: 100,
+          step: 1,
+          help: "This node's share of each provider's connections and request limits, relative to the other nodes. 2 gets twice the share of a node at 1; 0 means 1.",
+        },
+      ],
+    },
+  ];
+}
+
 export const PLEX: FieldGroup[] = [
   {
     title: "Remote access",

@@ -156,6 +156,29 @@ Supply a matching XMLTV guide for programme schedules. Search the channel list
 or filter to favourites; edit a channel in its drawer to change its settings.
 Ether includes no channel sources by default.
 
+## Cluster
+
+**Server › Cluster** shows how this server stores its data. A standalone
+server uses its own SQLite database; the page explains how to turn it into the
+first node of a cluster (see [Running a cluster](install.md#running-a-cluster)).
+
+On a cluster node the page lists every node with its version, whether it leads
+the cluster, whether it is online (or when it was last seen), its active
+streams, hardware transcoding, node weight and public IP. A banner warns about
+conditions to fix, such as nodes reaching the internet from different public
+addresses, or this node losing touch with the database. The page also shows
+the shared settings version and the credential key fingerprint, which match on
+every node, and refreshes every 10 seconds.
+
+To add a node, choose **Create join token**. The drawer shows the token and
+the `ether cluster join` command once; copy them before closing it, and keep
+the token secret. Revoke tokens you no longer need from the list.
+
+Elsewhere, **Backups & import** shows which node holds each backup and offers
+a shared backup folder, the Usenet and Debrid pages show this node's share of
+each account's connections, and **General** holds this node's own settings,
+including its node weight.
+
 ## Monitor and troubleshoot
 
 Use **Activity & notifications** for playback activity and alerts. **Logs** shows

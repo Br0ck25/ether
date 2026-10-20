@@ -518,6 +518,23 @@ func TestValidateConfigDirect(t *testing.T) {
 	}
 }
 
+func TestValidateClusterWeight(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	for _, w := range []int{0, 1, 100} {
+		cfg.Server.ClusterWeight = w
+		if errs := admin.ValidateConfig(cfg); len(errs) != 0 {
+			t.Errorf("weight %d rejected: %v", w, errs)
+		}
+	}
+	for _, w := range []int{-1, 101} {
+		cfg.Server.ClusterWeight = w
+		errs := admin.ValidateConfig(cfg)
+		if len(errs) != 1 || errs[0].Field != "server.clusterWeight" {
+			t.Errorf("weight %d: errs=%v", w, errs)
+		}
+	}
+}
+
 func TestValidateMaintenanceWindow(t *testing.T) {
 	cfg := config.Defaults(t.TempDir())
 	cfg.Updates.MaintenanceStart = "23:30"

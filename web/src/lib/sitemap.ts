@@ -146,6 +146,12 @@ export const PAGES: PageDef[] = [
     keywords: "settings integrations trakt llm language model opensubtitles",
   },
   {
+    href: "/cluster",
+    title: "Cluster",
+    sections: [],
+    keywords: "high availability ha nodes failover postgres postgresql join token weight leader",
+  },
+  {
     href: "/backups",
     title: "Backups & import",
     sections: [],

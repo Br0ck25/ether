@@ -129,92 +129,157 @@ outside your LAN:
 
 ## Running a cluster
 
-Two or more Ether nodes on one network can serve as one Plex server,
-sharing an owner-supplied PostgreSQL database. A single server needs none
-of this.
+A cluster is two or more Ether servers ("nodes") on one network that share a
+PostgreSQL database and appear in Plex as a single server. Viewers can be
+served by any node; if one stops, their apps carry on through the others. A
+single server needs none of this: it keeps everything in its own SQLite
+database.
 
-**Requirements**
+The **Cluster** page in the web UI (under *Server*) shows whether a server is
+standalone or a node, lists the nodes and their health, and creates the join
+tokens new nodes use.
 
-- PostgreSQL 14 or newer, with a dedicated, empty database for Ether.
-  Create it with the C collation (`CREATE DATABASE ether LC_COLLATE 'C'
-  LC_CTYPE 'C' TEMPLATE template0`) so text sorts as on a single server.
-- Ether does not make PostgreSQL highly available; replication and
-  failover of the database are yours to run.
-- Every node must reach the database (allow it through the firewall;
-  prefer `sslmode=require` off a trusted LAN) and the nodes must be on
-  the same LAN.
-- For remote access each node needs its own port forward (a different
-  external port per node, or UPnP), set on that node.
+### What you need
 
-**Start a cluster from an existing server**
+- **PostgreSQL 14 or newer**, with a dedicated, empty database for Ether.
+  Create it with the C collation so text sorts exactly as on a single server:
+
+  ```sql
+  CREATE DATABASE ether LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;
+  ```
+
+- **A database that stays up.** Ether does not install, replicate or fail over
+  PostgreSQL; if the database goes away, so does the cluster's shared state.
+  Run it highly available yourself, for example with Patroni, CloudNativePG
+  on Kubernetes, or a managed PostgreSQL service. Ether tolerates brief
+  database outages without ending streams, but not long ones.
+- **Nodes on the same LAN.** Every node must reach the database (allow it
+  through the firewall; use `sslmode=require` unless the network is trusted).
+- **A port forward per node** for remote access: each node needs its own
+  external port (for example 32400 to the first node, 32401 to the second),
+  or UPnP. Set the public port on each node's *Plex & remote access* page.
+- **The same mount paths for local media.** Local media folders are a shared
+  setting, so mount them at the same path on every node.
+- **One public IP for debrid.** Debrid services may flag one account used
+  from several addresses at once. Keep every node behind the same internet
+  connection; the Cluster page warns you when nodes reach the internet from
+  different public addresses.
+
+### Start a cluster from an existing server
+
+Take a backup first (*Backups & import › Create snapshot*). Then, on the
+server:
 
 ```sh
-# Stop Ether first (service stop, or quit the tray app), then:
+# 1. Stop Ether (stop the service, or quit the tray app).
+# 2. Copy this server into PostgreSQL and make it the first node:
 ether cluster init --database-url 'postgres://ether:PASSWORD@db.lan:5432/ether?sslmode=require'
-# start Ether again
+# 3. Start Ether again.
 ```
 
-`init` copies the server's database into PostgreSQL (it refuses a
-database that already holds data), shares its settings and identity from
-there and points `config.json` at PostgreSQL. A brand-new install can
-instead start with `ETHER_DATABASE_URL` set to the empty database; the
-first node to start seeds the cluster. Take a backup beforehand.
+`init` copies the server's data into PostgreSQL (it refuses a database that
+already holds data), moves its settings and identity there and points
+`config.json` at PostgreSQL. Your viewers, history, playlists and Plex sign-in
+come along; Plex apps keep seeing the same server. Open the Cluster page to
+confirm the server now shows as a node and the leader.
 
-**Add a node**
+A brand-new install can instead start with `ETHER_DATABASE_URL` set to the
+empty database; the first node to start seeds the cluster.
 
-On a running node, create a one-time join token, valid for one hour:
+### Add a node
 
-```sh
-ether cluster token          # or POST /ether/api/cluster/join-tokens
-```
+1. On the **Cluster** page of any running node, choose **Create join token**,
+   pick how long it stays valid (at most an hour) and create it. The token is
+   shown **once**, with the command to run. (On the command line:
+   `ether cluster token`.)
+2. Install Ether on the new machine and stop it.
+3. Run the command from the drawer:
 
-Install Ether on the new machine, stop it, then run:
+   ```sh
+   ether cluster join 'ether-join-v1:...'
+   ```
 
-```sh
-ether cluster join 'ether-join-v1:...'
-```
+4. Start Ether on the new machine and forward its own port. It appears on the
+   Cluster page within a few seconds.
 
-and start it. The token is a secret: it carries the database password and
-the credential key that decrypts every stored credential, so treat it like
-a password and use it promptly. A used or expired token is refused; create
-another. `join` refuses to overwrite an already configured server unless
-you pass `--force` (its old settings are kept as `*.pre-join-*` files). If
-the new node reaches the database under a different address, add
-`--database-url`. Joining from the web setup wizard is not available.
+The token is a secret: it carries the database password and the credential
+key that decrypts every stored credential. Treat it like a password, use it
+promptly and don't paste it into chats or tickets. A token works once; a used
+or expired one is refused, so create another. Unused tokens can be revoked
+from the Cluster page.
 
-**What each node keeps for itself:** port and bind address, log level,
-cache location and size, transcoding hardware, ffmpeg paths and
-transcode limit, the public port/host and UPnP for its port forward,
-custom certificate file paths and the database URL. Everything else
-(providers, indexers, metadata keys, policies, the server identity and
-plex.tv sign-in, update channel) is shared: change it on any node and
-the others follow (within 30 seconds at most). A node's `config.json` keeps a copy of
-the shared settings, which is replaced from the database at every start.
-Local media folders are shared, so mount them at the same path on every
-node.
+`join` refuses to overwrite an already configured server unless you pass
+`--force` (its old settings are kept as `*.pre-join-*` files). If the new
+machine reaches the database at a different address, add
+`--database-url 'postgres://…'`. Joining from the web setup wizard is not
+available.
 
-**Shared limits:** each Usenet provider's connection count is the
-account's total, so the live nodes divide it between them (a departed
-node's share returns to the others within about 30 seconds); TMDB
-requests are divided the same way. To give one node a larger share of
-the connections, set `server.clusterWeight` in that node's `config.json`
-(for example `2` for twice the share of a node left at the default of
-`1`).
+### Settings: shared and per node
 
-**Backups** run on whichever node leads and are saved on that node; the
-backup list on any node shows every node's backups and where each one is.
-To keep them in one place, set a shared backup directory (`sharedDir` in
-the backup settings) that every node can reach at the same path.
+Almost everything is shared: providers, indexers, metadata keys, policies,
+viewers, the server identity and plex.tv sign-in, the update channel. Change
+it on any node and the others follow within 30 seconds.
 
-**Never copy a node's data directory** to make another node: two nodes
-with the same `node.json` would overwrite each other, so the copy refuses
-to start. If that happens, stop the copy, delete `node.json` from its
-data directory and start it again; it joins as a new node.
+Each node keeps its own port and listen address, log level, cache location
+and size, transcoding hardware, ffmpeg paths and transcode limit, public
+port/host and UPnP for its port forward, custom certificate file paths, the
+database URL and its node weight. Edit these on that node's own pages (or in
+its `config.json`). A node's `config.json` also keeps a copy of the shared
+settings, which is replaced from the database at every start.
 
-**Remove a node:** stop and uninstall it, then delete its data directory
-(it holds the cluster's credential key). Unused tokens can be revoked with
-`DELETE /ether/api/cluster/join-tokens/{id}`. A node whose credential key
-does not match the cluster's refuses to start; join it with a fresh token.
+### Node weight
+
+Usenet connection counts, debrid API limits and TMDB request rates are
+account-wide, so the live nodes divide them between them; the provider pages
+show each node's part ("this node: 7 of 20 connections"). When a node leaves,
+its share returns to the others within about 30 seconds.
+
+To give a node a larger share, raise its **Node weight** on that node's
+*General* page (`server.clusterWeight` in its `config.json`). A node at `2`
+gets twice the share of a node at the default of `1`. Weights are listed on
+the Cluster page.
+
+### Backups
+
+Scheduled backups run on whichever node leads and are saved on that node.
+The backup list on any node shows every node's backups and which node holds
+each one; download a backup from the node that holds it. To keep them in one
+place, set a **Shared backup folder** on *Backups & import*: a folder every
+node reaches at the same path, such as a network share.
+
+### When a node fails
+
+Plex apps know every node's address. When a node stops or loses its network,
+apps reconnect through another node and playback resumes from the last
+reported position, usually after a brief pause. A stream that was cut off
+mid-response restarts rather than continuing seamlessly. If the node that
+failed was the leader, another node takes over plex.tv publishing and
+scheduled work within seconds.
+
+The Cluster page shows a stopped node as offline with when it was last seen.
+A cleanly stopped node leaves the list immediately; one that crashed stays
+listed as offline for up to a day.
+
+### Remove a node
+
+Stop Ether on it and uninstall it, then delete its data directory (it holds
+the cluster's credential key). Its share of provider connections returns to
+the other nodes. Revoke any join tokens you no longer need.
+
+**Never copy a node's data directory** to make another node: two nodes with
+the same `node.json` would overwrite each other, so the copy refuses to start.
+If that happens, stop the copy, delete `node.json` from its data directory and
+start it again; it joins as a new node. A node whose credential key does not
+match the cluster's also refuses to start; join it with a fresh token.
+
+### Updating a cluster
+
+Nodes update one at a time during the maintenance window, so the others keep
+serving viewers while each one restarts. A node rejoins only once its database
+changes are compatible with the rest of the cluster. If you update by hand
+(for example with your package manager or a new Docker image), do the same:
+update and restart one node, wait until it shows as online on the Cluster
+page, then move on to the next.
 
 ## Updates
 
