@@ -70,6 +70,41 @@ func TestResolverCachesFollowOtherNode(t *testing.T) {
 	waitUntil(t, "resync reload", func() bool { return b.isBad("rel-1") })
 }
 
+func TestFreshDiscoveryRevokesOtherNodesUnavailableAnswer(t *testing.T) {
+	ctx := context.Background()
+	db := store.OpenTest(t)
+	idx := &fakeIndexer{}
+	a := New(idx, fakeHealth{}, db, testCfg(), Options{})
+	b := New(idx, fakeHealth{}, db, testCfg(), Options{})
+	defer a.Close()
+	defer b.Close()
+	hub := clusterbus.NewHub()
+	a.SetBus(hub.Node("a"))
+	b.SetBus(hub.Node("b"))
+	req := core.ResolveRequest{Title: matrixTitle(), Client: plainCaps()}
+	if _, err := a.Resolve(ctx, req); err == nil {
+		t.Fatal("empty initial search unexpectedly resolved")
+	}
+	waitUntil(t, "B caches the negative verdict", func() bool {
+		known, available := b.Available(ctx, req.Title.Key)
+		return known && !available
+	})
+	idx.mu.Lock()
+	idx.releases = movieReleases()
+	idx.mu.Unlock()
+	search, err := a.SearchReleases(ctx, req.Title, SearchOptions{Fresh: true})
+	if err != nil || search.Winner == "" {
+		t.Fatalf("fresh discovery: %+v %v", search, err)
+	}
+	waitUntil(t, "B revokes the stale failure", func() bool {
+		known, _ := b.Available(ctx, req.Title.Key)
+		return !known
+	})
+	if res, err := b.Resolve(ctx, req); err != nil || res == nil {
+		t.Fatalf("peer playback retry: %+v %v", res, err)
+	}
+}
+
 // An owner block and unblock made on one node reach the other node's
 // in-memory blocklist, keeping the owner flag.
 func TestOwnerBlockAndUnblockFollowOtherNode(t *testing.T) {

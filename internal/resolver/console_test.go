@@ -126,6 +126,37 @@ func TestConsoleSearchMatchesResolveRanking(t *testing.T) {
 	}
 }
 
+func TestFreshSearchFindingCandidatesAllowsPlaybackRetry(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	idx := &fakeIndexer{}
+	svc := New(idx, fakeHealth{}, db, testCfg(), Options{})
+	defer svc.Close()
+	req := core.ResolveRequest{Title: matrixTitle(), Client: plainCaps()}
+	if _, err := svc.Resolve(ctx, req); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("initial empty search: %v", err)
+	}
+	idx.mu.Lock()
+	idx.releases = movieReleases()
+	idx.mu.Unlock()
+	search, err := svc.SearchReleases(ctx, req.Title, SearchOptions{Fresh: true})
+	if err != nil || search.Winner == "" {
+		t.Fatalf("fresh source discovery: %+v %v", search, err)
+	}
+	// Finding candidates does not prove health, but it must revoke the old
+	// negative verdict so Play can validate the newly discovered source.
+	if known, available := svc.Available(ctx, req.Title.Key); known && !available {
+		t.Fatal("fresh search found releases but Play is still blocked by the old failure")
+	}
+	res, err := svc.Resolve(ctx, req)
+	if err != nil || res == nil {
+		t.Fatalf("retry after source discovery: %+v %v", res, err)
+	}
+	if idx.searches.Load() != 2 {
+		t.Fatalf("retry should reuse fresh discovery: searches=%d", idx.searches.Load())
+	}
+}
+
 func TestPinHonouredAndGated(t *testing.T) {
 	ctx := context.Background()
 	idx := &fakeIndexer{releases: movieReleases()}

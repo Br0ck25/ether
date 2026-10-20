@@ -371,6 +371,14 @@ func (s *Service) SearchReleases(ctx context.Context, t *core.Title, opts Search
 	}
 	if len(cands) > 0 {
 		out.Winner = cands[0].rel.ID
+		// New candidates revoke an old negative verdict; they are not yet
+		// health-verified. Let the next Play validate them normally instead
+		// of returning the earlier failure for the rest of its cooloff.
+		if e, known := s.getAvailability(ctx, int64(t.Key)); known && !e.available {
+			if err := s.forgetAvailability(ctx, t.Key); err != nil {
+				s.log.Warn("resolver: clearing stale unavailability failed", "title", t.Key, "err", err)
+			}
+		}
 	}
 	out.Routing = trace.Routing
 	// rankCandidates writes one trace row per result, in result order.
@@ -574,11 +582,13 @@ func (s *Service) forgetAvailability(ctx context.Context, key core.RatingKey) er
 	s.mu.Lock()
 	delete(s.avail, int64(key))
 	s.mu.Unlock()
-	if s.db == nil {
-		return nil
+	if s.db != nil {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM resolver_availability WHERE rating_key=?`, int64(key)); err != nil {
+			return err
+		}
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM resolver_availability WHERE rating_key=?`, int64(key))
-	return err
+	s.notify("avail:" + key.String())
+	return nil
 }
 
 // likePattern escapes a substring for LIKE ... ESCAPE '\' and lowercases
