@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"database/sql"
+	"strconv"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/store"
@@ -101,9 +102,11 @@ func (s *Service) recordReputation(ctx context.Context, indexer string, success 
 		if success {
 			col = "successes"
 		}
-		_, _ = s.db.ExecContext(ctx,
+		if _, err := s.db.ExecContext(ctx,
 			`INSERT INTO resolver_reputation(indexer, `+col+`) VALUES (?,1)
-			 ON CONFLICT(indexer) DO UPDATE SET `+col+`=resolver_reputation.`+col+`+1`, indexer)
+			 ON CONFLICT(indexer) DO UPDATE SET `+col+`=resolver_reputation.`+col+`+1`, indexer); err == nil {
+			s.notify("reps")
+		}
 	}
 }
 
@@ -124,10 +127,12 @@ func (s *Service) setAvailability(ctx context.Context, key int64, available bool
 		if available {
 			v = 1
 		}
-		_, _ = s.db.ExecContext(ctx,
+		if _, err := s.db.ExecContext(ctx,
 			`INSERT INTO resolver_availability(rating_key, available, checked_at, expires_at) VALUES (?,?,?,?)
 			 ON CONFLICT(rating_key) DO UPDATE SET available=excluded.available, checked_at=excluded.checked_at, expires_at=excluded.expires_at`,
-			key, v, s.now().Unix(), exp.Unix())
+			key, v, s.now().Unix(), exp.Unix()); err == nil {
+			s.notify("avail:" + strconv.FormatInt(key, 10))
+		}
 	}
 }
 

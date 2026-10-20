@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/releaseparse"
@@ -110,6 +111,9 @@ type Service struct {
 
 	flightMu sync.Mutex
 	flights  map[string]*inflight
+
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
 }
 
 var _ core.Resolver = (*Service)(nil)
@@ -208,7 +212,11 @@ func (s *Service) MarkBad(ctx context.Context, releaseID string, reason string) 
 	s.bad[releaseID] = s.now()
 	s.mu.Unlock()
 	s.forgetVerified(ctx, releaseID)
-	return s.persistBad(ctx, releaseID, reason)
+	err := s.persistBad(ctx, releaseID, reason)
+	if err == nil {
+		s.notify("bad:" + releaseID)
+	}
+	return err
 }
 
 func (s *Service) isBad(id string) bool {
