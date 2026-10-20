@@ -443,6 +443,12 @@ func (s *Service) Import(ctx context.Context, id string) (Plan, error) {
 	var p Plan
 	err := s.state.ImportTransaction(ctx, func(tx *sql.Tx) (state.ImportBatch, error) {
 		var batch state.ImportBatch
+		// A State's write mutex belongs to one node. Serialize the import
+		// transaction in the shared database too: both the plan's imported
+		// flag and source-to-list mappings use read-then-write decisions.
+		if err := store.LockKey(ctx, store.DialectOf(s.db), tx, "migrate:import"); err != nil {
+			return batch, err
+		}
 		var doc string
 		var imported bool
 		if err := tx.QueryRowContext(ctx, `SELECT document,imported FROM migrate_plans WHERE id=?`, id).Scan(&doc, &imported); err != nil {
