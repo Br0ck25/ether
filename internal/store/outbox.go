@@ -163,8 +163,10 @@ func (ob *Outbox[K, V]) Write(ctx context.Context, key K, v V) (queued bool, err
 	if err == nil {
 		return false, nil
 	}
-	if !unavailable {
-		return false, err // after Close nothing would replay it
+	if !unavailable || ob.closed {
+		// After Close (even one that ran while this write was in flight)
+		// nothing would replay a queued value: report the failure.
+		return false, err
 	}
 	ob.lastErr = err.Error()
 	// A later Write for key may have been queued while this one was in
