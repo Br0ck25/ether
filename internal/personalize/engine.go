@@ -85,6 +85,9 @@ type Options struct {
 	Logger   *slog.Logger
 	Now      func() time.Time
 	Location *time.Location // server local time (default time.Local)
+	// Busy reports whether anyone is streaming right now (nil = never).
+	// Background work that can wait, like retraining the ranker, waits.
+	Busy func() bool
 	// IntentEnabled reports whether live session intent (#32) is on
 	// (nil = on); consulted per signal so owner edits apply live.
 	IntentEnabled func() bool

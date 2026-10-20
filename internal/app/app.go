@@ -233,6 +233,13 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		Collections: a.collections, // owner collections as targeted Home/section rows
 		ServerName:  func() string { return a.cfg.Get().Server.FriendlyName },
 		Logger:      log.With("component", "personalize"),
+		// Background training waits while anyone is streaming.
+		Busy: func() bool {
+			if a.playback != nil && len(a.playback.Sessions()) > 0 {
+				return true
+			}
+			return a.livetv != nil && len(a.livetv.ViewingSessions()) > 0
+		},
 		// Netflix-style hooks (#31/#32) follow the owner's live switches.
 		IntentEnabled: func() bool { return a.cfg.Get().Personalize.SessionIntent },
 		ClockFormat: func() string {
