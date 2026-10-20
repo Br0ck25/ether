@@ -38,6 +38,7 @@ func (a *App) buildCluster(dialect store.Dialect) error {
 	local := cluster.Local{Identity: id, Version: a.opts.Version, Addrs: a.nodeAddrs, Caps: a.nodeCaps, Load: a.nodeLoad}
 	log := a.log.With("component", "cluster")
 	a.peers = &peerSet{}
+	a.egress = &egressIP{}
 	if dialect != store.Postgres {
 		a.cluster = cluster.NewSolo(local, log)
 		return nil
@@ -114,7 +115,7 @@ func (a *App) nodeAddrs(ctx context.Context) []string {
 }
 
 func (a *App) nodeCaps() cluster.Caps {
-	caps := cluster.Caps{Weight: a.cfg.Get().Server.ClusterWeight}
+	caps := cluster.Caps{Weight: a.cfg.Get().Server.ClusterWeight, EgressIP: a.egress.get()}
 	if a.transcoder != nil {
 		caps.Transcode, caps.HWAccel = true, a.transcoder.HWAccel().Name
 	}
@@ -235,6 +236,8 @@ type clusterStatus struct {
 	Nodes  []cluster.Node  `json:"nodes"`            // every recorded node, with liveness
 	Health *cluster.Health `json:"health,omitempty"`
 	Error  string          `json:"error,omitempty"`
+	// Warnings are cluster conditions the owner should act on.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func (a *App) clusterHandler() http.Handler {
@@ -253,6 +256,9 @@ func (a *App) clusterHandler() http.Handler {
 			if n.Leader {
 				st.Leader = n.ID
 			}
+		}
+		if w := egressWarning(st.Nodes); w != "" {
+			st.Warnings = append(st.Warnings, w)
 		}
 		if pg, ok := a.cluster.(*cluster.Postgres); ok {
 			h := pg.Health()

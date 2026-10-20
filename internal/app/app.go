@@ -92,6 +92,7 @@ type App struct {
 	// caches the other nodes' URIs for the plex.tv publisher.
 	cluster cluster.Cluster
 	peers   *peerSet
+	egress  *egressIP // this node's public address, heartbeated when clustered
 	// clusterFatal receives the error that ended this node's cluster
 	// membership (a duplicate node identity); nil on a standalone server.
 	clusterFatal chan error
@@ -588,6 +589,7 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.runUpdates(ctx, cancel) })
 	background.start(func() { a.runClusterSync(ctx) })
 	background.start(func() { a.runBudgets(ctx) })
+	background.start(func() { a.runEgress(ctx) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)

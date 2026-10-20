@@ -86,10 +86,11 @@ func (a *App) runBudgets(ctx context.Context) {
 	})()
 	t := time.NewTicker(budgetPoll)
 	defer t.Stop()
-	last := ""
+	last, lastEgress := "", ""
 	for {
 		nodes, err := a.cluster.Nodes(ctx)
 		if err == nil {
+			a.noteEgress(nodes, &lastEgress)
 			m := liveBudgetMembers(nodes, a.cluster.Self())
 			if key := m.key(); key != last {
 				last = key
