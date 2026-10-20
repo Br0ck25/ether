@@ -981,6 +981,23 @@ export function createFakeServer(opts: FakeOptions = {}) {
   };
   const SECTION_ROWS = [
     {
+      hubId: "fans-also-loved",
+      title: "Fans of What You Watch Also Loved",
+      kind: "fans-also-loved",
+      description:
+        "What people who love the viewer's favourites loved most, strongest when several favourites agree.",
+      group: "picks",
+      sections: ["home", "movies", "shows"],
+    },
+    {
+      hubId: "trending-with-fans",
+      title: "Trending With Fans of What You Watch",
+      kind: "trending-with-fans",
+      description: "What's trending right now among fans of the viewer's favourites.",
+      group: "picks",
+      sections: ["home", "movies", "shows"],
+    },
+    {
       hubId: "taste-cluster",
       title: "<Taste cluster>",
       kind: "taste-cluster",
