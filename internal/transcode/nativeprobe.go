@@ -130,12 +130,12 @@ func (s *nativeSource) read(off int64, n int) ([]byte, error) {
 	return b, nil
 }
 
-type ebmlNode struct {
+type mkvNode struct {
 	id   uint64
 	body []byte
 }
 
-func ebmlVint(b []byte, id bool) (uint64, int, bool) {
+func mkvVint(b []byte, id bool) (uint64, int, bool) {
 	if len(b) == 0 || b[0] == 0 {
 		return 0, 0, false
 	}
@@ -158,19 +158,19 @@ func ebmlVint(b []byte, id bool) (uint64, int, bool) {
 	return v, n, true
 }
 
-// ebmlNodes splits a master element body into children.
-func ebmlNodes(b []byte) ([]ebmlNode, bool) {
-	var out []ebmlNode
+// mkvNodes splits a master element body into children.
+func mkvNodes(b []byte) ([]mkvNode, bool) {
+	var out []mkvNode
 	for len(b) > 0 {
-		id, ni, ok := ebmlVint(b, true)
+		id, ni, ok := mkvVint(b, true)
 		if !ok {
 			return nil, false
 		}
-		size, ns, ok := ebmlVint(b[ni:], false)
+		size, ns, ok := mkvVint(b[ni:], false)
 		if !ok || size > uint64(len(b)-ni-ns) {
 			return nil, false
 		}
-		out = append(out, ebmlNode{id, b[ni+ns : ni+ns+int(size)]})
+		out = append(out, mkvNode{id, b[ni+ns : ni+ns+int(size)]})
 		b = b[ni+ns+int(size):]
 		if len(out) > 100000 {
 			return nil, false
@@ -179,7 +179,7 @@ func ebmlNodes(b []byte) ([]ebmlNode, bool) {
 	return out, true
 }
 
-func ebmlU(b []byte) uint64 {
+func mkvUint(b []byte) uint64 {
 	if len(b) > 8 {
 		return 0
 	}
@@ -190,7 +190,7 @@ func ebmlU(b []byte) uint64 {
 	return v
 }
 
-func ebmlFloat(b []byte) float64 {
+func mkvFloat(b []byte) float64 {
 	switch len(b) {
 	case 4:
 		return float64(math.Float32frombits(binary.BigEndian.Uint32(b)))
@@ -200,7 +200,7 @@ func ebmlFloat(b []byte) float64 {
 	return 0
 }
 
-func ebmlString(b []byte) string {
+func mkvString(b []byte) string {
 	if i := strings.IndexByte(string(b), 0); i >= 0 {
 		b = b[:i]
 	}
@@ -218,11 +218,11 @@ func (s *nativeSource) header(off, end int64) (id uint64, start, stop int64, err
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	id, ni, ok := ebmlVint(b, true)
+	id, ni, ok := mkvVint(b, true)
 	if !ok {
 		return 0, 0, 0, incomplete("bad element id")
 	}
-	size, ns, ok := ebmlVint(b[ni:], false)
+	size, ns, ok := mkvVint(b[ni:], false)
 	if !ok {
 		return 0, 0, 0, incomplete("bad element size")
 	}
@@ -287,13 +287,13 @@ func (s *nativeSource) matroska() (*core.MediaInfo, error) {
 	if err != nil || id != mkvEBML || end > int64(len(s.head)) {
 		return nil, incomplete("bad EBML header")
 	}
-	children, ok := ebmlNodes(s.head[hs:end])
+	children, ok := mkvNodes(s.head[hs:end])
 	if !ok {
 		return nil, incomplete("bad EBML header")
 	}
 	for _, c := range children {
 		if c.id == mkvDocType {
-			if t := ebmlString(c.body); t != "matroska" && t != "webm" {
+			if t := mkvString(c.body); t != "matroska" && t != "webm" {
 				return nil, incomplete("unsupported doctype")
 			}
 		}
@@ -384,16 +384,16 @@ func (s *nativeSource) matroska() (*core.MediaInfo, error) {
 	m := &core.MediaInfo{Container: "mkv", Size: s.size}
 	scale := uint64(1000000)
 	var duration float64
-	infoNodes, ok := ebmlNodes(info)
+	infoNodes, ok := mkvNodes(info)
 	if !ok {
 		return nil, incomplete("bad Info")
 	}
 	for _, c := range infoNodes {
 		switch c.id {
 		case mkvTimecodeScl:
-			scale = ebmlU(c.body)
+			scale = mkvUint(c.body)
 		case mkvDuration:
-			duration = ebmlFloat(c.body)
+			duration = mkvFloat(c.body)
 		}
 	}
 	if scale == 0 || duration <= 0 || math.IsNaN(duration) || math.IsInf(duration, 0) {
@@ -556,7 +556,7 @@ func ProbeTrailer(ctx context.Context, src io.ReaderAt, size int64, m *core.Medi
 }
 
 func seekTargets(b []byte, segStart, segEnd int64, out map[uint64]int64) {
-	nodes, ok := ebmlNodes(b)
+	nodes, ok := mkvNodes(b)
 	if !ok {
 		return
 	}
@@ -564,7 +564,7 @@ func seekTargets(b []byte, segStart, segEnd int64, out map[uint64]int64) {
 		if c.id != mkvSeek {
 			continue
 		}
-		fields, ok := ebmlNodes(c.body)
+		fields, ok := mkvNodes(c.body)
 		if !ok {
 			continue
 		}
@@ -572,9 +572,9 @@ func seekTargets(b []byte, segStart, segEnd int64, out map[uint64]int64) {
 		for _, f := range fields {
 			switch f.id {
 			case mkvSeekID:
-				id = ebmlU(f.body)
+				id = mkvUint(f.body)
 			case mkvSeekPosition:
-				pos = ebmlU(f.body)
+				pos = mkvUint(f.body)
 			}
 		}
 		if id != 0 && pos < uint64(segEnd-segStart) {
@@ -586,7 +586,7 @@ func seekTargets(b []byte, segStart, segEnd int64, out map[uint64]int64) {
 }
 
 func mkvTracksOf(b []byte) ([]mkvTrack, error) {
-	nodes, ok := ebmlNodes(b)
+	nodes, ok := mkvNodes(b)
 	if !ok {
 		return nil, incomplete("bad Tracks")
 	}
@@ -595,7 +595,7 @@ func mkvTracksOf(b []byte) ([]mkvTrack, error) {
 		if n.id != mkvTrackEntry {
 			continue
 		}
-		fields, ok := ebmlNodes(n.body)
+		fields, ok := mkvNodes(n.body)
 		if !ok {
 			return nil, incomplete("bad TrackEntry")
 		}
@@ -603,73 +603,73 @@ func mkvTracksOf(b []byte) ([]mkvTrack, error) {
 		for _, f := range fields {
 			switch f.id {
 			case mkvTrackNumber:
-				t.number = ebmlU(f.body)
+				t.number = mkvUint(f.body)
 			case mkvTrackUID:
-				t.uid = ebmlU(f.body)
+				t.uid = mkvUint(f.body)
 			case mkvTrackType:
-				t.kind = ebmlU(f.body)
+				t.kind = mkvUint(f.body)
 			case mkvFlagDefault:
-				t.flagDefault = ebmlU(f.body) != 0
+				t.flagDefault = mkvUint(f.body) != 0
 			case mkvFlagForced:
-				t.forced = ebmlU(f.body) != 0
+				t.forced = mkvUint(f.body) != 0
 			case mkvDefaultDur:
-				t.defaultDur = ebmlU(f.body)
+				t.defaultDur = mkvUint(f.body)
 			case mkvName:
-				t.name = ebmlString(f.body)
+				t.name = mkvString(f.body)
 			case mkvLanguage:
-				t.language, t.hasLanguage = ebmlString(f.body), true
+				t.language, t.hasLanguage = mkvString(f.body), true
 			case mkvLanguageBCP:
-				t.bcp47 = ebmlString(f.body)
+				t.bcp47 = mkvString(f.body)
 			case mkvCodecID:
-				t.codecID = ebmlString(f.body)
+				t.codecID = mkvString(f.body)
 			case mkvCodecPrivate:
 				t.private = f.body
 			case mkvVideo:
-				vs, ok := ebmlNodes(f.body)
+				vs, ok := mkvNodes(f.body)
 				if !ok {
 					return nil, incomplete("bad Video")
 				}
 				for _, v := range vs {
 					switch v.id {
 					case mkvPixelWidth:
-						t.width = ebmlU(v.body)
+						t.width = mkvUint(v.body)
 					case mkvPixelHeight:
-						t.height = ebmlU(v.body)
+						t.height = mkvUint(v.body)
 					case mkvColour:
-						cs, _ := ebmlNodes(v.body)
+						cs, _ := mkvNodes(v.body)
 						for _, c := range cs {
 							switch c.id {
 							case mkvTransfer:
-								t.transfer = int(ebmlU(c.body))
+								t.transfer = int(mkvUint(c.body))
 							case mkvBitsPerChan:
-								t.bitsPerChan = ebmlU(c.body)
+								t.bitsPerChan = mkvUint(c.body)
 							}
 						}
 					}
 				}
 			case mkvAudio:
-				as, ok := ebmlNodes(f.body)
+				as, ok := mkvNodes(f.body)
 				if !ok {
 					return nil, incomplete("bad Audio")
 				}
 				for _, a := range as {
 					switch a.id {
 					case mkvSampling:
-						t.sampling = ebmlFloat(a.body)
+						t.sampling = mkvFloat(a.body)
 					case mkvOutSampling:
-						t.outSampling = ebmlFloat(a.body)
+						t.outSampling = mkvFloat(a.body)
 					case mkvChannels:
-						t.channels = ebmlU(a.body)
+						t.channels = mkvUint(a.body)
 					}
 				}
 			case mkvAddMapping:
-				ms, _ := ebmlNodes(f.body)
+				ms, _ := mkvNodes(f.body)
 				var kind uint64
 				var extra []byte
 				for _, x := range ms {
 					switch x.id {
 					case mkvAddIDType:
-						kind = ebmlU(x.body)
+						kind = mkvUint(x.body)
 					case mkvAddIDExtra:
 						extra = x.body
 					}
@@ -679,19 +679,19 @@ func mkvTracksOf(b []byte) ([]mkvTrack, error) {
 					t.dovi = extra
 				}
 			case mkvEncodings:
-				es, _ := ebmlNodes(f.body)
+				es, _ := mkvNodes(f.body)
 				for _, e := range es {
 					if e.id != mkvEncoding {
 						continue
 					}
 					scope, kind := uint64(1), uint64(0)
-					fs, _ := ebmlNodes(e.body)
+					fs, _ := mkvNodes(e.body)
 					for _, x := range fs {
 						switch x.id {
 						case mkvEncScope:
-							scope = ebmlU(x.body)
+							scope = mkvUint(x.body)
 						case mkvEncType:
-							kind = ebmlU(x.body)
+							kind = mkvUint(x.body)
 						}
 					}
 					if scope&2 != 0 {
@@ -1161,7 +1161,7 @@ func mkvChaptersOf(b []byte, duration time.Duration) []core.Chapter {
 	if b == nil {
 		return nil
 	}
-	editions, ok := ebmlNodes(b)
+	editions, ok := mkvNodes(b)
 	if !ok {
 		return nil
 	}
@@ -1175,7 +1175,7 @@ func mkvChaptersOf(b []byte, duration time.Duration) []core.Chapter {
 		if e.id != mkvEdition {
 			continue
 		}
-		cs, ok := ebmlNodes(e.body)
+		cs, ok := mkvNodes(e.body)
 		if !ok {
 			continue
 		}
@@ -1183,7 +1183,7 @@ func mkvChaptersOf(b []byte, duration time.Duration) []core.Chapter {
 			if c.id != mkvChapterAtom {
 				continue
 			}
-			fs, ok := ebmlNodes(c.body)
+			fs, ok := mkvNodes(c.body)
 			if !ok {
 				continue
 			}
@@ -1191,16 +1191,16 @@ func mkvChaptersOf(b []byte, duration time.Duration) []core.Chapter {
 			for _, f := range fs {
 				switch f.id {
 				case mkvChapterUID:
-					a.uid = ebmlU(f.body)
+					a.uid = mkvUint(f.body)
 				case mkvChapterStart:
-					a.start = int64(ebmlU(f.body))
+					a.start = int64(mkvUint(f.body))
 				case mkvChapterEnd:
-					a.end = int64(ebmlU(f.body))
+					a.end = int64(mkvUint(f.body))
 				case mkvChapDisplay:
-					ds, _ := ebmlNodes(f.body)
+					ds, _ := mkvNodes(f.body)
 					for _, d := range ds {
 						if d.id == mkvChapString && a.title == "" {
-							a.title = ebmlString(d.body)
+							a.title = mkvString(d.body)
 						}
 					}
 				}
@@ -1239,7 +1239,7 @@ func mkvTrackBitrates(b []byte) map[uint64]int {
 	if b == nil {
 		return nil
 	}
-	tags, ok := ebmlNodes(b)
+	tags, ok := mkvNodes(b)
 	if !ok {
 		return nil
 	}
@@ -1248,7 +1248,7 @@ func mkvTrackBitrates(b []byte) map[uint64]int {
 		if t.id != mkvTag {
 			continue
 		}
-		fs, ok := ebmlNodes(t.body)
+		fs, ok := mkvNodes(t.body)
 		if !ok {
 			continue
 		}
@@ -1257,21 +1257,21 @@ func mkvTrackBitrates(b []byte) map[uint64]int {
 		for _, f := range fs {
 			switch f.id {
 			case mkvTargets:
-				ts, _ := ebmlNodes(f.body)
+				ts, _ := mkvNodes(f.body)
 				for _, x := range ts {
 					if x.id == mkvTagTrackUID {
-						uid = ebmlU(x.body)
+						uid = mkvUint(x.body)
 					}
 				}
 			case mkvSimpleTag:
-				ss, _ := ebmlNodes(f.body)
+				ss, _ := mkvNodes(f.body)
 				var name, value string
 				for _, x := range ss {
 					switch x.id {
 					case mkvTagName:
-						name = ebmlString(x.body)
+						name = mkvString(x.body)
 					case mkvTagString:
-						value = ebmlString(x.body)
+						value = mkvString(x.body)
 					}
 				}
 				if strings.EqualFold(name, "BPS") || strings.EqualFold(name, "BPS-eng") {
