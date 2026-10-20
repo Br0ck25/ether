@@ -171,3 +171,29 @@ func TestDetailDoesNotWaitForRemotePlexIdentity(t *testing.T) {
 		t.Fatal("identity was not scheduled in background")
 	}
 }
+
+type keyWarmer struct {
+	core.Playback
+	keys []core.RatingKey
+}
+
+func (w *keyWarmer) PreResolve(_ context.Context, _ *core.User, k core.RatingKey, _ core.ClientCaps) bool {
+	w.keys = append(w.keys, k)
+	return true
+}
+
+func TestShowPageWarmsItsOnDeckEpisode(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	warmer := &keyWarmer{Playback: f.srv.d.Playback}
+	f.srv.d.Playback = warmer
+	if rec := f.get(t, "/library/metadata/2000000000001396?includeChildren=1&includeOnDeck=1"); rec.Code != 200 {
+		t.Fatalf("show detail: %d", rec.Code)
+	}
+	for _, k := range warmer.keys {
+		if k.Episode() > 0 {
+			return
+		}
+	}
+	t.Fatalf("no episode warmed: %v", warmer.keys)
+}

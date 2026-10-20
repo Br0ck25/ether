@@ -175,6 +175,13 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 	if onDeck && t.Type == core.TypeShow {
 		if ep, st := s.showOnDeck(ctx, pr, t.Key); ep != nil {
 			md.OnDeck = &model.OnDeck{Metadata: s.renderTitles(ctx, pr, []core.Title{*ep}, renderOpts{media: true, state: st})}
+			// The show page's Play button plays this episode: resolve,
+			// open and probe it while the viewer reads the page.
+			if warm, ok := s.d.Playback.(interface {
+				PreResolve(context.Context, *core.User, core.RatingKey, core.ClientCaps) bool
+			}); ok {
+				warm.PreResolve(ctx, pr.User, ep.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+			}
 		}
 	}
 	if related && s.d.Recommender != nil {
