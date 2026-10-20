@@ -101,7 +101,7 @@ func (s *streamingInner) SearchWith(ctx context.Context, _ core.SearchRequest, a
 func TestIndexerChecksCacheAsIndexersAnswer(t *testing.T) {
 	h := newHarness(t, 1<<20, "torbox")
 	h.provs["torbox-0"].bulk = true
-	other := strings.Repeat("ab", 20)
+	other := strings.Repeat("cd", 20)
 	h.provs["torbox-0"].cached[testHash] = true
 	inner := &streamingInner{h: h,
 		fast: []core.Release{{ID: "fast", Name: "Fast", Protocol: core.ProtocolTorrent, InfoHash: testHash}},
