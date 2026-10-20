@@ -419,13 +419,29 @@ func (f *Fetcher) StatStream(ctx context.Context, messageIDs []string, fn func(i
 			order = append(order, normalized)
 		}
 	}
-	pools := f.order()
-	if len(pools) == 0 {
+	all := f.order()
+	if len(all) == 0 {
 		return ErrNoProviders
+	}
+	// Providers locked out by an authentication failure cannot answer and
+	// are not counted, as in eachOnce: otherwise one bad login would leave
+	// every missing article undecided.
+	var pools []*pool
+	var firstErr error
+	for _, p := range all {
+		if err := p.brk.allow(); errors.Is(err, ErrProviderDisabled) {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", providerLabel(p.cfg), err)
+			}
+			continue
+		}
+		pools = append(pools, p)
+	}
+	if len(pools) == 0 {
+		return fmt.Errorf("%w: %w", ErrNoProviders, firstErr)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var firstErr error
 	for poolIdx, p := range pools {
 		lastPool := poolIdx == len(pools)-1
 		if len(pend) == 0 {
@@ -469,6 +485,11 @@ func (f *Fetcher) StatStream(ctx context.Context, messageIDs []string, fn func(i
 			if a.err != nil {
 				if firstErr == nil {
 					firstErr = a.err
+				}
+				if errors.Is(a.err, ErrProviderDisabled) || errors.Is(a.err, ErrAuthFailed) {
+					// Locked out mid-request (bad credentials): this
+					// provider cannot answer and is not counted.
+					continue
 				}
 				// A provider error means a negative from another provider
 				// cannot prove global absence for these articles.

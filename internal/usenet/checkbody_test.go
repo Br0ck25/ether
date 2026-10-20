@@ -276,3 +276,32 @@ func BenchmarkCheckBody(b *testing.B) {
 	})
 	checkBodyDrainMax = old
 }
+
+// A provider locked out by bad credentials cannot answer: like Body and
+// Stat, StatStream must not let it keep every missing article undecided.
+func TestStatStreamIgnoresAuthLockedProvider(t *testing.T) {
+	bad := nntptest.Start(t, nntptest.Options{Username: "u", Password: "right"})
+	good := nntptest.Start(t, nntptest.Options{})
+	addSeg(t, good, "here@x", []byte("a"))
+	bp := bad.Provider("bad", 2)
+	bp.Password = "wrong"
+	gp := good.Provider("good", 2)
+	gp.Priority = 1
+	f := newFetcher(t, []config.UsenetProvider{bp, gp}, Options{MinIdle: -1})
+	for pass := 0; pass < 2; pass++ { // mid-request lockout, then already disabled
+		got := map[string]bool{}
+		err := f.StatStream(context.Background(), []string{"here@x", "gone@x"}, func(id string, present bool) bool {
+			got[id] = present
+			return true
+		})
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if p, ok := got["gone@x"]; !ok || p || !got["here@x"] {
+			t.Fatalf("pass %d: got %v", pass, got)
+		}
+	}
+	if st := statsFor(f, "bad"); st.State != StateAuthFail {
+		t.Fatalf("state %q", st.State)
+	}
+}

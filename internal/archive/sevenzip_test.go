@@ -2,8 +2,10 @@ package archive
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"sort"
 	"strings"
 	"testing"
@@ -328,6 +330,49 @@ func TestList7zReaderErrorsPropagate(t *testing.T) {
 			if !errors.Is(err, errSentinel) || errors.Is(err, ErrCorrupt) {
 				t.Fatalf("%s fail at %d: %v", name, p, err)
 			}
+		}
+	}
+}
+
+// wrap7z builds a 7z archive from packed data and a raw (plain) header.
+func wrap7z(packed, hdr []byte) []byte {
+	sh := make([]byte, 32)
+	copy(sh, "7z\xbc\xaf\x27\x1c")
+	sh[7] = 4
+	binary.LittleEndian.PutUint64(sh[12:], uint64(len(packed)))
+	binary.LittleEndian.PutUint64(sh[20:], uint64(len(hdr)))
+	binary.LittleEndian.PutUint32(sh[28:], crc32.ChecksumIEEE(hdr))
+	binary.LittleEndian.PutUint32(sh[8:], crc32.ChecksumIEEE(sh[12:]))
+	return append(append(sh, packed...), hdr...)
+}
+
+// SubStreamsInfo placed before UnpackInfo (or UnpackInfo repeated) leaves
+// substream sizes for a different folder count than the folders parsed
+// last; that must be ErrCorrupt, not an index-out-of-range panic.
+func TestList7zSubStreamsFolderMismatch(t *testing.T) {
+	cat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	n := at.Number7z
+	unpackInfo := func(folders int) []byte {
+		b := cat([]byte{0x07, 0x0b}, n(uint64(folders)), []byte{0})
+		for i := 0; i < folders; i++ {
+			b = cat(b, n(1), []byte{0x01, 0x00})
+		}
+		b = append(b, 0x0c)
+		for i := 0; i < folders; i++ {
+			b = cat(b, n(3))
+		}
+		return append(b, 0x00)
+	}
+	packInfo := cat([]byte{0x06}, n(0), n(2), []byte{0x09}, n(3), n(3), []byte{0x00})
+	files := cat([]byte{0x05}, n(2), []byte{0x11}, n(9), []byte{0, 'a', 0, 0, 0, 'b', 0, 0, 0}, []byte{0x00})
+	for name, streams := range map[string][]byte{
+		"substreams first": cat(packInfo, []byte{0x08, 0x00}, unpackInfo(2)),
+		"unpack repeated":  cat(packInfo, unpackInfo(1), []byte{0x08, 0x00}, unpackInfo(2)),
+	} {
+		hdr := cat([]byte{0x01, 0x04}, streams, []byte{0x00}, files, []byte{0x00})
+		b := wrap7z([]byte("abcxyz"), hdr)
+		if _, err := List7z(bytes.NewReader(b), int64(len(b))); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("%s: err = %v, want ErrCorrupt", name, err)
 		}
 	}
 }

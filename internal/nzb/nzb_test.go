@@ -395,3 +395,24 @@ func TestPar2Index(t *testing.T) {
 		t.Fatal("IsPar2Volume")
 	}
 }
+
+// A hostile segment number must not size per-part tables (SegmentCount,
+// Missing) to billions of entries.
+func TestParseBoundsSegmentNumbers(t *testing.T) {
+	doc := `<nzb><file subject="x.mkv"><segments>` +
+		`<segment number="1">a@b</segment>` +
+		`<segment number="2000000000">c@d</segment>` +
+		`<segment number="-9000000000000000000">e@f</segment>` +
+		`</segments></file></nzb>`
+	n, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := n.Files[0]
+	if got := f.SegmentCount(); got != 1 {
+		t.Fatalf("SegmentCount = %d, want 1 (segments %+v)", got, f.Segments)
+	}
+	if m := f.Missing(); len(m) != 0 {
+		t.Fatalf("Missing = %d entries", len(m))
+	}
+}

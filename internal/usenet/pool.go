@@ -724,7 +724,11 @@ func (p *pool) warm(ctx context.Context, n int) error {
 	// each provider's warming pass so they share the same bounded idle set.
 	p.warmMu.Lock()
 	defer p.warmMu.Unlock()
-	n = min(n, 4, p.target())
+	// Every warming goroutine holds its slot until all have one, so never
+	// ask for more than the semaphore has (it runs below target while the
+	// server limits us): the extra requests would wait for slots their
+	// siblings hold, until ctx ends.
+	n = min(n, 4, p.target(), p.sem.stats().Size)
 	if n <= 0 {
 		return nil
 	}

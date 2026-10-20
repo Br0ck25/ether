@@ -288,15 +288,31 @@ func (p *parser) fail(format string, args ...any) {
 
 // mapping returns key → value nodes of a mapping node in document order.
 func mapping(n *yaml.Node) [][2]*yaml.Node {
+	budget := maxMergeVisits
+	return mergeMapping(nil, n, 0, &budget)
+}
+
+// Merge keys ("<<: *anchor") are expanded by hand, so a self-referencing
+// anchor ("a: &x {<<: *x}") or a fan-out of merges must not recurse
+// forever or expand exponentially.
+const (
+	maxMergeDepth  = 16
+	maxMergeVisits = 1 << 16
+)
+
+func mergeMapping(out [][2]*yaml.Node, n *yaml.Node, depth int, budget *int) [][2]*yaml.Node {
 	n = resolveAlias(n)
-	if n == nil || n.Kind != yaml.MappingNode {
-		return nil
+	if n == nil || n.Kind != yaml.MappingNode || depth > maxMergeDepth {
+		return out
 	}
-	out := make([][2]*yaml.Node, 0, len(n.Content)/2)
 	for i := 0; i+1 < len(n.Content); i += 2 {
+		if *budget <= 0 {
+			return out
+		}
+		*budget--
 		k, v := n.Content[i], resolveAlias(n.Content[i+1])
 		if k.Value == "<<" { // merge key
-			out = append(out, mapping(v)...)
+			out = mergeMapping(out, v, depth+1, budget)
 			continue
 		}
 		out = append(out, [2]*yaml.Node{k, v})

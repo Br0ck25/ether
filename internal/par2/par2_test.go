@@ -273,3 +273,29 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+// A hostile Main packet may announce a slice size of up to 1 TiB; verifying
+// a short file's single (padded) slice must not allocate SliceSize bytes.
+func TestVerifyHugeSliceSizeDoesNotAllocate(t *testing.T) {
+	d := rnd(9, 100)
+	id := par2test.FileID("x.mkv", d)
+	const huge = int64(1) << 40
+	main := par2test.MainBody(huge, []par2.ID{id})
+	setID := par2.ID(md5.Sum(main))
+	ifsc := append(append([]byte{}, id[:]...), make([]byte, 20)...) // one bogus slice
+	var data []byte
+	data = append(data, par2test.Packet(setID, par2.TypeMain, main)...)
+	data = append(data, par2test.Packet(setID, par2.TypeFileDesc, par2test.FileDescBody(id, "x.mkv", d))...)
+	data = append(data, par2test.Packet(setID, par2.TypeIFSC, ifsc)...)
+	s, err := par2.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.Files[0]
+	if f.SliceSize != huge || len(f.Slices) != 1 {
+		t.Fatalf("slice size %d, %d slices", f.SliceSize, len(f.Slices))
+	}
+	if n, err := f.Verify(d, int64(len(d))); err != nil || n != 3 {
+		t.Fatalf("Verify = %d %v", n, err)
+	}
+}

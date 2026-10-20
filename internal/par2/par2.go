@@ -393,6 +393,12 @@ func (f *File) BaseName() string {
 	return path.Base(strings.ReplaceAll(f.Name, `\`, "/"))
 }
 
+// maxSlicePad bounds the zero padding Verify hashes for a short last
+// slice; real slice sizes are a few MiB.
+const maxSlicePad = 256 << 20
+
+var zeroPad [32 << 10]byte
+
 // MismatchError says which PAR2 checksum the content failed.
 type MismatchError struct {
 	Name   string
@@ -429,27 +435,34 @@ func (f *File) Verify(prefix []byte, size int64) (checks int, err error) {
 		}
 	}
 	if f.SliceSize > 0 && len(f.Slices) > 0 {
-		var pad []byte
 		for k, sl := range f.Slices {
 			start := int64(k) * f.SliceSize
 			end := min(start+f.SliceSize, f.Length)
 			if end > int64(len(prefix)) {
 				break
 			}
-			chunk := prefix[start:end]
-			if short := f.SliceSize - (end - start); short > 0 {
-				if pad == nil {
-					pad = make([]byte, f.SliceSize)
-				}
-				copy(pad, chunk)
-				clear(pad[len(chunk):])
-				chunk = pad
+			// The last slice is hashed zero-padded to SliceSize. The padding
+			// is streamed rather than allocated: SliceSize comes from the
+			// (untrusted) Main packet and may be up to 1 TiB. Padding beyond
+			// maxSlicePad is not checked at all.
+			short := f.SliceSize - (end - start)
+			if short > maxSlicePad {
+				break
+			}
+			crc, sum := crc32.NewIEEE(), md5.New()
+			crc.Write(prefix[start:end])
+			sum.Write(prefix[start:end])
+			for short > 0 {
+				z := zeroPad[:min(short, int64(len(zeroPad)))]
+				crc.Write(z)
+				sum.Write(z)
+				short -= int64(len(z))
 			}
 			checks++
-			if crc32.ChecksumIEEE(chunk) != sl.CRC32 {
+			if crc.Sum32() != sl.CRC32 {
 				return checks, &MismatchError{Name: f.Name, What: fmt.Sprintf("slice %d CRC32", k)}
 			}
-			if md5.Sum(chunk) != sl.MD5 {
+			if [16]byte(sum.Sum(nil)) != sl.MD5 {
 				return checks, &MismatchError{Name: f.Name, What: fmt.Sprintf("slice %d MD5", k)}
 			}
 		}

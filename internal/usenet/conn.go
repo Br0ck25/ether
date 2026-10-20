@@ -25,6 +25,11 @@ const (
 	readBufferSize         = 64 << 10
 )
 
+// maxBodyLine bounds one line of a multi-line response. yEnc lines are a
+// few hundred bytes; even a whole article on one line fits. A variable so
+// tests can lower it.
+var maxBodyLine = 16 << 20
+
 // DialOptions describe how to reach and log in to one NNTP server.
 type DialOptions struct {
 	Host     string
@@ -582,6 +587,15 @@ func (b *BodyReader) readRaw() ([]byte, error) {
 	if err == bufio.ErrBufferFull {
 		b.long = append(b.long[:0], line...)
 		for err == bufio.ErrBufferFull {
+			if len(b.long) > maxBodyLine {
+				// A server streaming one endless line must not grow this
+				// buffer without bound; the rest of the body is unread, so
+				// the connection cannot be reused (ErrBufferFull marks it
+				// broken).
+				b.long = nil
+				b.finish(fmt.Errorf("%w: body line longer than %d bytes: %w", ErrCorrupt, maxBodyLine, bufio.ErrBufferFull))
+				return nil, b.ioErr
+			}
 			line, err = b.c.r.ReadSlice('\n')
 			b.long = append(b.long, line...)
 		}

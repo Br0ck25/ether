@@ -1113,3 +1113,16 @@ func TestTinyBodyCheckBackfillsWhenStatClaimsTakenDownArticleExists(t *testing.T
 		t.Fatalf("global BODY absence not detected: %v", err)
 	}
 }
+
+// Warm holds every slot it takes until all its connections are up, so it
+// must not ask for more slots than a server-limited semaphore has.
+func TestWarmWithShrunkSemaphoreDoesNotDeadlock(t *testing.T) {
+	s := nntptest.Start(t, nntptest.Options{})
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 4)}, Options{MinIdle: -1})
+	f.pools[0].shrinkTo(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := f.Warm(ctx, 4); err != nil {
+		t.Fatalf("Warm = %v", err)
+	}
+}

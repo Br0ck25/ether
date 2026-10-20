@@ -481,6 +481,10 @@ func (s *sz7Buf) streamsInfo() *sz7Streams {
 				for i := range st.folders {
 					st.subSizes[i] = []uint64{st.folders[i].unpackSize()}
 				}
+			} else if len(st.subSizes) != len(st.folders) {
+				// SubStreamsInfo came before (or was followed by another)
+				// UnpackInfo: its sizes describe other folders.
+				s.fail("substreams for %d folders, %d folders defined", len(st.subSizes), len(st.folders))
 			}
 			return st
 		case sz7PackInfo:

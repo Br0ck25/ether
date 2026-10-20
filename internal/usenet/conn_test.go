@@ -281,3 +281,55 @@ func TestDialRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A server that streams one endless line must not make the body reader
+// buffer it without bound; the article is corrupt and the connection,
+// left mid-body, must not be reused.
+func TestBodyEndlessLineIsBounded(t *testing.T) {
+	old := maxBodyLine
+	maxBodyLine = 256 << 10
+	t.Cleanup(func() { maxBodyLine = old })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	var sent atomic.Int64
+	go func() {
+		nc, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer nc.Close()
+		nc.Write([]byte("200 hello\r\n"))
+		buf := make([]byte, 512)
+		if _, err := nc.Read(buf); err != nil {
+			return
+		}
+		nc.Write([]byte("222 0 <a@b> body\r\n=ybegin line=128 size=10 name=x\r\n"))
+		chunk := bytes.Repeat([]byte{'a'}, 32<<10)
+		for sent.Load() < 64<<20 {
+			n, err := nc.Write(chunk)
+			sent.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+	}()
+	addr := ln.Addr().(*net.TCPAddr)
+	c, err := Dial(context.Background(), DialOptions{Host: "127.0.0.1", Port: addr.Port, Timeout: 2 * time.Second, CommandTimeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, err = c.BodyDecode(context.Background(), "a@b", nil)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("err = %v, want ErrCorrupt", err)
+	}
+	if !c.Broken() {
+		t.Fatal("connection left mid-body is still reusable")
+	}
+	if n := sent.Load(); n >= 64<<20 {
+		t.Fatalf("read the whole %d-byte line", n)
+	}
+}

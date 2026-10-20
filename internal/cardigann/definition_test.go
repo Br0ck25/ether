@@ -2,6 +2,7 @@ package cardigann
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -161,5 +162,24 @@ search:
 	}
 	if m := def.Search.Fields[1].Selector; m.Selector != "a" || m.Attribute != "href" {
 		t.Fatalf("merge key = %+v", m)
+	}
+}
+
+// A merge key that references its own anchor must not recurse until the
+// stack overflows (a fatal, unrecoverable crash), and stacked merges must
+// not expand exponentially.
+func TestYAMLSelfMergeDoesNotRecurseForever(t *testing.T) {
+	cyclic := "id: x\nname: x\nlinks: [\"https://a.example/\"]\nsearch: &s\n  <<: *s\n"
+	if _, _, err := Parse([]byte(cyclic)); err == nil {
+		t.Fatal("definition without search paths parsed")
+	}
+	var b strings.Builder
+	b.WriteString("id: x\nname: x\nlinks: [\"https://a.example/\"]\nl0: &l0 {a: 1, b: 2}\n")
+	for i := 1; i <= 40; i++ {
+		fmt.Fprintf(&b, "l%d: &l%d {<<: *l%d, <<: *l%d}\n", i, i, i-1, i-1)
+	}
+	b.WriteString("search:\n  <<: *l40\n")
+	if _, _, err := Parse([]byte(b.String())); err == nil || strings.Contains(err.Error(), "not valid YAML") {
+		t.Fatal("definition without search paths parsed")
 	}
 }

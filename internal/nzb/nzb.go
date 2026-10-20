@@ -26,6 +26,12 @@ var ErrInvalid = errors.New("nzb: invalid document")
 // tens of megabytes; anything far larger is not an NZB).
 const maxDocumentSize = 256 << 20
 
+// maxSegmentNumber bounds a segment's part number. Consumers size per-part
+// tables by the highest number (File.SegmentCount), so a hostile
+// number="2000000000" must not become a multi-gigabyte allocation. 1<<20
+// parts is about 700 GB at typical article sizes.
+const maxSegmentNumber = 1 << 20
+
 // NZB is a parsed document.
 type NZB struct {
 	// Meta holds <head><meta type="..."> values by lower-cased type.
@@ -234,6 +240,9 @@ func buildFile(xf xmlFile) *File {
 			// Some generators omit numbers; fall back to document order.
 			num = i + 1
 		}
+		if num < -maxSegmentNumber || num > maxSegmentNumber {
+			continue
+		}
 		b, _ := strconv.ParseInt(strings.TrimSpace(xs.Bytes), 10, 64)
 		if b < 0 {
 			b = 0
@@ -253,6 +262,9 @@ func buildFile(xf xmlFile) *File {
 	}
 	dedup := segs[:0]
 	for _, s := range segs {
+		if s.Number > maxSegmentNumber {
+			break // sorted: every later number is out of range too
+		}
 		if len(dedup) > 0 && dedup[len(dedup)-1].Number == s.Number {
 			f.Duplicates++
 			continue
