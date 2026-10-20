@@ -94,7 +94,17 @@ CREATE INDEX catalog_keywords_keyword ON catalog_keywords(keyword, key);
 	// also moves on every summary upsert (sync, lists, search), so it cannot
 	// decide when details are stale.
 	store.Register("catalog", 5, `ALTER TABLE catalog_titles ADD COLUMN detail_at INTEGER NOT NULL DEFAULT 0;`)
+	store.Register("catalog", 6, dropUnkeyableEpisodes)
 }
+
+// dropUnkeyableEpisodes removes mirrored seasons and episodes whose numbers
+// do not fit a rating key (episodeKeyFits). Before that check, a season
+// numbered by year (2023) was stored under another show's episode key,
+// overwriting that show's row; both are mirror data and are fetched again
+// on demand.
+const dropUnkeyableEpisodes = `DELETE FROM catalog_titles WHERE
+ (type='episode' AND (season < 0 OR season >= 1000 OR episode < 0 OR episode >= 10000))
+ OR (type='season' AND (season < 0 OR season >= 1000));`
 
 // TMDB is the subset of the TMDB client the catalogue needs.
 // *tmdb.Client satisfies it.
