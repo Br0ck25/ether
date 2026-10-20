@@ -117,7 +117,9 @@ type Deps struct {
 	TestTMDB          func(ctx context.Context, key string) error
 	TestOpenSubtitles func(ctx context.Context, cfg config.OpenSubtitles) error
 	TestLLM           func(ctx context.Context, cfg config.LLM) error
-	TestTrakt         func(ctx context.Context, cfg config.Trakt) error
+	// LLMModels lists the models the provider in cfg offers.
+	LLMModels func(ctx context.Context, cfg config.LLM) ([]LLMModel, error)
+	TestTrakt func(ctx context.Context, cfg config.Trakt) error
 
 	// Dashboard status providers. Each non-nil provider appears on the
 	// dashboard and at /ether/api/status/{name}.
@@ -260,6 +262,8 @@ func (h *Handler) routes() *http.ServeMux {
 	api("POST /api/test/tmdb", h.handleTestTMDB)
 	api("POST /api/test/opensubtitles", h.handleTestOpenSubtitles)
 	api("POST /api/test/llm", h.handleTestLLM)
+	api("GET /api/llm/providers", h.handleLLMProviders)
+	api("POST /api/llm/models", h.handleLLMModels)
 	api("POST /api/test/trakt", h.handleTestTrakt)
 
 	api("GET /api/dashboard", h.handleDashboard)

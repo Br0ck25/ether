@@ -599,3 +599,77 @@ func TestDatabaseSettingsRedactedAndNotEditable(t *testing.T) {
 		t.Fatalf("database settings changed through the admin API: %+v", got.Redacted())
 	}
 }
+
+func TestValidateLLMProvider(t *testing.T) {
+	fields := func(l config.LLM) map[string]bool {
+		cfg := config.Defaults(t.TempDir())
+		cfg.LLM = l
+		out := map[string]bool{}
+		for _, e := range admin.ValidateConfig(cfg) {
+			out[e.Field] = true
+		}
+		return out
+	}
+	if f := fields(config.LLM{Enabled: true, Provider: "anthropic", Model: "m", APIKey: "k"}); len(f) != 0 {
+		t.Fatalf("hosted provider needs no endpoint: %v", f)
+	}
+	if f := fields(config.LLM{Enabled: true, Provider: "openai", Model: "m"}); !f["llm.apiKey"] {
+		t.Fatalf("hosted provider without key: %v", f)
+	}
+	if f := fields(config.LLM{Enabled: true, Provider: "ollama", Model: "m"}); len(f) != 0 {
+		t.Fatalf("ollama uses its default endpoint: %v", f)
+	}
+	if f := fields(config.LLM{Enabled: true, Provider: "custom", Model: "m"}); !f["llm.baseUrl"] {
+		t.Fatalf("custom needs an endpoint: %v", f)
+	}
+	if f := fields(config.LLM{Enabled: true, Provider: "lmstudio"}); !f["llm.model"] {
+		t.Fatalf("model required: %v", f)
+	}
+	if f := fields(config.LLM{Provider: "bogus"}); !f["llm.provider"] {
+		t.Fatalf("unknown provider accepted: %v", f)
+	}
+}
+
+func TestLLMProvidersAndModels(t *testing.T) {
+	store := newStore(t, seededConfig)
+	var got config.LLM
+	h := admin.New(admin.Deps{
+		Config: store, IsOwnerToken: storedOwner(store),
+		LLMModels: func(_ context.Context, c config.LLM) ([]admin.LLMModel, error) {
+			got = c
+			if c.Provider == "groq" {
+				return nil, errors.New("401: invalid key")
+			}
+			return []admin.LLMModel{{ID: "claude-x", Label: "Claude X"}}, nil
+		},
+	})
+	auth := func(r *http.Request) *http.Request { r.Header.Set("X-Plex-Token", ownerToken); return r }
+
+	rec := serve(h, auth(req(http.MethodGet, "/ether/api/llm/providers", "")))
+	var providers struct {
+		Providers []config.LLMProvider `json:"providers"`
+	}
+	decode(t, rec, &providers)
+	if rec.Code != 200 || len(providers.Providers) != len(config.LLMProviders) {
+		t.Fatalf("providers: %d %s", rec.Code, rec.Body)
+	}
+
+	var res struct {
+		Models []admin.LLMModel `json:"models"`
+		Error  string           `json:"error"`
+	}
+	rec = serve(h, auth(req(http.MethodPost, "/ether/api/llm/models", `{"provider":"anthropic","apiKey":"`+admin.RedactedSecret+`"}`)))
+	decode(t, rec, &res)
+	if rec.Code != 200 || len(res.Models) != 1 || res.Models[0].Label != "Claude X" {
+		t.Fatalf("models: %d %s", rec.Code, rec.Body)
+	}
+	if got.APIKey != "llm-key" || got.Provider != "anthropic" {
+		t.Fatalf("placeholder key not restored: %+v", got)
+	}
+	rec = serve(h, auth(req(http.MethodPost, "/ether/api/llm/models", `{"provider":"groq","apiKey":"bad"}`)))
+	res.Models, res.Error = nil, ""
+	decode(t, rec, &res)
+	if rec.Code != 200 || res.Error == "" || res.Models == nil {
+		t.Fatalf("provider failure should be 200 with an error and empty list: %d %s", rec.Code, rec.Body)
+	}
+}

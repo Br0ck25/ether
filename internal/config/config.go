@@ -284,8 +284,13 @@ type OpenSubtitles struct {
 }
 
 type LLM struct {
-	Enabled bool   `json:"enabled"` // off by default
-	BaseURL string `json:"baseUrl"` // OpenAI-compatible, e.g. http://localhost:11434/v1
+	Enabled bool `json:"enabled"` // off by default
+	// Provider is an LLMProviders ID; empty means LLMProviderCustom.
+	Provider string `json:"provider"`
+	// BaseURL overrides the provider's endpoint for local servers and is
+	// required for a custom OpenAI-compatible endpoint, e.g.
+	// http://localhost:11434/v1. Hosted providers ignore it.
+	BaseURL string `json:"baseUrl"`
 	APIKey  string `json:"apiKey"`
 	Model   string `json:"model"`
 }

@@ -258,6 +258,43 @@ func (h *Handler) handleTestLLM(w http.ResponseWriter, r *http.Request) {
 	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestLLM(ctx, cfg) })
 }
 
+// LLMModel is one model a language-model provider offers.
+type LLMModel struct {
+	ID    string `json:"id"`
+	Label string `json:"label,omitempty"`
+}
+
+func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"providers": config.LLMProviders})
+}
+
+// handleLLMModels lists models for the posted (unsaved) settings. Like the
+// testers, a provider failure is a successful call carrying the provider's
+// message, so the model picker can show it inline.
+func (h *Handler) handleLLMModels(w http.ResponseWriter, r *http.Request) {
+	cfg := h.deps.Config.Get().LLM
+	_ = decodeJSONLenient(r, &cfg)
+	cfg.APIKey = preserve(cfg.APIKey, h.deps.Config.Get().LLM.APIKey)
+	if h.deps.LLMModels == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "model listing is not available")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), h.deps.TestTimeout)
+	defer cancel()
+	models, err := h.deps.LLMModels(ctx, cfg)
+	res := struct {
+		Models []LLMModel `json:"models"`
+		Error  string     `json:"error,omitempty"`
+	}{Models: models}
+	if res.Models == nil {
+		res.Models = []LLMModel{}
+	}
+	if err != nil {
+		res.Error = err.Error()
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 func (h *Handler) handleTestTrakt(w http.ResponseWriter, r *http.Request) {
 	cfg := h.deps.Config.Get().Trakt
 	_ = decodeJSONLenient(r, &cfg)

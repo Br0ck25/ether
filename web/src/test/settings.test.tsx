@@ -74,6 +74,57 @@ describe("Settings", () => {
     ).toBeVisible();
   });
 
+  it("picks a language-model provider and a model from its live list", async () => {
+    const { fake } = renderApp("/services/llm");
+    fireEvent.click(await screen.findByRole("button", { name: "Provider" }, WAIT));
+    fireEvent.click(await screen.findByRole("option", { name: /Anthropic — Claude/ }, WAIT));
+    // Switching provider clears the old provider's model.
+    expect(await screen.findByRole("button", { name: "Model" }, WAIT)).toHaveTextContent(
+      "Choose a model",
+    );
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-ant-test" } });
+    await waitFor(
+      () =>
+        expect(calls(fake, "POST", "/llm/models").at(-1)?.body).toMatchObject({
+          provider: "anthropic",
+          apiKey: "sk-ant-test",
+        }),
+      WAIT,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    fireEvent.click(await screen.findByRole("option", { name: /claude-opus-5-5/ }, WAIT));
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/llm")).toHaveLength(1), WAIT);
+    expect(calls(fake, "PUT", "/config/llm")[0]!.body).toEqual({
+      enabled: true,
+      provider: "anthropic",
+      baseUrl: "",
+      apiKey: "sk-ant-test",
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("accepts a typed model ID and shows the provider's listing error", async () => {
+    renderApp("/services/llm", {}, (f) => {
+      f.state.config.llm = {
+        enabled: true,
+        provider: "openai",
+        baseUrl: "",
+        apiKey: "bad",
+        model: "",
+      };
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Model" }, WAIT));
+    expect(
+      await screen.findByText(/Couldn't load models: 401: invalid key/, {}, WAIT),
+    ).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("Search or type a model ID…"), {
+      target: { value: "gpt-5-preview" },
+    });
+    fireEvent.click(await screen.findByRole("option", { name: /gpt-5-preview/ }, WAIT));
+    expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("gpt-5-preview");
+  });
+
   it("keeps unsaved edits across tabs and saves them together", async () => {
     const { fake } = renderApp("/services/trakt");
     fireEvent.change(await screen.findByLabelText("Client ID", {}, WAIT), {

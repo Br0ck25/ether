@@ -22,6 +22,7 @@ import { api, apiFetch, ApiError, type TestFn } from "../../lib/api";
 import { useAsync } from "../../lib/hooks";
 import type { EtherConfig } from "../../lib/types";
 import { LanguageFeatures } from "./LanguageFeatures";
+import { LanguageModelSettings } from "./LanguageModel";
 import { asObj, GenericFields, SchemaField, type FieldGroup } from "./SchemaForm";
 import * as S from "./schema";
 
@@ -36,6 +37,14 @@ interface Service {
   endpoint: string;
   label: string;
   groups: FieldGroup[];
+  /** A dedicated form instead of schema groups. */
+  form?: (props: {
+    value: Obj;
+    saved: Obj | undefined;
+    onChange: (next: Obj) => void;
+    errors: Record<string, string>;
+    footer: ReactNode;
+  }) => ReactNode;
   testLabel: string;
   test: (value: Obj) => ReturnType<TestFn>;
 }
@@ -55,7 +64,16 @@ const SERVICES: Service[] = [
     configKey: "llm",
     endpoint: "llm",
     label: "Language model",
-    groups: S.LLM,
+    groups: [],
+    form: ({ value, saved, onChange, errors, footer }) => (
+      <LanguageModelSettings
+        value={value as unknown as EtherConfig["llm"]}
+        saved={saved as unknown as EtherConfig["llm"] | undefined}
+        onChange={(next) => onChange(next as unknown as Obj)}
+        errors={errors}
+        footer={footer}
+      />
+    ),
     testLabel: "Test endpoint",
     test: (v) => api.testLLM(v as EtherConfig["llm"]),
   },
@@ -153,6 +171,24 @@ export function ConnectedServices({ tab }: { tab: ServiceTab }) {
       {SERVICES.filter((s) => s.tab === tab).map((s) => {
         const value = draft[s.configKey] ?? {};
         const set = (next: Obj) => setDraft({ ...draft, [s.configKey]: next });
+        const testButton = (
+          <TestButton
+            label={s.testLabel}
+            state={tests[s.configKey] ?? { status: "idle" }}
+            onTest={() => runTest(s, value)}
+          />
+        );
+        if (s.form)
+          return (
+            <s.form
+              key={s.configKey}
+              value={value}
+              saved={stored?.[s.configKey]}
+              onChange={set}
+              errors={errors}
+              footer={testButton}
+            />
+          );
         const known = new Set(s.groups.flatMap((g) => g.fields.map((f) => f.key)));
         const extra = Object.keys(value).filter((k) => !known.has(k));
         return s.groups.map((g, i) => {
@@ -162,15 +198,7 @@ export function ConnectedServices({ tab }: { tab: ServiceTab }) {
               key={`${s.configKey}-${g.title ?? i}`}
               title={g.title ?? s.label}
               description={g.description}
-              footer={
-                last ? (
-                  <TestButton
-                    label={s.testLabel}
-                    state={tests[s.configKey] ?? { status: "idle" }}
-                    onTest={() => runTest(s, value)}
-                  />
-                ) : undefined
-              }
+              footer={last ? testButton : undefined}
             >
               {g.fields.map((f) => (
                 <SchemaField
@@ -310,7 +338,7 @@ function ServiceOverview({ cfg }: { cfg: EtherConfig }) {
       name: "Language model",
       icon: <Sparkles size={icon} />,
       description: "Describe-it collections, themed Home rows, natural-language search and recaps.",
-      status: switchStatus(cfg.llm.enabled, Boolean(cfg.llm.baseUrl), "Needs an endpoint"),
+      status: switchStatus(cfg.llm.enabled, Boolean(cfg.llm.model), "Needs a model"),
       href: "/services/llm",
       action: cfg.llm.enabled ? "Manage language model" : "Set up a language model",
     },
