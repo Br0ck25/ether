@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/plextv"
@@ -170,6 +171,9 @@ type Service struct {
 	membershipMu sync.Mutex // serializes validation writes with authoritative revocation
 	seenMu       sync.Mutex
 	seen         map[int64]time.Time // pending last_seen_at writes
+
+	invalMu sync.Mutex
+	inval   *clusterbus.Invalidator // nil on a standalone server
 }
 
 type row struct {
@@ -246,6 +250,55 @@ func scanRow(sc interface{ Scan(...any) error }) (*row, error) {
 		r.LastSeen = time.Unix(lastSeen, 0)
 	}
 	return &r, nil
+}
+
+// SetBus connects the cluster bus (nil disconnects): after every write this
+// service tells the other nodes to reload users and tokens, and it reloads
+// when they write. A standalone server never calls it.
+func (s *Service) SetBus(bus clusterbus.Bus) {
+	iv := clusterbus.NewInvalidator(bus, "auth", s.log, s.applyRemote)
+	s.invalMu.Lock()
+	old := s.inval
+	s.inval = iv
+	s.invalMu.Unlock()
+	old.Close()
+}
+
+// Close disconnects the cluster bus.
+func (s *Service) Close() { s.SetBus(nil) }
+
+// notify tells other nodes this one changed users or tokens. hint is
+// "" (users/tokens changed), "caches" (drop every cached validation) or
+// "token:<hash>" (forget one token's cached validation).
+func (s *Service) notify(hint string) {
+	s.invalMu.Lock()
+	iv := s.inval
+	s.invalMu.Unlock()
+	iv.Notify(hint)
+}
+
+// applyRemote follows another node's write: reload users and tokens (which
+// also drops cached validations of users who lost access) and forget
+// negative results, which may predate access granted elsewhere.
+func (s *Service) applyRemote(ctx context.Context, hints []string, all bool) {
+	if err := s.reload(ctx); err != nil {
+		s.log.Warn("auth: reload after another node's change", "err", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.neg = map[string]time.Time{}
+	if all {
+		s.pos = map[string]cacheEntry{}
+		return
+	}
+	for _, h := range hints {
+		switch {
+		case h == "caches":
+			s.pos = map[string]cacheEntry{}
+		case strings.HasPrefix(h, "token:"):
+			delete(s.pos, strings.TrimPrefix(h, "token:"))
+		}
+	}
 }
 
 // reload rebuilds the in-memory users and token maps from the database.
@@ -443,6 +496,7 @@ func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User
 				if err := s.reload(ctx); err != nil {
 					return nil, err
 				}
+				s.notify("")
 			}
 			s.log.Info("token without access to this server", "plexId", acct.ID, "username", acct.Username)
 			s.reject(h)
@@ -535,6 +589,7 @@ func (s *Service) Invalidate(token string) {
 	delete(s.pos, h)
 	delete(s.neg, h)
 	s.mu.Unlock()
+	s.notify("token:" + h)
 }
 
 // touch records activity; written to the database by FlushSeen.
@@ -545,13 +600,15 @@ func (s *Service) touch(id int64, at time.Time) {
 }
 
 // FlushSeen persists last-seen times (call periodically and at shutdown).
+// Every node flushes its own observations; the update only ever moves
+// last_seen_at forward, so nodes flushing in any order keep the latest.
 func (s *Service) FlushSeen(ctx context.Context) error {
 	s.seenMu.Lock()
 	pending := s.seen
 	s.seen = map[int64]time.Time{}
 	s.seenMu.Unlock()
 	for id, at := range pending {
-		if _, err := s.db.ExecContext(ctx, `UPDATE auth_users SET last_seen_at=? WHERE id=?`, at.Unix(), id); err != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE auth_users SET last_seen_at=? WHERE id=? AND last_seen_at<?`, at.Unix(), id, at.Unix()); err != nil {
 			return err
 		}
 		s.mu.Lock()
@@ -577,6 +634,7 @@ ON CONFLICT(plex_id) DO UPDATE SET uuid=excluded.uuid, username=excluded.usernam
 	if err := s.reload(ctx); err != nil {
 		return 0, err
 	}
+	s.notify("")
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.byPlex[a.ID], nil
@@ -634,7 +692,9 @@ func (s *Service) SetOwner(ctx context.Context, a plextv.Account, serverToken st
 	s.pos = map[string]cacheEntry{}
 	s.neg = map[string]time.Time{}
 	s.mu.Unlock()
-	return s.reload(ctx)
+	err = s.reload(ctx)
+	s.notify("caches")
+	return err
 }
 
 // isUniqueViolation reports a unique-constraint failure from SQLite or
@@ -787,7 +847,9 @@ RETURNING id`,
 	if len(gone) > 0 {
 		s.log.Info("friends lost access", "count", len(gone))
 	}
-	return s.reload(ctx)
+	err = s.reload(ctx)
+	s.notify("")
+	return err
 }
 
 // sectionIDs converts plex.tv section keys ("1", "/library/sections/1") to
@@ -928,5 +990,7 @@ func (s *Service) UpdateUser(ctx context.Context, u core.User) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return core.ErrNotFound
 	}
-	return s.reload(ctx)
+	err = s.reload(ctx)
+	s.notify("")
+	return err
 }
