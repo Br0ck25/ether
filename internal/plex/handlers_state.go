@@ -192,7 +192,9 @@ func (s *Server) scrobble(w http.ResponseWriter, r *http.Request, watched bool) 
 	case core.KindEpisode:
 		t = core.TypeEpisode
 	}
-	s.notifyTimeline(key, t, "", FromContext(r.Context()).User.ID)
+	s.notifyTimeline(key, t, "", pr.User.ID)
+	s.log.Info("watch state changed", "user", pr.User.ID, "client", pr.ClientID,
+		"key", key, "watched", watched, "items", len(keys))
 	if watched {
 		if hook := s.d.Hooks.OnScrobble; hook != nil {
 			u := *pr.User
