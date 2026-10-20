@@ -11,18 +11,38 @@
   --drawer-top: 0px;
   /* Text and marks drawn over artwork scrims (which use the overlay token). */
   --on-scrim: rgb(var(--ch-bg));
+  /* Network download/upload series, validated as a pair (dataviz
+   * validate_palette.js) on the light surface; tritan separation sits in the
+   * floor band, so the chart always direct-labels both. */
+  --series-down: #0d9488;
+  --series-up: #4f46e5;
 }
 .dark {
   --on-scrim: rgb(var(--ch-fg));
+  --series-up: #6366f1;
 }
 @media (prefers-color-scheme: dark) {
   :root:not(.light):not(.dark) {
     --on-scrim: rgb(var(--ch-fg));
+    --series-up: #6366f1;
   }
 }
 
 @theme inline {
   --color-on-scrim: var(--on-scrim);
+  --color-series-down: var(--series-down);
+  --color-series-up: var(--series-up);
+}
+
+/* The Overview cockpit: one screen with no page scroll once the page is wide
+ * and the window tall enough to hold every panel; panels scroll inside.
+ * Narrower or shorter windows stack the panels and scroll the page. */
+@custom-variant cockpit {
+  @container (min-width: 64rem) {
+    @media (min-height: 600px) {
+      @slot;
+    }
+  }
 }
 
 /* The page scroller is the containing block for absolutely positioned content

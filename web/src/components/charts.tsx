@@ -33,13 +33,16 @@ export interface BarDatum {
 /** Vertical bars over time (e.g. plays per day). */
 export function TimeBars({
   data,
-  height = 160,
+  height: fixedHeight = 160,
+  fill = false,
   ariaLabel,
   valueFormat = (v) => String(v),
   className,
 }: {
   data: BarDatum[];
   height?: number;
+  /** Take the container's height instead of `height` (give it a definite height). */
+  fill?: boolean;
   ariaLabel: string;
   valueFormat?: (v: number) => string;
   className?: string;
@@ -47,6 +50,7 @@ export function TimeBars({
   const [hover, setHover] = useState<number | null>(null);
   const [ref, size] = useElementSize<HTMLDivElement>();
   const width = Math.max(240, Math.round(size.width || 600));
+  const height = fill ? Math.max(96, Math.round(size.height || fixedHeight)) : fixedHeight;
   const padL = 32;
   const padB = 22;
   const padT = 8;
@@ -59,12 +63,12 @@ export function TimeBars({
   const labelIdx = data.length ? [0, Math.floor((data.length - 1) / 2), data.length - 1] : [];
   const h = hover !== null ? data[hover] : undefined;
   return (
-    <div ref={ref} className={cn("relative", className)}>
+    <div ref={ref} className={cn("relative", fill && "h-full min-h-0", className)}>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width="100%"
         height={height}
-        className="block overflow-visible"
+        className={cn("block overflow-visible", fill && "absolute inset-0")}
         role="img"
         aria-label={ariaLabel}
         onMouseLeave={() => setHover(null)}
