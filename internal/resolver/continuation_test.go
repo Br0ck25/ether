@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/store"
 )
 
 type continuationHealth struct {
@@ -46,7 +47,7 @@ func TestResolveContinuesPastEightMissingReleasesAndSkipsThemOnRetry(t *testing.
 	for i := 0; i < 8; i++ {
 		h.failure[fmt.Sprintf("source%02d", i)] = core.ErrArticleMissing
 	}
-	s := New(&fakeIndexer{releases: continuationReleases(10)}, h, nil, testCfg(), Options{Now: clock.now})
+	s := New(&fakeIndexer{releases: continuationReleases(10)}, h, nil, testCfg(), Options{Now: clock.now, HealthTTL: -1})
 	defer s.Close()
 	req := core.ResolveRequest{Title: matrixTitle(), Client: webCaps()}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -68,6 +69,41 @@ func TestResolveContinuesPastEightMissingReleasesAndSkipsThemOnRetry(t *testing.
 	res, err := s.Resolve(ctx, req)
 	if err != nil || res.Release.ID != "source00" {
 		t.Fatalf("source did not recover after short pause: %+v %v", res, err)
+	}
+}
+
+func TestVerifiedWorkingSourceIsTriedFirstAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h := &continuationHealth{
+		checks:  map[string]int{},
+		failure: map[string]error{"source00": core.ErrArticleMissing},
+	}
+	idx := &fakeIndexer{releases: continuationReleases(2)}
+	req := core.ResolveRequest{Title: matrixTitle(), Client: webCaps()}
+	s := New(idx, h, db, testCfg(), Options{})
+	if res, err := s.Resolve(ctx, req); err != nil || res.Release.ID != "source01" {
+		t.Fatalf("initial working release: %+v %v", res, err)
+	}
+	s.Close()
+	h.mu.Lock()
+	before := h.checks["source00"]
+	h.mu.Unlock()
+	// The short failure cache is gone, but the successful health check is
+	// persisted. A new service should pick that working source immediately.
+	s = New(idx, h, db, testCfg(), Options{})
+	defer s.Close()
+	if res, err := s.Resolve(ctx, req); err != nil || res.Release.ID != "source01" {
+		t.Fatalf("known working source was not preferred: %+v %v", res, err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.checks["source00"] != before {
+		t.Fatal("restart re-probed the higher-ranked missing source")
 	}
 }
 

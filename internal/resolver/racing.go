@@ -12,8 +12,9 @@ import (
 )
 
 type candidate struct {
-	rel   core.Release
-	trace int
+	rel      core.Release
+	trace    int
+	verified bool
 }
 type validation struct {
 	index                         int
@@ -94,8 +95,13 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 	}
 	limit := min(len(cands), maxHealthAttempts)
 	var transient error
-	for base := 0; base < limit; base += width {
+	for base := 0; base < limit; {
 		count := min(width, limit-base)
+		if cands[base].verified {
+			// Reusing a known working release must not start speculative
+			// downloads and health checks for other releases alongside it.
+			count = 1
+		}
 		workCtx, cancel := context.WithCancel(ctx)
 		results := make(chan validation, count)
 		ordered := make([]chan validation, count)
@@ -168,6 +174,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 		if winner >= 0 {
 			return winner, nzb, nil
 		}
+		base += count
 	}
 	if transient == nil && len(cands) > limit {
 		return -1, nil, errHealthBudget

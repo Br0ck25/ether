@@ -121,6 +121,8 @@ on retries, without permanently banning the release. An exhausted validation
 budget does not establish that untried releases are unavailable. Within a health
 sample, a confirmed missing article takes precedence over another sample's
 transient error; a timeout alone never proves absence.
+Recently verified working releases are preferred within the viewer's and
+client's permitted profile, including after a restart.
 
 The media decision chooses direct play, copy-only remux, or transcoding. HLS and
 DASH use output containers appropriate to the selected codecs. Apple HLS includes

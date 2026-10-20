@@ -39,7 +39,7 @@ func (s *Service) Variants(ctx context.Context, req core.ResolveRequest, max int
 		return nil, nil
 	}
 	// Auto is exactly what normal resolution would pick: strict profile.
-	strict, _, err := s.scoreCandidates(req, sreq, profile, results, nil)
+	strict, _, err := s.scoreCandidates(ctx, req, sreq, profile, results, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func (s *Service) Variants(ctx context.Context, req core.ResolveRequest, max int
 	// other acceptability rule still applies. Resolve honours the pick via
 	// ResolveRequest.Prefer's profile-gate bypass.
 	if relaxed, ok := relaxedVariantProfile(profile, req.Client); ok {
-		pool, _, err = s.scoreCandidates(req, sreq, relaxed, results, nil)
+		pool, _, err = s.scoreCandidates(ctx, req, sreq, relaxed, results, nil)
 		if err != nil {
 			return nil, err
 		}

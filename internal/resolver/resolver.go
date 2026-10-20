@@ -341,7 +341,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 
 	rcfg := s.resolverCfg()
-	cands, clientRejected, err := s.scoreCandidates(req, sreq, profile, results, &trace)
+	cands, clientRejected, err := s.scoreCandidates(ctx, req, sreq, profile, results, &trace)
 	if err != nil {
 		trace.Err = err.Error()
 		return nil, err
@@ -474,7 +474,7 @@ func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Re
 // scoreCandidates filters and ranks search results for a request and
 // profile. trace may be nil (the variants path); candidate.trace is then
 // -1 and no trace rows are written.
-func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace) ([]candidate, bool, error) {
+func (s *Service) scoreCandidates(ctx context.Context, req core.ResolveRequest, sreq core.SearchRequest, profile core.QualityProfile, results []core.Release, trace *Trace) ([]candidate, bool, error) {
 	t := req.Title
 	exclude := map[string]bool{}
 	for _, id := range req.Exclude {
@@ -526,14 +526,26 @@ func (s *Service) scoreCandidates(req core.ResolveRequest, sreq core.SearchReque
 		ct.CompatibilityReason = note
 		rel.Score = s.score(rel, profile, t) + float64(formatScore) + compatibility
 		ct.Score = rel.Score
+		verified := s.recentlyVerified(ctx, rel.ID)
+		if verified {
+			ct.CompatibilityReason = strings.TrimSpace(note + "; source recently verified playable")
+			ct.CompatibilityReason = strings.TrimPrefix(ct.CompatibilityReason, "; ")
+		}
 		tr := -1
 		if trace != nil {
 			trace.Candidates = append(trace.Candidates, ct)
 			tr = len(trace.Candidates) - 1
 		}
-		cands = append(cands, candidate{rel: rel, trace: tr})
+		cands = append(cands, candidate{rel: rel, trace: tr, verified: verified})
 	}
-	sort.SliceStable(cands, func(i, j int) bool { return cands[i].rel.Score > cands[j].rel.Score })
+	sort.SliceStable(cands, func(i, j int) bool {
+		// Availability wins over soft quality preferences, after all hard
+		// profile/client gates above. Keep ranking within each group.
+		if cands[i].verified != cands[j].verified {
+			return cands[i].verified
+		}
+		return cands[i].rel.Score > cands[j].rel.Score
+	})
 	return cands, clientRejected, nil
 }
 
