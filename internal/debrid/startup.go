@@ -2,7 +2,6 @@ package debrid
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -23,9 +22,10 @@ func (s *Service) reusablePayload(ctx context.Context, rel core.Release) (Payloa
 }
 
 type payloadFlight struct {
-	done chan struct{}
-	data []byte
-	err  error
+	done      chan struct{}
+	data      []byte
+	err       error
+	abandoned bool
 }
 
 // fetchTorrent shares descriptor lookup and provider work across concurrent
@@ -52,7 +52,7 @@ func (x *Indexer) fetchTorrent(ctx context.Context, rel core.Release) ([]byte, e
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			if errors.Is(f.err, context.Canceled) || errors.Is(f.err, context.DeadlineExceeded) {
+			if f.err != nil && f.abandoned {
 				continue
 			}
 			return append([]byte(nil), f.data...), f.err
@@ -65,7 +65,7 @@ func (x *Indexer) fetchTorrent(ctx context.Context, rel core.Release) ([]byte, e
 		x.mu.Unlock()
 		data, err := x.fetchTorrentOnce(ctx, rel)
 		x.mu.Lock()
-		f.data, f.err = data, err
+		f.data, f.err, f.abandoned = data, err, ctx.Err() != nil
 		delete(x.flights, key)
 		close(f.done)
 		x.mu.Unlock()

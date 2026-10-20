@@ -630,9 +630,15 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 			trace.Candidates = append(trace.Candidates, ct)
 			tr = len(trace.Candidates) - 1
 		}
-		cands = append(cands, candidate{rel: rel, trace: tr, verified: verified})
+		cands = append(cands, candidate{rel: rel, trace: tr, verified: verified, bandwidth: sourceBandwidthFit(sizedForEpisode(rel), req.Client, t)})
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
+		// A previously working LAN remux must not outrank a source that
+		// fits this client's slower connection. Unknown sizes remain usable
+		// and an oversized source can still be transcoded as a fallback.
+		if cands[i].bandwidth != cands[j].bandwidth {
+			return cands[i].bandwidth > cands[j].bandwidth
+		}
 		// Availability wins over soft quality preferences, after all hard
 		// profile/client gates above. Keep ranking within each group.
 		if cands[i].verified != cands[j].verified {

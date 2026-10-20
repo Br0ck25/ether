@@ -231,6 +231,7 @@ type warmFacts struct {
 	dv       bool
 	size     int64
 	duration time.Duration
+	bitrate  int
 	known    bool // at least one property was known
 }
 
@@ -239,6 +240,7 @@ func (e *warmEntry) facts() warmFacts {
 	if e.probe != nil {
 		info := e.probe.info
 		f.size, f.duration = info.Size, info.Duration
+		f.bitrate = info.BitrateKbps
 		if v := info.Video(); v != nil {
 			f.height, f.codec = v.Height, v.Codec
 			f.hdr = v.ColorTransfer == "smpte2084" || v.ColorTransfer == "arib-std-b67"
@@ -268,6 +270,9 @@ func warmAcceptable(e *warmEntry, profile core.QualityProfile, caps core.ClientC
 		return false
 	}
 	f := e.facts()
+	if !sourceFitsBitrate(f.size, f.duration, f.bitrate, caps.MaxBitrateKbps) {
+		return false
+	}
 	if !f.known {
 		w := e.profileObj
 		heightOK := profile.MaxHeight == 0 || w.MaxHeight == 0 || profile.MaxHeight >= w.MaxHeight
