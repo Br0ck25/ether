@@ -632,7 +632,7 @@ func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.R
 		m.log.Warn("resume lookup failed", "err", err)
 		return nil
 	}
-	if rec == nil || rec.profile != profile {
+	if rec == nil || rec.profile != profile || !m.resumeSourceAllowed(rec.release) {
 		return nil
 	}
 	nzb, err := m.resume.readNZB(rec.nzbHash)
@@ -705,7 +705,7 @@ func (m *Manager) Remember(ctx context.Context, user *core.User, key core.Rating
 	if err != nil {
 		return err
 	}
-	if rec != nil && rec.profile == profile {
+	if rec != nil && rec.profile == profile && m.resumeSourceAllowed(rec.release) {
 		return nil
 	}
 	return m.resume.save(ctx, resumeRecord{
@@ -728,7 +728,7 @@ func (m *Manager) ResumeFor(ctx context.Context, user *core.User, key core.Ratin
 	if err != nil || rp == nil {
 		return nil, err
 	}
-	if rp.Profile != m.deps.SelectProfile(caps, user).Name {
+	if rp.Profile != m.deps.SelectProfile(caps, user).Name || !m.resumeSourceAllowed(rp.Release) {
 		return nil, nil
 	}
 	return rp, nil
