@@ -36,11 +36,12 @@ type cachedLayout struct {
 	expires time.Time
 }
 type Service struct {
-	db      *sql.DB
-	source  Source
-	catalog core.Catalog
-	mu      sync.Mutex
-	cache   map[string]cachedLayout
+	db         *sql.DB
+	source     Source
+	catalog    core.Catalog
+	mu         sync.Mutex
+	cache      map[string]cachedLayout
+	generation uint64 // changes whenever preferences invalidate in-flight layouts
 
 	invalMu sync.Mutex
 	inval   *clusterbus.Invalidator // nil on a standalone server
@@ -174,6 +175,7 @@ func (s *Service) layout(ctx context.Context, u *core.User, k core.RatingKey) (*
 	cacheKey := fmt.Sprintf("%d:%d", userID(u), show)
 	s.mu.Lock()
 	cached, ok := s.cache[cacheKey]
+	generation := s.generation
 	s.mu.Unlock()
 	if ok && time.Now().Before(cached.expires) {
 		return cached.value, nil
@@ -261,14 +263,21 @@ func (s *Service) layout(ctx context.Context, u *core.User, k core.RatingKey) (*
 		}
 	}
 	s.mu.Lock()
-	if len(s.cache) > 64 {
-		s.cache = map[string]cachedLayout{}
+	if s.generation == generation {
+		if len(s.cache) > 64 {
+			s.cache = map[string]cachedLayout{}
+		}
+		s.cache[cacheKey] = cachedLayout{out, time.Now().Add(time.Minute)}
 	}
-	s.cache[cacheKey] = cachedLayout{out, time.Now().Add(time.Minute)}
 	s.mu.Unlock()
 	return out, nil
 }
-func (s *Service) invalidate() { s.mu.Lock(); s.cache = map[string]cachedLayout{}; s.mu.Unlock() }
+func (s *Service) invalidate() {
+	s.mu.Lock()
+	s.generation++
+	s.cache = map[string]cachedLayout{}
+	s.mu.Unlock()
+}
 func (s *Service) Get(ctx context.Context, u *core.User, k core.RatingKey) (*core.Title, error) {
 	if k.Kind() == core.KindSeason && k.Season() >= virtualBase {
 		l, e := s.layout(ctx, u, k)
