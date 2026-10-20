@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/watchlist"
 	"io"
 	"strconv"
 	"strings"
@@ -144,22 +145,15 @@ func (s *Service) ExportCSV(ctx context.Context, viewer int64, format, kind stri
 	entries := []entry{}
 	var e error
 	if kind == "watchlist" {
-		rows, err := s.db.QueryContext(ctx, `SELECT key FROM migrate_watchlist WHERE viewer=?`, viewer)
+		if err := s.RecoverWatchlist(ctx, viewer); err != nil {
+			return err
+		}
+		keys, err := watchlist.ExportKeys(ctx, s.db, viewer)
 		if err != nil {
 			return err
 		}
-		for rows.Next() {
-			var v entry
-			if err := rows.Scan(&v.k); err != nil {
-				rows.Close()
-				return err
-			}
-			entries = append(entries, v)
-		}
-		e = rows.Err()
-		rows.Close()
-		if e != nil {
-			return e
+		for _, key := range keys {
+			entries = append(entries, entry{k: key})
 		}
 	} else {
 		exported, err := s.state.ExportEntries(ctx, viewer, kind == "ratings")

@@ -16,6 +16,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/state"
 	"github.com/braedonsaunders/ether/internal/store"
+	"github.com/braedonsaunders/ether/internal/watchlist"
 	"io"
 	"net/http"
 	"net/url"
@@ -441,7 +442,25 @@ func (s *Service) savePlan(ctx context.Context, p Plan) (Plan, error) {
 }
 func (s *Service) Import(ctx context.Context, id string) (Plan, error) {
 	var p Plan
-	err := s.state.ImportTransaction(ctx, func(tx *sql.Tx) (state.ImportBatch, error) {
+	var document string
+	var imported bool
+	if err := s.db.QueryRowContext(ctx, `SELECT document,imported FROM migrate_plans WHERE id=?`, id).Scan(&document, &imported); err != nil {
+		return p, err
+	}
+	if err := json.Unmarshal([]byte(document), &p); err != nil {
+		return p, err
+	}
+	if imported {
+		p.Imported = true
+		return p, nil
+	}
+	// Resolve snapshots before taking the write transaction: Catalog.Get may
+	// use the same database connection or fetch remote metadata.
+	titles, err := s.watchlistTitles(ctx, p.Items, strings.HasPrefix(p.Source, "csv:") && strings.HasSuffix(p.Source, ":watchlist"))
+	if err != nil {
+		return p, err
+	}
+	err = s.state.ImportTransaction(ctx, func(tx *sql.Tx) (state.ImportBatch, error) {
 		var batch state.ImportBatch
 		// A State's write mutex belongs to one node. Serialize the import
 		// transaction in the shared database too: both the plan's imported
@@ -465,7 +484,7 @@ func (s *Service) Import(ctx context.Context, id string) (Plan, error) {
 		ratingsOnly := strings.HasPrefix(p.Source, "csv:") && strings.HasSuffix(p.Source, ":ratings")
 		for _, it := range p.Items {
 			if watchlistOnly || it.Watchlist {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO migrate_watchlist(viewer,key) VALUES(?,?) ON CONFLICT DO NOTHING`, it.Viewer, it.Key); err != nil {
+				if err := watchlist.ImportTitleTx(ctx, tx, it.Viewer, titles[it.Key], time.Now().Unix()); err != nil {
 					return batch, err
 				}
 			}
