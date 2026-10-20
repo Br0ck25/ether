@@ -62,7 +62,7 @@ archives:
   - id: ether
     ids: [ether, ether-tray]
     name_template: >-
-      ether_{{ .Version }}_{{ .Os }}_{{ if eq .Arch "universal" }}universal{{ else }}{{ .Arch }}{{ end }}
+      ether_{{ .Version }}_{{ .Os }}_{{ if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}
     formats: [tar.gz]
     format_overrides:
       - goos: windows

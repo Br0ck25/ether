@@ -1,6 +1,6 @@
 #!/bin/sh
 # stage-universal-ffmpeg.sh — combine the staged darwin ffmpeg/ffprobe into
-# universal binaries at dist/ffmpeg/darwin-universal/, matching the
+# universal binaries at dist/ffmpeg/darwin-all/, matching the
 # universal ether binary in the macOS tarball (.goreleaser.yaml archives).
 # Needs `lipo` (Xcode CLT, macOS) or `llvm-lipo` (Linux CI: apt install llvm).
 # No-op (with a message) when the darwin builds have not been fetched.
@@ -31,10 +31,10 @@ else
   fi
 fi
 
-mkdir -p "$BASE/darwin-universal"
+mkdir -p "$BASE/darwin-all"
 for tool in ffmpeg ffprobe; do
   "$LIPO" -create "$BASE/darwin-amd64/$tool" "$BASE/darwin-arm64/$tool" \
-    -output "$BASE/darwin-universal/$tool"
-  chmod +x "$BASE/darwin-universal/$tool"
+    -output "$BASE/darwin-all/$tool"
+  chmod +x "$BASE/darwin-all/$tool"
 done
-echo "stage-universal-ffmpeg: wrote $BASE/darwin-universal/{ffmpeg,ffprobe}"
+echo "stage-universal-ffmpeg: wrote $BASE/darwin-all/{ffmpeg,ffprobe}"
