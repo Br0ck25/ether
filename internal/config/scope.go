@@ -40,7 +40,7 @@ var sectionScopes = map[string]Scope{
 	"trakt":         Shared,
 	"openSubtitles": Shared,
 	"llm":           Shared,
-	"updates":       Shared,
+	"updates":       Shared, // incl. maxDrain: every node drains the same way
 	"markers":       Shared,
 	"personalize":   Shared,
 	"setupComplete": Shared,

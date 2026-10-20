@@ -23,6 +23,9 @@ const (
 	StateWaitingIdle   = "waiting-for-idle"
 	StateApplying      = "applying"
 	StateRolledBack    = "rolled-back"
+	// Clustered nodes only (see Coordinator).
+	StateWaitingTurn = "waiting-for-turn" // another node holds the update lease
+	StateDraining    = "draining"         // lease held; waiting for this node's sessions to end
 )
 
 // Capabilities reported by Status.
@@ -42,6 +45,8 @@ const (
 	DefaultTick            = 30 * time.Second
 	DefaultWindowStart     = "03:00"
 	DefaultWindowEnd       = "06:00"
+	// DefaultMaxDrain bounds a clustered node's drain before an install.
+	DefaultMaxDrain = 30 * time.Minute
 )
 
 var (
@@ -51,7 +56,34 @@ var (
 	// ErrNotSelfApplicable: the install is notify-only (package manager,
 	// container, macOS app bundle, read-only install dir, ...).
 	ErrNotSelfApplicable = errors.New("updater: this installation cannot update itself")
+	// ErrClusterRolledBack is returned by Coordinator.AcquireUpdate for a
+	// release that rolled back on another node of the cluster.
+	ErrClusterRolledBack = errors.New("updater: this release was rolled back on another cluster node")
 )
+
+// Coordinator serialises self-updates across a cluster (rolling updates).
+// With a Coordinator the manager installs a release only while holding the
+// cluster-wide update lease, so nodes restart one at a time; before
+// installing it drains this node (no new sessions, out of the published
+// connections) and waits for this node's own sessions to end, up to
+// Updates.MaxDrain. The lease stays held through the restart: the new
+// process renews it while confirming its health and releases it once
+// confirmed. A process that finds no update to confirm releases a lease
+// this node still holds; one that rolled back reports the failed release
+// so the other nodes skip it.
+type Coordinator interface {
+	// AcquireUpdate takes, or renews, the update lease for version. ok is
+	// false while another node (holder) holds it; err wraps
+	// ErrClusterRolledBack for a release that rolled back elsewhere.
+	AcquireUpdate(ctx context.Context, version string) (ok bool, holder string, err error)
+	// ReleaseUpdate gives the lease back if this node holds it.
+	ReleaseUpdate(ctx context.Context) error
+	// ReportFailed records that version rolled back on this node.
+	ReportFailed(ctx context.Context, version string) error
+	// SetDraining takes this node out of (true) or back into (false) the
+	// rotation for new sessions.
+	SetDraining(draining bool)
+}
 
 // Checker is the slice of *Client the Manager needs.
 type Checker interface {
@@ -86,6 +118,13 @@ type ManagerOptions struct {
 	RequestRestart func(reason string)
 	// Boot is the result of ConfirmStartup for this process.
 	Boot StartupResult
+	// Coordinator, when set (a clustered node that can self-apply),
+	// coordinates installs with the other nodes; nil keeps the standalone
+	// behaviour (install after the server has been idle for QuietPeriod).
+	Coordinator Coordinator
+	// NodeName labels this node in status (the lease holder is compared
+	// with it); optional.
+	NodeName string
 
 	Now             func() time.Time
 	Location        *time.Location // maintenance window zone (default time.Local)
@@ -133,6 +172,14 @@ type Manager struct {
 	startedAt      time.Time
 	confirmed      bool
 	restarting     bool
+
+	// Rolling updates (Coordinator set).
+	leaseHeld      bool      // lease taken by this process for a pending install
+	draining       bool      // SetDraining(true) in effect
+	drainStart     time.Time // when draining began
+	holder         string    // node holding the lease, as last seen
+	releasePending bool      // a lease from a previous update must be released
+	reportFailed   string    // a rolled-back version still to report
 }
 
 // NewManager builds a Manager; it does not start polling (see Run).
@@ -236,6 +283,16 @@ func (m *Manager) begin() {
 	defer m.mu.Unlock()
 	m.startedAt = now
 	m.idleSince = now
+	if m.opts.Coordinator != nil {
+		switch {
+		case m.opts.Boot.RolledBack != nil:
+			m.reportFailed = m.opts.Boot.RolledBack.Version
+		case m.opts.Boot.Confirming == nil:
+			// Nothing to confirm: a lease this node still holds is left over
+			// (an update that did not take effect, or a crash) — free it.
+			m.releasePending = true
+		}
+	}
 	if !m.requested { // "Update now" before Run keeps its immediate check
 		m.nextCheck = now.Add(m.opts.FirstCheckDelay)
 	}
@@ -258,6 +315,7 @@ func (m *Manager) wake() {
 func (m *Manager) step(ctx context.Context) {
 	now := m.opts.Now()
 	m.confirmIfHealthy(now)
+	m.coordinate(ctx)
 	feedKey := clientKey(m.opts.Config())
 	active := 0
 	if m.opts.ActiveSessions != nil {
@@ -309,6 +367,9 @@ func (m *Manager) confirmIfHealthy(now time.Time) {
 	m.mu.Lock()
 	if m.failed != nil && !Newer(m.failed.Version, m.opts.CurrentVersion) {
 		m.failed = nil
+	}
+	if m.opts.Coordinator != nil {
+		m.releasePending = true // the next node may update now
 	}
 	m.mu.Unlock()
 	m.log.Info("updater: update confirmed healthy", "from", p.From, "version", p.To)
@@ -391,11 +452,13 @@ func (m *Manager) advance(ctx context.Context, now time.Time) {
 	if upd == nil {
 		m.state = StateIdle
 		m.mu.Unlock()
+		m.stopDrain(ctx)
 		return
 	}
 	if ok, _ := m.selfApplicableLocked(upd); !ok || !(cfg.AutoUpdate || m.requested) {
 		m.state = StateIdle
 		m.mu.Unlock()
+		m.stopDrain(ctx)
 		return
 	}
 	if m.staged == "" || m.stagedVersion != upd.Version() {
@@ -434,6 +497,12 @@ func (m *Manager) advance(ctx context.Context, now time.Time) {
 		m.mu.Lock()
 	}
 
+	if m.opts.Coordinator != nil {
+		staged := m.staged
+		m.mu.Unlock()
+		m.advanceCoordinated(ctx, now, cfg, upd, staged)
+		return
+	}
 	switch {
 	case !m.requested && !inWindow(now.In(m.opts.Location), cfg):
 		m.state = StateWaitingWindow
@@ -489,6 +558,174 @@ func (m *Manager) apply(now time.Time, upd *Update, staged string) {
 	m.mu.Unlock()
 	if m.opts.RequestRestart != nil {
 		m.opts.RequestRestart(fmt.Sprintf("updated %s → %s", p.From, p.To))
+	}
+}
+
+// coordinate does the lease bookkeeping that does not depend on an
+// available update: renew the lease while confirming a just-installed
+// version, release it once confirmed (or when left over), and report a
+// rollback.
+func (m *Manager) coordinate(ctx context.Context) {
+	c := m.opts.Coordinator
+	if c == nil {
+		return
+	}
+	m.mu.Lock()
+	confirming := !m.confirmed && m.opts.Boot.Confirming != nil
+	release, failed := m.releasePending, m.reportFailed
+	m.mu.Unlock()
+	if failed != "" {
+		if err := c.ReportFailed(ctx, failed); err != nil {
+			m.log.Debug("updater: report rolled-back release to the cluster", "err", err)
+		} else {
+			m.log.Warn("updater: told the other cluster nodes to skip the rolled-back release", "version", failed)
+			m.mu.Lock()
+			m.reportFailed = ""
+			m.mu.Unlock()
+		}
+	}
+	switch {
+	case confirming:
+		// Keep the lease while the new version proves itself, so no other
+		// node restarts meanwhile.
+		if _, _, err := c.AcquireUpdate(ctx, m.opts.CurrentVersion); err != nil {
+			m.log.Debug("updater: renew cluster update lease while confirming", "err", err)
+		}
+	case release:
+		if err := c.ReleaseUpdate(ctx); err != nil {
+			m.log.Debug("updater: release cluster update lease", "err", err)
+			return
+		}
+		m.mu.Lock()
+		m.releasePending = false
+		m.mu.Unlock()
+	}
+}
+
+// maxDrain is the configured drain bound.
+func maxDrain(cfg config.Updates) time.Duration {
+	if d := time.Duration(cfg.MaxDrain); d > 0 {
+		return d
+	}
+	return DefaultMaxDrain
+}
+
+// advanceCoordinated installs a staged update on a clustered node: inside
+// the window (or on request), once this node holds the cluster update
+// lease and has drained — its own sessions ended, or MaxDrain passed.
+func (m *Manager) advanceCoordinated(ctx context.Context, now time.Time, cfg config.Updates, upd *Update, staged string) {
+	c := m.opts.Coordinator
+	m.mu.Lock()
+	inWin := m.requested || inWindow(now.In(m.opts.Location), cfg)
+	confirmed := m.confirmed
+	force := m.requested && m.force
+	retryWait := now.Before(m.applyAfter)
+	m.mu.Unlock()
+	if !inWin || !confirmed || retryWait {
+		m.stopDrain(ctx)
+		m.mu.Lock()
+		switch {
+		case !inWin:
+			m.state = StateWaitingWindow
+		case !confirmed:
+			m.state = StateWaitingIdle
+		default:
+			m.state = StateStaged
+		}
+		m.mu.Unlock()
+		return
+	}
+	ok, holder, err := c.AcquireUpdate(ctx, upd.Version())
+	switch {
+	case errors.Is(err, ErrClusterRolledBack):
+		m.stopDrain(ctx)
+		m.mu.Lock()
+		m.log.Warn("updater: skipping a release that rolled back on another cluster node", "version", upd.Version())
+		m.failed = &FailedUpdate{Version: upd.Version(), From: m.opts.CurrentVersion, At: now,
+			Reason: "rolled back on another cluster node"}
+		m.skipped = upd.Version()
+		m.resetAvailableLocked()
+		m.requested, m.force = false, false
+		m.state = StateIdle
+		m.mu.Unlock()
+		return
+	case err != nil:
+		// Never install without the lease; keep any drain in place and
+		// try again next tick.
+		m.mu.Lock()
+		m.lastErr = "cluster update lease: " + err.Error()
+		if !m.draining {
+			m.state = StateWaitingTurn
+		}
+		m.mu.Unlock()
+		return
+	case !ok:
+		m.stopDrain(ctx) // lost a lease we had (it expired and was taken)
+		m.mu.Lock()
+		m.holder, m.state = holder, StateWaitingTurn
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Lock()
+	m.leaseHeld, m.holder = true, m.opts.NodeName
+	if m.lastErr != "" && strings.HasPrefix(m.lastErr, "cluster update lease: ") {
+		m.lastErr = ""
+	}
+	start := !m.draining
+	if start {
+		m.draining, m.drainStart = true, now
+	}
+	drainStart, active := m.drainStart, m.lastActive
+	m.mu.Unlock()
+	if start {
+		m.log.Info("updater: holding the cluster update lease; draining this node before installing",
+			"version", upd.Version(), "activeSessions", active, "maxDrain", maxDrain(cfg))
+		c.SetDraining(true)
+	}
+	if !force && active > 0 && now.Sub(drainStart) < maxDrain(cfg) {
+		m.mu.Lock()
+		m.state = StateDraining
+		m.mu.Unlock()
+		return
+	}
+	if active > 0 {
+		m.log.Warn("updater: drain time is up; installing with sessions still active", "activeSessions", active)
+	}
+	m.mu.Lock()
+	m.state = StateApplying
+	m.mu.Unlock()
+	m.apply(now, upd, staged)
+	if !m.isRestarting() {
+		m.stopDrain(ctx) // install failed: let another node have its turn
+	}
+}
+
+// stopDrain ends a drain and gives back a lease taken for an install that
+// is not going ahead.
+func (m *Manager) stopDrain(ctx context.Context) {
+	c := m.opts.Coordinator
+	if c == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.restarting {
+		m.mu.Unlock()
+		return
+	}
+	draining, held := m.draining, m.leaseHeld
+	m.draining, m.drainStart, m.leaseHeld = false, time.Time{}, false
+	m.mu.Unlock()
+	if draining {
+		m.log.Info("updater: install postponed; this node is back in rotation")
+		c.SetDraining(false)
+	}
+	if held {
+		if err := c.ReleaseUpdate(ctx); err != nil {
+			m.log.Debug("updater: release cluster update lease", "err", err)
+			m.mu.Lock()
+			m.releasePending = true
+			m.mu.Unlock()
+		}
 	}
 }
 
@@ -581,6 +818,21 @@ type ManagerStatus struct {
 	FailedVersion      string           `json:"failedVersion,omitempty"`
 	FailedReason       string           `json:"failedReason,omitempty"`
 	Note               string           `json:"note,omitempty"`
+	// Cluster is the rolling-update state of a clustered node.
+	Cluster *ClusterUpdateStatus `json:"cluster,omitempty"`
+}
+
+// ClusterUpdateStatus is a clustered node's part in a rolling update.
+type ClusterUpdateStatus struct {
+	// LeaseHeld is true while this node holds the cluster update lease
+	// for an install.
+	LeaseHeld bool `json:"leaseHeld"`
+	// LeaseHolder is the node last seen holding the lease (this node's
+	// name when LeaseHeld).
+	LeaseHolder     string     `json:"leaseHolder,omitempty"`
+	Draining        bool       `json:"draining"`
+	DrainStarted    *time.Time `json:"drainStarted,omitempty"`
+	MaxDrainSeconds int        `json:"maxDrainSeconds"`
 }
 
 // Status snapshots the manager.
@@ -616,6 +868,10 @@ func (m *Manager) Status() ManagerStatus {
 		st.NextCheck = tp(m.nextCheck)
 	}
 	st.IdleSince = tp(m.idleSince)
+	if m.opts.Coordinator != nil {
+		st.Cluster = &ClusterUpdateStatus{LeaseHeld: m.leaseHeld, LeaseHolder: m.holder, Draining: m.draining,
+			DrainStarted: tp(m.drainStart), MaxDrainSeconds: int(maxDrain(cfg) / time.Second)}
+	}
 	if m.available != nil {
 		mf := m.available.Manifest
 		st.Available = &AvailableUpdate{

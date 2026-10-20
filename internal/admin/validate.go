@@ -247,5 +247,8 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	}
 	v.clock("updates.maintenanceStart", cfg.Updates.MaintenanceStart)
 	v.clock("updates.maintenanceEnd", cfg.Updates.MaintenanceEnd)
+	if cfg.Updates.MaxDrain < 0 {
+		v.add("updates.maxDrain", "must not be negative")
+	}
 	return v.errs
 }

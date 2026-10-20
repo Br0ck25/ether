@@ -280,6 +280,11 @@ type Updates struct {
 	// wrap midnight; equal values mean "any time".
 	MaintenanceStart string `json:"maintenanceStart"`
 	MaintenanceEnd   string `json:"maintenanceEnd"`
+	// MaxDrain bounds how long a clustered node about to install an update
+	// waits for its own playback sessions to end (it admits no new ones
+	// meanwhile) before installing anyway inside the window. 0 means 30
+	// minutes. Ignored on a standalone server, which waits for idle.
+	MaxDrain Duration `json:"maxDrain,omitempty"`
 }
 
 // Spike serves local files as a library so the Plex front end can be
