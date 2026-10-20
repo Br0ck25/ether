@@ -1035,7 +1035,7 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 			stop()
 			release()
 		} else {
-			resp.Body = &stallBody{rc: resp.Body, d: e.stall, stop: stop, release: release}
+			resp.Body = newStallBody(resp.Body, e.stall, stop, release)
 		}
 		return resp, tm, err
 	}
@@ -1140,25 +1140,32 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 // stallBody ends a response whose body delivers no bytes for d by
 // cancelling its request, so a stalled CDN connection fails like a dropped
 // one (and is resumed) instead of blocking its reader forever. Close also
-// returns the request's connection slot.
+// returns the request's connection slot. Close may run concurrently with
+// Read, so the timer is created up front and only touched through its
+// (concurrency-safe) methods.
 type stallBody struct {
 	rc      io.ReadCloser
-	d       time.Duration
 	stop    context.CancelFunc
 	release func()
-	timer   *time.Timer
+	d       time.Duration
+	timer   *time.Timer // nil when d <= 0
 	fired   atomic.Bool
 }
 
+func newStallBody(rc io.ReadCloser, d time.Duration, stop context.CancelFunc, release func()) *stallBody {
+	b := &stallBody{rc: rc, stop: stop, release: release, d: d}
+	if d > 0 {
+		b.timer = time.AfterFunc(d, func() { b.fired.Store(true); b.stop() })
+		b.timer.Stop()
+	}
+	return b
+}
+
 func (b *stallBody) Read(p []byte) (int, error) {
-	if b.d <= 0 {
+	if b.timer == nil {
 		return b.rc.Read(p)
 	}
-	if b.timer == nil {
-		b.timer = time.AfterFunc(b.d, func() { b.fired.Store(true); b.stop() })
-	} else {
-		b.timer.Reset(b.d)
-	}
+	b.timer.Reset(b.d)
 	n, err := b.rc.Read(p)
 	b.timer.Stop()
 	if err != nil && b.fired.Load() {
