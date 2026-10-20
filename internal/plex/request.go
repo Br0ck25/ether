@@ -193,8 +193,10 @@ func (pr *Request) window(n int) (lo, hi int) {
 		return 0, n
 	}
 	lo = min(pr.Start, n)
-	if pr.Size < 0 {
+	// Compare against the remaining length: lo+Size overflows for a huge
+	// X-Plex-Container-Size and would yield hi < lo.
+	if pr.Size < 0 || pr.Size >= n-lo {
 		return lo, n
 	}
-	return lo, min(lo+pr.Size, n)
+	return lo, lo + pr.Size
 }

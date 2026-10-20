@@ -475,3 +475,32 @@ func TestDownloadMediaRechecksTitleVisibility(t *testing.T) {
 		t.Fatalf("media after restriction: %d, want 404", rec.Code)
 	}
 }
+
+type blockAllKeyword string
+
+func (b blockAllKeyword) Allowed(_ *core.User, t *core.Title) bool {
+	for _, k := range t.Keywords {
+		if k == string(b) {
+			return false
+		}
+	}
+	return true
+}
+
+// An episode of a show blocked by owner policy is not queued for download
+// (episodes do not carry the show's keywords).
+func TestDownloadQueueRejectsEpisodeOfBlockedShow(t *testing.T) {
+	f := newDownloadFixture(t, true)
+	f.srv.d.AccessPolicy = blockAllKeyword("blocked")
+	show := breakingBad
+	show.Keywords = []string{"blocked"}
+	f.srv.d.Catalog.(*fakeCatalog).titles[show.Key] = show
+	qid := f.queue(t)
+	rec := f.do(t, http.MethodPost, "/downloadQueue/"+itoa(qid)+"/add?keys="+bbE1.Key.String(), ownerToken, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("add blocked episode: %d %s", rec.Code, rec.Body.String())
+	}
+	if items := f.items(t, qid); len(items) != 0 {
+		t.Fatalf("blocked episode queued: %v", items)
+	}
+}

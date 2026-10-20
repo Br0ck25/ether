@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -25,6 +27,18 @@ func transcodeSessionID(path string) string {
 		return ""
 	}
 	return id
+}
+
+// routeSessionID is the {session} route parameter, only when it is exactly
+// the session the authentication middleware authorized. chi routes on the
+// escaped path, so an escaped segment ("a%2Fb") would otherwise authorize
+// one binding ("a") and, once sanitized, serve another ("a2Fb").
+func routeSessionID(r *http.Request) (string, bool) {
+	id := chi.URLParam(r, "session")
+	if id == "" || id != transcodeSessionID(r.URL.Path) || sanitizeSessionID(id) != id {
+		return "", false
+	}
+	return id, true
 }
 
 func (s *Server) activeViewer(ctx context.Context, id int64) *core.User {

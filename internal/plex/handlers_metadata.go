@@ -111,7 +111,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 			}
 		default:
 			t, err := s.metadataTitle(ctx, pr, k)
-			if err == nil && !s.titleVisible(pr.User, t) {
+			if err == nil && !s.visibleTitle(ctx, pr.User, t) {
 				err = core.ErrNotFound
 			}
 			if err != nil {
@@ -242,7 +242,7 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parent, err := s.metadataTitle(ctx, pr, k)
-	if err == nil && !s.titleVisible(pr.User, parent) {
+	if err == nil && !s.visibleTitle(ctx, pr.User, parent) {
 		err = core.ErrNotFound
 	}
 	if err != nil {
@@ -339,7 +339,7 @@ func (s *Server) handleAllLeaves(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parent, err := s.metadataTitle(ctx, pr, k)
-	if err == nil && !s.titleVisible(pr.User, parent) {
+	if err == nil && !s.visibleTitle(ctx, pr.User, parent) {
 		err = core.ErrNotFound
 	}
 	if err != nil {
@@ -402,7 +402,7 @@ func (s *Server) renderSingle(w http.ResponseWriter, r *http.Request, k core.Rat
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	t, err := s.metadataTitle(ctx, pr, k)
-	if err == nil && !s.titleVisible(pr.User, t) {
+	if err == nil && !s.visibleTitle(ctx, pr.User, t) {
 		err = core.ErrNotFound
 	}
 	if err != nil {

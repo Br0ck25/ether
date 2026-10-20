@@ -369,7 +369,7 @@ func (s *Server) expandDownloadKey(ctx context.Context, u *core.User, k core.Rat
 	if err != nil {
 		return nil, err
 	}
-	if !s.titleVisible(u, t) {
+	if !s.visibleTitle(ctx, u, t) {
 		return nil, core.ErrNotFound
 	}
 	switch t.Type {
@@ -639,6 +639,9 @@ func (s *Server) handleDownloadItemDecision(w http.ResponseWriter, r *http.Reque
 	ctx := r.Context()
 	pr := FromContext(ctx)
 	t, err := s.d.Catalog.Get(ctx, it.key)
+	if err == nil && !s.visibleTitle(ctx, pr.User, t) {
+		err = core.ErrNotFound // restrictions can change after queueing
+	}
 	if err != nil {
 		s.writeErr(w, r, err)
 		return

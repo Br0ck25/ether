@@ -136,6 +136,14 @@ func (s *Server) resolveURI(ctx context.Context, pr *Request, uri string) ([]cor
 		}
 		var out []core.RatingKey
 		for _, k := range keys {
+			// An addressed title (or the show above it) the viewer may
+			// not see never reaches a playlist or play queue.
+			switch k.Kind() {
+			case core.KindShow, core.KindSeason, core.KindMovie, core.KindEpisode:
+				if t, err := s.metadataTitle(ctx, pr, k); err == nil && !s.visibleTitle(ctx, pr.User, t) {
+					return nil, core.ErrNotFound
+				}
+			}
 			sub, err := s.expandKey(ctx, pr, k)
 			if err != nil {
 				return nil, err
@@ -397,7 +405,7 @@ func (s *Server) handlePlaylistItems(w http.ResponseWriter, r *http.Request) {
 	pr := FromContext(ctx)
 	lo, hi := pr.window(len(pl.Items))
 	window := pl.Items[lo:hi]
-	titles := s.getTitles(ctx, window)
+	titles := s.visibleTitles(pr.User, s.getTitles(ctx, window))
 	byKey := make(map[core.RatingKey]*core.Title, len(titles))
 	for i := range titles {
 		byKey[titles[i].Key] = &titles[i]

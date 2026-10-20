@@ -303,7 +303,7 @@ func (s *Server) handlePrefs(w http.ResponseWriter, r *http.Request) {
 // handlePrefsSet accepts and ignores PMS settings writes; Ether is
 // configured through its own admin UI.
 func (s *Server) handlePrefsSet(w http.ResponseWriter, r *http.Request) {
-	s.log.Info("ignoring PMS prefs write; use the Ether admin UI", "query", r.URL.RawQuery)
+	s.log.Info("ignoring PMS prefs write; use the Ether admin UI", "query", redactQuery(r.URL.RawQuery))
 	w.WriteHeader(http.StatusOK)
 }
 

@@ -100,3 +100,28 @@ func TestManifestGrantIncludesInitAndSegments(t *testing.T) {
 	}
 
 }
+
+// An escaped session path segment must not let a viewer's own binding
+// authorize a different (unescaped) transcode session.
+func TestTranscodeSessionPathEscapingCannotCrossSessions(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.trans.decision = core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true, Container: "mpegts"}
+	// The owner's running stream.
+	if rec := f.get(t, "/video/:/transcode/universal/start.m3u8?path=%2Flibrary%2Fmetadata%2F1000000000000550&session=a2Fb"); rec.Code != 200 {
+		t.Fatal(rec.Code, rec.Body.String())
+	}
+	// The friend's own binding "a".
+	f.srv.transcodes.put(&transcodeEntry{id: "a", userID: friendUser.ID, clientID: "client-1", started: true})
+	for _, path := range []string{
+		"/video/:/transcode/universal/session/a%2Fb/base/index.m3u8",
+		"/video/:/transcode/universal/session/a%2Fb/base/00000.ts",
+		"/video/:/transcode/universal/session/a%2Fb/0/header",
+		"/video/:/transcode/universal/session/a%2Fb/0/1.m4s",
+	} {
+		rec := f.get(t, path, "X-Plex-Token", friendToken)
+		if rec.Code == 200 {
+			t.Errorf("%s: friend reached the owner's session: %s", path, rec.Body.String())
+		}
+	}
+}

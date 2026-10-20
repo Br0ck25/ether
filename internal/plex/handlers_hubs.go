@@ -524,7 +524,7 @@ func (s *Server) handleHubItems(w http.ResponseWriter, r *http.Request) {
 	}
 	count := countParam(r, 50)
 	if pr.HasPage && pr.Size > 0 {
-		count = min(max(50, pr.Start+pr.Size), 200)
+		count = min(max(50, min(pr.Start, 200)+min(pr.Size, 200)), 200)
 	}
 	mc := hubContainer()
 	sections := parseSectionList(q.Get("contentDirectoryID"))
@@ -541,8 +541,8 @@ func (s *Server) handleHubItems(w http.ResponseWriter, r *http.Request) {
 	total := len(mc.Metadata)
 	start := min(max(pr.Start, 0), total)
 	end := total
-	if pr.HasPage && pr.Size > 0 {
-		end = min(start+pr.Size, total)
+	if pr.HasPage && pr.Size > 0 && pr.Size < total-start {
+		end = start + pr.Size
 	}
 	mc.Metadata = mc.Metadata[start:end]
 	mc.Size = len(mc.Metadata)

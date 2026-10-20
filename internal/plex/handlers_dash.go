@@ -106,10 +106,10 @@ func (s *Server) dashSession(w http.ResponseWriter, r *http.Request) (core.DASHS
 		writeHTTPError(w, http.StatusNotFound)
 		return nil, 0, false
 	}
-	id := sanitizeSessionID(chi.URLParam(r, "session"))
+	id, idOK := routeSessionID(r)
 	rep, err := strconv.Atoi(chi.URLParam(r, "stream"))
 	hs, ok := s.d.Transcoder.Session(id)
-	if err != nil || rep < 0 || !ok || hs == nil {
+	if !idOK || err != nil || rep < 0 || !ok || hs == nil {
 		writeHTTPError(w, http.StatusNotFound)
 		return nil, 0, false
 	}

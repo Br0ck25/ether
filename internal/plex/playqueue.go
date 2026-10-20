@@ -812,7 +812,7 @@ func (s *Server) writePlayQueue(w http.ResponseWriter, r *http.Request, pq playQ
 	for i, it := range slice {
 		keys[i] = it.key
 	}
-	titles := s.getTitles(ctx, dedupeKeys(keys))
+	titles := s.visibleTitles(pr.User, s.getTitles(ctx, dedupeKeys(keys)))
 	byKey := make(map[core.RatingKey]*core.Title, len(titles))
 	for i := range titles {
 		byKey[titles[i].Key] = &titles[i]

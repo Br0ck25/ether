@@ -163,9 +163,7 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 		p.sessionID = sanitizeSessionID(pr.ClientID + "-" + key.String())
 	}
 	p.sessionID = sanitizeSessionID(p.sessionID)
-	if off, err := strconv.ParseFloat(q.Get("offset"), 64); err == nil && off > 0 {
-		p.offset = time.Duration(off * float64(time.Second))
-	}
+	p.offset = durationParam(q.Get("offset"), time.Second)
 	return p, nil
 }
 
@@ -225,7 +223,7 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if err != nil {
 		return nil, nil, core.Decision{}, err
 	}
-	if !s.titleVisible(pr.User, t) {
+	if !s.visibleTitle(ctx, pr.User, t) {
 		return nil, nil, core.Decision{}, core.ErrNotFound
 	}
 	if policy, ok := s.d.AccessPolicy.(interface {
@@ -767,7 +765,11 @@ func (s *Server) handleTranscodeSession(w http.ResponseWriter, r *http.Request) 
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
-	id := sanitizeSessionID(chi.URLParam(r, "session"))
+	id, ok := routeSessionID(r)
+	if !ok {
+		writeHTTPError(w, http.StatusNotFound)
+		return
+	}
 	hs, ok := s.d.Transcoder.Session(id)
 	if !ok || hs == nil {
 		writeHTTPError(w, http.StatusNotFound)

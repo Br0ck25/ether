@@ -293,9 +293,7 @@ func (s *Server) parseExtraPlayRequest(r *http.Request, key core.RatingKey) play
 		p.sessionID = sanitizeSessionID(pr.ClientID + "-" + key.String())
 	}
 	p.sessionID = sanitizeSessionID(p.sessionID)
-	if off, err := strconv.ParseFloat(q.Get("offset"), 64); err == nil && off > 0 {
-		p.offset = time.Duration(off * float64(time.Second))
-	}
+	p.offset = durationParam(q.Get("offset"), time.Second)
 	return p
 }
 

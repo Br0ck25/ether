@@ -1,6 +1,7 @@
 package plex
 
 import (
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -20,11 +21,18 @@ func stateKey(r *http.Request) core.RatingKey {
 }
 
 func msParam(v string) time.Duration {
+	return durationParam(v, time.Millisecond)
+}
+
+// durationParam parses a non-negative count of unit. NaN, infinities and
+// values past the time.Duration range read as 0: converting them would
+// yield an implementation-defined (typically negative) duration.
+func durationParam(v string, unit time.Duration) time.Duration {
 	n, err := strconv.ParseFloat(v, 64)
-	if err != nil || n < 0 {
+	if err != nil || !(n >= 0) || n*float64(unit) >= float64(math.MaxInt64) {
 		return 0
 	}
-	return time.Duration(n * float64(time.Millisecond))
+	return time.Duration(n * float64(unit))
 }
 
 // handleTimeline is /:/timeline: playback progress from the client.
@@ -214,7 +222,7 @@ func (s *Server) handleRate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rating, err := strconv.ParseFloat(r.URL.Query().Get("rating"), 64)
-	if err != nil {
+	if err != nil || math.IsNaN(rating) {
 		writeHTTPError(w, http.StatusBadRequest)
 		return
 	}
@@ -397,6 +405,12 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTerminate(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	sid := q.Get("sessionId")
+	if sid == "" {
+		// An empty id would match every session that has no session
+		// identifier and stop an arbitrary one.
+		writeHTTPError(w, http.StatusBadRequest)
+		return
+	}
 	reason := q.Get("reason")
 	if reason == "" {
 		reason = "The server owner has ended this stream."

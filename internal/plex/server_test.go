@@ -707,3 +707,58 @@ func TestHLSInitializationSegmentServedForNativePlayer(t *testing.T) {
 		t.Fatalf("init was not routed to InitSegment: %d %s", init.Code, init.Body.String())
 	}
 }
+
+// A huge X-Plex-Container-Size must not overflow the page arithmetic.
+func TestPagingHugeContainerSize(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Recommender = &fakeRecommender{section: map[core.MediaType][]core.Hub{core.TypeMovie: {{ID: "movie.popular", Title: "Popular", Type: core.TypeMovie, Items: []core.Title{fightClub, alien}}}}}
+	page := "X-Plex-Container-Start=1&X-Plex-Container-Size=9223372036854775807"
+	for _, path := range []string{
+		"/library/metadata/" + bbS1.Key.String() + "/children?" + page,
+		"/library/metadata/" + bbS1.Key.String() + "/allLeaves?" + page,
+		"/hubs/items/movie.popular?contentDirectoryID=1&" + page,
+	} {
+		rec := f.get(t, path, jsonAccept...)
+		if rec.Code != 200 {
+			t.Fatalf("%s: status %d", path, rec.Code)
+		}
+		if mc := decodeJSON(t, rec); mc["size"].(float64) != 1 {
+			t.Errorf("%s: size %v, want the one item after the offset", path, mc["size"])
+		}
+	}
+}
+
+func TestDurationParamRejectsNonFinite(t *testing.T) {
+	for _, v := range []string{"NaN", "Inf", "+Inf", "-1", "1e300", "x", ""} {
+		if d := msParam(v); d != 0 {
+			t.Errorf("msParam(%q) = %v", v, d)
+		}
+		if d := durationParam(v, time.Second); d != 0 {
+			t.Errorf("durationParam(%q) = %v", v, d)
+		}
+	}
+	if d := msParam("1500.5"); d != 1500500*time.Microsecond {
+		t.Errorf("msParam(1500.5) = %v", d)
+	}
+	if d := durationParam("90", time.Second); d != 90*time.Second {
+		t.Errorf("durationParam(90) = %v", d)
+	}
+}
+
+func TestRateNaNAndEmptyTerminateAreBadRequests(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	if rec := f.get(t, "/:/rate?key=1000000000000550&identifier=com.plexapp.plugins.library&rating=NaN"); rec.Code != http.StatusBadRequest {
+		t.Errorf("rate NaN: %d", rec.Code)
+	}
+	// A session without an identifier must not be stopped by an empty id.
+	f.get(t, "/:/timeline?ratingKey=1000000000000550&state=playing&time=1000&duration=10000", "X-Plex-Token", friendToken)
+	if rec := f.get(t, "/status/sessions/terminate?reason=Bedtime"); rec.Code != http.StatusBadRequest {
+		t.Errorf("terminate without sessionId: %d", rec.Code)
+	}
+	rec := f.get(t, "/:/timeline?ratingKey=1000000000000550&state=playing&time=2000&duration=10000", "X-Plex-Token", friendToken)
+	if strings.Contains(rec.Body.String(), "terminationCode") {
+		t.Fatalf("an empty session id terminated a stream: %s", rec.Body.String())
+	}
+}
