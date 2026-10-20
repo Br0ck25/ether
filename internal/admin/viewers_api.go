@@ -36,6 +36,8 @@ type Personalization interface {
 	LayoutDefaults() map[string]int
 	AvailableRows(ctx context.Context) ([]core.RowDescriptor, error)
 	RowInsights(ctx context.Context, days int) ([]core.RowInsight, error)
+	// RankerInsight describes the learned ranking model.
+	RankerInsight(ctx context.Context) (core.RankerInsight, error)
 	Activity(ctx context.Context, days int) ([]core.ActivityDay, error)
 }
 
@@ -58,6 +60,7 @@ func (h *Handler) personalizationRoutes(api func(pattern string, fn http.Handler
 	api("POST /api/layout/preview", h.handleLayoutPreview)
 	api("POST /api/layout/impact", h.handleLayoutImpact)
 	api("GET /api/insights/rows", h.handleInsightRows)
+	api("GET /api/insights/ranker", h.handleInsightRanker)
 	api("GET /api/insights/activity", h.handleInsightActivity)
 }
 

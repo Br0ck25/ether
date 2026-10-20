@@ -124,6 +124,14 @@ func (f *fakeEngine) AvailableRows(context.Context) ([]core.RowDescriptor, error
 func (f *fakeEngine) RowInsights(context.Context, int) ([]core.RowInsight, error) {
 	return []core.RowInsight{{HubID: "top-10", Title: "Top 10 for You", Impressions7d: 20, Plays7d: 5, PlayRate: 0.25}}, nil
 }
+func (f *fakeEngine) RankerInsight(context.Context) (core.RankerInsight, error) {
+	if f.fail != nil {
+		return core.RankerInsight{}, f.fail
+	}
+	at := time.Date(2026, 10, 19, 6, 0, 0, 0, time.UTC)
+	return core.RankerInsight{TrainedAt: &at, Examples: 5200, Positives: 84, AUC: 0.71, BaselineAUC: 0.63, Active: true,
+		Features: []core.RankerFeature{{Name: "fit", Label: "Taste fit", Weight: 0.82}, {Name: "fatigue", Label: "Shown on several days without a play", Weight: -0.4}}}, nil
+}
 func (f *fakeEngine) Activity(context.Context, int) ([]core.ActivityDay, error) {
 	return []core.ActivityDay{{Date: "2026-10-18", Plays: 3, Hours: 2.5, UniqueViewers: 2}}, nil
 }
@@ -280,8 +288,33 @@ func TestLayoutAndInsightsEndpoints(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"impressions7d":20`) || !strings.Contains(rec.Body.String(), `"playRate":0.25`) {
 		t.Fatalf("insights rows: %d %s", rec.Code, rec.Body)
 	}
+	rec = serve(h, req(http.MethodGet, "/ether/api/insights/ranker", ""))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"trainedAt":"2026-10-19T06:00:00Z"`) ||
+		!strings.Contains(rec.Body.String(), `"auc":0.71,"baselineAuc":0.63,"active":true`) ||
+		!strings.Contains(rec.Body.String(), `"features":[{"name":"fit","label":"Taste fit","weight":0.82}`) {
+		t.Fatalf("insights ranker: %d %s", rec.Code, rec.Body)
+	}
 	rec = serve(h, req(http.MethodGet, "/ether/api/insights/activity", ""))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"days":[{"date":"2026-10-18","plays":3,"hours":2.5,"uniqueViewers":2}]`) {
 		t.Fatalf("insights activity: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// untrainedEngine has never trained its ranker.
+type untrainedEngine struct{ fakeEngine }
+
+func (*untrainedEngine) RankerInsight(context.Context) (core.RankerInsight, error) {
+	return core.RankerInsight{}, nil
+}
+
+func TestRankerInsightUntrained(t *testing.T) {
+	h := personalizationHandler(t, &untrainedEngine{})
+	rec := serve(h, req(http.MethodGet, "/ether/api/insights/ranker", ""))
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"examples":0,"positives":0,"auc":0,"baselineAuc":0,"active":false,"features":[]}` {
+		t.Fatalf("untrained ranker: %d %s", rec.Code, rec.Body)
+	}
+	h = personalizationHandler(t, &fakeEngine{fail: fmt.Errorf("boom")})
+	if rec := serve(h, req(http.MethodGet, "/ether/api/insights/ranker", "")); rec.Code < 400 {
+		t.Fatalf("failing engine: %d %s", rec.Code, rec.Body)
 	}
 }
