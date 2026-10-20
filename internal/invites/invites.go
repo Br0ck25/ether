@@ -22,6 +22,11 @@ import (
 
 func init() {
 	store.Register("invites", 1, `CREATE TABLE invites_links(id INTEGER PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL,label TEXT NOT NULL,expires INTEGER NOT NULL,max_uses INTEGER NOT NULL,uses INTEGER NOT NULL DEFAULT 0,policy TEXT NOT NULL,sections TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0); CREATE TABLE invites_claims(invite_id INTEGER NOT NULL,plex_id INTEGER NOT NULL,state TEXT NOT NULL,PRIMARY KEY(invite_id,plex_id));`)
+	// Pending plex.tv PIN sign-ins live in the database so a sign-in
+	// started on one cluster node can be polled on another. The handle the
+	// browser holds is stored hashed.
+	store.Register("invites", 2, `CREATE TABLE invites_pins(handle_hash TEXT PRIMARY KEY, invite_id INTEGER NOT NULL, pin_id TEXT NOT NULL, expires INTEGER NOT NULL, plex_id INTEGER NOT NULL DEFAULT 0, email TEXT NOT NULL DEFAULT '');
+CREATE INDEX invites_pins_expires ON invites_pins(expires);`)
 }
 
 type Invite struct {
@@ -52,12 +57,15 @@ type pending struct {
 	expires  time.Time
 	account  *Account
 }
+
+// pinTTL is how long a started sign-in may be polled.
+const pinTTL = 15 * time.Minute
+
 type Service struct {
 	db       *sql.DB
 	d        Deps
 	mu       sync.Mutex
 	redeemMu sync.Mutex // in-process only; the claim key and conditional use count keep redemption correct across nodes
-	pins     map[string]pending
 	rate     map[string]bucket
 }
 type bucket struct {
@@ -69,7 +77,7 @@ func New(db *sql.DB, d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Service{db: db, d: d, pins: map[string]pending{}, rate: map[string]bucket{}}
+	return &Service{db: db, d: d, rate: map[string]bucket{}}
 }
 func secret() (string, error) {
 	var b [32]byte
@@ -334,14 +342,10 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start sign in", 500)
 		return
 	}
-	s.mu.Lock()
-	for k, p := range s.pins {
-		if s.d.Now().After(p.expires) {
-			delete(s.pins, k)
-		}
+	if err := s.savePending(r.Context(), h, pending{inviteID: in.ID, pinID: id, expires: s.d.Now().Add(pinTTL)}); err != nil {
+		http.Error(w, "could not start sign in", 500)
+		return
 	}
-	s.pins[h] = pending{inviteID: in.ID, pinID: id, expires: s.d.Now().Add(15 * time.Minute)}
-	s.mu.Unlock()
 	reply(w, 200, map[string]string{"handle": h, "code": code, "authUrl": url})
 }
 func (s *Service) poll(w http.ResponseWriter, r *http.Request) {
@@ -357,9 +361,11 @@ func (s *Service) poll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid sign in", 400)
 		return
 	}
-	s.mu.Lock()
-	p, ok := s.pins[body.Handle]
-	s.mu.Unlock()
+	p, ok, err := s.loadPending(r.Context(), body.Handle)
+	if err != nil {
+		http.Error(w, "could not check sign in", 500)
+		return
+	}
 	if !ok || p.inviteID != in.ID || s.d.Now().After(p.expires) {
 		http.Error(w, "sign in expired", 404)
 		return
@@ -376,16 +382,53 @@ func (s *Service) poll(w http.ResponseWriter, r *http.Request) {
 		reply(w, 200, map[string]bool{"done": false})
 		return
 	}
-	s.mu.Lock()
-	p.account = a
-	s.pins[body.Handle] = p
-	s.mu.Unlock()
+	if p.account == nil {
+		// plex.tv answers a PIN once: keep the account for retries on any node.
+		if err := s.saveAccount(r.Context(), body.Handle, *a); err != nil {
+			http.Error(w, "could not save sign in", 500)
+			return
+		}
+	}
 	if err = s.Redeem(r.Context(), in, *a); err != nil {
 		http.Error(w, err.Error(), 409)
 		return
 	}
-	s.mu.Lock()
-	delete(s.pins, body.Handle)
-	s.mu.Unlock()
+	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM invites_pins WHERE handle_hash=?`, hash(body.Handle))
 	reply(w, 200, map[string]bool{"done": true})
+}
+
+// savePending records a started sign-in, dropping expired ones.
+func (s *Service) savePending(ctx context.Context, handle string, p pending) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM invites_pins WHERE expires<?`, s.d.Now().Unix()); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO invites_pins(handle_hash,invite_id,pin_id,expires) VALUES(?,?,?,?)`,
+		hash(handle), p.inviteID, p.pinID, p.expires.Unix())
+	return err
+}
+
+// loadPending reads a started sign-in by its handle.
+func (s *Service) loadPending(ctx context.Context, handle string) (pending, bool, error) {
+	var p pending
+	var exp, plexID int64
+	var email string
+	err := s.db.QueryRowContext(ctx, `SELECT invite_id,pin_id,expires,plex_id,email FROM invites_pins WHERE handle_hash=?`, hash(handle)).
+		Scan(&p.inviteID, &p.pinID, &exp, &plexID, &email)
+	if errors.Is(err, sql.ErrNoRows) {
+		return p, false, nil
+	}
+	if err != nil {
+		return p, false, err
+	}
+	p.expires = time.Unix(exp, 0)
+	if plexID > 0 {
+		p.account = &Account{PlexID: plexID, Email: email}
+	}
+	return p, true, nil
+}
+
+// saveAccount records the plex.tv account a sign-in resolved to.
+func (s *Service) saveAccount(ctx context.Context, handle string, a Account) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE invites_pins SET plex_id=?, email=? WHERE handle_hash=?`, a.PlexID, a.Email, hash(handle))
+	return err
 }
