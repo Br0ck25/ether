@@ -33,7 +33,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/debrid"
 	"github.com/braedonsaunders/ether/internal/episodeorder"
 	"github.com/braedonsaunders/ether/internal/extras"
-	"github.com/braedonsaunders/ether/internal/invites"
 	"github.com/braedonsaunders/ether/internal/livetv"
 	"github.com/braedonsaunders/ether/internal/llm"
 	"github.com/braedonsaunders/ether/internal/markers"
@@ -158,7 +157,6 @@ type App struct {
 	extras            *extras.Service
 	backups           *backup.Service
 	migration         *migrate.Service
-	invites           *invites.Service
 	safety            *safety.Service
 	updates           *updateState
 	plexServer        *plex.Server
@@ -547,7 +545,6 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("live TV: %w", err)
 	}
 	a.personalize.SetExtraHomeRows(a.extraHomeRows)
-	a.buildInvites()
 	a.cfg.Subscribe(a.applyConfig)
 
 	a.buildExtras()
@@ -556,7 +553,6 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("plex front end: %w", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/invite/", http.StripPrefix("/invite", a.invites.PublicHandler()))
 	mux.Handle("/ether/", lanOnly(a.buildAdmin()))
 	mux.HandleFunc("/ether", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ether/", http.StatusFound)

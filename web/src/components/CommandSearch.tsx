@@ -10,7 +10,6 @@ import { destinations } from "../lib/sitemap";
 import { loadViewers, viewerName } from "./pickers";
 
 const ACTIONS = [
-  { title: "Invite a friend", href: "/viewers/invitations", keywords: "share add user" },
   { title: "Add an indexer", href: "/sources/indexers", keywords: "newznab prowlarr" },
   { title: "Add a Usenet provider", href: "/sources/usenet", keywords: "nntp" },
   {
