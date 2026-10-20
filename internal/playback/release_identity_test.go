@@ -65,7 +65,8 @@ func TestCachedAndFallbackReleasesRecheckReportedIDs(t *testing.T) {
 	if releaseMatchesTitle(r, title) {
 		t.Fatal("matching ID bypassed wrong cached episode")
 	}
-	r.Name = "Pilote.Spatial.S02E02.Pierre.et.Ciel.1080p.WEB"
+	title.ShowIDs = core.IDs{TVDB: 789} // a partially hydrated series identity
+	r.Name = "Space.Pilot.2005.S02E02.1080p.WEB"
 	r.TitleIDs.TMDB = 456
 	if releaseMatchesTitle(r, title) {
 		t.Fatal("conflicting series ID reached open")

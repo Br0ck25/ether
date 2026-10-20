@@ -15,7 +15,7 @@ func releaseMatchesTitle(rel core.Release, title *core.Title) bool {
 	expected := title.IDs
 	if title.Type == core.TypeEpisode {
 		expected = title.ShowIDs
-		if expected.TMDB == 0 && expected.TVDB == 0 && expected.IMDB == "" && title.Key.Kind() == core.KindEpisode {
+		if expected.TMDB == 0 && title.Key.Kind() == core.KindEpisode {
 			expected.TMDB = title.Key.TMDB()
 		}
 	}

@@ -316,13 +316,11 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 	}
 	if t.Type == core.TypeEpisode || t.Key.Kind() == core.KindEpisode {
 		ids := t.ShowIDs
-		if ids.TMDB == 0 && ids.IMDB == "" && ids.TVDB == 0 {
-			ids = t.IDs
-			// For an episode, IDs.TMDB is the episode id, not the show's.
-			ids.TMDB = 0
-			if t.Key.Kind() == core.KindEpisode {
-				ids.TMDB = t.Key.TMDB()
-			}
+		// Episode external IDs describe the episode, not its series.
+		// The rating key provides a canonical series TMDB ID even when
+		// the cached ShowIDs only contain an IMDb or TVDB identifier.
+		if ids.TMDB == 0 && t.Key.Kind() == core.KindEpisode {
+			ids.TMDB = t.Key.TMDB()
 		}
 		title := t.ShowTitle
 		if title == "" {
