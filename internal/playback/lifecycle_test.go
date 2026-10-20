@@ -26,8 +26,11 @@ func TestInternalProducerReadsAndBufferingDoNotRenewViewerLease(t *testing.T) {
 			if _, ok := h.m.Session(ps.ID); ok {
 				t.Fatal("producer/buffering activity preserved abandoned source")
 			}
-			if !h.engine.sources[0].closed.Load() || h.cache.pinned("A", PinReasonLive) {
-				t.Fatal("abandoned source resources retained")
+			// The HTTP client can finish reading before the producer's
+			// deferred generation release runs on the server goroutine.
+			eventually(t, "abandoned source closed", func() bool { return h.engine.sources[0].closed.Load() })
+			if h.cache.pinned("A", PinReasonLive) {
+				t.Fatal("abandoned source live pin retained")
 			}
 		})
 	}
