@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CalendarRange,
   ChevronRight,
+  KeyRound,
   ListVideo,
   Radio,
   Sparkles,
@@ -345,6 +346,13 @@ export function SourceList({
               <span className="min-w-0 flex-1 space-y-1">
                 <span className="flex items-center gap-2">
                   <span className="truncate text-sm font-medium text-fg">{s.name}</span>
+                  {s.auth?.type ? (
+                    <KeyRound
+                      size={12}
+                      className="shrink-0 text-fg-subtle"
+                      aria-label={s.auth.type === "xtream" ? "Xtream login" : "Signs in"}
+                    />
+                  ) : null}
                   {s.lastError ? (
                     <Badge variant="destructive" className="shrink-0">
                       Refresh failed

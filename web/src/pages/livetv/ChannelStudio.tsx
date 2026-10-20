@@ -11,6 +11,7 @@ import {
 import {
   Clapperboard,
   Film,
+  KeyRound,
   Layers,
   Play,
   Plus,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Artwork } from "../../components/Artwork";
+import { ToolbarPicker } from "../../components/ToolbarPicker";
 import { DragHandle, SortableList } from "../../components/Sortable";
 import { Field, Segmented } from "../../components/fields";
 import { errorMessage, isAbort } from "../../lib/api";
@@ -375,7 +377,7 @@ export function ChannelStudio({
         {tab === "schedule" && virtual ? <Schedule channel={c} onChange={set} /> : null}
         {tab === "stream" && !virtual ? (
           <section className="max-w-2xl space-y-4">
-            <StreamSources channel={c} onChange={set} />
+            <StreamSources channel={c} sources={sources} onChange={set} />
             <Field label="Group" htmlFor="ch-group">
               <Input
                 id="ch-group"
@@ -515,11 +517,29 @@ function newSourceId(): string {
  */
 function StreamSources({
   channel: c,
+  sources,
   onChange,
 }: {
   channel: Channel;
+  sources: Source[];
   onChange: (p: Partial<Channel>) => void;
 }) {
+  // Each input signs in with the login it names. "Default" means the
+  // playlist's own entry uses the channel's source and added backups go
+  // anonymous, so one provider's login never reaches another's URLs.
+  const logins = sources.filter((x) => x.auth?.type);
+  const loginOptions = [
+    {
+      value: "",
+      label: "Default",
+      hint: "Imported entry uses its source's login; added backups use none",
+    },
+    ...logins.map((x) => ({
+      value: x.id,
+      label: x.name,
+      hint: x.id === c.sourceId ? "This channel's source" : "Use this source's login",
+    })),
+  ];
   const list: StreamSource[] = c.streamSources?.length
     ? [...c.streamSources].sort((a, b) => a.priority - b.priority)
     : [{ id: "primary", name: "Primary", url: c.streamUrl || "", enabled: true, priority: 0 }];
@@ -631,6 +651,16 @@ function StreamSources({
                 />
               ) : null}
               <SourceHealth status={status.get(x.id)} />
+              {logins.length ? (
+                <ToolbarPicker
+                  ariaLabel={`Login for source ${i + 1}`}
+                  value={x.authSourceId ?? ""}
+                  onChange={(v) => update(i, { authSourceId: v || undefined })}
+                  options={loginOptions.map((o) => ({ ...o, icon: <KeyRound size={13} /> }))}
+                  className="h-8 max-w-[9rem] shrink-0 text-xs"
+                  menuClassName="w-64"
+                />
+              ) : null}
               <Input
                 value={x.url}
                 onChange={(e) => update(i, { url: e.currentTarget.value })}

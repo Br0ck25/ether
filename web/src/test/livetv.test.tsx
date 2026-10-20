@@ -325,6 +325,109 @@ describe("Live TV preview player", () => {
   });
 });
 
+describe("Live TV source sign-in", () => {
+  it("imports an Xtream Codes source from a server and login", async () => {
+    const calls = backend();
+    renderLiveTV();
+    fireEvent.click(await screen.findByRole("button", { name: "Add" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /IPTV source/ }));
+    fireEvent.change(await screen.findByLabelText("Source name"), {
+      target: { value: "My provider" },
+    });
+    fireEvent.click(screen.getByRole("radio", { name: /Xtream Codes login/ }));
+    fireEvent.change(screen.getByLabelText("Server"), {
+      target: { value: "http://panel.example:8080" },
+    });
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "me" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
+    fireEvent.click(screen.getByRole("button", { name: "Import source" }));
+    await waitFor(() => expect(sent(calls, "POST", /\/livetv\/sources$/)).toHaveLength(1));
+    expect(body(sent(calls, "POST", /\/livetv\/sources$/)[0])).toMatchObject({
+      name: "My provider",
+      playlistUrl: "",
+      auth: {
+        type: "xtream",
+        server: "http://panel.example:8080",
+        username: "me",
+        password: "pw",
+        output: "ts",
+      },
+    });
+  });
+
+  it("keeps a stored password by sending the placeholder back", async () => {
+    const calls = backend([], (url, init) => {
+      if (url.endsWith("/livetv/sources") && (init?.method ?? "GET") === "GET")
+        return [
+          {
+            id: "p1",
+            name: "Protected",
+            playlistUrl: "https://iptv.example/list.m3u",
+            updatedAt: "2026-10-19T00:00:00Z",
+            hasPlaylist: true,
+            auth: { type: "basic", username: "owner", password: "••••", userAgent: "VLC/3.0" },
+          },
+        ];
+      return undefined;
+    });
+    renderLiveTV("/livetv?source=p1");
+    expect(await screen.findByText(/Saved. Leave as is to keep it/, {}, WAIT)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save and re-import" }));
+    await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/sources\/p1$/)).toHaveLength(1));
+    expect(body(sent(calls, "PUT", /\/livetv\/sources\/p1$/)[0]).auth).toEqual({
+      type: "basic",
+      username: "owner",
+      password: "••••",
+      userAgent: "VLC/3.0",
+    });
+  });
+
+  it("lets a backup input use another source's login", async () => {
+    const calls = backend(
+      [
+        iptv("c1", {
+          streamSources: [
+            {
+              id: "imp",
+              name: "Primary",
+              url: "https://a.example/1.m3u8",
+              enabled: true,
+              priority: 0,
+            },
+            {
+              id: "bk",
+              name: "Backup",
+              url: "https://b.example/1.m3u8",
+              enabled: true,
+              priority: 1,
+            },
+          ],
+        }),
+      ],
+      (url, init) => {
+        if (url.endsWith("/livetv/sources") && (init?.method ?? "GET") === "GET")
+          return [
+            {
+              id: "b",
+              name: "Provider B",
+              updatedAt: "2026-10-19T00:00:00Z",
+              auth: { type: "bearer", token: "••••" },
+            },
+          ];
+        return undefined;
+      },
+    );
+    renderLiveTV("/livetv?channel=c1");
+    fireEvent.click(await screen.findByRole("button", { name: "Login for source 2" }, WAIT));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Provider B/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Save channel/ }));
+    await waitFor(() => expect(sent(calls, "PUT", /\/livetv\/channels\/c1$/)).toHaveLength(1));
+    const saved = body(sent(calls, "PUT", /\/livetv\/channels\/c1$/)[0]);
+    expect(saved.streamSources[0].authSourceId).toBeUndefined();
+    expect(saved.streamSources[1]).toMatchObject({ id: "bk", authSourceId: "b" });
+  });
+});
+
 describe("Live TV access on the viewer profile", () => {
   it("edits one viewer's Live TV policy in place on their Access tab", async () => {
     let policy = {

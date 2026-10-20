@@ -42,6 +42,21 @@ export type StreamSource = {
   url: string;
   enabled: boolean;
   priority: number;
+  /** The source whose provider login this input uses (blank: the channel's own). */
+  authSourceId?: string;
+};
+export type AuthType = "" | "basic" | "bearer" | "headers" | "xtream";
+/** Provider login. Secrets come back as "••••"; sending that back keeps them. */
+export type SourceAuth = {
+  type?: AuthType;
+  username?: string;
+  password?: string;
+  token?: string;
+  userAgent?: string;
+  referer?: string;
+  headers?: Record<string, string>;
+  server?: string;
+  output?: "ts" | "m3u8";
 };
 export type SourceStatus = {
   id: string;
@@ -76,6 +91,7 @@ export type Source = {
   nextRefresh?: string;
   hasPlaylist?: boolean;
   hasGuide?: boolean;
+  auth?: SourceAuth;
   refreshFailures?: number;
 };
 export type SourceDraft = {
@@ -86,6 +102,7 @@ export type SourceDraft = {
   playlist: string;
   guide: string;
   refreshHours?: number;
+  auth?: SourceAuth;
 };
 export type Programme = { id: string; channelId: string; start: string; end: string; item: Item };
 export type GuideChannel = {

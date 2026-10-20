@@ -1,10 +1,30 @@
 import { Badge, Button, Input, confirmDialog, toast } from "@braedonsaunders/appkit-ui";
-import { AlertTriangle, CalendarRange, FileUp, ListVideo, RefreshCw, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarRange,
+  FileUp,
+  KeyRound,
+  Link2,
+  ListVideo,
+  Plus,
+  RefreshCw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
-import { Field, Segmented } from "../../components/fields";
+import { Field, SecretInput, Segmented } from "../../components/fields";
 import { errorMessage } from "../../lib/api";
 import { formatNumber, relativeTime } from "../../lib/format";
-import { dayClock, duration, emptySource, tv, type Source, type SourceDraft } from "./model";
+import {
+  dayClock,
+  duration,
+  emptySource,
+  tv,
+  type AuthType,
+  type Source,
+  type SourceAuth,
+  type SourceDraft,
+} from "./model";
 
 export type SourceKind = "playlist" | "guide";
 
@@ -42,6 +62,7 @@ export function SourceEditor({
             playlistUrl: source.playlistUrl ?? "",
             guideUrl: source.guideUrl ?? "",
             refreshHours: source.refreshHours,
+            auth: source.auth ? structuredClone(source.auth) : undefined,
           }
         : emptySource(),
     );
@@ -72,17 +93,24 @@ export function SourceEditor({
     }
   };
 
+  const auth = draft.auth ?? {};
+  const xtream = kind === "playlist" && auth.type === "xtream";
+  const setAuth = (patch: SourceAuth) => setDraft((d) => ({ ...d, auth: { ...d.auth, ...patch } }));
   const canSave =
     draft.name.trim() !== "" &&
-    (kind === "playlist"
-      ? Boolean(draft.playlist || draft.playlistUrl)
-      : Boolean(draft.guide || draft.guideUrl));
+    (xtream
+      ? Boolean(auth.server?.trim() && auth.username?.trim() && auth.password)
+      : kind === "playlist"
+        ? Boolean(draft.playlist || draft.playlistUrl)
+        : Boolean(draft.guide || draft.guideUrl));
 
   const save = async () => {
     setBusy("save");
     setError("");
     try {
-      const body = kind === "guide" ? { ...draft, playlist: "", playlistUrl: "" } : draft;
+      const body: SourceDraft =
+        kind === "guide" || xtream ? { ...draft, playlist: "", playlistUrl: "" } : { ...draft };
+      body.auth = cleanAuth(draft.auth, kind);
       const saved = await tv.saveSource(body);
       toast.success(source ? "Source re-imported" : "Source imported", {
         description: "Channel numbers, mappings and access rules are kept.",
@@ -134,7 +162,7 @@ export function SourceEditor({
   };
 
   const auto = (draft.refreshHours ?? 0) >= 0;
-  const urlBacked = Boolean(draft.playlistUrl || draft.guideUrl);
+  const urlBacked = xtream || Boolean(draft.playlistUrl || draft.guideUrl);
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 p-3 sm:p-6">
@@ -230,6 +258,76 @@ export function SourceEditor({
           />
         </Field>
         {kind === "playlist" ? (
+          <Field label="Connect with">
+            <Segmented
+              ariaLabel="Connect with"
+              size="sm"
+              value={xtream ? "xtream" : "url"}
+              onChange={(v) =>
+                setDraft((d) => ({
+                  ...d,
+                  auth:
+                    v === "xtream"
+                      ? { ...d.auth, type: "xtream" }
+                      : { ...d.auth, type: d.auth?.type === "xtream" ? "" : d.auth?.type },
+                }))
+              }
+              options={[
+                { value: "url", label: "Playlist URL or file", icon: <Link2 size={13} /> },
+                { value: "xtream", label: "Xtream Codes login", icon: <KeyRound size={13} /> },
+              ]}
+            />
+          </Field>
+        ) : null}
+        {xtream ? (
+          <div className="space-y-4 rounded-xl border border-border bg-bg-subtle/60 p-4">
+            <Field
+              label="Server"
+              htmlFor="xt-server"
+              hint="The panel address your provider gave you, e.g. http://provider.example:8080"
+            >
+              <Input
+                id="xt-server"
+                value={auth.server ?? ""}
+                onChange={(e) => setAuth({ server: e.currentTarget.value })}
+                placeholder="http://provider.example:8080"
+              />
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Username" htmlFor="xt-user">
+                <Input
+                  id="xt-user"
+                  value={auth.username ?? ""}
+                  autoComplete="off"
+                  onChange={(e) => setAuth({ username: e.currentTarget.value })}
+                />
+              </Field>
+              <Field label="Password" htmlFor="xt-pass">
+                <SecretInput
+                  id="xt-pass"
+                  value={auth.password ?? ""}
+                  onChange={(v) => setAuth({ password: v })}
+                />
+              </Field>
+            </div>
+            <Field
+              label="Stream format"
+              hint="TS works with almost every panel; pick HLS if yours prefers it."
+            >
+              <Segmented
+                ariaLabel="Stream format"
+                size="sm"
+                value={auth.output ?? "ts"}
+                onChange={(v) => setAuth({ output: v })}
+                options={[
+                  { value: "ts", label: "MPEG-TS" },
+                  { value: "m3u8", label: "HLS" },
+                ]}
+              />
+            </Field>
+          </div>
+        ) : null}
+        {kind === "playlist" && !xtream ? (
           <UrlOrFile
             id="src-m3u"
             label="M3U playlist"
@@ -243,15 +341,29 @@ export function SourceEditor({
         ) : null}
         <UrlOrFile
           id="src-xmltv"
-          label={kind === "playlist" ? "XMLTV guide (optional)" : "XMLTV guide"}
+          label={
+            xtream
+              ? "XMLTV guide override (optional)"
+              : kind === "playlist"
+                ? "XMLTV guide (optional)"
+                : "XMLTV guide"
+          }
           url={draft.guideUrl}
           fileReady={Boolean(draft.guide)}
           accept=".xml,.gz,application/xml,text/xml,application/gzip"
-          placeholder="https://…/guide.xml or .xml.gz"
-          hint="Gzipped guides (.xml.gz) are fine."
+          placeholder={
+            xtream ? "Leave blank to use the panel's guide" : "https://…/guide.xml or .xml.gz"
+          }
+          hint={
+            xtream
+              ? "Ether uses the panel's own XMLTV export unless you set one here."
+              : "Gzipped guides (.xml.gz) are fine."
+          }
           onUrl={(v) => setDraft({ ...draft, guideUrl: v, guide: "" })}
           onFile={(f) => void upload(f, "guide")}
         />
+        {!xtream ? <SignIn auth={auth} onChange={setAuth} /> : null}
+        <ClientIdentity auth={auth} onChange={setAuth} />
         <Field
           label="Keep it fresh"
           hint={
@@ -303,6 +415,184 @@ export function SourceEditor({
         </div>
       </section>
     </div>
+  );
+}
+
+/** Drop an empty login so plain sources stay plain. */
+function cleanAuth(a: SourceAuth | undefined, kind: SourceKind): SourceAuth | undefined {
+  if (!a) return undefined;
+  const type = kind === "guide" && a.type === "xtream" ? "" : (a.type ?? "");
+  const headers = Object.fromEntries(
+    Object.entries(a.headers ?? {}).filter(([k]) => k.trim() !== ""),
+  );
+  const out: SourceAuth = {
+    type,
+    ...(type === "basic" || type === "xtream"
+      ? { username: a.username?.trim(), password: a.password }
+      : {}),
+    ...(type === "bearer" ? { token: a.token } : {}),
+    ...(type === "xtream" ? { server: a.server?.trim(), output: a.output ?? "ts" } : {}),
+    ...(Object.keys(headers).length ? { headers } : {}),
+    ...(a.userAgent?.trim() ? { userAgent: a.userAgent.trim() } : {}),
+    ...(a.referer?.trim() ? { referer: a.referer.trim() } : {}),
+  };
+  if (type === "headers" && !out.headers) out.type = "";
+  if (!out.type && !out.headers && !out.userAgent && !out.referer) return undefined;
+  return out;
+}
+
+const SIGN_IN: { value: Exclude<AuthType, "xtream">; label: string }[] = [
+  { value: "", label: "None" },
+  { value: "basic", label: "Username & password" },
+  { value: "bearer", label: "Token" },
+  { value: "headers", label: "Custom headers" },
+];
+
+/** How Ether signs in to a provider that protects its playlist, guide and streams. */
+function SignIn({ auth, onChange }: { auth: SourceAuth; onChange: (p: SourceAuth) => void }) {
+  const type = auth.type === "xtream" ? "" : (auth.type ?? "");
+  return (
+    <Field
+      label="Sign-in"
+      hint={
+        type
+          ? "Used for the playlist, the guide and this source's streams. Never sent to other providers."
+          : "Choose a sign-in if the provider protects its URLs."
+      }
+    >
+      <div className="space-y-3">
+        <Segmented
+          ariaLabel="Sign-in"
+          size="sm"
+          value={type}
+          onChange={(v) => onChange({ type: v })}
+          options={SIGN_IN}
+        />
+        {type === "basic" ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input
+              aria-label="Username"
+              placeholder="Username"
+              autoComplete="off"
+              value={auth.username ?? ""}
+              onChange={(e) => onChange({ username: e.currentTarget.value })}
+            />
+            <SecretInput
+              ariaLabel="Password"
+              placeholder="Password"
+              value={auth.password ?? ""}
+              onChange={(v) => onChange({ password: v })}
+            />
+          </div>
+        ) : null}
+        {type === "bearer" ? (
+          <SecretInput
+            ariaLabel="Token"
+            placeholder="Bearer token"
+            value={auth.token ?? ""}
+            onChange={(v) => onChange({ token: v })}
+          />
+        ) : null}
+        {type === "headers" ? (
+          <HeaderRows headers={auth.headers ?? {}} onChange={(headers) => onChange({ headers })} />
+        ) : null}
+      </div>
+    </Field>
+  );
+}
+
+function HeaderRows({
+  headers,
+  onChange,
+}: {
+  headers: Record<string, string>;
+  onChange: (h: Record<string, string>) => void;
+}) {
+  // Rows live locally so blank and in-progress rows survive; the source only
+  // receives named headers.
+  const [list, setList] = useState<[string, string][]>(() => {
+    const rows = Object.entries(headers);
+    return rows.length ? rows : [["", ""]];
+  });
+  const commit = (next: [string, string][]) => {
+    setList(next.length ? next : [["", ""]]);
+    onChange(Object.fromEntries(next.filter(([k]) => k.trim() !== "")));
+  };
+  return (
+    <div className="space-y-2">
+      {list.map(([k, v], i) => (
+        <div key={i} className="flex items-start gap-2">
+          <Input
+            aria-label={`Header ${i + 1} name`}
+            placeholder="X-Api-Key"
+            value={k}
+            className="w-44 shrink-0 font-mono text-xs"
+            onChange={(e) =>
+              commit(list.map((r, n) => (n === i ? [e.currentTarget.value, r[1]] : r)))
+            }
+          />
+          <div className="min-w-0 flex-1">
+            <SecretInput
+              ariaLabel={`Header ${i + 1} value`}
+              placeholder="Value"
+              value={v}
+              onChange={(val) => commit(list.map((r, n) => (n === i ? [r[0], val] : r)))}
+            />
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="size-9 shrink-0 p-0 text-fg-subtle hover:text-danger"
+            aria-label={`Remove header ${i + 1}`}
+            onClick={() => commit(list.filter((_, n) => n !== i))}
+          >
+            <X size={14} />
+          </Button>
+        </div>
+      ))}
+      <Button variant="ghost" size="sm" onClick={() => commit([...list, ["", ""]])}>
+        <Plus size={13} /> Add header
+      </Button>
+    </div>
+  );
+}
+
+/** User agent and referer: many providers only answer known players. */
+function ClientIdentity({
+  auth,
+  onChange,
+}: {
+  auth: SourceAuth;
+  onChange: (p: SourceAuth) => void;
+}) {
+  const set = Boolean(auth.userAgent || auth.referer);
+  return (
+    <details open={set} className="rounded-xl border border-border bg-bg-subtle/40 px-4 py-3">
+      <summary className="cursor-pointer text-sm font-medium text-fg">
+        Player identity{" "}
+        <span className="font-normal text-fg-muted">
+          {set ? "· custom" : "· for providers that only answer known players"}
+        </span>
+      </summary>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="User agent" htmlFor="src-ua">
+          <Input
+            id="src-ua"
+            placeholder="e.g. VLC/3.0.20 LibVLC/3.0.20"
+            value={auth.userAgent ?? ""}
+            onChange={(e) => onChange({ userAgent: e.currentTarget.value })}
+          />
+        </Field>
+        <Field label="Referer" htmlFor="src-referer">
+          <Input
+            id="src-referer"
+            placeholder="https://…"
+            value={auth.referer ?? ""}
+            onChange={(e) => onChange({ referer: e.currentTarget.value })}
+          />
+        </Field>
+      </div>
+    </details>
   );
 }
 
