@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -39,7 +40,18 @@ func (a *App) buildCluster(dialect store.Dialect) error {
 		a.cluster = cluster.NewSolo(local, log)
 		return nil
 	}
-	pg, err := cluster.NewPostgres(cluster.Options{DB: a.db, Local: local, Logger: log})
+	a.clusterFatal = make(chan error, 1)
+	pg, err := cluster.NewPostgres(cluster.Options{
+		DB: a.db, Local: local, Logger: log,
+		IdentityPath: filepath.Join(a.opts.DataDir, cluster.NodeFile),
+		// A clone of this node (copied node.json) is running: stop serving.
+		OnFatal: func(err error) {
+			select {
+			case a.clusterFatal <- err:
+			default:
+			}
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -76,10 +88,11 @@ func (a *App) nodeAddrs(ctx context.Context) []string {
 }
 
 func (a *App) nodeCaps() cluster.Caps {
-	if a.transcoder == nil {
-		return cluster.Caps{}
+	caps := cluster.Caps{Weight: a.cfg.Get().Server.ClusterWeight}
+	if a.transcoder != nil {
+		caps.Transcode, caps.HWAccel = true, a.transcoder.HWAccel().Name
 	}
-	return cluster.Caps{Transcode: true, HWAccel: a.transcoder.HWAccel().Name}
+	return caps
 }
 
 func (a *App) nodeLoad() int {
@@ -127,8 +140,9 @@ func (a *App) refreshPeers(ctx context.Context) bool {
 }
 
 // runRegistrarAsLeader runs the plex.tv registrar (publication, presence,
-// friend sync, certificate renewal, port mapping, reachability) only on
-// the leader. GDM discovery and the HTTP listener stay on every node.
+// friend sync, certificate renewal, reachability) only on the leader. GDM
+// discovery, the HTTP listener and port mapping (Registrar.RunPortMapping:
+// each node is reached through its own port forward) stay on every node.
 func (a *App) runRegistrarAsLeader(ctx context.Context) {
 	a.cluster.RunAsLeader(ctx, "plex.tv registrar", func(ctx context.Context) {
 		a.refreshPeers(ctx)

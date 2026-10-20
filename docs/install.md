@@ -193,6 +193,24 @@ the shared settings, which is replaced from the database at every start.
 Local media folders are shared, so mount them at the same path on every
 node.
 
+**Shared limits:** each Usenet provider's connection count is the
+account's total, so the live nodes divide it between them (a departed
+node's share returns to the others within about 30 seconds); TMDB
+requests are divided the same way. To give one node a larger share of
+the connections, set `server.clusterWeight` in that node's `config.json`
+(for example `2` for twice the share of a node left at the default of
+`1`).
+
+**Backups** run on whichever node leads and are saved on that node; the
+backup list on any node shows every node's backups and where each one is.
+To keep them in one place, set a shared backup directory (`sharedDir` in
+the backup settings) that every node can reach at the same path.
+
+**Never copy a node's data directory** to make another node: two nodes
+with the same `node.json` would overwrite each other, so the copy refuses
+to start. If that happens, stop the copy, delete `node.json` from its
+data directory and start it again; it joins as a new node.
+
 **Remove a node:** stop and uninstall it, then delete its data directory
 (it holds the cluster's credential key). Unused tokens can be revoked with
 `DELETE /ether/api/cluster/join-tokens/{id}`. A node whose credential key

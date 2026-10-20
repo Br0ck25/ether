@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -109,6 +110,13 @@ type RegistrarOptions struct {
 	// It is called on every publish and must not block on the network.
 	PeerURIs func() []string
 
+	// NodeMapping moves port mapping out of the publishing loop: the owner
+	// runs RunPortMapping on every node (each cluster node is reached
+	// through its own port forward, plex.publicPort being node-local), and
+	// Stop leaves the mapping in place. Off, the loop maps the port and
+	// Stop removes the mapping (a standalone server).
+	NodeMapping bool
+
 	// PublishPlexDirect also publishes the https plex.direct URIs. Off by
 	// default: PMS publishes plain http URIs and plex.tv synthesises the
 	// plex.direct https variants for clients asking with includeHttps=1.
@@ -125,7 +133,8 @@ type Registrar struct {
 	client *Client
 	log    *slog.Logger
 
-	wake chan struct{}
+	wake    chan struct{}
+	mapWake chan struct{} // RunPortMapping
 
 	runMu  sync.Mutex
 	cancel context.CancelFunc
@@ -203,11 +212,12 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 		o.Reach = remote.NewReachabilityChecker(nil)
 	}
 	r := &Registrar{
-		o:      o,
-		client: client,
-		log:    o.Logger.With("component", "registrar"),
-		wake:   make(chan struct{}, 1),
-		next:   map[string]time.Time{},
+		o:       o,
+		client:  client,
+		log:     o.Logger.With("component", "registrar"),
+		wake:    make(chan struct{}, 1),
+		mapWake: make(chan struct{}, 1),
+		next:    map[string]time.Time{},
 	}
 	r.presence = NewPresence(PresenceOptions{
 		Client: client,
@@ -261,6 +271,12 @@ func (r *Registrar) Stop() {
 	}
 	cancel()
 	<-done
+	if !r.o.NodeMapping {
+		r.closeMapping()
+	}
+}
+
+func (r *Registrar) closeMapping() {
 	ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
 	defer c()
 	r.o.Mapper.Close(ctx)
@@ -268,6 +284,34 @@ func (r *Registrar) Stop() {
 	r.st.UPnP = r.o.Mapper.Status()
 	r.mappingOn = false
 	r.mu.Unlock()
+}
+
+// RunPortMapping keeps this node's port mapping (UPnP IGD or NAT-PMP)
+// alive until ctx ends, then removes it. Used with NodeMapping, on every
+// cluster node whether or not it leads.
+func (r *Registrar) RunPortMapping(ctx context.Context) {
+	t := time.NewTicker(r.o.Tick)
+	defer t.Stop()
+	for {
+		if r.due(taskMapping, r.o.MappingInterval) {
+			prev := r.o.Mapper.Status()
+			r.ensureMapping(ctx, r.o.Config.Get())
+			if cur := r.o.Mapper.Status(); cur.Active != prev.Active || cur.ExternalPort != prev.ExternalPort || cur.ExternalIP != prev.ExternalIP {
+				// The WAN URI this node heartbeats may have changed:
+				// refresh addresses on the next NodeURIs.
+				r.addrMu.Lock()
+				r.addrRefresh = time.Time{}
+				r.addrMu.Unlock()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			r.closeMapping()
+			return
+		case <-t.C:
+		case <-r.mapWake:
+		}
+	}
 }
 
 // Trigger asks the loop to re-check addresses and re-publish now (e.g. after
@@ -280,6 +324,10 @@ func (r *Registrar) Trigger() {
 	r.mu.Unlock()
 	select {
 	case r.wake <- struct{}{}:
+	default:
+	}
+	select {
+	case r.mapWake <- struct{}{}:
 	default:
 	}
 }
@@ -358,7 +406,7 @@ func (r *Registrar) schedule(task string, at time.Time) {
 func (r *Registrar) runDue(ctx context.Context) {
 	cfg := r.o.Config.Get()
 	r.refreshConfigStatus(cfg)
-	if r.due(taskMapping, r.o.MappingInterval) {
+	if !r.o.NodeMapping && r.due(taskMapping, r.o.MappingInterval) {
 		r.ensureMapping(ctx, cfg)
 	}
 	if r.due(taskAddress, r.o.AddressInterval) {
@@ -562,6 +610,33 @@ func (r *Registrar) NodeURIs(ctx context.Context) []string {
 	return uris
 }
 
+// peerLANAddrs is the LAN IP addresses in the other cluster nodes' URIs
+// (PeerURIs), for servers.xml's localAddresses: plex.tv then knows every
+// node's LAN address, not only the leader's.
+func (r *Registrar) peerLANAddrs() []string {
+	if r.o.PeerURIs == nil {
+		return nil
+	}
+	var out []string
+	for _, raw := range r.o.PeerURIs() {
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(u.Hostname())
+		if ip == nil {
+			ip, _, _ = remote.ParsePlexDirectHost(u.Hostname())
+		}
+		if ip == nil || !remote.UsableLANIP(ip) || remote.IsPublicIP(ip) {
+			continue
+		}
+		if s := ip.String(); !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // mergeURIs appends extra to own, skipping duplicates.
 func mergeURIs(own, extra []string) []string {
 	out := slices.Clone(own)
@@ -625,7 +700,7 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 		mapping = "unmapped"
 	}
 	reg := ServerRegistration{
-		Name: cfg.Server.FriendlyName, Version: r.o.Version, LocalAddresses: lan, MappingState: mapping,
+		Name: cfg.Server.FriendlyName, Version: r.o.Version, LocalAddresses: mergeURIs(lan, r.peerLANAddrs()), MappingState: mapping,
 		PrivatePort: serverPort(cfg),
 	}
 	if len(lan) > 0 {

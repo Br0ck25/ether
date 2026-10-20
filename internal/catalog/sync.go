@@ -90,17 +90,25 @@ func (c *Catalog) SyncProgress() SyncProgress {
 }
 
 // Run performs an initial sync and then refreshes on RefreshInterval until ctx ends.
-// Intended to be run in its own goroutine by the app wiring.
+// Intended to be run in its own goroutine by the app wiring. With
+// WithResumeSchedule the initial sync waits until the interval has passed
+// since the last recorded sync.
 func (c *Catalog) Run(ctx context.Context) {
+	if wait := c.untilDue(ctx); wait > 0 {
+		c.log.Info("catalog: resuming the sync schedule", "next_sync_in", wait.Round(time.Second))
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
 	if err := c.Sync(ctx); err != nil && ctx.Err() == nil {
 		c.log.Error("catalog: initial sync", "err", err)
 	}
 	for {
-		interval := c.config().RefreshInterval.D()
-		if interval <= 0 {
-			interval = 24 * time.Hour
-		}
-		t := time.NewTimer(interval)
+		t := time.NewTimer(c.refreshInterval())
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -111,6 +119,26 @@ func (c *Catalog) Run(ctx context.Context) {
 			c.log.Error("catalog: refresh sync", "err", err)
 		}
 	}
+}
+
+func (c *Catalog) refreshInterval() time.Duration {
+	if d := c.config().RefreshInterval.D(); d > 0 {
+		return d
+	}
+	return 24 * time.Hour
+}
+
+// untilDue is how long Run waits before its first sync: zero unless
+// resuming the recorded schedule and the last sync is recent.
+func (c *Catalog) untilDue(ctx context.Context) time.Duration {
+	if !c.resumeSchedule {
+		return 0
+	}
+	n, err := strconv.ParseInt(c.getMeta(ctx, "last_sync"), 10, 64)
+	if err != nil || n <= 0 {
+		return 0 // never synced: sync now
+	}
+	return max(time.Unix(n, 0).Add(c.refreshInterval()).Sub(c.now()), 0)
 }
 
 // Sync (re)builds the browsable set from TMDB discover. A second call while

@@ -13,8 +13,10 @@ import (
 )
 
 // NodeFile holds this node's identity in the data directory. It is
-// node-local: never copy it to another node (two nodes with one ID would
-// overwrite each other's heartbeat).
+// node-local: never copy it to another node. Two live processes with one ID
+// would overwrite each other's heartbeat, so the PostgreSQL runtime refuses
+// to join (or leaves) when it sees another process heartbeating under its
+// ID (ErrDuplicateNode).
 const NodeFile = "node.json"
 
 // Identity names this node within a cluster.

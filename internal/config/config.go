@@ -52,6 +52,11 @@ type Server struct {
 	// DefaultStreamLimit applies to users without their own limit.
 	DefaultStreamLimit int `json:"defaultStreamLimit"`
 	MaxStreams         int `json:"maxStreams"` // server-wide cap, 0 = derived from Usenet connections
+	// ClusterWeight is this node's weight when a cluster divides
+	// account-wide budgets (Usenet provider connections) among live nodes;
+	// a node with weight 2 gets twice the share of a node with weight 1.
+	// 0 means 1. Node-local; ignored on a standalone server.
+	ClusterWeight int `json:"clusterWeight,omitempty"`
 }
 
 type Plex struct {

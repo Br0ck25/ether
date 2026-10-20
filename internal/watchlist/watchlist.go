@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -23,6 +24,9 @@ CREATE TABLE watchlist_settings(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT NO
 CREATE TABLE watchlist_items(user_id INTEGER NOT NULL,item_key INTEGER NOT NULL,source TEXT NOT NULL,title TEXT NOT NULL,added INTEGER NOT NULL,checked INTEGER NOT NULL DEFAULT 0,available INTEGER NOT NULL DEFAULT 0,notified INTEGER NOT NULL DEFAULT 0,warmed INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(user_id,item_key,source));
 CREATE INDEX watchlist_viewer ON watchlist_items(user_id,available,added);
 `)
+	// Cluster-wide record of the last scheduled pass, so a new leader
+	// continues the schedule rather than re-running at once.
+	store.Register("watchlist", 2, `CREATE TABLE watchlist_meta(k TEXT PRIMARY KEY, v TEXT NOT NULL DEFAULT '');`)
 }
 
 type Source interface {
@@ -54,6 +58,13 @@ type Options struct {
 	PlexBaseURL  string
 	Now          func() time.Time
 	PrewarmBytes int64
+	// SyncInterval is how often Run passes over every viewer (30m).
+	SyncInterval time.Duration
+	// ResumeSchedule makes Run wait until SyncInterval has passed since the
+	// last pass recorded in the database (by any node) before its first
+	// pass, instead of passing at once. A cluster sets it because Run
+	// restarts on every leader handoff.
+	ResumeSchedule bool
 }
 type Service struct {
 	db *sql.DB
@@ -80,6 +91,9 @@ func New(db *sql.DB, o Options) *Service {
 	}
 	if o.PrewarmBytes <= 0 {
 		o.PrewarmBytes = 8 << 20
+	}
+	if o.SyncInterval <= 0 {
+		o.SyncInterval = 30 * time.Minute
 	}
 	return &Service{db: db, o: o}
 }
@@ -399,10 +413,21 @@ func (s *Service) Hubs(ctx context.Context, u *core.User, limit int) ([]core.Hub
 }
 
 // Run is cancelled by the app; individual viewers are isolated and bounded.
+// Run passes over every viewer (watchlist sync and availability check) at
+// once and then every SyncInterval; with ResumeSchedule the first pass
+// waits out the interval since the last recorded pass.
 func (s *Service) Run(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Minute)
-	defer ticker.Stop()
+	if wait := s.untilDue(ctx); wait > 0 {
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+	}
 	run := func() {
+		defer s.recordPass(ctx)
 		if s.o.Users == nil {
 			return
 		}
@@ -421,6 +446,8 @@ func (s *Service) Run(ctx context.Context) {
 		}
 	}
 	run()
+	ticker := time.NewTicker(s.o.SyncInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -429,6 +456,31 @@ func (s *Service) Run(ctx context.Context) {
 			run()
 		}
 	}
+}
+
+// untilDue is how long Run waits before its first pass.
+func (s *Service) untilDue(ctx context.Context) time.Duration {
+	if !s.o.ResumeSchedule {
+		return 0
+	}
+	var v string
+	if err := s.db.QueryRowContext(ctx, `SELECT v FROM watchlist_meta WHERE k='last_pass'`).Scan(&v); err != nil {
+		return 0
+	}
+	ms, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || ms <= 0 {
+		return 0
+	}
+	return max(time.UnixMilli(ms).Add(s.o.SyncInterval).Sub(s.o.Now()), 0)
+}
+
+// recordPass notes a finished (or attempted) pass for ResumeSchedule.
+func (s *Service) recordPass(ctx context.Context) {
+	if ctx.Err() != nil {
+		return // interrupted (leadership lost): let the next leader redo it
+	}
+	_, _ = s.db.ExecContext(ctx, `INSERT INTO watchlist_meta(k,v) VALUES('last_pass',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`,
+		strconv.FormatInt(s.o.Now().UnixMilli(), 10))
 }
 func (s *Service) user(ctx context.Context, id int64) (*core.User, error) {
 	if s.o.Users == nil {

@@ -27,11 +27,27 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 func init() {
 	store.Register("backup", 1, `CREATE TABLE backup_settings(id INTEGER PRIMARY KEY CHECK(id=1),interval_hours INTEGER NOT NULL DEFAULT 24,retain INTEGER NOT NULL DEFAULT 7,last_run INTEGER NOT NULL DEFAULT 0); INSERT INTO backup_settings(id)VALUES(1);`)
+	// Clustered servers: an optional backup directory every node can reach,
+	// and a cluster-visible record of which node holds which bundle.
+	store.Register("backup", 2, `
+ALTER TABLE backup_settings ADD COLUMN shared_dir TEXT NOT NULL DEFAULT '';
+CREATE TABLE backup_files(
+	node_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	node_name TEXT NOT NULL DEFAULT '',
+	dir TEXT NOT NULL DEFAULT '',
+	shared INTEGER NOT NULL DEFAULT 0,
+	size INTEGER NOT NULL DEFAULT 0,
+	created INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(node_id, name)
+);
+CREATE INDEX backup_files_created ON backup_files(created);`)
 }
 
 const maxBundleFile int64 = 8 << 30
@@ -45,7 +61,23 @@ type Service struct {
 	configPath, dir string
 	retain          int
 	mu              sync.Mutex
+	// node is set on a clustered server (SetCluster).
+	node atomic.Pointer[Node]
 }
+
+// Node identifies the cluster node a Service runs on.
+type Node struct {
+	ID, Name string
+}
+
+// SetCluster marks the server as clustered: every bundle is recorded in
+// the shared database with the node that holds it (so any node lists the
+// whole cluster's backups), and the shared backup directory setting is
+// honoured. A standalone server never calls it and keeps its bundles in
+// its data directory only.
+func (s *Service) SetCluster(n Node) { s.node.Store(&n) }
+
+func (s *Service) clusterNode() *Node { return s.node.Load() }
 
 func New(db *sql.DB, configPath, dir string, retain int) *Service {
 	if retain < 1 {
@@ -58,11 +90,23 @@ type Snapshot struct {
 	Name    string    `json:"name"`
 	Size    int64     `json:"size"`
 	Created time.Time `json:"created"`
+	// Clustered servers only: the node that wrote the bundle and holds it
+	// (unless Shared), whether it is in the shared backup directory, and
+	// Remote when it is on another node's disk (download it there).
+	Node   string `json:"node,omitempty"`
+	NodeID string `json:"nodeId,omitempty"`
+	Shared bool   `json:"shared,omitempty"`
+	Remote bool   `json:"remote,omitempty"`
 }
 type Settings struct {
 	IntervalHours int   `json:"intervalHours"`
 	Retain        int   `json:"retain"`
 	LastRun       int64 `json:"lastRun"`
+	// SharedDir (clustered servers) is a directory every node can reach,
+	// at the same path, where scheduled and manual backups are written
+	// instead of the writing node's data directory. Empty keeps them on
+	// the node that made them.
+	SharedDir string `json:"sharedDir,omitempty"`
 }
 type Manifest struct {
 	Version int               `json:"version"`
@@ -110,18 +154,32 @@ func exportLogical(ctx context.Context, db *sql.DB, path string) error {
 
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	var v Settings
-	e := s.db.QueryRowContext(ctx, `SELECT interval_hours,retain,last_run FROM backup_settings WHERE id=1`).Scan(&v.IntervalHours, &v.Retain, &v.LastRun)
+	e := s.db.QueryRowContext(ctx, `SELECT interval_hours,retain,last_run,shared_dir FROM backup_settings WHERE id=1`).Scan(&v.IntervalHours, &v.Retain, &v.LastRun, &v.SharedDir)
 	return v, e
 }
 func (s *Service) Configure(ctx context.Context, v Settings) error {
 	if v.IntervalHours < 0 || v.IntervalHours > 8760 || v.Retain < 1 || v.Retain > 365 {
 		return errors.New("intervalHours must be 0..8760 and retain 1..365")
 	}
-	_, e := s.db.ExecContext(ctx, `UPDATE backup_settings SET interval_hours=?,retain=? WHERE id=1`, v.IntervalHours, v.Retain)
+	v.SharedDir = strings.TrimSpace(v.SharedDir)
+	if v.SharedDir != "" && (!filepath.IsAbs(v.SharedDir) || len(v.SharedDir) > 4096) {
+		return errors.New("sharedDir must be an absolute path")
+	}
+	if v.SharedDir != "" && s.clusterNode() == nil {
+		return errors.New("a shared backup directory applies only to clustered servers")
+	}
+	if v.SharedDir != "" {
+		v.SharedDir = filepath.Clean(v.SharedDir)
+	}
+	_, e := s.db.ExecContext(ctx, `UPDATE backup_settings SET interval_hours=?,retain=?,shared_dir=? WHERE id=1`, v.IntervalHours, v.Retain, v.SharedDir)
 	return e
 }
-func (s *Service) List() ([]Snapshot, error) {
-	entries, e := os.ReadDir(s.dir)
+
+// List is this node's own bundles (its data directory's backups).
+func (s *Service) List() ([]Snapshot, error) { return listDir(s.dir) }
+
+func listDir(dir string) ([]Snapshot, error) {
+	entries, e := os.ReadDir(dir)
 	if os.IsNotExist(e) {
 		return []Snapshot{}, nil
 	}
@@ -187,10 +245,16 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out Snapshot
-	if e := os.MkdirAll(s.dir, 0700); e != nil {
+	settings, se := s.Settings(ctx)
+	dir, shared := s.dir, false
+	node := s.clusterNode()
+	if node != nil && se == nil && settings.SharedDir != "" {
+		dir, shared = settings.SharedDir, true
+	}
+	if e := os.MkdirAll(dir, 0700); e != nil {
 		return out, e
 	}
-	stage, e := os.MkdirTemp(s.dir, ".snapshot-")
+	stage, e := os.MkdirTemp(dir, ".snapshot-")
 	if e != nil {
 		return out, e
 	}
@@ -291,11 +355,10 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 	if e != nil {
 		return out, e
 	}
-	target := filepath.Join(s.dir, name)
+	target := filepath.Join(dir, name)
 	if e = os.Rename(temp, target); e != nil {
 		return out, e
 	}
-	settings, se := s.Settings(ctx)
 	retain := s.retain
 	if se == nil {
 		retain = settings.Retain
@@ -303,7 +366,7 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 	if _, e = s.db.ExecContext(ctx, `UPDATE backup_settings SET last_run=? WHERE id=1`, manifest.Created.Unix()); e != nil {
 		return out, e
 	}
-	snaps, e := s.List()
+	snaps, e := listDir(dir)
 	if e != nil {
 		return out, e
 	}
@@ -312,10 +375,16 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 			out = snap
 		}
 		if i >= retain {
-			if e = os.Remove(filepath.Join(s.dir, snap.Name)); e != nil {
+			if e = os.Remove(filepath.Join(dir, snap.Name)); e != nil {
 				return out, e
 			}
 		}
+	}
+	if node != nil {
+		if e = s.record(ctx, *node, dir, shared); e != nil {
+			return out, e
+		}
+		out.Node, out.NodeID, out.Shared = node.Name, node.ID, shared
 	}
 	return out, nil
 }
@@ -505,7 +574,7 @@ func (s *Service) Handler() http.Handler {
 		json.NewEncoder(w).Encode(v)
 	}
 	m.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		snaps, e := s.List()
+		snaps, e := s.Snapshots(r.Context())
 		v, se := s.Settings(r.Context())
 		if e == nil {
 			e = se
@@ -513,10 +582,18 @@ func (s *Service) Handler() http.Handler {
 		reply(w, map[string]any{"snapshots": snaps, "settings": v, "warning": FilesystemWarning(r.Context(), filepath.Dir(s.configPath))}, e)
 	})
 	m.HandleFunc("POST /settings", func(w http.ResponseWriter, r *http.Request) {
-		var q Settings
-		e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&q)
+		var q struct {
+			Settings
+			SharedDir *string `json:"sharedDir"` // absent: unchanged
+		}
+		e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&q)
 		if e == nil {
-			e = s.Configure(r.Context(), q)
+			if q.SharedDir != nil {
+				q.Settings.SharedDir = *q.SharedDir
+			} else if cur, ce := s.Settings(r.Context()); ce == nil {
+				q.Settings.SharedDir = cur.SharedDir
+			}
+			e = s.Configure(r.Context(), q.Settings)
 		}
 		reply(w, map[string]bool{"ok": e == nil}, e)
 	})
@@ -527,7 +604,19 @@ func (s *Service) Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		f, e := os.Open(filepath.Join(s.dir, name))
+		path, e := s.locate(r.Context(), name)
+		var elsewhere errElsewhere
+		if errors.As(e, &elsewhere) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "on_other_node", "message": elsewhere.Error()}})
+			return
+		}
+		if e != nil {
+			http.NotFound(w, r)
+			return
+		}
+		f, e := os.Open(path)
 		if e != nil {
 			http.NotFound(w, r)
 			return

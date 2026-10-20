@@ -146,6 +146,29 @@ func newClient(key, lang, region string, log *slog.Logger, opts ...Option) *Clie
 		cache: newRespCache(o.cacheMaxEntries, o.cacheMaxBytes), flights: map[string]*flight{}}
 }
 
+// MinClusterRate is the floor, in requests per second, of a node's TMDB
+// rate when a cluster divides the per-key budget (SetRateShare).
+const MinClusterRate = 5
+
+// SetRateShare divides the configured request rate and burst by nodes, the
+// number of live cluster nodes sharing the API key, with a floor of
+// MinClusterRate requests per second (and burst) so a node of a large
+// cluster still makes progress; nodes ≤ 1 restores the configured rate.
+// TMDB's limit is per key (or per IP), so N nodes at the full rate would
+// together exceed it.
+func (c *Client) SetRateShare(nodes int) {
+	rate, burst := c.opts.ratePerSec, c.opts.burst
+	if nodes > 1 {
+		floor := min(float64(MinClusterRate), rate)
+		rate = max(rate/float64(nodes), floor)
+		burst = max(burst/nodes, min(MinClusterRate, burst), 1)
+	}
+	c.lim.setRate(rate, burst)
+}
+
+// RateLimit reports the current request rate (per second) and burst.
+func (c *Client) RateLimit() (perSec float64, burst int) { return c.lim.current() }
+
 // HasKey reports whether a key is available.
 func (c *Client) HasKey() bool { return c.settings().key != "" }
 

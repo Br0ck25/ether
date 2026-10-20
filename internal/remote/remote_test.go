@@ -151,6 +151,7 @@ type fakeIGD struct {
 	leases    map[string]string
 	permanent bool   // reject non-zero leases with 725
 	conflict  string // internal client already holding every port
+	strict    bool   // refuse to add over or delete any existing entry (606/718)
 	calls     []string
 	srv       *httptest.Server
 }
@@ -247,6 +248,10 @@ func (f *fakeIGD) soap(w http.ResponseWriter, r *http.Request) {
 			fault(725, "OnlyPermanentLeasesSupported")
 			return
 		}
+		if _, exists := f.mappings[key]; exists && f.strict {
+			fault(718, "ConflictInMappingEntry")
+			return
+		}
 		if f.conflict != "" {
 			if _, exists := f.mappings[key]; !exists {
 				f.mappings[key] = f.conflict + ":32400"
@@ -260,6 +265,10 @@ func (f *fakeIGD) soap(w http.ResponseWriter, r *http.Request) {
 		f.leases[key] = arg("NewLeaseDuration")
 		ok(name, "")
 	case "DeletePortMapping":
+		if f.strict {
+			fault(606, "Action not authorized")
+			return
+		}
 		if _, exists := f.mappings[key]; !exists {
 			fault(714, "NoSuchEntryInArray")
 			return
@@ -407,6 +416,34 @@ func TestPortMapperConflict(t *testing.T) {
 	n := f.ncalls()
 	if _, err := m.Ensure(context.Background(), 32400, 0); err == nil || f.ncalls() != n {
 		t.Fatal("expected backoff")
+	}
+}
+
+// A gateway that will not replace or delete an existing entry still
+// works when the entry already forwards to this host and port (left by an
+// earlier run of this node); one forwarding elsewhere is a conflict.
+func TestPortMapperAdoptsExistingOwnMapping(t *testing.T) {
+	f := newFakeIGD(t)
+	f.strict = true
+	f.mappings["TCP/32400"] = "127.0.0.1:32400"
+	f.mappings["TCP/32401"] = "127.0.0.1:9999"
+	newMapper := func() *PortMapper {
+		return NewPortMapper(PortMapperOptions{
+			DiscoverIGD: func(ctx context.Context) (*IGD, error) { return LoadIGD(ctx, nil, f.srv.URL+"/rootDesc.xml") },
+			Gateway:     func() (net.IP, error) { return nil, fmt.Errorf("none") },
+		})
+	}
+	st, err := newMapper().Ensure(context.Background(), 32400, 0)
+	if err != nil || !st.Active || st.ExternalPort != 32400 || st.InternalPort != 32400 || st.ExternalIP != "203.0.113.7" {
+		t.Fatalf("existing own mapping not adopted: st=%+v err=%v", st, err)
+	}
+	if st.RenewAt.IsZero() {
+		t.Fatalf("adopted mapping never re-checked: %+v", st)
+	}
+	// Same host, different internal port: not ours to adopt.
+	st, err = newMapper().Ensure(context.Background(), 32400, 32401)
+	if err == nil || st.Active {
+		t.Fatalf("mapping to another port adopted: st=%+v err=%v", st, err)
 	}
 }
 

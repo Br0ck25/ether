@@ -92,6 +92,9 @@ type App struct {
 	// caches the other nodes' URIs for the plex.tv publisher.
 	cluster cluster.Cluster
 	peers   *peerSet
+	// clusterFatal receives the error that ended this node's cluster
+	// membership (a duplicate node identity); nil on a standalone server.
+	clusterFatal chan error
 
 	tmdb        *tmdb.Client
 	catalog     *catalog.Catalog
@@ -237,7 +240,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// Catalogue.
 	a.tmdb = tmdb.NewFromConfig(cfg.Catalog, log.With("component", "tmdb"))
 	a.closers = append(a.closers, a.tmdb.Close)
-	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog")); err != nil {
+	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog"), a.catalogOptions()...); err != nil {
 		return fmt.Errorf("catalog: %w", err)
 	}
 	if a.collections, err = collections.New(a.db, a.catalog, log.With("component", "collections"), a.collectionOptions(cfg)...); err != nil {
@@ -421,6 +424,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 	if a.clustered() {
 		ropts.PeerURIs = a.peers.get // publish the union of every live node
+		ropts.NodeMapping = true     // every node maps its own port (runRegistrarAsLeader)
 	}
 	if a.registrar, err = plextv.NewRegistrar(ropts); err != nil {
 		return fmt.Errorf("registrar: %w", err)
@@ -537,6 +541,9 @@ func (a *App) Run(ctx context.Context) error {
 	// Leave the cluster last, after background work has stopped.
 	defer a.cluster.Close()
 	if err := a.cluster.Start(ctx); err != nil {
+		if errors.Is(err, cluster.ErrDuplicateNode) {
+			return err
+		}
 		a.log.Warn("cluster", "err", err)
 	}
 	var background backgroundGroup
@@ -551,6 +558,7 @@ func (a *App) Run(ctx context.Context) error {
 	go a.trakt.Start(ctx)
 	if a.clustered() {
 		background.start(func() { a.runRegistrarAsLeader(ctx) })
+		background.start(func() { a.registrar.RunPortMapping(ctx) })
 	} else if err := a.registrar.Start(ctx); err != nil {
 		a.log.Warn("plex.tv registrar", "err", err)
 	}
@@ -577,6 +585,7 @@ func (a *App) Run(ctx context.Context) error {
 	})
 	background.start(func() { a.runUpdates(ctx, cancel) })
 	background.start(func() { a.runClusterSync(ctx) })
+	background.start(func() { a.runBudgets(ctx) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)
@@ -606,6 +615,7 @@ func (a *App) Run(ctx context.Context) error {
 			return err
 		}
 	case runErr = <-watchdogErr:
+	case runErr = <-a.clusterFatal: // nil channel (never ready) when standalone
 	}
 	shutdown, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
