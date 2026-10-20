@@ -156,6 +156,9 @@ func buildCodecArgs(s runSpec) []string {
 	if v != nil {
 		if d.VideoCopy {
 			args = append(args, "-c:v", "copy")
+			if d.StripDolbyVision {
+				args = append(args, "-bsf:v", "dovi_rpu=strip=1")
+			}
 			if container == ContainerFMP4 && v.Codec != "hevc" {
 				tag := "0"
 				if v.Codec == "h264" {
@@ -170,7 +173,7 @@ func buildCodecArgs(s runSpec) []string {
 				}
 				args = append(args, "-tag:v", tag)
 			}
-			if v.DolbyVision && container == ContainerFMP4 {
+			if v.DolbyVision && !d.StripDolbyVision && container == ContainerFMP4 {
 				args = append(args, "-strict", "unofficial") // write the dvcC box
 			}
 		} else {

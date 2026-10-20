@@ -410,8 +410,14 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	containerOK := len(caps.Containers) == 0 || caps.SupportsContainer(info.Container)
 	name := clientName(caps)
 
+	// Plex's current native tvOS decoder can accept profile 8.1 media in
+	// its decision and then stall before the first frame. Keep its HDR10
+	// base at the original resolution; removing RPU/configuration data
+	// requires a copy-only mux rather than serving the original file.
+	hdr10Base := appleTVHDR10Base(v, caps)
+
 	// 1. Direct play.
-	if opts.DirectPlay && containerOK && len(videoIssues) == 0 && len(audioIssues) == 0 && len(otherIssues) == 0 {
+	if opts.DirectPlay && !hdr10Base && containerOK && len(videoIssues) == 0 && len(audioIssues) == 0 && len(otherIssues) == 0 {
 		d.Kind = core.DecisionDirectPlay
 		d.VideoCopy, d.AudioCopy = true, true
 		d.Container = info.Container
@@ -436,6 +442,9 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	}
 
 	var why []string
+	if hdr10Base {
+		why = append(why, "native Plex Apple TV compatibility: Dolby Vision 8.1 uses its HDR10 base layer")
+	}
 	if !opts.DirectPlay {
 		why = append(why, "direct play not allowed by client")
 	}
@@ -484,6 +493,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 		(!audioCopy && info.BitrateKbps-copiedAudioKbps(a)+audioKbps <= bitrateCap)) {
 		d.Kind = core.DecisionRemux
 		d.VideoCopy = true
+		d.StripDolbyVision = hdr10Base
 		d.AudioCopy = audioCopy
 		d.AudioCodec = audioCodec
 		if v != nil {
@@ -666,4 +676,18 @@ func describeSource(info core.MediaInfo, v, a *core.StreamInfo) string {
 		parts = append(parts, a.Codec)
 	}
 	return strings.Join(parts, "/")
+}
+
+// appleTVHDR10Base is a player quirk, not a hardware certification or a
+// blanket HEVC/HDR limit. Profile 5 has no HDR10 base and must not be stripped.
+func appleTVHDR10Base(v *core.StreamInfo, caps core.ClientCaps) bool {
+	if v == nil || v.Codec != "hevc" || !v.DolbyVision || v.DolbyVisionProfile != 8 ||
+		v.DolbyVisionCompatibilityID != 1 || v.ColorTransfer != "smpte2084" || !caps.HDR10 {
+		return false
+	}
+	if v.DolbyVisionBLPresent != nil && !*v.DolbyVisionBLPresent {
+		return false
+	}
+	product := strings.ToLower(caps.Product)
+	return strings.Contains(product, "plex") && (strings.Contains(product, "apple tv") || strings.EqualFold(caps.Platform, "tvos"))
 }

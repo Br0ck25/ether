@@ -36,7 +36,7 @@ func HLSVariantAttributes(info core.MediaInfo, d core.Decision) string {
 				videoRange = "HLG"
 			}
 		}
-		if d.VideoCopy && v.DolbyVision {
+		if d.VideoCopy && v.DolbyVision && !d.StripDolbyVision {
 			if v.DolbyVisionProfile == 5 && v.DolbyVisionLevel > 0 {
 				c = fmt.Sprintf("dvh1.05.%02d", v.DolbyVisionLevel)
 				videoRange = "PQ"

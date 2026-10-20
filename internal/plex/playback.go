@@ -544,6 +544,14 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		switch st.StreamType {
 		case 1:
 			st.Decision = "copy"
+			if dec.StripDolbyVision {
+				st.DOVIPresent, st.DOVIProfile, st.DOVILevel, st.DOVIVersion = nil, 0, 0, ""
+				st.DOVIBLCompatID, st.DOVIBLPresent, st.DOVIELPresent, st.DOVIRPUPresent = nil, nil, nil, nil
+				base := src
+				base.DolbyVision = false
+				st.DisplayTitle = videoDisplayTitle(base)
+				st.ExtendedDisplayTitle = st.DisplayTitle
+			}
 			if !dec.VideoCopy {
 				// A transcoded stream is new: PMS drops the source's
 				// profile and chroma details and reports 8-bit output.

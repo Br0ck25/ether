@@ -1268,9 +1268,13 @@ func adaptDecision(old core.Decision, oldInfo, newInfo core.MediaInfo, container
 
 	oldV, newV := oldInfo.Video(), newInfo.Video()
 	if newV != nil && oldV != nil {
+		oldRange := dynamicRange(oldV)
+		if old.StripDolbyVision {
+			oldRange = rangeHDR10 // the decoder holds HDR10, not source DV headers
+		}
 		if d.VideoCopy {
-			sameRange := dynamicRange(oldV) == dynamicRange(newV) ||
-				(dynamicRange(newV) == rangeDV && rangeOfDVBase(newV) == dynamicRange(oldV))
+			sameRange := oldRange == dynamicRange(newV) ||
+				(dynamicRange(newV) == rangeDV && rangeOfDVBase(newV) == oldRange)
 			if newV.Codec != oldV.Codec || newV.Height > oldV.Height || !sameRange || d.BurnSubtitles {
 				d.Kind = core.DecisionTranscode
 				d.VideoCopy = false
@@ -1289,6 +1293,7 @@ func adaptDecision(old core.Decision, oldInfo, newInfo core.MediaInfo, container
 			keptHDR := isHDR(oldV) && !old.ToneMap
 			d.ToneMap = isHDR(newV) && !keptHDR
 		}
+		d.StripDolbyVision = d.VideoCopy && oldRange == rangeHDR10 && newV.DolbyVision && rangeOfDVBase(newV) == rangeHDR10
 	}
 	if newA != nil && oldA != nil && d.AudioCopy && newA.Codec != oldA.Codec {
 		d.AudioCopy = false

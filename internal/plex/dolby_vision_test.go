@@ -1,7 +1,9 @@
 package plex
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -60,5 +62,26 @@ func TestUnknownDolbyVisionRecordDoesNotInventLayerFlags(t *testing.T) {
 	}
 	if got.DOVIBLCompatID != nil || got.DOVIBLPresent != nil || got.DOVIELPresent != nil || got.DOVIRPUPresent != nil || got.DOVIVersion != "" {
 		t.Fatalf("invented configuration from codec tag: %+v", got)
+	}
+}
+
+func TestHDR10BaseDecisionKeepsCopyAndRemovesDVSignaling(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	info := core.MediaInfo{Container: "mkv", Streams: []core.StreamInfo{{Type: "video", Codec: "hevc", Width: 3840, Height: 2160, BitDepth: 10, ColorTransfer: "smpte2084", DolbyVision: true, DolbyVisionProfile: 8, DolbyVisionLevel: 6, DolbyVisionCompatibilityID: 1, DolbyVisionVersion: "1.0", DolbyVisionBLPresent: model.Ptr(true), DolbyVisionELPresent: model.Ptr(false), DolbyVisionRPUPresent: model.Ptr(true)}}}
+	ps := &core.PlaySession{Key: fightClub.Key, Info: info, Resolution: &core.Resolution{Release: core.Release{ID: "debrid-source", Protocol: core.ProtocolTorrent}}}
+	dec := core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true, VideoCodec: "hevc", Container: "mkv", StripDolbyVision: true}
+	p := playRequest{protocol: "hls", mde: true, opts: core.DecideOptions{DirectPlay: true, DirectStream: true}}
+	mc := f.srv.decisionContainer(context.Background(), &Request{User: &ownerUser}, &fightClub, ps, dec, p)
+	part := mc.Metadata[0].Media[0].Part[0]
+	if part.Decision == "directplay" {
+		t.Fatal("MDE disguised required base-layer remux as direct play")
+	}
+	v := part.Stream[0]
+	if v.Decision != "copy" || v.Codec != "hevc" || v.Width != 3840 || v.Height != 2160 || v.BitDepth != 10 || v.ColorTrc != "smpte2084" {
+		t.Fatalf("HDR10 base changed: %+v", v)
+	}
+	if v.DOVIPresent != nil || v.DOVIProfile != 0 || v.DOVILevel != 0 || v.DOVIBLCompatID != nil || v.DOVIBLPresent != nil || v.DOVIELPresent != nil || v.DOVIRPUPresent != nil || v.DOVIVersion != "" || strings.Contains(v.DisplayTitle, "DoVi") {
+		t.Fatalf("output advertised removed DV data: %+v", v)
 	}
 }

@@ -413,6 +413,10 @@ type Decision struct {
 	// ToneMap converts HDR (HDR10, HLG, Dolby Vision) video to SDR while
 	// transcoding, for clients without HDR support.
 	ToneMap bool `json:"toneMap,omitempty"`
+
+	// StripDolbyVision copies the compatible HDR10 base layer while
+	// removing Dolby Vision RPU/configuration data; it never re-encodes.
+	StripDolbyVision bool `json:"stripDolbyVision,omitempty"`
 }
 
 type HWAccel struct {
