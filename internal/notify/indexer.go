@@ -20,16 +20,14 @@ func (s *Service) ObserveIndexer(e newznab.Event) {
 	}
 	key := e.Indexer + "\x00" + e.Kind
 	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
 	if s.indexerStates == nil {
 		s.indexerStates = map[string]string{}
 	}
 	old := s.indexerStates[key]
 	if state == "" {
 		delete(s.indexerStates, key)
-	} else {
-		s.indexerStates[key] = state
 	}
-	s.healthMu.Unlock()
 	if state == "" || state == old {
 		return
 	}
@@ -41,5 +39,9 @@ func (s *Service) ObserveIndexer(e newznab.Event) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_ = s.Emit(ctx, Event{Kind: kind, Title: e.Indexer, Message: message, At: e.At})
+	if err := s.Emit(ctx, Event{Kind: kind, Title: e.Indexer, Message: message, At: e.At}); err != nil {
+		s.opts.Logger.Warn("enqueue indexer notification", "err", err)
+		return
+	}
+	s.indexerStates[key] = state
 }

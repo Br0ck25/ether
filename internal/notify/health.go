@@ -20,7 +20,6 @@ func (s *Service) SampleHealth(ctx context.Context) error {
 				id = p.Host
 			}
 			old := s.providerStates[id]
-			s.providerStates[id] = p.State
 			if (p.State == usenet.StateBackoff || p.State == usenet.StateAuthFail) && p.State != old {
 				name := p.Name
 				if name == "" {
@@ -30,6 +29,7 @@ func (s *Service) SampleHealth(ctx context.Context) error {
 					return err
 				}
 			}
+			s.providerStates[id] = p.State
 		}
 	}
 	if s.opts.CacheUsage != nil {

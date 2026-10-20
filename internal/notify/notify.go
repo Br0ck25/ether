@@ -188,20 +188,31 @@ func (s *Service) Emit(ctx context.Context, e Event) error {
 	if err != nil {
 		return err
 	}
-	matched := false
+	var selected []Channel
 	for _, c := range cs {
-		if !c.Enabled || !matches(c.Events, e.Kind) || (e.Kind == "newsletter.weekly" && c.Kind != "smtp") {
-			continue
+		if c.Enabled && matches(c.Events, e.Kind) && (e.Kind != "newsletter.weekly" || c.Kind == "smtp") {
+			selected = append(selected, c)
 		}
-		matched = true
-		if err := s.enqueue(ctx, c, e); err != nil {
+	}
+	if len(selected) == 0 {
+		if e.Kind == "newsletter.weekly" {
+			return errors.New("no enabled SMTP channel selected for weekly newsletters")
+		}
+		return nil
+	}
+	// Commit every destination together. A failed fan-out can be retried
+	// without duplicating notifications already queued for earlier channels.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, c := range selected {
+		if err := enqueueWith(ctx, tx, c, e, s.opts.Now()); err != nil {
 			return err
 		}
 	}
-	if e.Kind == "newsletter.weekly" && !matched {
-		return errors.New("no enabled SMTP channel selected for weekly newsletters")
-	}
-	return nil
+	return tx.Commit()
 }
 func known(k string) bool {
 	for _, v := range Kinds {
@@ -220,12 +231,17 @@ func matches(events []string, k string) bool {
 	return false
 }
 func (s *Service) enqueue(ctx context.Context, c Channel, e Event) error {
+	return enqueueWith(ctx, s.db, c, e, s.opts.Now())
+}
+
+func enqueueWith(ctx context.Context, db interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, c Channel, e Event, now time.Time) error {
 	raw, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
-	now := s.opts.Now()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO notify_queue(channel,event,created,due) VALUES(?,?,?,?)`, c.ID, string(raw), now.Unix(), now.Add(time.Duration(c.DigestMinutes)*time.Minute).Unix())
+	_, err = db.ExecContext(ctx, `INSERT INTO notify_queue(channel,event,created,due) VALUES(?,?,?,?)`, c.ID, string(raw), now.Unix(), now.Add(time.Duration(c.DigestMinutes)*time.Minute).Unix())
 	return err
 }
 
