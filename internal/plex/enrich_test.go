@@ -484,10 +484,22 @@ func TestStartHLSRedecidesForMDEStream(t *testing.T) {
 	}
 }
 
-// Usenet decisions prefer a remux; local files retain the native MDE path.
+// Usenet decisions prefer a remux; compatible HTTP and local files retain
+// direct play. A debrid file needing conversion must not be reported as copy.
 func TestMDEOnDemandPrefersCopyRemux(t *testing.T) {
-	for _, local := range []bool{false, true} {
-		t.Run(fmt.Sprint("local=", local), func(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, protocol string
+		requireRemux       bool
+		convert            bool
+		want               core.DecisionKind
+	}{
+		{name: "usenet", id: "usenet-release", want: core.DecisionRemux},
+		{name: "local", id: "local:550", want: core.DecisionDirectPlay},
+		{name: "debrid", id: "debrid-release", protocol: core.ProtocolTorrent, want: core.DecisionDirectPlay},
+		{name: "debrid failover", id: "debrid-release", protocol: core.ProtocolTorrent, requireRemux: true, want: core.DecisionRemux},
+		{name: "debrid conversion", id: "debrid-release", protocol: core.ProtocolTorrent, convert: true, want: core.DecisionTranscode},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture()
 			defer f.srv.Close()
 			user := &core.User{ID: 1, IsOwner: true}
@@ -496,28 +508,24 @@ func TestMDEOnDemandPrefersCopyRemux(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			id := "usenet-release"
-			if local {
-				id = "local:" + fightClub.Key.String()
+			ps.Resolution = &core.Resolution{Release: core.Release{ID: tc.id, Protocol: tc.protocol}}
+			ps.RequiresRemux = tc.requireRemux
+			if tc.convert {
+				f.trans.decision = core.Decision{Kind: core.DecisionTranscode, Container: "mpegts", VideoCodec: "h264", AudioCodec: "aac"}
 			}
-			ps.Resolution = &core.Resolution{Release: core.Release{ID: id}}
 			pr := &Request{User: user, ClientID: caps.ClientID}
 			p := playRequest{key: fightClub.Key, caps: caps, mde: true, sessionID: "copy-remux", protocol: "hls", opts: core.DecideOptions{DirectPlay: true, DirectStream: true}}
 			title, session, dec, err := f.srv.prepare(context.Background(), pr, &p)
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := core.DecisionRemux
-			if local {
-				want = core.DecisionDirectPlay
-			}
-			if dec.Kind != want || !dec.VideoCopy || !dec.AudioCopy {
+			if dec.Kind != tc.want || (!tc.convert && (!dec.VideoCopy || !dec.AudioCopy)) {
 				t.Fatalf("decision: %+v", dec)
 			}
 			mc := f.srv.decisionContainer(context.Background(), pr, title, session, dec, p)
 			part := mc.Metadata[0].Media[0].Part[0]
-			if !local && part.Decision == "directplay" {
-				t.Fatal("MDE response overrides safe remux")
+			if got := part.Decision == "directplay"; got != (tc.want == core.DecisionDirectPlay) {
+				t.Fatalf("MDE response overrides decision: %s", part.Decision)
 			}
 		})
 	}

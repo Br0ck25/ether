@@ -258,15 +258,19 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 			return t, nil, core.Decision{}, fmt.Errorf("this client requires media conversion; install or configure FFmpeg")
 		}
 	}
-	// On-demand sources can change during failover. A copy-only remux gives
+	// Usenet sources can change during failover. A copy-only remux gives
 	// MDE clients fresh container headers at the resumed timestamp. A
 	// session flagged RequiresRemux (direct-play failover found no
 	// exact-size replacement) gets the same treatment for every client.
+	// Debrid exposes a stable HTTP file: keep a compatible client's direct
+	// play decision instead of adding a segmented-Matroska demuxer and an
+	// ffmpeg process. Needed conversions still follow the normal decision.
 	requiresRemux := ps.RequiresRemux
 	if rr, ok := s.d.Playback.(core.RemuxRequirer); ok && rr.RequiresRemux(ps.ID) {
 		requiresRemux = true
 	}
-	if (p.mde || requiresRemux) && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
+	preferRemux := p.mde && onDemandSession(ps) && ps.Resolution.Release.Protocol != core.ProtocolTorrent
+	if (preferRemux || requiresRemux) && p.opts.DirectStream && onDemandSession(ps) && dec.Kind == core.DecisionDirectPlay && s.d.Transcoder != nil {
 		dec.Kind = core.DecisionRemux
 		dec.VideoCopy, dec.AudioCopy = true, true
 		videoCodec, audioCodec := "", ""
@@ -398,7 +402,7 @@ func (s *Server) decisionContainer(ctx context.Context, pr *Request, t *core.Tit
 	// engine decides: PMS answers with the source media as direct play and
 	// only an mdeDecisionCode. Ether's own decision is kept for start.m3u8
 	// in case the client then asks for a stream.
-	mdeDirect := p.mde && p.opts.DirectPlay && len(p.opts.AudioFilters) == 0 && !(onDemandSession(ps) && p.opts.DirectStream)
+	mdeDirect := p.mde && p.opts.DirectPlay && len(p.opts.AudioFilters) == 0 && !(onDemandSession(ps) && p.opts.DirectStream && dec.Kind != core.DecisionDirectPlay)
 	shown := dec
 	if mdeDirect {
 		shown = core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container}
