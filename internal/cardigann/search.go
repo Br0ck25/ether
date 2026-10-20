@@ -118,7 +118,10 @@ func (r *Runner) attempts(req core.SearchRequest, movieCats, tvCats []int) []que
 	if title := sanitizeTitle(req.Title); title != "" {
 		kq := base
 		kq.q = title
-		if req.Year > 0 {
+		// Episode release names normally omit the series premiere year.
+		// Keep Year as an explicit query variable and retain the canonical
+		// IDs for validation, but do not AND an absent year into keywords.
+		if req.Year > 0 && !isTV {
 			kq.q = fmt.Sprintf("%s %d", title, req.Year)
 		}
 		kq.keywords = strings.TrimSpace(kq.q + " " + epString)

@@ -161,7 +161,7 @@ func TestPublicKeywordSearchAndTVPath(t *testing.T) {
 		t.Fatalf("andmatch kept %d rows", len(rels))
 	}
 	seen = nil
-	rels, err = r.Search(ctx, core.SearchRequest{Type: core.TypeEpisode, Title: "Show Name", Season: 1, Episode: 2}, nil, nil, nil)
+	rels, err = r.Search(ctx, core.SearchRequest{Type: core.TypeEpisode, Title: "Show Name", Year: 1996, Season: 1, Episode: 2}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,5 +346,20 @@ func TestSearchErrorsAreReported(t *testing.T) {
 	budgetErr := func(context.Context, string) error { return core.ErrBudgetExhausted }
 	if _, err := r.Search(context.Background(), core.SearchRequest{Type: core.TypeMovie, Title: "x"}, nil, nil, budgetErr); !errors.Is(err, core.ErrBudgetExhausted) {
 		t.Fatalf("budget err = %v", err)
+	}
+}
+
+func TestTVKeywordSearchKeepsCanonicalYearOutsideReleaseKeywords(t *testing.T) {
+	r := testRunner(t, loadDef(t, "public.yml"), "https://tracker.test", runnerSetup{})
+	attempts := r.attempts(core.SearchRequest{Type: core.TypeEpisode, Title: "Show Name", Year: 1996, Season: 2, Episode: 3}, nil, nil)
+	if len(attempts) != 1 || attempts[0].keywords != "Show Name S02E03" || attempts[0].year != 1996 {
+		t.Fatalf("TV query: %+v", attempts)
+	}
+	vars, err := r.searchVars(attempts[0], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars["Query"].(map[string]string)["Year"] != "1996" {
+		t.Fatal("lost series identity year")
 	}
 }

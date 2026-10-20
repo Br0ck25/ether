@@ -274,6 +274,11 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 
 func cacheKey(c *Client, req core.SearchRequest) string {
 	h := sha1.New()
+	if c.Config().IsBuiltin() && (req.Type == core.TypeEpisode || req.Type == core.TypeShow || req.Season > 0) {
+		// Built-in TV keywords no longer require the series premiere year.
+		// Do not reuse persisted empty answers from that narrower search.
+		fmt.Fprint(h, "tv-keywords-v2|")
+	}
 	fmt.Fprintf(h, "%s|%s|%d|%s|%d|%s|%d|%d|%d",
 		c.indexerID(), req.Type, req.IDs.TMDB, req.IDs.IMDB, req.IDs.TVDB,
 		strings.ToLower(strings.TrimSpace(req.Title)), req.Year, req.Season, req.Episode)

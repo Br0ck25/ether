@@ -88,3 +88,22 @@ func TestBuiltinWithoutBackendFails(t *testing.T) {
 		t.Fatal("built-in indexer searched without a backend")
 	}
 }
+
+func TestBuiltinTVSearchDoesNotReuseOldYearKeywordAnswers(t *testing.T) {
+	ctx := context.Background()
+	fb := &fakeBackend{}
+	cfg := config.Indexer{ID: "site", Name: "Site", Kind: config.IndexerKindCardigann, Definition: "fake", Enabled: true}
+	c := New(cfg, nil, Options{Backend: func(config.Indexer) (Backend, error) { return fb, nil }})
+	req := core.SearchRequest{Type: core.TypeEpisode, Title: "Show Name", Year: 1996, Season: 2, Episode: 3}
+	// Non-built-in keys retain the legacy format. Seed a persisted answer
+	// made by the earlier TV query, then exercise the normal client path.
+	legacy := New(config.Indexer{ID: cfg.ID}, nil, Options{})
+	c.cachePut(ctx, cacheKey(legacy, req), []core.Release{{GUID: "old-answer"}})
+	got, err := c.Search(ctx, req)
+	if err != nil || fb.searches != 1 || len(got) != 1 || got[0].GUID == "old-answer" {
+		t.Fatalf("reused stale TV query: searches=%d got=%+v err=%v", fb.searches, got, err)
+	}
+	if _, err := c.Search(ctx, req); err != nil || fb.searches != 1 {
+		t.Fatal("corrected TV answer was not cached")
+	}
+}
