@@ -2,8 +2,10 @@ package debrid
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"sync"
+	"time"
 )
 
 // defaultHostConnections caps open TCP connections per media host across
@@ -21,6 +23,7 @@ const defaultHostConnections = 12
 type connCap struct {
 	limit     int
 	closeIdle func()
+	log       *slog.Logger
 
 	mu    sync.Mutex
 	open  map[string]int
@@ -49,6 +52,12 @@ func (c *connCap) wrap(next dialFunc) dialFunc {
 
 func (c *connCap) acquire(ctx context.Context, addr string) error {
 	asked := false
+	began := time.Now()
+	defer func() {
+		if wait := time.Since(began); wait > 250*time.Millisecond && c.log != nil {
+			c.log.Info("media connection waited for the host cap", "host", addr, "wait", wait, "limit", c.limit)
+		}
+	}()
 	for {
 		c.mu.Lock()
 		if c.open[addr] < c.limit {

@@ -183,6 +183,7 @@ func NewEngine(svc *Service, opts EngineOptions) *Engine {
 	if e.log == nil {
 		e.log = slog.Default()
 	}
+	limit.log = e.log
 	if e.now == nil {
 		e.now = time.Now
 	}
@@ -1253,8 +1254,13 @@ func (p *peekBody) Close() error { return p.rc.Close() }
 
 func (e *Engine) send(ctx context.Context, hc *http.Client, u string, start, end int64) (*http.Response, timing, error) {
 	began := time.Now()
-	var connStart, connect, ttfb atomic.Int64
+	var connStart, connect, ttfb, gotConn atomic.Int64
+	reused := false
 	trace := &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) {
+			gotConn.Store(int64(time.Since(began)))
+			reused = info.Reused
+		},
 		ConnectStart: func(string, string) { connStart.CompareAndSwap(0, int64(time.Since(began))) },
 		ConnectDone: func(_, _ string, err error) {
 			if err == nil {
@@ -1274,6 +1280,12 @@ func (e *Engine) send(ctx context.Context, hc *http.Client, u string, start, end
 	req.Header.Set("User-Agent", "Ether")
 	resp, err := hc.Do(req)
 	tm := timing{connect: time.Duration(connect.Load()), ttfb: time.Duration(ttfb.Load())}
+	if took := time.Since(began); took > time.Second {
+		// A slow first byte stalls ffmpeg at a start or seek; say whether
+		// the time went to waiting for a connection, dialing or the CDN.
+		e.log.Info("slow media response", "took", took, "connWait", time.Duration(gotConn.Load())-tm.connect,
+			"connect", tm.connect, "ttfb", tm.ttfb, "reused", reused, "bytes", end-start+1, "err", err != nil)
+	}
 	if err != nil {
 		return nil, tm, fmt.Errorf("debrid: media request: %w: %v", core.ErrSourceUnavailable, sanitize(err))
 	}
