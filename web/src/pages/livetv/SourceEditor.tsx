@@ -627,7 +627,7 @@ function UrlOrFile({
           placeholder={fileReady ? "Using the uploaded file" : placeholder}
           className="min-w-0 flex-1"
         />
-        <label className="inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg hover:bg-surface-hover">
+        <label className="relative inline-flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg hover:bg-surface-hover">
           <FileUp size={14} />
           Upload
           <input

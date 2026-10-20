@@ -333,10 +333,10 @@ function Shell() {
             <Route path="/releases/:tab?" element={<Releases />} />
             <Route path="/playback/:tab?" element={<Playback />} />
             <Route path="/notifications/:tab?" element={<Notifications />} />
-            <Route path="/server" element={<GeneralPage />} />
-            <Route path="/remote-access" element={<RemoteAccessPage />} />
-            <Route path="/services" element={<ServicesPage />} />
-            <Route path="/backups" element={<BackupsPage />} />
+            <Route path="/server/:tab?" element={<GeneralPage />} />
+            <Route path="/remote-access/:tab?" element={<RemoteAccessPage />} />
+            <Route path="/services/:tab?" element={<ServicesPage />} />
+            <Route path="/backups/:tab?" element={<BackupsPage />} />
             <Route path="/updates" element={<UpdatesPage />} />
             <Route path="/troubleshooting" element={<TroubleshootingPage />} />
             <Route path="/logs" element={<Logs />} />

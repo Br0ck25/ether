@@ -11,9 +11,10 @@ import { SaveBar, useDraft } from "./SaveBar";
 type Obj = Record<string, unknown>;
 
 /**
- * One owner config section (`config.json` key) edited in place: every field
- * group stacked on the page, server-validated errors beside each field, and the
- * shared save bar while there are unsaved changes.
+ * One owner config section (`config.json` key) edited in place: its field
+ * groups, server-validated errors beside each field, and the shared save bar
+ * while there are unsaved changes. Pages with tabs keep one mounted instance
+ * and pass `show`, so a draft survives switching tabs.
  */
 export function ConfigSection({
   configKey,
@@ -25,6 +26,10 @@ export function ConfigSection({
   test,
   onSaved,
   omit,
+  hidden = false,
+  show,
+  showAdvanced = true,
+  onFieldErrors,
 }: {
   /** Key in config.json, e.g. "cache" or "openSubtitles". */
   configKey: string;
@@ -44,6 +49,14 @@ export function ConfigSection({
   onSaved?: (value: Obj) => void;
   /** Keys edited elsewhere: kept in the saved value, never shown under "Advanced". */
   omit?: string[];
+  /** Keep the form (and its unsaved edits) mounted without rendering it, e.g. on another tab. */
+  hidden?: boolean;
+  /** Which groups to render; all of them when omitted. Hidden groups keep their edits. */
+  show?: (group: FieldGroup, index: number) => boolean;
+  /** Whether to render the "Advanced" block of options this UI has no schema for. */
+  showAdvanced?: boolean;
+  /** Field keys (without the section prefix) the server rejected, to reveal their tab. */
+  onFieldErrors?: (keys: string[]) => void;
 }) {
   const { refreshDashboard } = useApp();
   const config = useAsync(() => api.getConfig(), []);
@@ -61,20 +74,45 @@ export function ConfigSection({
     setErrors({});
     try {
       if (endpoint) await api.putSection(endpoint, draft);
-      else await api.putConfig({ ...cfg, [configKey]: draft } as EtherConfig);
+      else {
+        // Merge into the live config: another form on the page may have just saved.
+        const live = await api.getConfig();
+        await api.putConfig({ ...live, [configKey]: draft } as EtherConfig);
+      }
       toast.success("Settings saved", { description: label });
       await config.reload();
       void refreshDashboard();
       onSaved?.(draft);
     } catch (e) {
       setError(e);
-      if (e instanceof ApiError && e.fields)
+      if (e instanceof ApiError && e.fields) {
         setErrors(Object.fromEntries(e.fields.map((f) => [f.field, f.message])));
+        const prefix = `${configKey}.`;
+        onFieldErrors?.(
+          e.fields
+            .filter((f) => f.field.startsWith(prefix))
+            .map((f) => f.field.slice(prefix.length)),
+        );
+      }
     } finally {
       setSaving(false);
     }
-  }, [cfg, config, configKey, draft, endpoint, label, onSaved, refreshDashboard]);
+  }, [cfg, config, configKey, draft, endpoint, label, onFieldErrors, onSaved, refreshDashboard]);
 
+  const saveBar = (
+    <SaveBar
+      dirty={dirty}
+      saving={saving}
+      error={error}
+      onSave={save}
+      onDiscard={() => {
+        reset();
+        setErrors({});
+        setError(null);
+      }}
+    />
+  );
+  if (hidden) return saveBar;
   if (config.error) return <ErrorPanel error={config.error} onRetry={() => void config.reload()} />;
   if (!cfg || !draft)
     return (
@@ -89,25 +127,27 @@ export function ConfigSection({
   return (
     <>
       {before?.(draft, cfg)}
-      {groups.map((g, i) => (
-        <SettingsSection
-          key={g.title ?? `group-${i}`}
-          title={g.title ?? (i === 0 ? label : undefined)}
-          description={g.description}
-        >
-          {g.fields.map((f) => (
-            <SchemaField
-              key={f.key}
-              def={f}
-              value={draft[f.key]}
-              path={`${configKey}.${f.key}`}
-              error={errors[`${configKey}.${f.key}`]}
-              onChange={(v) => change({ ...draft, [f.key]: v })}
-            />
-          ))}
-        </SettingsSection>
-      ))}
-      {extra.length ? (
+      {groups.map((g, i) =>
+        show && !show(g, i) ? null : (
+          <SettingsSection
+            key={g.title ?? `group-${i}`}
+            title={g.title ?? (i === 0 ? label : undefined)}
+            description={g.description}
+          >
+            {g.fields.map((f) => (
+              <SchemaField
+                key={f.key}
+                def={f}
+                value={draft[f.key]}
+                path={`${configKey}.${f.key}`}
+                error={errors[`${configKey}.${f.key}`]}
+                onChange={(v) => change({ ...draft, [f.key]: v })}
+              />
+            ))}
+          </SettingsSection>
+        ),
+      )}
+      {extra.length && showAdvanced ? (
         <SettingsSection title="Advanced" description="Additional options this server supports.">
           <GenericFields
             value={draft}
@@ -120,17 +160,7 @@ export function ConfigSection({
       ) : null}
       {test ? <div className="flex justify-end">{test(draft)}</div> : null}
       {after?.(draft, cfg)}
-      <SaveBar
-        dirty={dirty}
-        saving={saving}
-        error={error}
-        onSave={save}
-        onDiscard={() => {
-          reset();
-          setErrors({});
-          setError(null);
-        }}
-      />
+      {saveBar}
     </>
   );
 }

@@ -107,7 +107,7 @@ function FilePick({
 }) {
   return (
     <label
-      className={`inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg shadow-sm hover:bg-surface-hover focus-within:ring-2 focus-within:ring-ring/50 ${disabled ? "pointer-events-none opacity-50" : ""}`}
+      className={`relative inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-sm font-medium text-fg shadow-sm hover:bg-surface-hover focus-within:ring-2 focus-within:ring-ring/50 ${disabled ? "pointer-events-none opacity-50" : ""}`}
     >
       <FileUp size={14} /> {label}
       <input
@@ -127,10 +127,11 @@ function FilePick({
 }
 
 /**
- * Settings › Backups & import: the automatic backup schedule edited in place,
- * snapshots and restore, and one-off imports from Plex, Trakt and Letterboxd.
+ * Backups & import: the automatic backup schedule edited in place, snapshots
+ * and restore on one tab; one-off imports from Plex, Trakt and Letterboxd on
+ * the other. Both stay mounted so a half-finished import survives a tab switch.
  */
-export function BackupsAndImport() {
+export function BackupsAndImport({ tab = "backups" }: { tab?: "backups" | "import" }) {
   const users = useImportViewers();
   const [data, setData] = useState<Backups | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
@@ -169,158 +170,162 @@ export function BackupsAndImport() {
 
   return (
     <>
-      {loadError && !data ? (
-        <ErrorPanel error={loadError} onRetry={() => void load()} />
-      ) : (
-        <>
-          <SettingsSection
-            title="Automatic backups"
-            description="Snapshots hold your settings and a consistent copy of the database."
-          >
-            {draft ? (
-              <>
-                <SettingsRow
-                  title={<label htmlFor="backup-interval">Back up every</label>}
-                  description="0 turns automatic backups off."
-                  control={
-                    <span className="flex items-center gap-2">
+      <div hidden={tab !== "backups"} className="space-y-6">
+        {loadError && !data ? (
+          <ErrorPanel error={loadError} onRetry={() => void load()} />
+        ) : (
+          <>
+            <SettingsSection
+              title="Automatic backups"
+              description="Snapshots hold your settings and a consistent copy of the database."
+            >
+              {draft ? (
+                <>
+                  <SettingsRow
+                    title={<label htmlFor="backup-interval">Back up every</label>}
+                    description="0 turns automatic backups off."
+                    control={
+                      <span className="flex items-center gap-2">
+                        <NumberInput
+                          id="backup-interval"
+                          aria-label="Back up every"
+                          className="w-24"
+                          min={0}
+                          max={8760}
+                          step={1}
+                          value={draft.intervalHours}
+                          onChange={(n) => setDraft({ ...draft, intervalHours: n })}
+                        />
+                        <span className="text-sm text-fg-muted">hours</span>
+                      </span>
+                    }
+                  />
+                  <SettingsRow
+                    title={<label htmlFor="backup-retain">Snapshots to keep</label>}
+                    description="The oldest snapshot is removed when a new one would exceed this."
+                    control={
                       <NumberInput
-                        id="backup-interval"
-                        aria-label="Back up every"
+                        id="backup-retain"
+                        aria-label="Snapshots to keep"
                         className="w-24"
-                        min={0}
-                        max={8760}
+                        min={1}
+                        max={365}
                         step={1}
-                        value={draft.intervalHours}
-                        onChange={(n) => setDraft({ ...draft, intervalHours: n })}
+                        value={draft.retain}
+                        onChange={(n) => setDraft({ ...draft, retain: n })}
                       />
-                      <span className="text-sm text-fg-muted">hours</span>
-                    </span>
-                  }
-                />
-                <SettingsRow
-                  title={<label htmlFor="backup-retain">Snapshots to keep</label>}
-                  description="The oldest snapshot is removed when a new one would exceed this."
-                  control={
-                    <NumberInput
-                      id="backup-retain"
-                      aria-label="Snapshots to keep"
-                      className="w-24"
-                      min={1}
-                      max={365}
-                      step={1}
-                      value={draft.retain}
-                      onChange={(n) => setDraft({ ...draft, retain: n })}
-                    />
-                  }
-                />
-              </>
-            ) : (
-              <div className="px-5 py-4">
-                <LoadingRows rows={2} />
-              </div>
-            )}
-          </SettingsSection>
+                    }
+                  />
+                </>
+              ) : (
+                <div className="px-5 py-4">
+                  <LoadingRows rows={2} />
+                </div>
+              )}
+            </SettingsSection>
 
-          <Section
-            title="Snapshots"
-            description="Downloads include account credentials. Keep them private."
-            actions={
-              <Button
-                size="sm"
-                disabled={busy}
-                onClick={() => void run(() => post("/backups/").then(load))}
-              >
-                <Plus size={14} /> {busy ? "Working…" : "Create snapshot"}
-              </Button>
-            }
-          >
-            {data?.warning ? (
-              <Alert variant="warning" role="status">
-                <AlertDescription>{data.warning}</AlertDescription>
-              </Alert>
-            ) : null}
-            {data ? (
-              <PagedTable
-                rows={data.snapshots ?? []}
-                rowKey={(s) => s.name}
-                pageSize={10}
-                empty="No snapshots yet. Create your first backup."
-                defaultSort={{ key: "created", dir: "desc" }}
-                labels={{ searchLabel: "Search backups" }}
-                columns={[
-                  {
-                    key: "created",
-                    header: "Created",
-                    search: (s) => s.name,
-                    sortValue: (s) => s.created,
-                    cell: (s) => new Date(s.created).toLocaleString(),
-                  },
-                  {
-                    key: "size",
-                    header: "Size",
-                    align: "right",
-                    sortValue: (s) => s.size,
-                    cell: (s) => <span className="tabular-nums">{formatBytes(s.size)}</span>,
-                  },
-                  {
-                    key: "download",
-                    header: "",
-                    align: "right",
-                    cell: (s) => (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={busy}
-                        aria-label={`Download ${s.name}`}
-                        onClick={() =>
-                          void run(() =>
-                            download("/backups/export/" + encodeURIComponent(s.name), s.name),
-                          )
-                        }
-                      >
-                        <Download size={14} /> Download
-                      </Button>
-                    ),
-                  },
-                ]}
-              />
-            ) : (
-              <LoadingRows rows={3} />
-            )}
-          </Section>
-
-          <Section
-            title="Restore a backup"
-            description="Ether checks the bundle's checksums and database, then prepares it in a separate data folder. Nothing changes until you stop Ether and start it from that folder."
-          >
-            <FilePick
-              label="Choose backup bundle"
-              accept=".tar.gz,.gz,application/gzip"
-              disabled={busy}
-              onFile={(file) =>
-                void run(async () => {
-                  const result = (await upload("/backups/restore", file, "application/gzip")) as {
-                    path?: string;
-                  };
-                  setRestored(result.path ?? "");
-                  toast.success("Restore validated and staged");
-                })
+            <Section
+              title="Snapshots"
+              description="Downloads include account credentials. Keep them private."
+              actions={
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void run(() => post("/backups/").then(load))}
+                >
+                  <Plus size={14} /> {busy ? "Working…" : "Create snapshot"}
+                </Button>
               }
-            />
-            {restored ? (
-              <Alert variant="success" role="status">
-                <AlertDescription>
-                  Ready to restore. Stop Ether and start it with the data folder{" "}
-                  <code className="break-all">{restored}</code>.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-          </Section>
-        </>
-      )}
-      <PlexImport users={users} />
-      <CsvTools users={users} />
+            >
+              {data?.warning ? (
+                <Alert variant="warning" role="status">
+                  <AlertDescription>{data.warning}</AlertDescription>
+                </Alert>
+              ) : null}
+              {data ? (
+                <PagedTable
+                  rows={data.snapshots ?? []}
+                  rowKey={(s) => s.name}
+                  pageSize={10}
+                  empty="No snapshots yet. Create your first backup."
+                  defaultSort={{ key: "created", dir: "desc" }}
+                  labels={{ searchLabel: "Search backups" }}
+                  columns={[
+                    {
+                      key: "created",
+                      header: "Created",
+                      search: (s) => s.name,
+                      sortValue: (s) => s.created,
+                      cell: (s) => new Date(s.created).toLocaleString(),
+                    },
+                    {
+                      key: "size",
+                      header: "Size",
+                      align: "right",
+                      sortValue: (s) => s.size,
+                      cell: (s) => <span className="tabular-nums">{formatBytes(s.size)}</span>,
+                    },
+                    {
+                      key: "download",
+                      header: "",
+                      align: "right",
+                      cell: (s) => (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          aria-label={`Download ${s.name}`}
+                          onClick={() =>
+                            void run(() =>
+                              download("/backups/export/" + encodeURIComponent(s.name), s.name),
+                            )
+                          }
+                        >
+                          <Download size={14} /> Download
+                        </Button>
+                      ),
+                    },
+                  ]}
+                />
+              ) : (
+                <LoadingRows rows={3} />
+              )}
+            </Section>
+
+            <Section
+              title="Restore a backup"
+              description="Ether checks the bundle's checksums and database, then prepares it in a separate data folder. Nothing changes until you stop Ether and start it from that folder."
+            >
+              <FilePick
+                label="Choose backup bundle"
+                accept=".tar.gz,.gz,application/gzip"
+                disabled={busy}
+                onFile={(file) =>
+                  void run(async () => {
+                    const result = (await upload("/backups/restore", file, "application/gzip")) as {
+                      path?: string;
+                    };
+                    setRestored(result.path ?? "");
+                    toast.success("Restore validated and staged");
+                  })
+                }
+              />
+              {restored ? (
+                <Alert variant="success" role="status">
+                  <AlertDescription>
+                    Ready to restore. Stop Ether and start it with the data folder{" "}
+                    <code className="break-all">{restored}</code>.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+            </Section>
+          </>
+        )}
+      </div>
+      <div hidden={tab !== "import"} className="space-y-6">
+        <PlexImport users={users} />
+        <CsvTools users={users} />
+      </div>
 
       <SaveBar
         dirty={dirty}

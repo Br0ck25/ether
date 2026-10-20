@@ -38,6 +38,7 @@ import {
   posterFor,
   type FakeTitle,
 } from "./data";
+import { createMaintenance } from "./maintenance";
 import { createReleaseConsoleMock } from "./releases";
 import { createSitesMock } from "./sites";
 import { createLiveTVMock } from "./livetv";
@@ -256,6 +257,23 @@ function defaultConfig(): EtherConfig {
     llm: { enabled: true, baseUrl: "http://localhost:11434/v1", apiKey: "", model: "llama3" },
     updates: { channel: "stable", autoUpdate: true, feedUrl: "" },
     spike: { enabled: false, localFiles: null },
+    downloads: {
+      enabled: true,
+      allowFriends: false,
+      maxConcurrent: 2,
+      maxConcurrentPerUser: 1,
+      diskBudgetBytes: 20 * 1024 ** 3,
+      expiry: "24h0m0s",
+      maxHeight: 1080,
+    },
+    personalize: {
+      postPlay: true,
+      postPlayPrebuffer: true,
+      microReasons: true,
+      sessionIntent: true,
+      clockFormat: "",
+    },
+    extras: { enabled: false, resolverTimeout: "20s", prewarmBytes: 48 * 1024 ** 2 },
     setupComplete: true,
   };
 }
@@ -325,6 +343,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const catalog = buildCatalog();
   const byKey = new Map(catalog.map((t) => [t.key, t]));
   const releaseConsole = createReleaseConsoleMock(catalog);
+  const maintenance = createMaintenance();
   const sites = createSitesMock();
   const liveTV = createLiveTVMock(catalog);
   const state = {
@@ -1497,6 +1516,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const rc = releaseConsole.handle(method, seg, q, body);
     if (rc)
       return rc.status === 204 ? new Response(null, { status: 204 }) : json(rc.body, rc.status);
+
+    const mr = maintenance.handle(method, seg, body);
+    if (mr) return json(mr.body, mr.status);
 
     // Static routes
     switch (route) {
