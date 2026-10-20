@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -18,7 +19,8 @@ func TestOutageAlertsRetryAfterQueueFailure(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			s := New(db, Options{Providers: func() []usenet.ProviderStats { return []usenet.ProviderStats{{ID: "p", State: usenet.StateBackoff}} }})
+			now := time.Now()
+			s := New(db, Options{Now: func() time.Time { return now }, Providers: func() []usenet.ProviderStats { return []usenet.ProviderStats{{ID: "p", State: usenet.StateBackoff}} }})
 			if err := s.Save(ctx, Channel{ID: "hook", Kind: "webhook", Enabled: true, Endpoint: "https://fixture.example/hook", Events: []string{"*"}}); err != nil {
 				t.Fatal(err)
 			}
@@ -36,6 +38,17 @@ func TestOutageAlertsRetryAfterQueueFailure(t *testing.T) {
 			if _, err := db.Exec(`DROP TRIGGER reject_notification`); err != nil {
 				t.Fatal(err)
 			}
+			if kind == "indexer" {
+				observe()
+				var queued int
+				if err := db.QueryRow(`SELECT COUNT(*) FROM notify_queue`).Scan(&queued); err != nil {
+					t.Fatal(err)
+				}
+				if queued != 0 {
+					t.Fatal("failed queue retried without backoff")
+				}
+			}
+			now = now.Add(time.Minute)
 			observe()
 			observe()
 			var count int

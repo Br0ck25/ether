@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/faillog"
 	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/usenet"
@@ -75,7 +76,8 @@ type Service struct {
 	drainMu        sync.Mutex
 	healthMu       sync.Mutex
 	providerStates map[string]string
-	indexerStates  map[string]string // indexer+kind -> "outage"/"budget"
+	indexerAlerts  map[string]*indexerAlert // indexer+kind -> notification state
+	indexerLog     *faillog.Tracker
 	cacheFull      bool
 	db             *sql.DB
 	opts           Options
@@ -96,7 +98,7 @@ func New(db *sql.DB, opts Options) *Service {
 		_, _ = rand.Read(b[:])
 		opts.NodeID = hex.EncodeToString(b[:])
 	}
-	return &Service{db: db, opts: opts}
+	return &Service{db: db, opts: opts, indexerLog: faillog.New(opts.Logger, "enqueue indexer notification")}
 }
 
 // claimTimeout is how long a claimed row may stay in 'sending' before it is
