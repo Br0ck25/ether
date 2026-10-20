@@ -23,6 +23,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/auth"
 	"github.com/braedonsaunders/ether/internal/backup"
+	"github.com/braedonsaunders/ether/internal/cardigann"
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/collections"
 	"github.com/braedonsaunders/ether/internal/config"
@@ -98,6 +99,7 @@ type App struct {
 	cache       *segcache.Cache
 	engine      *stream.Engine
 	indexers    *newznab.Manager
+	sites       *cardigann.Service // built-in indexer sites from owner-installed definitions
 	// Debrid: torrent releases stream through owner debrid accounts. The
 	// wrappers dispatch on the payload and delegate Usenet to engine and
 	// indexers, so every consumer uses media and sources.
@@ -264,10 +266,12 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.closers = append(a.closers, func() { a.engine.Close() })
 
 	// Indexers and resolver.
+	a.sites = cardigann.New(cardigann.Options{DB: a.db, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites})
 	a.indexers = newznab.NewManager(a.db, cfg.Indexers, newznab.Options{
 		Logger:         log.With("component", "newznab"),
 		SearchCacheTTL: cfg.Resolver.SearchCacheTTL.D(),
 		NZBDir:         filepath.Join(dataDir, "nzb"),
+		Backend:        a.sites.Backend,
 	})
 	a.debrid = debrid.NewService(cfg.Debrid, debrid.Options{DB: a.db, Logger: log.With("component", "debrid")})
 	a.media = debrid.NewEngine(a.debrid, debrid.EngineOptions{Inner: a.engine, Health: a.engine, Cache: a.cache, Logger: log.With("component", "debrid")})
@@ -449,6 +453,7 @@ func (a *App) applyConfig(c config.Config) {
 	a.tmdb.UpdateConfig(c.Catalog)
 	a.llm.UpdateConfig(c.LLM)
 	a.fetcher.UpdateConfig(c.Usenet)
+	a.sites.ApplyConfig(c)
 	a.indexers.ApplyConfig(c)
 	a.debrid.UpdateConfig(c.Debrid)
 	a.resolver.UpdateConfig(c)
