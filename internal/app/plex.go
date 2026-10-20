@@ -76,7 +76,11 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 		}
 	}
 	deps.Variants = a.resolver // "Play Version" release picker (cache-only)
-	deps.PlexGUID = plexguid.New(a.db, plexguid.Options{Token: func() string { return a.cfg.Get().Plex.Token }})
+	deps.PlexGUID = plexguid.New(a.db, plexguid.Options{
+		Token:      func() string { return a.cfg.Get().Plex.Token },
+		Background: true,
+	})
+	a.closers = append(a.closers, deps.PlexGUID.Close)
 	deps.EpisodeOrder = a.episodeorder
 	deps.Discovery = a.plexDiscovery
 	deps.LiveTV = a.livetv

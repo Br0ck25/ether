@@ -14,7 +14,7 @@ import (
 
 // MPEG-DASH playback for Plex Web, which asks for DASH (protocol=dash,
 // start.mpd) in Chromium and Firefox when it cannot direct play. The URL
-// layout is the one real PMS uses (see docs/plex-api-notes.md):
+// layout is the one real PMS uses:
 //
 //	/video/:/transcode/universal/start.mpd?session={id}&...    static MPD
 //	/video/:/transcode/universal/session/{id}/{rep}/header     init segment

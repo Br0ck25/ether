@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -474,9 +475,26 @@ func (r *Registrar) connections(cfg config.Config) []remote.Connection {
 	if wanS != "" {
 		if ip := net.ParseIP(wanS); ip != nil {
 			wan = ip
+		} else if strings.HasPrefix(wanS, "https://") || strings.HasPrefix(wanS, "http://") {
+			// PublicHost supplied as a full URL (e.g. https://plex.example.com).
+			extraURLs = append(extraURLs, wanS)
 		} else {
-			// PublicHost is a DNS name: publish it as a custom URL.
-			extraURLs = append(extraURLs, fmt.Sprintf("http://%s", net.JoinHostPort(wanS, fmt.Sprint(publicPort(cfg)))))
+			// PublicHost is a DNS name: publish it as a custom URL, using https
+			// when a custom TLS certificate is installed, port 443 is used, or
+			// secure connections are required.
+			port := publicPort(cfg)
+			hostPort := net.JoinHostPort(wanS, fmt.Sprint(port))
+			customCert := r.o.Certs != nil && r.o.Certs.Info().Present && r.o.Certs.Info().Custom && !r.o.Certs.Info().SelfSigned
+			if cfg.Plex.SecureConnections != remote.SecureDisabled && (customCert || port == 443 || cfg.Plex.SecureConnections == remote.SecureRequired) {
+				if port == 443 {
+					extraURLs = append(extraURLs, "https://"+wanS)
+				} else {
+					extraURLs = append(extraURLs, "https://"+hostPort)
+				}
+			}
+			if cfg.Plex.SecureConnections != remote.SecureRequired && port != 443 {
+				extraURLs = append(extraURLs, "http://"+hostPort)
+			}
 		}
 	}
 	hash := cfg.Plex.CertHash
@@ -531,9 +549,19 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	}
 	now := r.o.Now()
 	flags := &PublishFlags{HTTPSRequired: cfg.Plex.SecureConnections == "required"}
-	if r.o.Certs != nil {
-		ci := r.o.Certs.Info()
-		flags.HTTPSEnabled = ci.Present && !ci.SelfSigned && cfg.Plex.SecureConnections != "disabled"
+	if cfg.Plex.SecureConnections != "disabled" {
+		if r.o.Certs != nil {
+			ci := r.o.Certs.Info()
+			flags.HTTPSEnabled = ci.Present && !ci.SelfSigned
+		}
+		if !flags.HTTPSEnabled {
+			for _, u := range uris {
+				if strings.HasPrefix(u, "https://") {
+					flags.HTTPSEnabled = true
+					break
+				}
+			}
+		}
 	}
 	err := r.client.PublishConnectionsWith(ctx, cfg.Plex.Token, uris, flags)
 
@@ -655,11 +683,10 @@ func (r *Registrar) CheckReachability(ctx context.Context) remote.Reachability {
 		if hash != "" {
 			uris = append(uris, "https://"+net.JoinHostPort(remote.PlexDirectHost(ip, hash), fmt.Sprint(publicPort(cfg))))
 		}
-	} else {
-		for _, c := range r.connections(cfg) {
-			if !c.Local {
-				uris = append(uris, c.URI)
-			}
+	}
+	for _, c := range r.connections(cfg) {
+		if !c.Local && (len(uris) == 0 || c.Custom) && !slices.Contains(uris, c.URI) {
+			uris = append(uris, c.URI)
 		}
 	}
 	res := r.o.Reach.Check(ctx, uris, cfg.Server.MachineIdentifier)

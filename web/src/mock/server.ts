@@ -1,8 +1,8 @@
 /**
- * In-memory fake of the Ether admin API (docs/owner-ui.md plus the existing
- * endpoints). Used by `vite --mode mock` and by the tests; never shipped.
- * It evaluates collection rules against a generated catalogue and builds
- * context-aware Home rows so every screen behaves realistically offline.
+ * In-memory fake of the Ether admin API. Used by `vite --mode mock` and by the
+ * tests; never shipped. It evaluates collection rules against a generated
+ * catalogue and builds context-aware Home rows so every screen behaves
+ * realistically offline.
  */
 import type {
   ActivityDay,

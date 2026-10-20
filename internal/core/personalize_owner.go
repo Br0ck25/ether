@@ -4,10 +4,9 @@ import (
 	"time"
 )
 
-// Owner-facing personalization shapes (docs/owner-ui.md, "Viewers and
-// personalization", "Home Designer", "Insights"). The personalization
-// engine produces them; internal/admin serves them. JSON tags follow the
-// API contract.
+// Owner-facing personalization shapes ("Viewers and personalization",
+// "Home Designer", "Insights"). The personalization engine produces them;
+// internal/admin serves them. JSON tags follow the API contract.
 
 // TasteWeight is one named affinity, weight in -1..1.
 type TasteWeight struct {

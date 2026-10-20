@@ -45,7 +45,7 @@ type IndexPoint struct {
 //
 // Without Points it assumes a constant bitrate: offset/Size == time/Duration.
 // With Points it interpolates linearly between the surrounding points, with
-// (0, 0) and (Size, Duration) as implicit end anchors. See docs/failover.md.
+// (0, 0) and (Size, Duration) as implicit end anchors.
 type TimeMap struct {
 	Size     int64
 	Duration time.Duration
@@ -142,8 +142,7 @@ const palRatio = 25.0 / (24000.0 / 1001.0)
 // one systematic difference that can be detected from durations alone is
 // PAL speedup (25 fps vs 23.976 fps, a 4.3% runtime difference): then the
 // time is scaled by the ratio. The result is clamped to [0, to] when to is
-// known. Different cuts or intros cannot be detected this way; see
-// docs/failover.md.
+// known. Different cuts or intros cannot be detected from durations alone.
 func AlignTime(at, from, to time.Duration) time.Duration {
 	if at < 0 {
 		at = 0

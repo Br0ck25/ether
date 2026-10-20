@@ -1,8 +1,7 @@
 // Package plextv is Ether's plex.tv client: PIN sign-in, server claim,
 // connection publishing, resources, shared users and their server access
 // tokens, and plex.direct certificates. It also holds the Registrar that runs
-// these periodically. See docs/plextv-notes.md for how each call maps to
-// real Plex Media Server behaviour.
+// these periodically.
 package plextv
 
 import (

@@ -13,7 +13,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// Catalogue helpers for the Collection Studio's pickers (docs/owner-ui.md).
+// Catalogue helpers for the Collection Studio's pickers.
 
 // SearchTitles searches the catalogue (reaching all of TMDB).
 func (s *Service) SearchTitles(ctx context.Context, q string, t core.MediaType, limit int) ([]core.Title, error) {

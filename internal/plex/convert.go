@@ -1048,17 +1048,61 @@ func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title,
 		o.state = s.stateFor(ctx, pr, ts)
 	}
 	s.preloadUltraBlur(ctx, ts)
+	var guids map[core.RatingKey]string
+	var missingGUIDs []core.RatingKey
+	if s.d.PlexGUID != nil {
+		lookup := make([]core.RatingKey, 0, len(ts)*2)
+		for i := range ts {
+			k := ts[i].Key
+			lookup = append(lookup, k)
+			switch ts[i].Type {
+			case core.TypeSeason:
+				if k.TMDB() > 0 {
+					lookup = append(lookup, core.ShowKey(k.TMDB()))
+				}
+			case core.TypeEpisode:
+				if k.TMDB() > 0 {
+					lookup = append(lookup, core.ShowKey(k.TMDB()), core.SeasonKey(k.TMDB(), ts[i].Season))
+				}
+			}
+		}
+		guids = s.d.PlexGUID.CachedMany(ctx, lookup)
+	}
 	out := make([]model.Metadata, 0, len(ts))
 	for i := range ts {
 		m := s.metadata(ctx, pr, &ts[i], o)
 		s.applyEpisodeOrder(ctx, pr, &ts[i], &m)
 		if s.d.PlexGUID != nil {
-			guid := s.d.PlexGUID.Cached(ctx, ts[i].Key)
-			if guid != "" {
-				m.GUID = guid
+			k := ts[i].Key
+			if guid := guids[k]; guid != "" {
+				if !(ts[i].Type == core.TypeSeason && ts[i].Season >= 9000) {
+					m.GUID = guid
+				}
+			} else {
+				missingGUIDs = append(missingGUIDs, k)
+			}
+			switch ts[i].Type {
+			case core.TypeSeason:
+				if ts[i].Season < 9000 {
+					if sg := guids[core.ShowKey(k.TMDB())]; sg != "" {
+						m.ParentGUID = sg
+					}
+				}
+			case core.TypeEpisode:
+				if sg := guids[core.ShowKey(k.TMDB())]; sg != "" {
+					m.GrandparentGUID = sg
+				}
+				if !strings.HasPrefix(m.ParentGUID, "local://episode-order/") {
+					if seag := guids[core.SeasonKey(k.TMDB(), ts[i].Season)]; seag != "" {
+						m.ParentGUID = seag
+					}
+				}
 			}
 		}
 		out = append(out, m)
+	}
+	if s.d.PlexGUID != nil && len(missingGUIDs) > 0 {
+		s.d.PlexGUID.Schedule(missingGUIDs...)
 	}
 	return out
 }

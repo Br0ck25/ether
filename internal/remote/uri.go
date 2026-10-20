@@ -107,8 +107,23 @@ func BuildConnections(o BuildOptions) []Connection {
 	if secure == "" {
 		secure = SecurePreferred
 	}
+	var parsedCustom []Connection
+	hasCustomHTTPS := false
+	for _, raw := range o.CustomURLs {
+		c, err := ParseCustomURL(raw)
+		if err != nil {
+			continue
+		}
+		if secure == SecureDisabled && c.Protocol == "https" {
+			continue
+		}
+		if c.Protocol == "https" {
+			hasCustomHTTPS = true
+		}
+		parsedCustom = append(parsedCustom, c)
+	}
 	wantHTTPS := secure != SecureDisabled && o.CertHash != ""
-	wantHTTP := secure != SecureRequired || (o.CertHash == "" && !o.HTTPSOnPlainIP)
+	wantHTTP := secure != SecureRequired || (o.CertHash == "" && !o.HTTPSOnPlainIP && !hasCustomHTTPS)
 
 	var out []Connection
 	seen := map[string]bool{}
@@ -145,9 +160,8 @@ func BuildConnections(o BuildOptions) []Connection {
 	if o.WAN != nil {
 		addIP(o.WAN, o.PublicPort, false)
 	}
-	for _, raw := range o.CustomURLs {
-		c, err := ParseCustomURL(raw)
-		if err != nil {
+	for _, c := range parsedCustom {
+		if secure == SecureRequired && c.Protocol == "http" && (wantHTTPS || o.HTTPSOnPlainIP || hasCustomHTTPS) {
 			continue
 		}
 		add(c)

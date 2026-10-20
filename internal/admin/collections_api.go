@@ -15,7 +15,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// The Collection Studio API (docs/owner-ui.md, "Collection Studio").
+// The Collection Studio API.
 
 // CollectionStudio backs /ether/api/collections*. Implemented by
 // internal/collections.

@@ -10,10 +10,9 @@ import type {
 } from "./contract";
 
 /**
- * Home Designer helpers for the layered layout (docs/owner-ui.md, "Home
- * Designer"): a Global Home template, per-viewer overrides on top. Edits
- * are immutable; empty pages and viewer layers are pruned so an untouched
- * document compares equal to the saved one.
+ * Home Designer helpers for the layered layout: a Global Home template,
+ * per-viewer overrides on top. Edits are immutable; empty pages and viewer
+ * layers are pruned so an untouched document compares equal to the saved one.
  */
 
 /** A layer of the document: the Global Home, or a viewer's overrides (their id). */

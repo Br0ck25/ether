@@ -12,8 +12,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// Catalogue helpers for the Collection Studio and the TMDB image proxy
-// (docs/owner-ui.md, "Catalogue helpers").
+// Catalogue helpers for the Collection Studio and the TMDB image proxy.
 
 // CatalogHelper backs /ether/api/catalog/*. Implemented by
 // internal/collections.

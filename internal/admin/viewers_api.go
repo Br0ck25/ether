@@ -13,8 +13,7 @@ import (
 )
 
 // Personalization is the engine behind the viewers, Home Designer and
-// insights endpoints (docs/owner-ui.md). Implemented by
-// internal/personalize.Engine.
+// insights endpoints. Implemented by internal/personalize.Engine.
 type Personalization interface {
 	ViewerStats(ctx context.Context, userIDs []int64) (map[int64]core.ViewerStats, error)
 	RecentActivity(ctx context.Context, userID int64, limit int) ([]core.ViewerActivity, error)

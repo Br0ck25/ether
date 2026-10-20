@@ -43,9 +43,7 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 | `github.com/mattn/go-isatty`, `github.com/ncruces/go-strftime`, `github.com/remyoudompheng/bigfft`, `github.com/hashicorp/golang-lru/v2` | modernc/sqlite internals (indirect) | MIT / MIT / BSD-3-Clause / MPL-2.0 respectively |
 | `golang.org/x/sys` (and other `golang.org/x/*` in the build graph) | Platform primitives (indirect) | BSD-3-Clause |
 
-Other work packages may add modules; they must extend this table in the
-same PR (see CONTRIBUTING.md). Regenerate the ground truth any time
-with `go list -m all` and each module's `LICENSE` file.
+Regenerate the ground truth any time with `go list -m all` and each module's `LICENSE` file.
 
 ## Go fonts (embedded in the binary)
 
@@ -113,12 +111,8 @@ segment indexing). Ether's code is its own.
 
 > MIT License — Copyright (c) 2025 Javier Blanco
 
-If any AltMount snippet is ever adapted verbatim, the specific files
-must be listed in this section with their copyright line kept in the
-source, per AGENTS.md. No AltMount code is vendored; the stream engine's tests use AltMount's
-MIT-licensed WinRAR RAR5 fixture files (see below). (Design doc: "AltMount's MIT-licensed code is vendored with
-its notice kept" — this section is that notice's home when/if vendoring
-lands in the stream-engine work package.)
+No AltMount code is vendored; the stream engine's tests use AltMount's
+MIT-licensed WinRAR RAR5 fixture files (see below).
 
 ## Stream engine components
 

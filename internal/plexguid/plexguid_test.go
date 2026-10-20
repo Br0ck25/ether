@@ -54,3 +54,79 @@ func TestTokenNotForwardedOnRedirect(t *testing.T) {
 		t.Fatal("redirect followed", calls, e)
 	}
 }
+
+func TestSeasonAndEpisodeResolutionAndCachedMany(t *testing.T) {
+	ctx := context.Background()
+	db, e := store.OpenMemory(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+
+	const (
+		showGUID   = "plex://show/5d9c086c46115600200aa2fe"
+		seasonGUID = "plex://season/602e5e2194f08e002d001122"
+		ep1GUID    = "plex://episode/602e5e2294f08e002d003344"
+		ep2GUID    = "plex://episode/602e5e2294f08e002d005566"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/library/metadata/matches":
+			if r.URL.Query().Get("type") == "2" && r.URL.Query().Get("guid") == "tmdb://1396" {
+				w.Write([]byte(`{"MediaContainer":{"Metadata":[{"guid":"` + showGUID + `","type":"show","Guid":[{"id":"tmdb://1396"}]}]}}`))
+				return
+			}
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[]}}`))
+		case "/library/metadata/5d9c086c46115600200aa2fe/children":
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[{"guid":"` + seasonGUID + `","type":"season","index":1}]}}`))
+		case "/library/metadata/602e5e2194f08e002d001122/children":
+			w.Write([]byte(`{"MediaContainer":{"Metadata":[{"guid":"` + ep1GUID + `","type":"episode","index":1,"parentIndex":1},{"guid":"` + ep2GUID + `","type":"episode","index":2,"parentIndex":1}]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	s := New(db, Options{BaseURL: srv.URL, Token: func() string { return "fixture" }})
+	gotEp, err := s.Resolve(ctx, core.EpisodeKey(1396, 1, 1))
+	if err != nil || gotEp != ep1GUID {
+		t.Fatalf("episode resolve=%q err=%v", gotEp, err)
+	}
+	batch := s.CachedMany(ctx, []core.RatingKey{
+		core.ShowKey(1396),
+		core.SeasonKey(1396, 1),
+		core.EpisodeKey(1396, 1, 1),
+		core.EpisodeKey(1396, 1, 2),
+	})
+	if batch[core.ShowKey(1396)] != showGUID ||
+		batch[core.SeasonKey(1396, 1)] != seasonGUID ||
+		batch[core.EpisodeKey(1396, 1, 1)] != ep1GUID ||
+		batch[core.EpisodeKey(1396, 1, 2)] != ep2GUID {
+		t.Fatalf("unexpected batch cache: %+v", batch)
+	}
+}
+
+func TestBackgroundScheduleWarmsGUIDs(t *testing.T) {
+	ctx := context.Background()
+	db, e := store.OpenMemory(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer db.Close()
+
+	const want = "plex://movie/5d7768265af944001f1f6976"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"MediaContainer":{"Metadata":[{"guid":"` + want + `","type":"movie","Guid":[{"id":"tmdb://550"}]}]}}`))
+	}))
+	defer srv.Close()
+
+	s := New(db, Options{BaseURL: srv.URL, Token: func() string { return "fixture" }, Background: true})
+	defer s.Close()
+
+	s.Schedule(core.MovieKey(550))
+	s.Wait()
+
+	if got := s.Cached(ctx, core.MovieKey(550)); got != want {
+		t.Fatalf("background cached=%q, want %q", got, want)
+	}
+}
