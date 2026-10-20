@@ -394,8 +394,14 @@ func ChooseFile(files []File, target *core.ReleaseTarget) (File, error) {
 			return f, nil
 		}
 	}
+	// A single-episode torrent whose file name carries no episode number.
+	// A file that names a different episode (a partial pack) never stands
+	// in for the wanted one.
 	if len(videos) == 1 {
-		return videos[0], nil // a single-episode torrent with an unparseable file name
+		info := releaseparse.Parse(strings.NewReplacer("/", " ", "\\", " ").Replace(videos[0].Path))
+		if len(info.Episodes) == 0 {
+			return videos[0], nil
+		}
 	}
 	return File{}, fmt.Errorf("debrid: no file for S%02dE%02d in torrent: %w", target.Season, target.Episode, errNoVideo)
 }

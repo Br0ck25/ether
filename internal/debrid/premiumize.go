@@ -75,7 +75,7 @@ func (p *premiumize) do(ctx context.Context, r apiRequest, out any) error {
 		return fmt.Errorf("premiumize: %s: %w", msg, ErrAuth)
 	case strings.Contains(lower, "not cached") || strings.Contains(lower, "no cached") || strings.Contains(lower, "content not in cache"):
 		return fmt.Errorf("premiumize: %s: %w", msg, core.ErrNotCached)
-	case strings.Contains(lower, "too many") || strings.Contains(lower, "rate"):
+	case strings.Contains(lower, "too many") || strings.Contains(lower, "rate limit") || strings.Contains(lower, "rate-limit"):
 		return fmt.Errorf("premiumize: %s: %w", msg, ErrRateLimited)
 	}
 	if status >= 200 && status < 300 {

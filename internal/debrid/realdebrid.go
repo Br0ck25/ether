@@ -88,13 +88,21 @@ func (p *realDebrid) classify(status int, e rdError) error {
 		msg = http.StatusText(status)
 	}
 	switch e.ErrorCode {
-	case 8, 9, 10, 11, 12, 13, 14, 15, 20: // bad/expired token, permission denied, account locked, premium only
+	// Codes from the Real-Debrid API documentation.
+	case 8, 9, 10, 11, 12, 13, 14, 15, 20, 22, 23, 36:
+		// Bad token, permission denied, two-factor, invalid login, account
+		// locked or not activated, premium only, IP not allowed, traffic
+		// exhausted, fair-usage limit: the account, not the release.
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrAuth)
-	case 34: // too many requests
+	case 5, 34: // slow down, too many requests
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrRateLimited)
-	case 7, 24, 25: // unknown resource, unavailable file, infringing/dead
+	case 7, 24, 35: // resource not found, file unavailable, infringing file
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrGone)
+	case 30: // torrent file invalid
+		return fmt.Errorf("real-debrid: %s: %w", msg, core.ErrReleaseRejected)
 	}
+	// Everything else (including 25 "service unavailable" and 19 "hoster
+	// temporarily unavailable") is transient.
 	return statusError("real-debrid", status, msg)
 }
 
