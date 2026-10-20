@@ -144,32 +144,36 @@ func (ob *Outbox[K, V]) Write(ctx context.Context, key K, v V) (queued bool, err
 	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ob.o.Timeout)
 	err = ob.o.Apply(actx, key, v)
 	cancel()
+	unavailable := err != nil && IsUnavailable(err) && !closed
+	if unavailable {
+		ob.avail.Fail(err)
+	} else if err == nil {
+		ob.avail.OK()
+	}
 	ob.mu.Lock()
+	defer ob.mu.Unlock()
+	// This write stays registered in inflight until its outcome is decided
+	// under the same lock as the enqueue, so a newer Write for key that
+	// starts (or even applies) meanwhile is always seen.
 	newer := ob.latest[key] > seq
 	if ob.inflight[key]--; ob.inflight[key] <= 0 {
 		delete(ob.inflight, key)
 		delete(ob.latest, key)
 	}
-	ob.mu.Unlock()
 	if err == nil {
-		ob.avail.OK()
 		return false, nil
 	}
-	if !IsUnavailable(err) || closed {
+	if !unavailable {
 		return false, err // after Close nothing would replay it
 	}
-	ob.avail.Fail(err)
-	ob.mu.Lock()
 	ob.lastErr = err.Error()
 	// A later Write for key may have been queued while this one was in
 	// flight; enqueueLocked keeps that newer value on top. If it was
-	// already replayed (no entry left), this older value is obsolete.
+	// already replayed or applied (no entry left), this value is obsolete.
 	if _, pending := ob.entries[key]; newer && !pending {
-		ob.mu.Unlock()
 		return true, nil
 	}
 	ob.enqueueLocked(key, v, seq)
-	ob.mu.Unlock()
 	ob.wake()
 	return true, nil
 }
