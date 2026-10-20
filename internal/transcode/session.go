@@ -70,17 +70,18 @@ type Session struct {
 
 	// Adaptive HLS engine: the shared segment plan (HLS only), the config
 	// snapshot, the ABR ladder and measured delivery goodput.
-	plan        *Timeline
-	adapt       adaptiveSettings
-	rungs       []rung
-	initFiles   []string // per HLS track: init path relative to dir
-	wantTrack   int      // track the encoder should be producing (rung/rep)
-	goodput     goodputEstimator
-	segSizes    map[int]int64 // primary-track segment sizes (spike governor)
-	governorOn  bool          // plan may change ahead of the player
-	lastGovSeg  int           // last segment the governor evaluated from
-	govCooldown time.Time     // no new clamp planning before this
-	seekRampSeg int           // segment a seek restarted at (preset ramp); -1 none
+	plan           *Timeline
+	adapt          adaptiveSettings
+	rungs          []rung
+	initFiles      []string // per HLS track: init path relative to dir
+	wantTrack      int      // track the encoder should be producing (rung/rep)
+	videoRequested bool     // a client has requested video media, not just initialization
+	goodput        goodputEstimator
+	segSizes       map[int]int64 // primary-track segment sizes (spike governor)
+	governorOn     bool          // plan may change ahead of the player
+	lastGovSeg     int           // last segment the governor evaluated from
+	govCooldown    time.Time     // no new clamp planning before this
+	seekRampSeg    int           // segment a seek restarted at (preset ramp); -1 none
 }
 
 // run is one ffmpeg process producing segments from startSeg on.
@@ -522,6 +523,7 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 		if s.isDASH() {
 			if t != s.audioTrackLocked() {
 				s.wantTrack = t
+				s.videoRequested = true
 			}
 		} else {
 			s.wantTrack = t
@@ -679,12 +681,23 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			http.Error(w, "init segment missing", http.StatusInternalServerError)
 			return
 		}
-		if !s.isDASH() {
+		// A DASH player requests initialization before media. Selecting a
+		// lazy video representation must start it here; waiting for its
+		// first media request otherwise deadlocks startup. Audio shares the
+		// current video run and must never select another video rung.
+		selectTrack := !s.isDASH() || t != s.audioTrackLocked()
+		if selectTrack {
 			s.wantTrack = t
 		}
 		var dwell *time.Timer
-		if (s.cur == nil || s.cur.finished || s.cur.stopped || (!s.isDASH() && s.cur.track != t)) && !restarted {
-			if left := s.rungDwellLocked(); left > 0 && !s.isDASH() {
+		if (s.cur == nil || s.cur.finished || s.cur.stopped || (selectTrack && s.cur.track != t)) && !restarted {
+			left := s.rungDwellLocked()
+			if s.isDASH() && selectTrack && !s.videoRequested {
+				// No video was requested yet: the initial quality choice
+				// has no active rendition to protect with a dwell.
+				left = 0
+			}
+			if left > 0 {
 				// A rendition probe for another rung's init segment waits
 				// out the running rung's dwell (see rungDwellLocked).
 				dwell = time.NewTimer(left)
