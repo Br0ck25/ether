@@ -243,7 +243,7 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 			ss.relay = nil
 		}
 		last = err
-		if ctx.Err() == nil {
+		if !errors.Is(ctx.Err(), context.Canceled) {
 			s.recordSourceHealth(c.ID, src, err, false)
 		}
 	}

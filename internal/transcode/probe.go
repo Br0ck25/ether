@@ -60,6 +60,10 @@ func probeArgs(input string, a probeAttempt) []string {
 // probe runs ffprobe, retrying with a larger probesize when the quick pass
 // leaves stream parameters unknown.
 func probe(ctx context.Context, r Runner, ffprobe, input string) (*core.MediaInfo, error) {
+	return probeMode(ctx, r, ffprobe, input, false)
+}
+
+func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) (*core.MediaInfo, error) {
 	var best *core.MediaInfo
 	var lastErr error
 	for i, a := range probeAttempts {
@@ -72,7 +76,7 @@ func probe(ctx context.Context, r Runner, ffprobe, input string) (*core.MediaInf
 			continue
 		}
 		best = info
-		if probeComplete(info) {
+		if probeCompleteMode(info, live) {
 			return info, nil
 		}
 		if i < len(probeAttempts)-1 {
@@ -99,7 +103,11 @@ func probeOnce(ctx context.Context, r Runner, ffprobe, input string, a probeAtte
 // probeComplete reports whether every stream ffmpeg needs parameters for has
 // them; otherwise a larger probe is worth the time.
 func probeComplete(m *core.MediaInfo) bool {
-	if m.Duration <= 0 {
+	return probeCompleteMode(m, false)
+}
+
+func probeCompleteMode(m *core.MediaInfo, live bool) bool {
+	if m.Duration <= 0 && !live {
 		return false
 	}
 	hasAV := false

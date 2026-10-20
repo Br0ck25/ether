@@ -5,6 +5,8 @@ package plex
 // particular the grid attaches broadcast times to Media, not the Video item.
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -446,6 +448,11 @@ func (s *Server) handleLiveTune(w http.ResponseWriter, r *http.Request) {
 	info, err := s.d.LiveTV.TuneWithSession(r.Context(), pr.User, id, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps), pr.SessionID)
 	if err != nil {
 		s.log.Warn("live tune failed", "channel", id, "client", pr.ClientID, "product", pr.Product, "err", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			w.Header().Set("Retry-After", "1")
+			writeHTTPError(w, http.StatusServiceUnavailable)
+			return
+		}
 		s.writeErr(w, r, err)
 		return
 	}

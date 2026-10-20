@@ -627,7 +627,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if isHLS && !c.Transcode {
 		analyze := len(ss.caps.VideoCodecs) > 0 || len(ss.caps.AudioCodecs) > 0 || strings.Contains(strings.ToLower(ss.caps.Product), "apple") || strings.EqualFold(ss.caps.Platform, "tvos") || strings.EqualFold(ss.caps.Platform, "ios")
 		if s.o.Transcoder != nil && analyze {
-			info, err = s.o.Transcoder.Probe(ctx, c.StreamURL)
+			info, err = s.probeLiveInput(ctx, c.StreamURL)
 			if err != nil {
 				return err
 			}
@@ -651,7 +651,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if s.o.Transcoder == nil {
 		return core.ErrNotAvailable
 	}
-	info, err = s.o.Transcoder.Probe(ctx, c.StreamURL)
+	info, err = s.probeLiveInput(ctx, c.StreamURL)
 	if err != nil {
 		return err
 	}

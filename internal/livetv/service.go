@@ -29,6 +29,8 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
+	probeMu          sync.Mutex
+	probeCache       map[string]liveProbeEntry
 	sourceMu         sync.Mutex
 	sourceHealth     map[string]streamSourceHealth
 	transMu          sync.RWMutex

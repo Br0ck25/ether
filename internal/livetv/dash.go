@@ -30,7 +30,7 @@ func (s *Service) ServeDASH(w http.ResponseWriter, r *http.Request, id string, u
 		info := ss.info.MediaInfo
 		var e error
 		if info == nil {
-			info, e = s.o.Transcoder.Probe(r.Context(), ss.inputURL)
+			info, e = s.probeLiveInput(r.Context(), ss.inputURL)
 		}
 		if e != nil {
 			ss.mu.Unlock()

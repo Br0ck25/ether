@@ -51,6 +51,20 @@ func liveFixture(t *testing.T, transcoders ...core.Transcoder) (*fixture, *livet
 	f.srv.d.Identity.MyPlexSubscription = true
 	return f, service, cs[0]
 }
+
+type timedOutLiveProber struct{ core.Transcoder }
+
+func (timedOutLiveProber) Probe(context.Context, string) (*core.MediaInfo, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestLiveTuneTimeoutIsRetryableUnavailable(t *testing.T) {
+	f, service, channel := liveFixture(t, timedOutLiveProber{})
+	r := f.request(t, "POST", "/livetv/dvrs/1/channels/"+channel.ID+"/tune", map[string]string{"X-Plex-Product": "Plex for Apple TV"})
+	if r.Code != 503 || r.Header().Get("Retry-After") != "1" || len(service.ViewingSessions()) != 0 {
+		t.Fatalf("timeout returned internal error or leaked session: status=%d retry=%q", r.Code, r.Header().Get("Retry-After"))
+	}
+}
 func TestLiveTVDVRGuideProviderAndTuneShapes(t *testing.T) {
 	f, _, channel := liveFixture(t)
 	// Official PMS contract uses a Dvr list, Device children, Channel grid keys,
