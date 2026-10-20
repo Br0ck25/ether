@@ -17,7 +17,7 @@ const globe = (size: number) => (
 );
 
 /**
- * Which layer the controls edit: the Global Home, or one viewer's overrides.
+ * Which layer the controls edit: the Plex Home for everyone, or one viewer's overrides.
  * A searchable dropdown, so it stays one line however many viewers there are;
  * viewers who already override something are listed first.
  */
@@ -40,8 +40,8 @@ export function LayerSwitcher({
     const out: ToolbarOption<string>[] = [
       {
         value: "global",
-        label: "Global Home",
-        hint: `Everyone · ${plural(viewers.length, "viewer")}`,
+        label: "Everyone",
+        hint: `The Plex Home all ${plural(viewers.length, "viewer")} get`,
         icon: globe(26),
       },
       ...counted.map(({ v, n }) => ({
@@ -79,7 +79,7 @@ export function LayerSwitcher({
             globe(20)
           )}
           <span className="min-w-0 flex-1 truncate text-left">
-            {current ? viewerName(current) : layer === "global" ? "Global Home" : `Viewer ${layer}`}
+            {current ? viewerName(current) : layer === "global" ? "Everyone" : `Viewer ${layer}`}
           </span>
           {count ? (
             <span className="shrink-0 rounded-full bg-info/15 px-1.5 text-[11px] font-semibold tabular-nums text-info">

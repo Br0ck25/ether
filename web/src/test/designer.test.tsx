@@ -49,7 +49,7 @@ async function setStatus(title: string, value: "Always" | "Eligible" | "Off") {
 }
 
 describe("HomeScreen", () => {
-  it("previews the typical viewer's Global Home with each row's provenance", async () => {
+  it("previews the typical viewer's Home with each row's provenance", async () => {
     const { fake } = renderApp("/home-screens");
     const cw = await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     expect(within(cw).getByText(/Global anchor/)).toBeInTheDocument();
@@ -64,9 +64,9 @@ describe("HomeScreen", () => {
     expect(body.device).toBe("tv");
     expect(body.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     // The layer picker starts on Global; Kids carry an override and sort first.
-    expect(screen.getByRole("button", { name: "Editing layer" })).toHaveTextContent("Global Home");
+    expect(screen.getByRole("button", { name: "Editing layer" })).toHaveTextContent("Everyone");
     const menu = openLayers();
-    expect(within(menu).getByRole("menuitemradio", { name: /Global Home/ })).toHaveAttribute(
+    expect(within(menu).getByRole("menuitemradio", { name: /Everyone/ })).toHaveAttribute(
       "aria-checked",
       "true",
     );

@@ -22,7 +22,7 @@ function initialContext(): ViewContext {
 }
 
 /**
- * HomeScreen: a Global Home everyone starts from, personalization
+ * HomeScreen: the native Plex Home (each viewer's For You) for everyone, personalization
  * within it, and per-viewer overrides on top. Controls on the left third,
  * the live Plex Home (rendered server-side from the draft) on the right.
  */
@@ -51,7 +51,7 @@ export default function Designer() {
   const viewerById = useMemo(() => new Map((viewers ?? []).map((v) => [v.id, v])), [viewers]);
   const layerName =
     layer === "global"
-      ? "Global Home"
+      ? "everyone's Home"
       : viewerById.get(layer)
         ? viewerName(viewerById.get(layer)!)
         : `Viewer ${layer}`;
@@ -141,7 +141,7 @@ export default function Designer() {
   return (
     <Workspace
       title="HomeScreen"
-      subtitle="The Global Home everyone starts from, personalized per viewer, with per-viewer overrides on top."
+      subtitle="Shape the native Plex Home: every viewer's personalized For You, with per-viewer overrides on top."
       actions={actions}
       asideLabel="Designer controls"
       mainLabel="Home preview"

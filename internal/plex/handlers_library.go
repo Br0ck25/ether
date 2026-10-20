@@ -100,9 +100,6 @@ func sectionPrefs(sec Section) []model.Setting {
 }
 
 func sectionTypeTitle(sec Section) (typeTitle, all string) {
-	if sec.Mixed {
-		return "For You", "For You"
-	}
 	if sec.Type == core.TypeShow {
 		return "TV Shows", "All Shows"
 	}
@@ -640,54 +637,18 @@ func (s *Server) sectionList(w http.ResponseWriter, r *http.Request, sec Section
 		s.sectionSearch(w, r, sec, t, query, mc)
 		return
 	}
-	if sec.Mixed && sub == "all" && q.Get("sort") == "" && !hasBrowseFilter(q) {
-		if fy, ok := s.d.Recommender.(interface {
-			ForYouFeed(context.Context, *core.User, core.HubContext, int) ([]core.Title, error)
-		}); ok {
-			offset, size := pr.pageOf(br.limit)
-			feed, err := fy.ForYouFeed(ctx, pr.User, s.hubContext(pr, sec.ID), max(offset+size, 80))
-			if err == nil && len(feed) > 0 {
-				feed = s.filterAllowed(pr.User, feed)
-				total := len(feed)
-				lo := min(offset, total)
-				hi := min(lo+size, total)
-				mc.Mixed = model.Ptr(true)
-				mc.Metadata = s.renderTitles(ctx, pr, feed[lo:hi], renderOpts{media: true, inSection: false})
-				mc.Size = len(mc.Metadata)
-				mc.SetPage(offset, total)
-				if q.Get("includeMeta") == "1" {
-					mc.Meta = s.meta(sec, t, q.Get("sort"))
-				}
-				s.write(w, r, mc)
-				return
-			}
-		}
-	}
 	items, total, offset, err := s.browse(ctx, pr, br)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
-	mc.Metadata = s.renderTitles(ctx, pr, items, renderOpts{media: true, inSection: !sec.Mixed})
+	mc.Metadata = s.renderTitles(ctx, pr, items, renderOpts{media: true, inSection: true})
 	mc.Size = len(mc.Metadata)
 	mc.SetPage(offset, total)
 	if q.Get("includeMeta") == "1" {
 		mc.Meta = s.meta(sec, t, q.Get("sort"))
 	}
 	s.write(w, r, mc)
-}
-
-func hasBrowseFilter(q url.Values) bool {
-	for k := range q {
-		switch k {
-		case "type", "sort", "includeMeta", "includeDetails", "includeCollections", "includeAdvanced", "includeExternalMedia", "includeGuids", "limit",
-			"X-Plex-Container-Start", "X-Plex-Container-Size", "X-Plex-Token", "X-Plex-Client-Identifier", "X-Plex-Product", "X-Plex-Platform", "X-Plex-Device":
-			continue
-		default:
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Server) sectionSearch(w http.ResponseWriter, r *http.Request, sec Section, t core.MediaType, query string, mc *model.MediaContainer) {
@@ -912,9 +873,6 @@ func (s *Server) handleRecentlyAdded(w http.ResponseWriter, r *http.Request) {
 	wantType := typeFromParam(rq.Get("type"))
 	wantSection, _ := strconv.Atoi(rq.Get("sectionID"))
 	for _, sec := range s.userSections(pr.User) {
-		if sec.Mixed && wantSection != sec.ID {
-			continue
-		}
 		if wantSection > 0 && sec.ID != wantSection || wantType != "" && wantType != sec.Type {
 			continue
 		}

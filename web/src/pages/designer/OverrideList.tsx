@@ -65,7 +65,7 @@ export function OverrideList({
         ) : null}
         {all.length === 0 ? (
           <p className="text-xs text-fg-muted">
-            Nobody overrides the Global Home. Switch the editing layer at the top to a viewer to
+            Nobody overrides everyone's Home. Switch the editing layer at the top to a viewer to
             pin, hide or add rows just for them.
           </p>
         ) : withOverrides.length === 0 ? (
@@ -124,7 +124,7 @@ export function OverrideList({
       </div>
       {!page || (page.rows.length === 0 && lengths.length === 0) ? (
         <p className="text-xs text-fg-muted">
-          {name} follows the Global Home on {sectionLabel}.
+          {name} follows everyone's Home on {sectionLabel}.
           {total ? ` (${plural(total, "override")} on other pages.)` : ""}
         </p>
       ) : (

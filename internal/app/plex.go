@@ -73,11 +73,6 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 			Transcoder:  tc,
 			ImageURL:    a.tmdb.ImageURLFunc(),
 			DB:          a.db, // plex_ultrablur
-			Sections: []plex.Section{
-				{ID: 3, Type: core.TypeMovie, Title: "For You", Mixed: true},
-				{ID: 1, Type: core.TypeMovie, Title: "Movies"},
-				{ID: 2, Type: core.TypeShow, Title: "TV Shows"},
-			},
 		}
 	}
 	deps.Variants = a.resolver // "Play Version" release picker (cache-only)

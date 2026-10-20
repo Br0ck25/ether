@@ -59,14 +59,6 @@ type Section struct {
 	Title    string
 	UUID     string // stable; derived from the machine identifier when empty
 	Language string
-	Mixed    bool // pseudo-library serving both movies and TV shows ("For You")
-}
-
-func (sec Section) recommendType() core.MediaType {
-	if sec.Mixed {
-		return ""
-	}
-	return sec.Type
 }
 
 // SessionToucher is optionally implemented by core.Playback to keep a play
@@ -318,11 +310,6 @@ func (s *Server) sectionFor(t core.MediaType) (Section, bool) {
 		want = core.TypeShow
 	}
 	for _, sec := range s.sections {
-		if !sec.Mixed && sec.Type == want {
-			return sec, true
-		}
-	}
-	for _, sec := range s.sections {
 		if sec.Type == want {
 			return sec, true
 		}
@@ -335,30 +322,13 @@ func (s *Server) userSections(u *core.User) []Section {
 	if u == nil || len(u.AllowedSections) == 0 || u.IsOwner {
 		return s.sections
 	}
-	hasAllowedNonMixed := false
-	for _, sec := range s.sections {
-		if !sec.Mixed {
-			for _, id := range u.AllowedSections {
-				if id == sec.ID {
-					hasAllowedNonMixed = true
-					break
-				}
-			}
-		}
-	}
 	var out []Section
 	for _, sec := range s.sections {
-		allowed := sec.Mixed && hasAllowedNonMixed
-		if !allowed {
-			for _, id := range u.AllowedSections {
-				if id == sec.ID {
-					allowed = true
-					break
-				}
+		for _, id := range u.AllowedSections {
+			if id == sec.ID {
+				out = append(out, sec)
+				break
 			}
-		}
-		if allowed {
-			out = append(out, sec)
 		}
 	}
 	return out

@@ -138,7 +138,7 @@ export function AnchoredSlots({
         />
       ) : null}
       {inherited.length ? (
-        <ul className="space-y-1" aria-label="Anchors from Global Home">
+        <ul className="space-y-1" aria-label="Anchors from everyone's Home">
           {inherited.map((p) => (
             <li
               key={p.row}
