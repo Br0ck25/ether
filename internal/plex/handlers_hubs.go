@@ -652,7 +652,9 @@ func (s *Server) relatedSourceVisible(ctx context.Context, pr *Request, k core.R
 	}
 	t, err := s.metadataTitle(ctx, pr, k)
 	if err != nil {
-		return true // unknown titles yield no rows anyway
+		// Fail closed: the recommender fetches the title again, and a
+		// lookup that failed here may succeed there.
+		return false
 	}
 	return s.visibleTitle(ctx, pr.User, t)
 }

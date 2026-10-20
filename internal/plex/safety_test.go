@@ -281,3 +281,38 @@ func TestAllLeavesPagesVisibleEpisodes(t *testing.T) {
 		t.Fatalf("allLeaves page: %s", rec.Body.String())
 	}
 }
+
+// A lookup that fails while checking the source title must not let its
+// related rows through: the recommender fetches the title again.
+func TestRelatedRowsFailClosedOnLookupError(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.Auth.(*fakeAuth).users["kid"] = core.User{ID: 30, Username: "kid", MaxContentRating: "PG"}
+	f.catalog.failOnce = map[core.RatingKey]bool{fightClub.Key: true}
+	if rec := f.get(t, "/hubs/metadata/"+fightClub.Key.String()+"/related", "X-Plex-Token", "kid"); rec.Code == 200 {
+		t.Fatalf("related rows served after a failed visibility lookup: %s", rec.Body.String())
+	}
+}
+
+// History and collection poster fallbacks apply the show's policy to its
+// episodes, like every other listing.
+func TestHistoryAndPosterHideBlockedShowEpisodes(t *testing.T) {
+	f := newFixture(func(d *Deps) { d.AccessPolicy = keywordPolicy{blocked: "blocked"} })
+	defer f.srv.Close()
+	show := breakingBad
+	show.Keywords = []string{"blocked"}
+	f.catalog.titles[show.Key] = show
+	f.srv.d.State = historyState{fakeState: f.state, hist: []core.HistoryEntry{{UserID: friendUser.ID, Key: bbE1.Key, ViewedAt: fixedNow}}}
+	if rec := f.get(t, "/status/sessions/history/all", "X-Plex-Token", friendToken); rec.Code != 200 || strings.Contains(rec.Body.String(), bbE1.Title) {
+		t.Errorf("history: %d %s", rec.Code, rec.Body.String())
+	}
+	key := core.CollectionKey(78)
+	f.cols.cols[key] = core.Collection{Key: key, Title: "Eps", Kind: "franchise", Type: core.TypeEpisode, ChildCount: 1}
+	ep := bbE1
+	ep.PosterPath = "/blocked-ep.jpg"
+	f.cols.items[key] = []core.Title{ep}
+	f.get(t, "/library/collections/"+key.String()+"/thumb/1", "X-Plex-Token", friendToken)
+	if n := f.art.count("/t/p/w500/blocked-ep.jpg"); n != 0 {
+		t.Fatalf("blocked show's episode poster used as fallback (%d fetches)", n)
+	}
+}

@@ -3,6 +3,7 @@ package plex
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"image"
@@ -81,11 +82,16 @@ type fakeCatalog struct {
 	children map[core.RatingKey][]core.RatingKey
 	facets   map[string][]core.FacetValue
 	lastQ    core.BrowseQuery
+	failOnce map[core.RatingKey]bool // the next Get of these keys fails
 }
 
 func (c *fakeCatalog) Get(_ context.Context, k core.RatingKey) (*core.Title, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.failOnce[k] {
+		delete(c.failOnce, k)
+		return nil, errors.New("fake: transient catalogue failure")
+	}
 	t, ok := c.titles[k]
 	if !ok {
 		return nil, core.ErrNotFound
