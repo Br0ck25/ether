@@ -390,10 +390,9 @@ func (ts *Taste) stopBudgetMinutes(hc core.HubContext, now time.Time) float64 {
 			}
 		}
 	}
+	// A stop past midnight (00:30) is today's when it is still ahead (the
+	// small hours) and tomorrow's otherwise (seen from the evening).
 	stop := time.Date(now.Year(), now.Month(), now.Day(), stopHour%24, stopMin, 0, 0, now.Location())
-	if stopHour >= 24 {
-		stop = stop.AddDate(0, 0, 1)
-	}
 	if !stop.After(now) {
 		// Tonight's stop is the coming one (a 00:30 stop seen from the
 		// evening before, or already past in the small hours — then the

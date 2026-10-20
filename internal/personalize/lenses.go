@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/recommend"
@@ -364,7 +366,10 @@ func themeWords(k string) string {
 		switch {
 		case i > 0 && (w == "of" || w == "the" || w == "and" || w == "in" || w == "on" || w == "a"):
 		default:
-			words[i] = strings.ToUpper(w[:1]) + w[1:]
+			// Upper-case the first rune, not the first byte: TMDB keywords
+			// can start with a multi-byte letter ("émigré", "à").
+			r, n := utf8.DecodeRuneInString(w)
+			words[i] = string(unicode.ToUpper(r)) + w[n:]
 		}
 	}
 	return strings.Join(words, "-")

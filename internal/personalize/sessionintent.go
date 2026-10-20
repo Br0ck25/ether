@@ -167,18 +167,17 @@ func (e *Engine) RecordDetailOpen(ctx context.Context, user *core.User, t *core.
 		hs.intent[user.ID] = ui
 	}
 	ui.opens = pruneOpens(ui.opens, now)
-	found := false
-	for i := range ui.opens {
-		if ui.opens[i].key == key {
-			ui.opens[i] = intentOpen{key: key, at: now, genres: genres, decade: decade, people: people}
-			found = true
+	// The refreshed open moves to the end (newest), so trimming to
+	// intentMaxOpens always drops the oldest votes.
+	kept := ui.opens[:0]
+	for _, o := range ui.opens {
+		if o.key != key {
+			kept = append(kept, o)
 		}
 	}
-	if !found {
-		ui.opens = append(ui.opens, intentOpen{key: key, at: now, genres: genres, decade: decade, people: people})
-		if len(ui.opens) > intentMaxOpens {
-			ui.opens = ui.opens[len(ui.opens)-intentMaxOpens:]
-		}
+	ui.opens = append(kept, intentOpen{key: key, at: now, genres: genres, decade: decade, people: people})
+	if len(ui.opens) > intentMaxOpens {
+		ui.opens = ui.opens[len(ui.opens)-intentMaxOpens:]
 	}
 	ui.version++
 }

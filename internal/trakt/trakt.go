@@ -535,11 +535,20 @@ func (c *Client) accessToken(ctx context.Context, userID int64) (string, error) 
 	if t.ExpiresAt.IsZero() || c.now().Add(60*time.Second).Before(t.ExpiresAt) {
 		return t.AccessToken, nil
 	}
+	return c.refreshFrom(ctx, userID, t.AccessToken)
+}
+
+// refreshFrom replaces the stale access token under rfrMu and returns the
+// current one. Trakt refresh tokens are single-use, so two callers must
+// never both spend the same one: the loser's refresh would be rejected and
+// disconnect the user. A caller that waited while another refreshed reuses
+// the new token instead.
+func (c *Client) refreshFrom(ctx context.Context, userID int64, stale string) (string, error) {
 	c.rfrMu.Lock()
 	defer c.rfrMu.Unlock()
 	// Re-read: another goroutine may have refreshed while we waited.
 	t2, ok, err := c.Tokens(ctx, userID)
-	if err == nil && ok && t2.AccessToken != t.AccessToken {
+	if err == nil && ok && t2.AccessToken != stale {
 		return t2.AccessToken, nil
 	}
 	if err := c.Refresh(ctx, userID); err != nil {
@@ -557,10 +566,8 @@ func (c *Client) authed(ctx context.Context, userID int64, method, path string, 
 	}
 	status, b, err := c.do(ctx, method, path, payload, tok)
 	if err == nil && status == http.StatusUnauthorized {
-		if rerr := c.Refresh(ctx, userID); rerr == nil {
-			if tok2, err2 := c.accessToken(ctx, userID); err2 == nil {
-				return c.do(ctx, method, path, payload, tok2)
-			}
+		if tok2, rerr := c.refreshFrom(ctx, userID, tok); rerr == nil {
+			return c.do(ctx, method, path, payload, tok2)
 		}
 	}
 	return status, b, err

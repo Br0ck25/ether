@@ -126,10 +126,19 @@ type serveWriter struct {
 	stop     <-chan struct{} // closed when the engine shuts down
 	dropped  atomic.Int64
 	written  atomic.Int64
+	// ids maps the engine-local serve handles (serveRec.id, which repeats
+	// touch) onto the ids the database assigned. Nodes of a cluster share
+	// one database, so serve ids are never chosen locally. Owned by run.
+	ids map[int64]int64
 }
 
+// maxServeIDs bounds the handle map; a repeat of a forgotten serve is
+// simply not counted.
+const maxServeIDs = 8192
+
 func newServeWriter(db *sql.DB, log *slog.Logger, buffer int, every time.Duration, stop <-chan struct{}) *serveWriter {
-	return &serveWriter{db: db, log: log, ch: make(chan serveOp, buffer), flushReq: make(chan chan struct{}), every: every, stop: stop}
+	return &serveWriter{db: db, log: log, ch: make(chan serveOp, buffer), flushReq: make(chan chan struct{}), every: every, stop: stop,
+		ids: map[int64]int64{}}
 }
 
 func (w *serveWriter) enqueue(op serveOp) bool {
@@ -169,7 +178,7 @@ func (w *serveWriter) run(ctx context.Context) {
 		}
 		wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if err := writeServes(wctx, w.db, batch); err != nil {
+		if err := writeServes(wctx, w.db, batch, w.ids); err != nil {
 			w.log.Warn("personalize: writing serve log failed", "err", err, "ops", len(batch))
 		} else {
 			w.written.Add(int64(len(batch)))
@@ -207,51 +216,76 @@ func (w *serveWriter) run(ctx context.Context) {
 	}
 }
 
-func writeServes(ctx context.Context, db *sql.DB, ops []serveOp) error {
+// writeServes writes a batch in one transaction. New serves get their id
+// from the database (ids maps each local handle onto it, for later
+// touches); ids is only updated once the batch commits.
+func writeServes(ctx context.Context, db *sql.DB, ops []serveOp, ids map[int64]int64) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	serveStmt, err := tx.PrepareContext(ctx, `INSERT INTO personalize_serves
-		(id, user_id, first_at, last_at, surface, device, daypart, weekend) VALUES (?,?,?,?,?,?,?,?)`)
+		(user_id, first_at, last_at, surface, device, daypart, weekend) VALUES (?,?,?,?,?,?,?) RETURNING id`)
 	if err != nil {
 		return err
 	}
 	defer serveStmt.Close()
-	itemStmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO personalize_serve_items
+	itemStmt, err := tx.PrepareContext(ctx, `INSERT INTO personalize_serve_items
 		(serve_id, user_id, item_key, taste_key, hub_id, kind, row_pos, item_pos, baseline, explore, propensity, fv, features)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (serve_id, row_pos, item_pos) DO NOTHING`)
 	if err != nil {
 		return err
 	}
 	defer itemStmt.Close()
-	touchStmt, err := tx.PrepareContext(ctx, `UPDATE personalize_serves SET last_at = max(last_at, ?), repeats = repeats + 1 WHERE id = ?`)
+	touchStmt, err := tx.PrepareContext(ctx, `UPDATE personalize_serves SET last_at = CASE WHEN ? > last_at THEN ? ELSE last_at END,
+		repeats = repeats + 1 WHERE id = ?`)
 	if err != nil {
 		return err
 	}
 	defer touchStmt.Close()
+	fresh := map[int64]int64{}
 	for _, op := range ops {
 		if op.rec == nil {
-			if _, err := touchStmt.ExecContext(ctx, ms(op.at), op.touch); err != nil {
+			id, ok := fresh[op.touch]
+			if !ok {
+				id, ok = ids[op.touch]
+			}
+			if !ok {
+				continue
+			}
+			if _, err := touchStmt.ExecContext(ctx, ms(op.at), ms(op.at), id); err != nil {
 				return err
 			}
 			continue
 		}
 		r := op.rec
 		at := ms(r.at)
-		if _, err := serveStmt.ExecContext(ctx, r.id, r.userID, at, at, r.surface, r.hc.Device, r.hc.Daypart, b2i(r.hc.Weekend)); err != nil {
+		var id int64
+		if err := serveStmt.QueryRowContext(ctx, r.userID, at, at, r.surface, r.hc.Device, r.hc.Daypart, b2i(r.hc.Weekend)).Scan(&id); err != nil {
 			return err
 		}
+		fresh[r.id] = id
 		for _, it := range r.items {
-			if _, err := itemStmt.ExecContext(ctx, r.id, r.userID, int64(it.key), int64(tasteKey(it.key)), it.hubID, it.kind,
+			if _, err := itemStmt.ExecContext(ctx, id, r.userID, int64(it.key), int64(tasteKey(it.key)), it.hubID, it.kind,
 				it.rowPos, it.itemPos, float64(it.snap.baseline), float64(it.snap.explore), float64(it.snap.propensity),
 				rawFeatureVersion, encodeFeatures(it.snap.raw[:])); err != nil {
 				return err
 			}
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if ids != nil {
+		if len(ids)+len(fresh) > maxServeIDs {
+			clear(ids)
+		}
+		for k, v := range fresh {
+			ids[k] = v
+		}
+	}
+	return nil
 }
 
 // encodeFeatures packs a feature snapshot as little-endian float32s.

@@ -84,15 +84,24 @@ func (e *Engine) worker(ctx context.Context) {
 				}
 				e.mu.Unlock()
 				e.buildAndStore(ctx, id)
+				// Decide and retire the flight under one lock: a request
+				// that lands between the check and the retirement would
+				// otherwise set again on a flight about to close, and its
+				// rebuild would be lost.
 				e.mu.Lock()
 				f := e.flights[id]
 				again := f != nil && f.again && ctx.Err() == nil
+				if !again {
+					delete(e.flights, id)
+				}
 				e.mu.Unlock()
 				if !again {
+					if f != nil {
+						close(f.done)
+					}
 					break
 				}
 			}
-			e.finish(id)
 		}
 	}
 }

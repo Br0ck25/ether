@@ -110,7 +110,9 @@ func (d *Discovery) YearInReview(ctx context.Context, u *core.User, year, limit 
 	if limit <= 0 {
 		limit = 20
 	}
-	start := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	// The year is the server's calendar year (d.now's zone), not UTC's: a
+	// film finished on New Year's Eve evening belongs to that year.
+	start := time.Date(year, 1, 1, 0, 0, 0, 0, d.now().Location())
 	end := start.AddDate(1, 0, 0)
 	entries, e := d.state.History(ctx, u.ID, start, 10000)
 	if e != nil {
