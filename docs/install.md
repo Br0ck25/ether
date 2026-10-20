@@ -234,6 +234,16 @@ account-wide, so the live nodes divide them between them; the provider pages
 show each node's part ("this node: 7 of 20 connections"). When a node leaves,
 its share returns to the others within about 30 seconds.
 
+There is nothing extra to configure. Enter each provider's connection limit
+once, as you would for a single server, and the cluster divides it. Every live
+node gets at least one connection per provider. The warm connections a node
+keeps open for fast starts count towards its own share and never exceed it.
+Debrid API calls (adding torrents, creating links) are limited per account and
+divided in the same way. The number of connections a node uses to read one
+debrid file is a per-node setting and is not divided: it only changes how
+quickly a single stream fills. Indexer daily limits are counted in the shared
+database, so together the nodes never exceed an indexer's quota.
+
 To give a node a larger share, raise its **Node weight** on that node's
 *General* page (`server.clusterWeight` in its `config.json`). A node at `2`
 gets twice the share of a node at the default of `1`. Weights are listed on
