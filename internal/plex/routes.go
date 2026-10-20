@@ -18,7 +18,7 @@ func (s *Server) routes() chi.Router {
 		r.Head(pattern, h)
 	}
 	any := func(pattern string, h http.HandlerFunc) { r.HandleFunc(pattern, h) }
-	empty := s.handleUnknown
+	empty := func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) }
 
 	// Server
 	get("/", s.handleRoot)

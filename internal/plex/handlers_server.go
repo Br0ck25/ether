@@ -356,11 +356,14 @@ func (s *Server) handleUpdaterStatus(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-// handleUnknown answers endpoints Ether doesn't implement the way PMS does
-// for unknown-but-harmless paths: an empty container.
+// handleUnknown answers endpoints Ether doesn't implement the way PMS
+// answers paths it does not know: 404 with its HTML error page. An empty
+// 200 container here would make a mistyped or unsupported request look
+// like an empty result; routes Ether knowingly stubs answer with
+// writeEmpty explicitly in routes().
 func (s *Server) handleUnknown(w http.ResponseWriter, r *http.Request) {
 	s.log.Debug("unhandled endpoint", "method", r.Method, "path", r.URL.Path, "query", redactQuery(r.URL.RawQuery))
-	s.writeEmpty(w, r)
+	writeHTTPError(w, http.StatusNotFound)
 }
 
 func (s *Server) handleOK(w http.ResponseWriter, r *http.Request) {
