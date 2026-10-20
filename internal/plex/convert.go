@@ -1159,6 +1159,21 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 			continue
 		}
 		eps = s.visibleTitles(pr.User, eps)
+		if title.Type == core.TypeShow {
+			// A show's totals are its regular episodes, as the catalogue
+			// counts them on every list: Specials neither add to the badge
+			// nor keep a finished show unwatched.
+			regular := eps[:0:0]
+			for _, e := range eps {
+				if e.Season > 0 {
+					regular = append(regular, e)
+				}
+			}
+			eps = regular
+			if len(eps) == 0 {
+				continue
+			}
+		}
 		st := s.stateFor(ctx, pr, eps)
 		viewed := 0
 		for _, e := range eps {
@@ -1167,7 +1182,8 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 			}
 		}
 		// The episodes just counted are the ones the viewer can list and
-		// play (aired, visible, in their episode order), so leafCount comes
+		// play (aired, visible, in their episode order; regular seasons for
+		// a show), so leafCount comes
 		// from the same list as viewedLeafCount and a fully watched show
 		// or season reads as watched.
 		items[i].ViewedLeafCount = model.Ptr(viewed)
