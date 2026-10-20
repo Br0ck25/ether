@@ -52,6 +52,10 @@ type Channel struct {
 	// Collection/Filter are expanded into a stable item snapshot when saved.
 	Collection core.RatingKey `json:"collection,omitempty"`
 	Filter     *core.Filter   `json:"filter,omitempty"`
+
+	// GuideSourceID names the source whose XMLTV supplies GuideID's
+	// programmes. Empty means SourceID. Virtual channels ignore it.
+	GuideSourceID string `json:"guideSourceId,omitempty"`
 }
 type Source struct {
 	ID          string `json:"id"`
@@ -62,6 +66,25 @@ type Source struct {
 	Playlist  string    `json:"playlist,omitempty"`
 	Guide     string    `json:"guide,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// RefreshHours caps the time between automatic refreshes of URL-backed
+	// sources: 0 uses the 6 hour default, a negative value means manual
+	// refresh only. Sources also refresh before mapped listings run out.
+	// Inline uploads never refresh automatically.
+	RefreshHours int `json:"refreshHours,omitempty"`
+	// LastError/LastErrorAt/RefreshFailures record failed refreshes; a
+	// successful import clears them. Existing data is kept on failure.
+	LastError       string     `json:"lastError,omitempty"`
+	LastErrorAt     *time.Time `json:"lastErrorAt,omitempty"`
+	RefreshFailures int        `json:"refreshFailures,omitempty"`
+	// Read-only statistics computed by Sources(); ignored on import.
+	HasPlaylist       bool       `json:"hasPlaylist"`
+	HasGuide          bool       `json:"hasGuide"`
+	ChannelCount      int        `json:"channelCount"`
+	GuideChannelCount int        `json:"guideChannelCount"`
+	ProgrammeCount    int        `json:"programmeCount"`
+	GuideFrom         *time.Time `json:"guideFrom,omitempty"`
+	GuideUntil        *time.Time `json:"guideUntil,omitempty"`
+	NextRefresh       *time.Time `json:"nextRefresh,omitempty"`
 }
 type Programme struct {
 	ID        string    `json:"id"`
