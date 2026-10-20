@@ -198,3 +198,25 @@ func TestStartupMeasuredFromRealChecksOnly(t *testing.T) {
 		t.Fatalf("verified-cache answer was measured: %+v", st)
 	}
 }
+
+func TestExplicitSourcePreferenceFindsNonAdjacentEqualQuality(t *testing.T) {
+	cfg := testCfg()
+	cfg.Resolver.SourcePreference = PreferDebrid
+	svc := New(nil, fakeHealth{}, nil, cfg, Options{})
+	releases := routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")
+	releases[0].Score, releases[1].Score = 100, 95
+	lower := releases[0]
+	lower.ID = "lower"
+	lower.Info.Height = 720
+	lower.Score = 80
+	cands := []candidate{{rel: releases[0], verified: true}, {rel: lower, verified: true}, {rel: releases[1]}}
+	got := svc.routeSources(cands, routingTitle(true), nil)
+	if got[0].rel.ID != "torrent" || got[1].rel.ID != "usenet" || got[2].rel.ID != "lower" {
+		t.Fatalf("non-adjacent source preference: %+v", got)
+	}
+	releases[1].Score = 50
+	cands[2].rel = releases[1]
+	if got = svc.routeSources(cands, routingTitle(true), nil); got[0].rel.ID != "usenet" {
+		t.Fatal("source preference exceeded score margin")
+	}
+}

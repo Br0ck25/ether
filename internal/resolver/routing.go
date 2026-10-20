@@ -174,12 +174,25 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 	}
 	lead := cands[0]
 	tier := qualityTier(lead.rel.Info)
-	group := 0 // cands[:group] are equivalent to the leader
-	for group < len(cands) && (!cands[group].verified || explicit) && qualityTier(cands[group].rel.Info) == tier && cands[group].rel.Score >= lead.rel.Score-margin {
-		group++
+	// Verified candidates are promoted ahead of the score order, so equal-tier
+	// alternatives need not be adjacent to the leader. Explicit source choices
+	// must consider the whole eligible tier instead of stopping at a verified
+	// release of another quality.
+	var group []candidate
+	var indexes []int
+	for i, c := range cands {
+		eligible := (!c.verified || explicit) && qualityTier(c.rel.Info) == tier && c.rel.Score >= lead.rel.Score-margin
+		if !eligible {
+			if !explicit {
+				break
+			}
+			continue
+		}
+		group = append(group, c)
+		indexes = append(indexes, i)
 	}
 	hasUsenet, hasTorrent := false, false
-	for _, c := range cands[:group] {
+	for _, c := range group {
 		if protocolOf(c.rel) == core.ProtocolTorrent {
 			hasTorrent = true
 		} else {
@@ -197,7 +210,7 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 	case PreferDebrid:
 		want, why = core.ProtocolTorrent, "owner prefers debrid"
 	default:
-		want, why = s.autoSource(cands[:group], t)
+		want, why = s.autoSource(group, t)
 	}
 	if want == "" {
 		return cands
@@ -211,9 +224,9 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 		return want != core.ProtocolTorrent || mode == PreferDebrid || s.knownCached(c.rel)
 	}
 	first := -1
-	for i, c := range cands[:group] {
+	for i, c := range group {
 		if fast(c) {
-			first = i
+			first = indexes[i]
 			break
 		}
 	}
@@ -225,9 +238,9 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 	// Hedge: the best of the other source second, so ranked validation
 	// checks both sources at once.
 	other := -1
-	for i, c := range cands[:group] {
-		if i != first && protocolOf(c.rel) != want {
-			other = i
+	for i, c := range group {
+		if indexes[i] != first && protocolOf(c.rel) != want {
+			other = indexes[i]
 			break
 		}
 	}
