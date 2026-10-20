@@ -38,11 +38,20 @@ const (
 	maxRangeAttempts    = 4
 	maxLinkFailures     = 3
 	readAtDefaultBudget = 2 * time.Minute
+	// bodyStallTimeout bounds a media read that receives no bytes at all.
+	// The transport only times out headers; a CDN connection that stays
+	// open but stops sending would otherwise hold a block's flight (and
+	// every reader waiting on it) for the file's lifetime.
+	bodyStallTimeout = 15 * time.Second
 )
 
 // errRunCancelled marks blocks whose read-ahead run was cancelled by a
 // seek; a reader waiting on one simply fetches it again.
 var errRunCancelled = errors.New("debrid: read-ahead cancelled")
+
+// errBodyStalled is a media response that delivered no bytes for
+// bodyStallTimeout; the read is retried from the block it stopped in.
+var errBodyStalled = errors.New("debrid: media response stalled")
 
 // EngineOptions configure an Engine.
 type EngineOptions struct {
@@ -76,6 +85,7 @@ type Engine struct {
 	now   func() time.Time
 	delay time.Duration
 	block int64
+	stall time.Duration // bodyStallTimeout; tests shorten it
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -139,7 +149,7 @@ func NewStreamingTransport() *http.Transport {
 // NewEngine wraps inner with debrid streaming.
 func NewEngine(svc *Service, opts EngineOptions) *Engine {
 	e := &Engine{svc: svc, inner: opts.Inner, inHC: opts.Health, cache: opts.Cache, hc: opts.HTTPClient, hedge: opts.HedgeClient,
-		log: opts.Logger, now: opts.Now, delay: opts.HedgeDelay, block: opts.BlockSize, files: map[string]*remoteFile{}}
+		log: opts.Logger, now: opts.Now, delay: opts.HedgeDelay, block: opts.BlockSize, stall: bodyStallTimeout, files: map[string]*remoteFile{}}
 	if e.inHC == nil {
 		e.inHC, _ = opts.Inner.(core.HealthChecker)
 	}
@@ -1019,11 +1029,13 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 	send := func(c context.Context, hc *http.Client) (*http.Response, timing, error) {
 		var once sync.Once
 		release := func() { once.Do(func() { <-slots }) }
+		c, stop := context.WithCancel(c)
 		resp, tm, err := e.send(c, hc, u, start, end)
 		if err != nil {
+			stop()
 			release()
 		} else {
-			resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: release}
+			resp.Body = &stallBody{rc: resp.Body, d: e.stall, stop: stop, release: release}
 		}
 		return resp, tm, err
 	}
@@ -1123,6 +1135,46 @@ func (e *Engine) get(ctx context.Context, u string, start, end int64, urgent boo
 		}
 	}
 	return nil, firstErr.tm, firstErr.err
+}
+
+// stallBody ends a response whose body delivers no bytes for d by
+// cancelling its request, so a stalled CDN connection fails like a dropped
+// one (and is resumed) instead of blocking its reader forever. Close also
+// returns the request's connection slot.
+type stallBody struct {
+	rc      io.ReadCloser
+	d       time.Duration
+	stop    context.CancelFunc
+	release func()
+	timer   *time.Timer
+	fired   atomic.Bool
+}
+
+func (b *stallBody) Read(p []byte) (int, error) {
+	if b.d <= 0 {
+		return b.rc.Read(p)
+	}
+	if b.timer == nil {
+		b.timer = time.AfterFunc(b.d, func() { b.fired.Store(true); b.stop() })
+	} else {
+		b.timer.Reset(b.d)
+	}
+	n, err := b.rc.Read(p)
+	b.timer.Stop()
+	if err != nil && b.fired.Load() {
+		err = errBodyStalled
+	}
+	return n, err
+}
+
+func (b *stallBody) Close() error {
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	err := b.rc.Close()
+	b.stop()
+	b.release()
+	return err
 }
 
 type cancelOnClose struct {

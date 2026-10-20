@@ -276,7 +276,12 @@ func (e *entry) observe(now time.Time, err error) *backoffEvent {
 	if err == nil || errors.Is(err, core.ErrNotCached) || errors.Is(err, ErrGone) || errors.Is(err, core.ErrReleaseRejected) {
 		// The provider answered; release-level outcomes are not outages.
 		was := e.state
-		e.failures, e.state = 0, ""
+		e.failures = 0
+		if !now.Before(e.until) {
+			// A call that was already in flight when a pause began does not
+			// end it (nor blank its reported state) early.
+			e.state = ""
+		}
 		if err == nil {
 			t := now
 			e.stats.LastSuccess = &t
@@ -668,6 +673,15 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	}
 	queueDuration = time.Since(wallStarted)
 	defer e.release()
+	// A caller's own budget (a resolver candidate check, say) ending says
+	// nothing about the provider; only the provider's outcomes, including
+	// its own providerOpTimeout, move the breaker.
+	parent := ctx
+	observe := func(err error) {
+		if err == nil || parent.Err() == nil {
+			s.observe(e, err)
+		}
+	}
 	ctx, cancel := context.WithTimeout(ctx, providerOpTimeout)
 	defer cancel()
 	cfg := s.Config()
@@ -684,7 +698,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 		} else if id, err := e.p.Find(ctx, hash); err == nil {
 			torrentID = id
 		} else if !errors.Is(err, ErrUnsupported) {
-			s.observe(e, err)
+			observe(err)
 			if errors.Is(err, ErrAuth) {
 				return Payload{}, err
 			}
@@ -718,7 +732,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 		}
 	}
 	readyDuration = time.Since(readyStarted)
-	s.observe(e, err)
+	observe(err)
 	if err != nil {
 		if errors.Is(err, core.ErrNotCached) {
 			e.count(func(st *ProviderStats) { st.NotCached++ })
@@ -740,7 +754,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	linkWallStarted := time.Now()
 	dl, err := e.p.Link(ctx, p.handle())
 	linkDuration = time.Since(linkWallStarted)
-	s.observe(e, err)
+	observe(err)
 	if err != nil {
 		return Payload{}, err
 	}
@@ -846,7 +860,9 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 	lctx, cancel := context.WithTimeout(ctx, providerOpTimeout)
 	start := s.now()
 	dl, err := e.p.Link(lctx, p.handle())
-	s.observe(e, err)
+	if err == nil || ctx.Err() == nil { // the caller's budget is not a provider failure
+		s.observe(e, err)
+	}
 	cancel()
 	e.release()
 	if err == nil {
