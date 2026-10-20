@@ -39,6 +39,18 @@ func (c *clock) Set(t time.Time) {
 
 var testGenres = []string{"Science Fiction", "Drama", "Comedy", "Horror", "Animation", "Family", "Thriller", "Romance", "Documentary", "Crime"}
 
+// showShapes give the five shows of each genre a status and length:
+// returning, a complete three-season run, a limited series, a new
+// returning one-season show, and a complete two-season run.
+var showShapes = [5]struct {
+	status  string
+	seasons int
+}{{statusReturning, 2}, {statusEnded, 3}, {statusEnded, 1}, {statusReturning, 1}, {statusEnded, 2}}
+
+// testNetworks are the shows' networks (show j of genre gi airs on
+// network (gi+j)%4).
+var testNetworks = []string{"Aurora Network", "Harbor TV", "Summit Channel", "Lumen Studios"}
+
 // genreThemes are each genre's four themes (TMDB-style keywords); movie j
 // of a genre carries theme j%4.
 var genreThemes = map[string][4]string{
@@ -140,19 +152,30 @@ func newFakeCatalog(now time.Time) *fakeCatalog {
 			if g == "Comedy" || g == "Animation" {
 				rt = 24
 			}
+			sh := showShapes[j]
+			kws := []string{genreSlug(g) + "-theme"}
+			if sh.status == statusEnded && sh.seasons == 1 {
+				kws = append(kws, "miniseries")
+			}
 			s := core.Title{
 				Key: showKey(gi, j), Type: core.TypeShow, IDs: core.IDs{TMDB: int64(1000*(gi+1) + j + 1)},
-				Title: fmt.Sprintf("%s Show %d", g, j), Year: 2010 + j, Genres: []string{g}, Keywords: []string{genreSlug(g) + "-theme"},
+				Title: fmt.Sprintf("%s Show %d", g, j), Year: 2010 + j, Genres: []string{g}, Keywords: kws,
 				Runtime: time.Duration(rt) * time.Minute, Language: "en", ContentRating: rating,
 				Rating: 7.0 + float64(j)*0.3, VoteCount: 300 + j*100, Popularity: 10 + float64(j*15), Released: now.AddDate(-1, 0, -j*30),
-				ChildCount: 1, LeafCount: 8,
+				ChildCount: sh.seasons, LeafCount: 8 * sh.seasons, Status: sh.status, Studios: []string{testNetworks[(gi+j)%len(testNetworks)]},
 			}
 			c.add(s)
-			for e := 1; e <= 8; e++ {
-				ep := core.Title{Key: core.EpisodeKey(s.IDs.TMDB, 1, e), Type: core.TypeEpisode, ShowKey: s.Key, ShowTitle: s.Title,
-					Season: 1, Episode: e, Title: fmt.Sprintf("%s E%d", s.Title, e), Runtime: s.Runtime, Genres: s.Genres,
-					ContentRating: s.ContentRating, Released: s.Released.AddDate(0, 0, 7*e)}
-				c.titles[ep.Key] = ep
+			for se := 1; se <= sh.seasons; se++ {
+				premiere := s.Released.AddDate(0, 0, 180*(se-1))
+				for e := 1; e <= 8; e++ {
+					ep := core.Title{Key: core.EpisodeKey(s.IDs.TMDB, se, e), Type: core.TypeEpisode, ShowKey: s.Key, ShowTitle: s.Title,
+						Season: se, Episode: e, Title: fmt.Sprintf("%s S%dE%d", s.Title, se, e), Runtime: s.Runtime, Genres: s.Genres,
+						ContentRating: s.ContentRating, Released: premiere.AddDate(0, 0, 7*e)}
+					if se == 1 {
+						ep.Title = fmt.Sprintf("%s E%d", s.Title, e)
+					}
+					c.titles[ep.Key] = ep
+				}
 			}
 		}
 	}
@@ -242,8 +265,76 @@ func (c *fakeCatalog) Get(_ context.Context, k core.RatingKey) (*core.Title, err
 	}
 	return nil, core.ErrNotFound
 }
-func (c *fakeCatalog) Children(context.Context, core.RatingKey) ([]core.Title, error) {
-	return nil, nil
+
+// Children lists a show's seasons, derived from its episodes (a season's
+// release is its first episode's).
+func (c *fakeCatalog) Children(_ context.Context, k core.RatingKey) ([]core.Title, error) {
+	c.count("children")
+	if k.Kind() != core.KindShow {
+		return nil, nil
+	}
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
+	seasons := map[int]*core.Title{}
+	for _, t := range c.titles {
+		if t.Type != core.TypeEpisode || t.ShowKey != k {
+			continue
+		}
+		s := seasons[t.Season]
+		if s == nil {
+			s = &core.Title{Key: core.SeasonKey(k.TMDB(), t.Season), Type: core.TypeSeason, ShowKey: k, ShowTitle: t.ShowTitle,
+				Season: t.Season, Title: fmt.Sprintf("Season %d", t.Season), Released: t.Released}
+			seasons[t.Season] = s
+		}
+		s.ChildCount++
+		if t.Released.Before(s.Released) {
+			s.Released = t.Released
+		}
+	}
+	out := make([]core.Title, 0, len(seasons))
+	for _, s := range seasons {
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Season < out[j].Season })
+	return out, nil
+}
+
+// addSeason gives a show another season of eight episodes premiering at
+// premiere (weekly after that).
+func (c *fakeCatalog) addSeason(show core.RatingKey, season int, premiere time.Time) {
+	c.dataMu.Lock()
+	defer c.dataMu.Unlock()
+	s := c.titles[show]
+	for e := 1; e <= 8; e++ {
+		ep := core.Title{Key: core.EpisodeKey(show.TMDB(), season, e), Type: core.TypeEpisode, ShowKey: show, ShowTitle: s.Title,
+			Season: season, Episode: e, Title: fmt.Sprintf("%s S%dE%d", s.Title, season, e), Runtime: s.Runtime, Genres: s.Genres,
+			ContentRating: s.ContentRating, Released: premiere.AddDate(0, 0, 7*(e-1))}
+		c.titles[ep.Key] = ep
+	}
+	if season > s.ChildCount {
+		s.ChildCount = season
+		s.LeafCount = 8 * season
+	}
+	c.titles[show] = s
+}
+
+// addWorldCinema adds n films in a language (alternating Drama and
+// Thriller), modestly popular so they stay out of the trending lists.
+func (c *fakeCatalog) addWorldCinema(lang, country string, base, n int) []core.RatingKey {
+	var keys []core.RatingKey
+	for j := 0; j < n; j++ {
+		g := []string{"Drama", "Thriller"}[j%2]
+		id := int64(50000 + base + j)
+		t := core.Title{Key: core.MovieKey(id), Type: core.TypeMovie, IDs: core.IDs{TMDB: id},
+			Title: fmt.Sprintf("%s Film %d", lang, j), Year: 2000 + j, Genres: []string{g}, Keywords: []string{genreThemes[g][j%4]},
+			Runtime: time.Duration(95+j*3) * time.Minute, Language: lang, Countries: []string{country}, ContentRating: "R",
+			Rating: 7.0 + float64(j%5)*0.3, VoteCount: 1500 + j*200, Popularity: 6 + float64(j%5),
+			Released:  time.Date(2000+j, 3, 1, 0, 0, 0, 0, time.UTC),
+			Directors: []core.Person{{TMDB: id + 900000, Name: fmt.Sprintf("%s Director %d", lang, j)}}}
+		c.add(t)
+		keys = append(keys, t.Key)
+	}
+	return keys
 }
 func (c *fakeCatalog) Grandchildren(context.Context, core.RatingKey) ([]core.Title, error) {
 	return nil, nil
@@ -273,6 +364,18 @@ func (c *fakeCatalog) Browse(_ context.Context, q core.BrowseQuery) (core.Page, 
 			continue
 		}
 		if f.Person != 0 && !hasPerson(&t, f.Person) {
+			continue
+		}
+		if f.YearFrom > 0 && t.Year < f.YearFrom || f.YearTo > 0 && t.Year > f.YearTo {
+			continue
+		}
+		if len(f.Languages) > 0 && !overlap([]string{t.Language}, f.Languages) {
+			continue
+		}
+		if len(f.Countries) > 0 && !overlap(t.Countries, f.Countries) {
+			continue
+		}
+		if f.Studio != "" && !overlap(t.Studios, []string{f.Studio}) {
 			continue
 		}
 		items = append(items, t)

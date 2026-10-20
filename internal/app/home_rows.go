@@ -28,8 +28,8 @@ func (a *App) extraHomeRows(ctx context.Context, u *core.User, hc core.HubContex
 		}
 		filtered := out[:0]
 		for _, h := range out {
-			if h.Type == typ {
-				filtered = append(filtered, h)
+			if v, ok := core.SectionView(h, typ); ok {
+				filtered = append(filtered, v)
 			}
 		}
 		out = filtered

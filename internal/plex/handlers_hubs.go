@@ -494,8 +494,11 @@ func (s *Server) handleSectionHubs(w http.ResponseWriter, r *http.Request) {
 			add(hubSpec{Hub: h})
 		}
 	}
+	// Mixed discovery rows (watchlist, Rediscover) keep this section's
+	// titles.
 	for _, hs := range s.discoveryHubs(ctx, pr, count) {
-		if hs.Type == sec.Type {
+		if h, ok := core.SectionView(hs.Hub, sec.Type); ok {
+			hs.Hub = h
 			add(hs)
 		}
 	}
@@ -581,9 +584,18 @@ func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections [
 		return hubSpec{}, false
 	}
 	for _, h := range s.discoveryHubs(ctx, pr, count) {
-		if h.ID == id && s.hubInSections(h.Hub, sections) {
-			return h, true
+		if h.ID != id || !s.hubInSections(h.Hub, sections) {
+			continue
 		}
+		if len(sections) == 1 {
+			// A section's copy of a mixed row ("More" from a library).
+			if sec, ok := s.sectionByID(sections[0]); ok {
+				if v, ok := core.SectionView(h.Hub, sec.Type); ok {
+					h.Hub = v
+				}
+			}
+		}
+		return h, true
 	}
 	if s.d.Recommender == nil {
 		return hubSpec{}, false

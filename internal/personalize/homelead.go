@@ -27,8 +27,17 @@ const (
 // homeLead is what the Home leads with.
 type homeLead struct {
 	keys map[core.RatingKey]bool // taste keys (episodes fold onto shows)
-	rows map[string]bool         // row ids without the screen prefix
+	rows map[string]bool         // lead row ids without the screen prefix
+	// same holds, for every row visible anywhere on the Home, the titles
+	// it shows there: a section's copy of the same row (New & Noteworthy,
+	// Trending) never opens with them either.
+	same map[string]map[core.RatingKey]bool
 	sig  uint64
+}
+
+// holds reports whether a title is held back from a section row.
+func (l *homeLead) holds(rowID string, k core.RatingKey) bool {
+	return l.keys[k] || l.same[rowID][k]
 }
 
 // homeLeadFor computes the Home lead for a section request: the Home
@@ -44,25 +53,30 @@ func (e *Engine) homeLeadFor(ctx context.Context, user *core.User, hc core.HubCo
 
 // leadFromRows collects the lead from arranged Home rows.
 func leadFromRows(rows []core.HomeRow, items int) *homeLead {
-	l := &homeLead{keys: map[core.RatingKey]bool{}, rows: map[string]bool{}}
+	l := &homeLead{keys: map[core.RatingKey]bool{}, rows: map[string]bool{}, same: map[string]map[core.RatingKey]bool{}}
 	seen := 0
 	for _, r := range rows {
 		if r.Hidden {
 			continue
 		}
-		if seen >= leadRows {
-			break
-		}
 		seen++
 		if r.Source == core.RowSourcePlex {
 			continue // Continue Watching: in-progress titles never recur as picks
 		}
-		l.rows[strings.TrimPrefix(r.HubID, "home.")] = true
+		id := strings.TrimPrefix(r.HubID, "home.")
+		same := map[core.RatingKey]bool{}
 		for i, t := range r.Items {
 			if i >= items {
 				break
 			}
-			l.keys[tasteKey(t.Key)] = true
+			same[tasteKey(t.Key)] = true
+			if seen <= leadRows {
+				l.keys[tasteKey(t.Key)] = true
+			}
+		}
+		l.same[id] = same
+		if seen <= leadRows {
+			l.rows[id] = true
 		}
 	}
 	h := fnv.New64a()
@@ -74,24 +88,40 @@ func leadFromRows(rows []core.HomeRow, items int) *homeLead {
 	for _, k := range keys {
 		_, _ = h.Write([]byte(strconv.FormatInt(k, 36) + ","))
 	}
-	ids := make([]string, 0, len(l.rows))
-	for id := range l.rows {
+	ids := make([]string, 0, len(l.same))
+	for id := range l.same {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		_, _ = h.Write([]byte(id + ";"))
+		lead := "-"
+		if l.rows[id] {
+			lead = "+"
+		}
+		_, _ = h.Write([]byte(lead + id + ":"))
+		ks := make([]int64, 0, len(l.same[id]))
+		for k := range l.same[id] {
+			ks = append(ks, int64(k))
+		}
+		sort.Slice(ks, func(i, j int) bool { return ks[i] < ks[j] })
+		for _, k := range ks {
+			_, _ = h.Write([]byte(strconv.FormatInt(k, 36) + ","))
+		}
+		_, _ = h.Write([]byte(";"))
 	}
 	l.sig = h.Sum64() | 1 // never 0, which means "no dedupe"
 	return l
 }
 
-// holdBackHomeLead removes the Home lead's titles from a ranked row. A row
-// the exclusion would leave too thin keeps them at the back instead and is
-// demoted (surfaceMult).
-func (a *assembly) holdBackHomeLead(c *candRow, items []candItem) []candItem {
-	if a.lead == nil || len(a.lead.keys) == 0 || c.source == core.RowSourcePlex {
-		return items
+// holdBackHomeLead splits a ranked row into the titles it may lead with
+// and the Home lead's titles it holds back. A row the exclusion would
+// leave too thin is demoted instead (surfaceMult): it keeps the held
+// titles, after all of its own (demoted = true). A row left with almost
+// nothing of its own would only repeat the Home and is dropped (unless the
+// owner placed it).
+func (a *assembly) holdBackHomeLead(c *candRow, items []candItem) (kept, held []candItem, demoted bool) {
+	if a.lead == nil || len(a.lead.keys) == 0 && len(a.lead.same[c.id]) == 0 || c.source == core.RowSourcePlex {
+		return items, nil, false
 	}
 	if a.demoted == nil {
 		a.demoted = map[*candRow]bool{}
@@ -99,12 +129,11 @@ func (a *assembly) holdBackHomeLead(c *candRow, items []candItem) []candItem {
 	if a.held == nil {
 		a.held = map[*candRow][]core.RatingKey{}
 	}
-	kept := make([]candItem, 0, len(items))
-	var held []candItem
+	kept = make([]candItem, 0, len(items))
 	var visible []core.RatingKey
 	cap := a.rowCap(c)
 	for i, it := range items {
-		if a.lead.keys[tasteKey(it.t.Key)] {
+		if a.lead.holds(c.id, tasteKey(it.t.Key)) {
 			held = append(held, it)
 			if i < cap {
 				visible = append(visible, it.t.Key)
@@ -114,14 +143,23 @@ func (a *assembly) holdBackHomeLead(c *candRow, items []candItem) []candItem {
 		kept = append(kept, it)
 	}
 	if len(held) == 0 {
-		return items
+		return items, nil, false
 	}
-	if len(kept) < max(c.minItems, 4) {
+	thin, empty := max(c.minItems, 4), 2
+	if c.minItems <= 1 {
+		thin, empty = 1, 1 // rows that are fine with one title (new seasons)
+	}
+	if len(kept) < thin {
+		if len(kept) < empty && !a.ownerPlaced(c, a.hubID(c)) {
+			// Nothing of its own to lead with: the page would only repeat
+			// the Home's row.
+			return nil, nil, false
+		}
 		a.demoted[c] = true
-		return append(kept, held...)
+		return kept, held, true
 	}
 	a.held[c] = visible
-	return kept
+	return kept, nil, false
 }
 
 // countHeld counts the distinct Home-lead titles kept off rows that made

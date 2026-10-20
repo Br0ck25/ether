@@ -79,3 +79,35 @@ type CollectionRows interface {
 type PersonalScorer interface {
 	ScoreTitles(ctx context.Context, user *User, titles []Title) (map[RatingKey]float64, error)
 }
+
+// SectionView restricts a Home hub to one library section's media type,
+// so mixed rows that belong on a section too (the watchlist, Rediscover)
+// can appear there with only that section's titles. A typed hub passes
+// through when its type matches. Recaps (Year in Review) stay on Home.
+// ok is false when nothing of the type remains.
+func SectionView(h Hub, t MediaType) (Hub, bool) {
+	if h.Context == "hub.home.yearinreview" {
+		return h, false
+	}
+	match := func(x MediaType) bool {
+		if t == TypeShow {
+			return x == TypeShow || x == TypeSeason || x == TypeEpisode
+		}
+		return x == t
+	}
+	if h.Type != "" {
+		return h, match(h.Type)
+	}
+	items := make([]Title, 0, len(h.Items))
+	for _, it := range h.Items {
+		if match(it.Type) {
+			items = append(items, it)
+		}
+	}
+	if len(items) == 0 {
+		return h, false
+	}
+	h.Items = items
+	h.Type = t
+	return h, true
+}

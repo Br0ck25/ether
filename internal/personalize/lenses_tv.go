@@ -78,6 +78,17 @@ func (b *builder) genNewSeasons() []*candRow {
 		if best.Season == 0 || !recommend.ContentRatingAllowed(e.Title.ContentRating, b.user.MaxContentRating) {
 			continue
 		}
+		// Only for viewers caught up on what came before (most of the
+		// earlier seasons' episodes); the rest is Finish What You Started.
+		prior := 0
+		for _, s := range seasons {
+			if s.Season >= 1 && s.Season < best.Season {
+				prior += s.ChildCount
+			}
+		}
+		if prior > 0 && 4*e.Completions < 3*prior {
+			continue
+		}
 		cands = append(cands, cand{show: e.Title, season: best.Season, at: best.Released, w: e.Weight})
 		firstEps = append(firstEps, core.EpisodeKey(e.Key.TMDB(), best.Season, 1))
 	}
@@ -108,6 +119,11 @@ func (b *builder) genNewSeasons() []*candRow {
 			reason: fmt.Sprintf("Season %d %s", c.season, when)})
 	}
 	sortItems(items)
+	var shows []core.Title
+	for _, it := range items {
+		shows = append(shows, it.t)
+	}
+	b.memo["newseasons"] = shows // Finish What You Started leaves these to this row
 	r := newRow(KindNewSeasons, "newseasons", "New Seasons of Your Shows", "Series you watched that have a new season out you haven't started.", items)
 	r.minItems = 1
 	return []*candRow{r}
@@ -123,10 +139,14 @@ func (b *builder) genFinishShow() []*candRow {
 	if b.generic || b.taste == nil {
 		return nil
 	}
+	newSeason := map[core.RatingKey]bool{}
+	for _, t := range b.memo["newseasons"] {
+		newSeason[t.Key] = true
+	}
 	var items []candItem
 	for _, e := range b.showEvidence() {
 		t := e.Title
-		if t.LeafCount <= 0 || e.Completions >= t.LeafCount || e.At.IsZero() {
+		if t.LeafCount <= 0 || e.Completions >= t.LeafCount || e.At.IsZero() || newSeason[t.Key] {
 			continue
 		}
 		idle := b.now.Sub(e.At)

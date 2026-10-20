@@ -188,7 +188,7 @@ func (a *assembly) surfaceMult(c *candRow) float64 {
 	}
 	if a.section != "" {
 		m *= sectionBoost(c.kind) / editorialBoost(c.kind)
-		if a.lead != nil && a.lead.rows[c.id] {
+		if a.lead != nil && a.lead.same[c.id] != nil {
 			m *= 0.8 // the Home already shows this row
 		}
 		if a.demoted[c] {

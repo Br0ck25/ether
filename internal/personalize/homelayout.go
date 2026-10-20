@@ -74,6 +74,31 @@ func (s *sqlStore) setHomeLayout(ctx context.Context, d core.HomeLayout) error {
 }
 
 func normalizeHomeLayout(d core.HomeLayout) (core.HomeLayout, error) {
+	// Values JSON cannot carry would be lost by the clone below.
+	nan := &ValidationError{}
+	checkNaN := func(ps []core.LayoutPage, field string) {
+		for i, p := range ps {
+			if tu := p.Tuning; tu != nil {
+				for name, v := range map[string]*float64{"discovery": tu.Discovery, "freshness": tu.Freshness, "variety": tu.Variety} {
+					if v != nil && (math.IsNaN(*v) || math.IsInf(*v, 0)) {
+						nan.add(fmt.Sprintf("%s[%d].tuning.%s", field, i, name), "must be 0-1")
+					}
+				}
+			}
+			for j, r := range p.Rows {
+				if math.IsNaN(r.Priority) || math.IsInf(r.Priority, 0) {
+					nan.add(fmt.Sprintf("%s[%d].rows[%d].priority", field, i, j), "must be 0-10")
+				}
+			}
+		}
+	}
+	checkNaN(d.Global, "layout.global")
+	for i, v := range d.Viewers {
+		checkNaN(v.Pages, fmt.Sprintf("layout.viewers[%d].pages", i))
+	}
+	if err := nan.orNil(); err != nil {
+		return d, err
+	}
 	d = cloneLayout(d)
 	ve := &ValidationError{}
 	pages := func(ps []core.LayoutPage, field string) {
@@ -97,6 +122,22 @@ func normalizeHomeLayout(d core.HomeLayout) (core.HomeLayout, error) {
 			for dev, n := range p.DeviceMaxRows {
 				if !validDevices[dev] || n < 1 || n > 100 {
 					ve.add(f+".deviceMaxRows", "devices must be tv, mobile, web or desktop with limits 1-100")
+				}
+			}
+			if p.DedupeHome != nil && p.Section == "home" {
+				ve.add(f+".dedupeHome", "only applies to the movies and shows pages")
+			}
+			if tu := p.Tuning; tu != nil {
+				for _, dial := range []struct {
+					name string
+					v    *float64
+				}{{"discovery", tu.Discovery}, {"freshness", tu.Freshness}, {"variety", tu.Variety}} {
+					if dial.v != nil && (math.IsNaN(*dial.v) || *dial.v < 0 || *dial.v > 1) {
+						ve.add(f+".tuning."+dial.name, "must be 0-1")
+					}
+				}
+				if tu.Discovery == nil && tu.Freshness == nil && tu.Variety == nil {
+					p.Tuning = nil // every dial inherits
 				}
 			}
 			ids := map[string]bool{}
@@ -440,6 +481,10 @@ func hubKind(id string) string {
 		return "recently-added"
 	case strings.Contains(id, "playlist"):
 		return "playlists"
+	}
+	// An engine row from before a restart ("movie.cluster.…").
+	if k := parseHubKind(id); k != "other" && (strings.HasPrefix(id, "home.") || strings.HasPrefix(id, "movie.") || strings.HasPrefix(id, "tv.")) {
+		return k
 	}
 	return id
 }

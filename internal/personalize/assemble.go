@@ -423,6 +423,15 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 		out = append(out, it)
 	}
 	if c.keepOrder {
+		// Ordered engine rows hold the Home's titles back too (a stalled
+		// series the Home's Up Next already offers), but never reorder:
+		// one too thin without them stays as it is. Rows a collection
+		// defines (a franchise, an owner collection) keep their titles.
+		if c.collKey == 0 && c.source == core.RowSourceEngine {
+			if kept, _, demoted := a.holdBackHomeLead(c, out); !demoted {
+				return kept
+			}
+		}
 		return out
 	}
 	sortItems(out)
@@ -430,9 +439,15 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 	if c.maxItems > 0 && c.maxItems < n {
 		n = c.maxItems
 	}
-	out = a.holdBackHomeLead(c, out)
+	// Movies / TV pages hold back what the Home leads with; a row too thin
+	// without those titles keeps them, after its own.
+	out, held, demoted := a.holdBackHomeLead(c, out)
 	// Diversify the head; the tail is slack for cross-row dedupe.
-	return mmr(out, min(len(out), 3*n+6), a.dials().lambda())
+	out = mmr(out, min(len(out), 3*n+6), a.dials().lambda())
+	if demoted {
+		out = append(out, mmr(held, len(held), a.dials().lambda())...)
+	}
+	return out
 }
 
 // adjust is the context-dependent part of an item's score.

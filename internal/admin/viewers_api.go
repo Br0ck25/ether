@@ -304,12 +304,18 @@ func (h *Handler) writeHomePreview(w http.ResponseWriter, p *core.HomePreview, v
 		}
 		rows = append(rows, hr)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"rows":        rows,
 		"viewer":      viewer,
 		"generatedAt": p.GeneratedAt.UTC(),
 		"context":     map[string]any{"device": p.Context.Device, "daypart": p.Context.Daypart, "weekend": p.Context.Weekend},
-	})
+	}
+	if p.HomeDeduped > 0 {
+		// Titles kept off a Movies/TV Shows page because the Home leads
+		// with them (DedupeHome).
+		body["homeDeduped"] = p.HomeDeduped
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (h *Handler) handleViewerRefresh(w http.ResponseWriter, r *http.Request) {

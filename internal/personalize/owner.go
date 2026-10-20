@@ -290,7 +290,8 @@ func (e *Engine) SetTasteOverrides(ctx context.Context, user *core.User, os []co
 }
 
 // AvailableRows lists the row kinds layout policies can target, plus owner
-// collection rows recently served.
+// collection rows recently served, each with the pages it can appear on
+// (Sections) and its designer group.
 func (e *Engine) AvailableRows(ctx context.Context) ([]core.RowDescriptor, error) {
 	e.rec.flush(ctx)
 	shows, err := e.store.rowShowsSince(ctx, e.now().AddDate(0, 0, -30))
@@ -301,7 +302,7 @@ func (e *Engine) AvailableRows(ctx context.Context) ([]core.RowDescriptor, error
 	for kind, st := range shows {
 		if strings.HasPrefix(kind, KindCollectionPrefix) {
 			extra = append(extra, core.RowDescriptor{HubID: kind, Title: st.title, Kind: kind,
-				Description: "Owner collection row (" + st.hubID + ")."})
+				Description: "Owner collection row (" + st.hubID + ").", Sections: append([]string(nil), allSurfaces...), Group: groupCollections})
 		}
 	}
 	if source, ok := e.opts.Collections.(interface {
@@ -311,33 +312,71 @@ func (e *Engine) AvailableRows(ctx context.Context) ([]core.RowDescriptor, error
 		if err != nil {
 			return nil, err
 		}
-		seen := map[string]bool{}
-		for _, d := range extra {
-			seen[d.HubID] = true
+		index := map[string]int{}
+		for i, d := range extra {
+			index[d.HubID] = i
 		}
 		for _, sp := range specs {
 			key := KindCollectionPrefix + sp.ID
-			if !seen[key] && sp.Enabled {
-				extra = append(extra, core.RowDescriptor{HubID: key, Title: sp.Name, Kind: key, Description: "Owner collection; choose Always or Eligible to add it to this Home layer."})
-				seen[key] = true
+			if !sp.Enabled {
+				continue
 			}
+			secs := collectionSections(sp.MediaType)
+			if i, ok := index[key]; ok {
+				extra[i].Sections = secs
+				continue
+			}
+			index[key] = len(extra)
+			extra = append(extra, core.RowDescriptor{HubID: key, Title: sp.Name, Kind: key,
+				Description: "Owner collection; choose Always or Eligible to add it to this page.", Sections: secs, Group: groupCollections})
 		}
 	}
 	if e.extraHomeRows != nil {
-		seen := map[string]bool{}
-		for _, d := range extra {
-			seen[d.HubID] = true
+		index := map[string]int{}
+		for i, d := range extra {
+			index[d.HubID] = i
 		}
 		hc := core.NewHubContext(e.now(), "", "", "")
 		hc.Device = core.DeviceTV
-		for _, hub := range e.extraHomeRows(ctx, &core.User{IsOwner: true}, hc, "home", 1) {
-			if !seen[hub.ID] {
-				extra = append(extra, core.RowDescriptor{HubID: hub.ID, Kind: hubKind(hub.ID), Title: hub.Title, Description: "Additional Plex Home row."})
-				seen[hub.ID] = true
+		for _, section := range allSurfaces {
+			for _, hub := range e.extraHomeRows(ctx, &core.User{IsOwner: true}, hc, section, 1) {
+				if i, ok := index[hub.ID]; ok {
+					if !containsString(extra[i].Sections, section) {
+						extra[i].Sections = append(extra[i].Sections, section)
+					}
+					continue
+				}
+				index[hub.ID] = len(extra)
+				group := groupPicks
+				if strings.HasPrefix(hub.ID, "live.") {
+					group = groupPlex
+				}
+				extra = append(extra, core.RowDescriptor{HubID: hub.ID, Kind: hubKind(hub.ID), Title: hub.Title,
+					Description: "Additional Plex row.", Sections: []string{section}, Group: group})
 			}
 		}
 	}
 	return descriptors(extra), nil
+}
+
+// collectionSections is where a collection of a media type can appear.
+func collectionSections(mediaType string) []string {
+	switch mediaType {
+	case "movie":
+		return []string{surfHome, surfMovies}
+	case "show":
+		return []string{surfHome, surfShows}
+	}
+	return append([]string(nil), allSurfaces...)
+}
+
+func containsString(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }
 
 // RowInsights reports, per row kind, how often it was shown and played

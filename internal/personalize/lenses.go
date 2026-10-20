@@ -136,7 +136,7 @@ func (b *builder) clustersOfType(typ core.MediaType) []*candRow {
 		for _, g := range gs {
 			for i, k := range e.Title.Keywords {
 				k = strings.ToLower(strings.TrimSpace(k))
-				if i >= 15 || genericKeywords[k] || len(strings.Fields(k)) > 3 || k == "" {
+				if i >= 15 || genericKeywords[k] || len(strings.Fields(k)) > 3 || k == "" || namesGenre(k) {
 					continue
 				}
 				add(kw, [2]string{g, k}, e.Weight)
@@ -279,6 +279,17 @@ func (b *builder) clustersOfType(typ core.MediaType) []*candRow {
 		rows = append(rows, r)
 	}
 	return rows
+}
+
+// namesGenre reports whether a keyword just restates a genre ("horror",
+// "sci-fi"): that is a genre, not a theme.
+func namesGenre(k string) bool {
+	for g := range genreFilms {
+		if strings.Contains(k, strings.ToLower(g)) || strings.Contains(k, genreSlug(g)) {
+			return true
+		}
+	}
+	return strings.Contains(k, "sci-fi")
 }
 
 func hasKeyword(t *core.Title, k string) bool {
@@ -556,6 +567,15 @@ func (b *builder) genOccasions() []*candRow {
 		}
 		return n
 	}
+	// Family films the viewer finished that a family can watch (not an
+	// R-rated animated horror).
+	familyFilms := 0
+	for _, e := range liked {
+		if anyShared(normGenres(e.Title.Genres), []string{"Family", "Animation"}) && e.Title.ContentRating != "" &&
+			recommend.ContentRatingAllowed(e.Title.ContentRating, "PG") {
+			familyFilms++
+		}
+	}
 	var rows []*candRow
 	occasion := func(id, title, reason string, src []core.Title, keep func(*core.Title) bool, why func(*core.Title) string) {
 		var in []core.Title
@@ -591,7 +611,7 @@ func (b *builder) genOccasions() []*candRow {
 			},
 			func(t *core.Title) string { return "Romance · " + runtimePhrase(t) })
 	}
-	if n := countGenre("Family", "Animation"); n >= 2 && math.Max(b.taste.Genre["Family"], b.taste.Genre["Animation"]) >= 0.25 {
+	if n := familyFilms; n >= 2 && math.Max(b.taste.Genre["Family"], b.taste.Genre["Animation"]) >= 0.25 {
 		var src []core.Title
 		for _, g := range []string{"Family", "Animation"} {
 			src = append(src, b.browse(core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 200})...)
