@@ -15,6 +15,11 @@ import (
 // leaves it unset; PMS uses 5 s.
 const DefaultDASHSegmentDuration = 5 * time.Second
 
+// Encoded video can force short GOPs. Shorter segments also lower the MPD's
+// minimum buffer, reducing bytes needed before startup and a seek on weak links.
+// Copy/remux retains the source-keyframe-friendly PMS default above.
+const encodedDASHSegmentDuration = 2 * time.Second
+
 // dashChunkDuration is the length ffmpeg's dash muxer cuts chunks at. Chunks
 // are cut at keyframes, and Ether regroups them into fixed-duration
 // segments by their timestamps, so finer chunks place segment boundaries

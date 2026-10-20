@@ -472,7 +472,7 @@ func TestDASHHardwareFallsBackToCPU(t *testing.T) {
 	if fr.startCount() != 2 || argValue(fr.lastStart(), "-c:v") != "libx264" {
 		t.Errorf("starts %d, last encoder %q", fr.startCount(), argValue(fr.lastStart(), "-c:v"))
 	}
-	if !strings.Contains(strings.Join(fr.lastStart(), " "), "-force_key_frames expr:gte(t,n_forced*5.000)") {
+	if !strings.Contains(strings.Join(fr.lastStart(), " "), "-force_key_frames expr:gte(t,n_forced*2.000)") {
 		t.Errorf("keyframes not forced at segment boundaries: %v", fr.lastStart())
 	}
 }

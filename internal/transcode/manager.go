@@ -383,6 +383,9 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		segDur = DefaultSegmentDuration
 		if proto == core.ProtocolDASH {
 			segDur = DefaultDASHSegmentDuration
+			if !d.VideoCopy {
+				segDur = encodedDASHSegmentDuration
+			}
 		}
 	}
 	offset := req.StartOffset

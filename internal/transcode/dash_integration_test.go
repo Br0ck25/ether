@@ -207,13 +207,13 @@ func TestIntegrationDASHTranscodeFromOffset(t *testing.T) {
 		t.Errorf("video rep %+v", r)
 	}
 	vinit := dashGet(t, ds, 0, InitSegment)
-	for _, n := range []int{2, 3} {
+	for _, n := range []int{5, 6} {
 		st, first := e.probeDASH(t, "tx.mp4", vinit, dashGet(t, ds, 0, n))
 		if st.Height != 240 || st.CodecName != "h264" {
 			t.Errorf("segment %d: %+v", n, st)
 		}
-		if math.Abs(first-float64(5*n)) > 0.1 {
-			t.Errorf("segment %d starts at %.3f, want %d (forced keyframes)", n, first, 5*n)
+		if math.Abs(first-float64(2*n)) > 0.1 {
+			t.Errorf("segment %d starts at %.3f, want %d (forced keyframes)", n, first, 2*n)
 		}
 	}
 	// Segment 0 is before the start offset: a restart produces it.
