@@ -65,3 +65,21 @@ func TestPrepareSourcesSkipsVerifiedPreferredSource(t *testing.T) {
 		t.Fatal("repeated descriptor work for a verified debrid source")
 	}
 }
+
+func TestPrepareSourcesDoesNotDelayKnownCachedLeader(t *testing.T) {
+	cfg := testCfg()
+	cfg.Resolver.SourcePreference = PreferDebrid
+	idx := &preparingIndexer{signals: cachedSet{hashA: true}}
+	svc := New(idx, fakeHealth{}, nil, cfg, Options{})
+	svc.SetSourceSignals(idx.signals)
+	releases := routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")
+	lead := releases[1]
+	lead.InfoHash = hashA
+	other := lead
+	other.ID, other.InfoHash = "unknown", ""
+	cands := []candidate{{rel: lead}, {rel: other}, {rel: releases[0]}}
+	got := svc.prepareSources(t.Context(), cands, routingTitle(false), nil)
+	if idx.calls != 0 || got[0].rel.ID != lead.ID || got[1].rel.InfoHash != "" {
+		t.Fatal("cached leader waited for unrelated descriptor preparation")
+	}
+}

@@ -313,9 +313,27 @@ func knownTorrent(r core.Release) (core.Release, bool) {
 // supplied a download URL. Releases that already carry both are returned
 // unchanged without a request.
 func (c *Client) ResolveTorrent(ctx context.Context, r core.Release) (core.Release, error) {
+	out, _, err := c.resolveTorrentCached(ctx, r)
+	return out, err
+}
+
+func (c *Client) resolveTorrentCached(ctx context.Context, r core.Release) (core.Release, bool, error) {
 	if known, ok := knownTorrent(r); ok {
-		return known, nil
+		return known, true, nil
 	}
+	key := torrentDescriptorKey(c.Config(), r)
+	if hash, magnet, ok := c.torrents.get(key, c.now()); ok {
+		r.InfoHash, r.MagnetURL = hash, magnet
+		return r, true, nil
+	}
+	out, err := c.resolveTorrent(ctx, r)
+	if err == nil && out.InfoHash != "" {
+		c.torrents.put(key, out.InfoHash, out.MagnetURL, c.now())
+	}
+	return out, false, err
+}
+
+func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Release, error) {
 	if c.Config().IsBuiltin() {
 		b, err := c.backend()
 		if err != nil {
@@ -429,8 +447,10 @@ func (m *Manager) ResolveTorrent(ctx context.Context, r core.Release) (core.Rele
 	for _, cl := range m.Clients() {
 		if cl.Name() == r.Indexer {
 			started := time.Now()
-			out, err := cl.ResolveTorrent(ctx, r)
-			m.emitEvent(Event{Indexer: cl.Name(), Kind: "grab", Success: err == nil, BudgetExhausted: errors.Is(err, core.ErrBudgetExhausted), Duration: time.Since(started), At: time.Now()})
+			out, cached, err := cl.resolveTorrentCached(ctx, r)
+			if !cached {
+				m.emitEvent(Event{Indexer: cl.Name(), Kind: "grab", Success: err == nil, BudgetExhausted: errors.Is(err, core.ErrBudgetExhausted), Duration: time.Since(started), At: time.Now()})
+			}
 			return out, err
 		}
 	}

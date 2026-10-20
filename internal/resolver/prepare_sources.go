@@ -22,6 +22,13 @@ func (s *Service) prepareSources(ctx context.Context, cands []candidate, title *
 	if cands[0].verified && (s.resolverCfg().SourcePreference != PreferDebrid || protocolOf(cands[0].rel) == core.ProtocolTorrent) {
 		return cands
 	}
+	if s.knownCached(cands[0].rel) {
+		// Ranking already chose a cached torrent in the accepted quality
+		// tier. Validate it now instead of delaying Play to discover the
+		// availability of a dozen lower-ranked descriptors. Validation can
+		// still reject a stale cache answer and try the normal alternates.
+		return cands
+	}
 	var releases []core.Release
 	for _, c := range cands {
 		if c.rel.Protocol == core.ProtocolTorrent {

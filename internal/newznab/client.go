@@ -74,6 +74,7 @@ type Client struct {
 
 	cacheMu  sync.RWMutex
 	memCache map[string]memCacheEntry
+	torrents torrentDescriptorCache
 
 	capsMu sync.Mutex
 	caps   *Caps
