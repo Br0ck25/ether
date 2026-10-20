@@ -129,6 +129,10 @@ func (p Policy) Validate() error {
 }
 
 func (s *Service) Put(ctx context.Context, id int64, p Policy) error {
+	// Cache an independent snapshot, just as Get returns one to callers.
+	p.AllowedHours = append([]int(nil), p.AllowedHours...)
+	p.BlockedGenres = append([]string(nil), p.BlockedGenres...)
+	p.BlockedKeywords = append([]string(nil), p.BlockedKeywords...)
 	if id == 0 {
 		return fmt.Errorf("invalid viewer or bitrate")
 	}
