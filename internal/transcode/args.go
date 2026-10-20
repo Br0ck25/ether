@@ -199,7 +199,7 @@ func buildCodecArgs(s runSpec) []string {
 			if codec == "" {
 				codec = "aac"
 			}
-			ch := outputChannels(codec, a)
+			ch := decisionAudioChannels(d, a)
 			enc := codec
 			switch codec {
 			case "mp3":
@@ -210,7 +210,7 @@ func buildCodecArgs(s runSpec) []string {
 					enc = "opus"
 				}
 			}
-			args = append(args, "-c:a", enc, "-ac", strconv.Itoa(ch), "-ar", "48000",
+			args = append(args, "-c:a", enc, "-ac", strconv.Itoa(ch), "-ar", strconv.Itoa(decisionAudioRate(d)),
 				"-b:a", fmt.Sprintf("%dk", audioBitrateKbps(codec, ch)))
 			if len(d.AudioFilters) > 0 {
 				args = append(args, "-af", strings.Join(d.AudioFilters, ","))
@@ -646,7 +646,7 @@ func videoBitrate(info core.MediaInfo, d core.Decision) int {
 		if d.AudioCopy {
 			audio = copiedAudioKbps(a)
 		} else {
-			audio = audioBitrateKbps(d.AudioCodec, outputChannels(d.AudioCodec, a))
+			audio = audioBitrateKbps(d.AudioCodec, decisionAudioChannels(d, a))
 		}
 	}
 	k := d.BitrateKbps - audio

@@ -527,6 +527,11 @@ func (s *Service) CheckCached(ctx context.Context, hashes []string) (map[string]
 			definitive = false
 			continue
 		}
+		if err != nil && ctx.Err() != nil {
+			// A caller's short discovery budget says nothing about the
+			// provider's availability. Do not open its circuit for that.
+			return out, false
+		}
 		s.observe(e, err)
 		if err != nil {
 			definitive = false

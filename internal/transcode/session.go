@@ -1381,10 +1381,10 @@ func adaptDecision(old core.Decision, oldInfo, newInfo core.MediaInfo, container
 		}
 		d.StripDolbyVision = d.VideoCopy && oldRange == rangeHDR10 && newV.DolbyVision && rangeOfDVBase(newV) == rangeHDR10
 	}
-	if newA != nil && oldA != nil && d.AudioCopy && newA.Codec != oldA.Codec {
-		d.AudioCopy = false
-		d.AudioCodec = oldA.Codec
-		notes = append(notes, fmt.Sprintf("audio %s re-encoded to %s", newA.Codec, d.AudioCodec))
+	var audioNote string
+	d, audioNote = preserveAudio(d, oldA, newA)
+	if audioNote != "" {
+		notes = append(notes, audioNote)
 	}
 	if !d.AudioCopy && newA != nil {
 		switch d.AudioCodec {

@@ -218,8 +218,8 @@ func dashReps(info core.MediaInfo, d core.Decision) []dashRep {
 			if codec == "" {
 				codec = "aac"
 			}
-			r.Channels = outputChannels(codec, a)
-			r.SampleRate = 48000
+			r.Channels = decisionAudioChannels(d, a)
+			r.SampleRate = decisionAudioRate(d)
 			r.Bandwidth = audioBitrateKbps(codec, r.Channels) * 1000
 		}
 		profile := a.Profile

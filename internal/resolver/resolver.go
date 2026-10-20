@@ -510,6 +510,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 	}
 
+	cands = s.prepareSources(ctx, cands, req.Title, &trace)
 	if rcfg.OptimisticStart && !preferTried {
 		nzb, err := s.indexer.FetchNZB(ctx, cands[0].rel)
 		if err == nil {

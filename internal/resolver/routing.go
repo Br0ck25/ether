@@ -224,8 +224,19 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 		return want != core.ProtocolTorrent || mode == PreferDebrid || s.knownCached(c.rel)
 	}
 	first := -1
+	// An explicit debrid preference still means ready-to-stream first.
+	// Unknown availability is a fallback, not a reason to spend the whole
+	// validation budget before a known-cached equivalent gets a chance.
+	if want == core.ProtocolTorrent {
+		for i, c := range group {
+			if s.knownCached(c.rel) {
+				first = indexes[i]
+				break
+			}
+		}
+	}
 	for i, c := range group {
-		if fast(c) {
+		if first < 0 && fast(c) {
 			first = indexes[i]
 			break
 		}

@@ -100,6 +100,21 @@ func TestRoutingNeverTradesQualityForSpeed(t *testing.T) {
 	}
 }
 
+func TestDebridPreferenceTriesReadyCopyBeforeUnknownAvailability(t *testing.T) {
+	cfg := testCfg()
+	cfg.Resolver.SourcePreference = PreferDebrid
+	svc := New(nil, fakeHealth{}, nil, cfg, Options{})
+	releases := routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")
+	unknown := releases[1]
+	unknown.ID, unknown.InfoHash, unknown.Score = "unknown", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 110
+	releases[0].Score, releases[1].Score = 100, 95
+	svc.SetSourceSignals(cachedSet{hashA: true})
+	got := svc.routeSources([]candidate{{rel: unknown}, {rel: releases[0]}, {rel: releases[1]}}, routingTitle(false), nil)
+	if got[0].rel.ID != "torrent" || got[1].rel.ID != "usenet" {
+		t.Fatalf("ready copy did not lead with an independent hedge: %+v", got)
+	}
+}
+
 func TestExplicitSourcePreferenceOverridesPreviousVerifiedSource(t *testing.T) {
 	for _, mode := range []string{PreferAuto, PreferDebrid, PreferUsenet} {
 		t.Run(mode, func(t *testing.T) {
