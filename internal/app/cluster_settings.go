@@ -69,7 +69,15 @@ func (a *App) connectClusterHooks() {
 	// Debrid accounts: back-off, add claims, streaming leases and
 	// known-cached answers are shared (internal/debrid/cluster.go).
 	a.debrid.SetCluster(bus)
+	// Streaming leases lapse during a long database outage; renew them the
+	// moment the database answers again.
+	unsubAvail := a.dbAvail.Subscribe(func(up bool) {
+		if up {
+			a.media.RefreshLeases()
+		}
+	})
 	a.closers = append(a.closers, func() {
+		unsubAvail()
 		a.debrid.SetCluster(nil)
 		a.users.Close()
 		a.safety.Close()
