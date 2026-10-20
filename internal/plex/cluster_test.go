@@ -235,3 +235,20 @@ func TestStandaloneServerHasNoClusterState(t *testing.T) {
 		t.Fatalf("standalone server stored queues: %d %v", n, err)
 	}
 }
+
+// A client whose "stopped" timeline reaches another node (it switched
+// connections) still ends its stream on the node serving it.
+func TestClusterStoppedTimelineForwardedToServingNode(t *testing.T) {
+	a, b, _ := twoServers(t)
+	ps, _ := a.playback.Prepare(context.Background(), &friendUser, fightClub.Key, core.ClientCaps{ClientID: "client-1"})
+	a.get(t, "/:/timeline?ratingKey=1000000000000550&state=playing&time=1000&duration=10000",
+		"X-Plex-Session-Identifier", "sx", "X-Plex-Token", friendToken)
+	waitFor(t, "B sees the stream", func() bool { return len(sessionsOf(t, b)) == 1 })
+	b.get(t, "/:/timeline?ratingKey=1000000000000550&state=stopped&time=4000&duration=10000",
+		"X-Plex-Session-Identifier", "sx", "X-Plex-Token", friendToken)
+	waitFor(t, "A ends the stream", func() bool {
+		_, live := a.playback.Session(ps.ID)
+		return !live && len(a.srv.sessions.list()) == 0
+	})
+	waitFor(t, "gone everywhere", func() bool { return len(sessionsOf(t, b)) == 0 })
+}

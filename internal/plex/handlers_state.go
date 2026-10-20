@@ -81,6 +81,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			e.offset = offset
 			s.notifyPlaying(e, "stopped")
 			s.cl.poke()
+		} else if s.cl != nil && ps == nil && len(tids) == 0 {
+			// The client switched nodes mid-play: the node serving it ends it.
+			s.cl.forwardStop(r.Context(), tid, offset)
 		}
 		if ps != nil {
 			s.d.Playback.Stop(ps.ID)

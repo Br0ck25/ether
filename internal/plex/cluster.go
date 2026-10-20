@@ -375,13 +375,46 @@ func (c *clusterState) allocSessionKey() int {
 }
 
 // sessionEntries is this node's sessions plus, when clustered, every other
-// live node's.
+// live node's. A client that moved here mid-play is listed once (this
+// node's entry wins) until the old node's entry expires.
 func (s *Server) sessionEntries(ctx context.Context) []playEntry {
 	entries := s.sessions.list()
-	if s.cl != nil {
-		entries = append(entries, s.cl.remoteEntries(ctx)...)
+	if s.cl == nil {
+		return entries
+	}
+	local := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		local[e.id] = true
+	}
+	for _, e := range s.cl.remoteEntries(ctx) {
+		if !local[e.id] {
+			entries = append(entries, e)
+		}
 	}
 	return entries
+}
+
+// endLocalSession applies a "stopped" timeline another node received for a
+// session this node serves, as handleTimeline does for a local one.
+func (s *Server) endLocalSession(tid string, offset time.Duration) {
+	e, ok := s.sessions.remove(tid)
+	if !ok {
+		return
+	}
+	e.offset = offset
+	s.notifyPlaying(e, "stopped")
+	s.cl.poke()
+	if s.d.Playback != nil {
+		if ps, ok := s.d.Playback.SessionFor(e.user.ID, e.client.ClientID, e.key); ok {
+			s.d.Playback.Stop(ps.ID)
+		}
+	}
+	for _, id := range s.transcodes.forClient(e.user.ID, e.client.ClientID, e.key) {
+		if s.d.Transcoder != nil {
+			s.d.Transcoder.Stop(id)
+		}
+		s.transcodes.remove(id)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +426,19 @@ type terminateEvent struct {
 	ID     string `json:"id"`
 	Reason string `json:"reason"`
 	Node   string `json:"node,omitempty"` // the node believed to serve it (informational)
+	// OffsetMS is the final position of a "stopped" forward.
+	OffsetMS int64 `json:"offset,omitempty"`
+}
+
+// forwardStop hands a client's "stopped" timeline to the node that serves
+// its session (the client reached this node instead).
+func (c *clusterState) forwardStop(ctx context.Context, tid string, offset time.Duration) {
+	for _, e := range c.remoteEntries(ctx) {
+		if e.id == tid {
+			c.publish(topicTerminate, terminateEvent{Scope: "stopped", ID: tid, Node: e.node, OffsetMS: offset.Milliseconds()})
+			return
+		}
+	}
 }
 
 func (c *clusterState) onTerminate(msg []byte) {
@@ -411,6 +457,8 @@ func (c *clusterState) onTerminate(msg []byte) {
 			if c.s.stopLocalPlayback(ev.ID, ev.Reason) {
 				c.s.log.Info("ended stream at another node's request", "session", ev.ID)
 			}
+		case "stopped":
+			c.s.endLocalSession(ev.ID, time.Duration(ev.OffsetMS)*time.Millisecond)
 		}
 	}()
 }
