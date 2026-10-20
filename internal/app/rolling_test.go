@@ -3,8 +3,8 @@ package app
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -109,8 +109,10 @@ func rollingManager(t *testing.T, a *App, name, version string, feed updater.Che
 	t.Helper()
 	dir := filepath.Join(a.opts.DataDir, "updates")
 	return updater.NewManager(updater.ManagerOptions{
-		NewClient:      func(config.Updates) (updater.Checker, error) { return feed, nil },
-		Config:         func() config.Updates { return config.Updates{AutoUpdate: true, MaintenanceStart: "00:00", MaintenanceEnd: "00:00"} },
+		NewClient: func(config.Updates) (updater.Checker, error) { return feed, nil },
+		Config: func() config.Updates {
+			return config.Updates{AutoUpdate: true, MaintenanceStart: "00:00", MaintenanceEnd: "00:00"}
+		},
 		CurrentVersion: version,
 		Dir:            dir,
 		Target:         filepath.Join(a.opts.DataDir, "ether-bin"),

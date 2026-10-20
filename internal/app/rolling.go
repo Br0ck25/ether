@@ -53,6 +53,15 @@ func (a *App) newClusterUpdates() *clusterUpdates {
 func (c *clusterUpdates) AcquireUpdate(ctx context.Context, version string) (bool, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, leaseOpTimeout)
 	defer cancel()
+	// Another node's turn: report it. Otherwise only take the turn if a
+	// peer stays in service while this node restarts.
+	if h, err := c.lease.Holder(ctx); err == nil && h != nil && h.NodeID != "" &&
+		h.NodeID != c.a.cluster.Self().ID && time.Now().Before(h.ExpiresAt) {
+		return false, c.a.nodeName(ctx, h.NodeID), nil
+	}
+	if c.mustKeepServing(ctx) {
+		return false, "", nil
+	}
 	ok, err := c.lease.Acquire(ctx, version)
 	if errors.Is(err, cluster.ErrVersionFailed) {
 		return false, "", fmt.Errorf("%w: %v", updater.ErrClusterRolledBack, err)
@@ -205,4 +214,42 @@ func versionWarning(nodes []cluster.Node) string {
 		parts = append(parts, v+": "+strings.Join(versions[v], ", "))
 	}
 	return "Nodes run different Ether releases (" + strings.Join(parts, "; ") + "). This is expected during a rolling update; otherwise update the older nodes."
+}
+
+// mustKeepServing reports whether this node has to stay up for now because
+// restarting it would leave no other node serving clients: other nodes are
+// recorded but none is live and accepting sessions (a two-node cluster
+// whose peer is down, or whose peer is itself draining). A node alone in
+// the cluster may update, and a node already holding the lease (renewing
+// through its own update) is never held back.
+func (c *clusterUpdates) mustKeepServing(ctx context.Context) bool {
+	self := c.a.cluster.Self().ID
+	if h, err := c.lease.Holder(ctx); err == nil && h != nil && h.NodeID == self {
+		return false
+	}
+	nodes, err := c.a.cluster.AllNodes(ctx)
+	if err != nil {
+		return true // membership unknown: do not risk taking the last node down
+	}
+	if othersNotServing(nodes, self) {
+		c.a.log.Info("updater: waiting to update until another cluster node is serving")
+		return true
+	}
+	return false
+}
+
+// othersNotServing reports whether other nodes are recorded but none of
+// them is live and accepting new sessions.
+func othersNotServing(nodes []cluster.Node, self string) bool {
+	others, serving := 0, 0
+	for _, n := range nodes {
+		if n.ID == self {
+			continue
+		}
+		others++
+		if n.Live && !n.Draining {
+			serving++
+		}
+	}
+	return others > 0 && serving == 0
 }
