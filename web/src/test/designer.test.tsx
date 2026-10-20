@@ -24,6 +24,17 @@ async function closeEditor() {
   fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 }
+function openLayers() {
+  fireEvent.click(screen.getByRole("button", { name: "Editing layer" }));
+  return screen.getByRole("menu", { name: "Editing layer" });
+}
+async function layersClosed() {
+  await waitFor(() => expect(screen.queryByRole("menu", { name: "Editing layer" })).toBeNull());
+}
+async function pickLayer(name: RegExp) {
+  fireEvent.click(within(openLayers()).getByRole("menuitemradio", { name }));
+  await layersClosed();
+}
 async function setStatus(title: string, value: "Always" | "Eligible" | "Off") {
   fireEvent.click(screen.getByRole("tab", { name: "Rows" }));
   fireEvent.click(screen.getByRole("button", { name: `Constraints for ${title}` }));
@@ -37,7 +48,7 @@ async function setStatus(title: string, value: "Always" | "Eligible" | "Off") {
   await closeEditor();
 }
 
-describe("Home screens", () => {
+describe("HomeScreen", () => {
   it("previews the typical viewer's Global Home with each row's provenance", async () => {
     const { fake } = renderApp("/home-screens");
     const cw = await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
@@ -52,12 +63,16 @@ describe("Home screens", () => {
     expect(body.layout).toBeUndefined();
     expect(body.device).toBe("tv");
     expect(body.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    // The layer switcher starts on Global; Kids carry an override.
-    expect(screen.getByRole("radio", { name: /Global Home/ })).toHaveAttribute(
+    // The layer picker starts on Global; Kids carry an override and sort first.
+    expect(screen.getByRole("button", { name: "Editing layer" })).toHaveTextContent("Global Home");
+    const menu = openLayers();
+    expect(within(menu).getByRole("menuitemradio", { name: /Global Home/ })).toHaveAttribute(
       "aria-checked",
       "true",
     );
-    expect(screen.getByRole("radio", { name: /The Kids/ })).toHaveTextContent("2 overrides");
+    const kids = within(menu).getByRole("menuitemradio", { name: /The Kids/ });
+    expect(kids).toHaveTextContent("2 overrides");
+    expect(within(menu).getAllByRole("menuitemradio")[1]).toBe(kids);
   });
 
   it("edits Global: the server previews the draft and reports the impact across viewers", async () => {
@@ -123,7 +138,7 @@ describe("Home screens", () => {
   it("overrides a Global setting for one viewer and resets it to global", async () => {
     const { fake } = renderApp("/home-screens");
     await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
-    fireEvent.click(screen.getByRole("radio", { name: /Sam Rivera/ }));
+    await pickLayer(/Sam Rivera/);
     await screen.findByRole("region", { name: /Hidden Gems for You/ }, WAIT);
     await waitFor(() => expect(lastPreview(fake).viewerId).toBe(2));
 
@@ -144,8 +159,12 @@ describe("Home screens", () => {
         "Override",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Sam Rivera/ })).toHaveTextContent("1 override");
-    fireEvent.click(screen.getByRole("tab", { name: "Overrides" }));
+    expect(
+      within(openLayers()).getByRole("menuitemradio", { name: /Sam Rivera/ }),
+    ).toHaveTextContent("1 override");
+    fireEvent.click(screen.getByRole("button", { name: "Editing layer" }));
+    await layersClosed();
+    fireEvent.click(screen.getByRole("tab", { name: /^Overrides/ }));
     expect(screen.getByRole("region", { name: "Overrides for Sam Rivera" })).toHaveTextContent(
       "hidden-gems",
     );
@@ -223,7 +242,7 @@ describe("Home screens", () => {
 
   it("adds a custom row pattern from a drawer", async () => {
     renderApp("/home-screens");
-    expect(await screen.findByRole("heading", { name: "Home screens" }, WAIT)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "HomeScreen" }, WAIT)).toBeInTheDocument();
     await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     fireEvent.click(screen.getByRole("tab", { name: "Rows" }));
     fireEvent.click(screen.getByRole("button", { name: "Add custom pattern" }));

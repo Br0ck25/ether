@@ -76,3 +76,30 @@ func JSONText(d Dialect, col, key string) string {
 	}
 	return "json_extract(" + col + ",'$." + key + "')"
 }
+
+// JSONInt extracts the top-level key from the JSON text column col as an
+// integer (NULL when absent). key is not escaped.
+func JSONInt(d Dialect, col, key string) string {
+	if d == Postgres {
+		return "CAST(" + col + "::jsonb->>'" + key + "' AS BIGINT)"
+	}
+	return "json_extract(" + col + ",'$." + key + "')"
+}
+
+// JSONRemove is the JSON text column col without the top-level key, as
+// text. key is not escaped.
+func JSONRemove(d Dialect, col, key string) string {
+	if d == Postgres {
+		return "((" + col + "::jsonb) - '" + key + "')::text"
+	}
+	return "json_remove(" + col + ",'$." + key + "')"
+}
+
+// Contains is a literal (non-pattern) substring test of needle in haystack,
+// both SQL expressions.
+func Contains(d Dialect, haystack, needle string) string {
+	if d == Postgres {
+		return "strpos(" + haystack + "," + needle + ")>0"
+	}
+	return "instr(" + haystack + "," + needle + ")>0"
+}

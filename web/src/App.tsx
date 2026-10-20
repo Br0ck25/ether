@@ -133,7 +133,7 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
     {
       label: "In Plex",
       items: [
-        { href: "/home-screens", label: "Home screens", icon: <LayoutTemplate size={icon} /> },
+        { href: "/home-screens", label: "HomeScreen", icon: <LayoutTemplate size={icon} /> },
         { href: "/collections", label: "Collections", icon: <Layers size={icon} />, mobile: true },
         { href: "/livetv", label: "Live TV", icon: <Tv size={icon} /> },
         { href: "/metadata", label: "Metadata", icon: <Tags size={icon} /> },

@@ -1,11 +1,26 @@
-import { Avatar, Badge, cn } from "@braedonsaunders/appkit-ui";
+import { Avatar, Badge } from "@braedonsaunders/appkit-ui";
 import { Globe2 } from "lucide-react";
+import { useMemo } from "react";
 import { viewerName } from "../../components/pickers";
+import { ToolbarPicker, type ToolbarOption } from "../../components/ToolbarPicker";
 import type { HomeLayout, Viewer } from "../../lib/contract";
 import { plural } from "../../lib/format";
 import { overrideCount, type LayerKey } from "../../lib/layout";
 
-/** Which layer the controls edit: the Global Home, or one viewer's overrides. */
+const globe = (size: number) => (
+  <span
+    className="grid shrink-0 place-items-center rounded-full bg-primary-subtle text-primary"
+    style={{ width: size, height: size }}
+  >
+    <Globe2 size={Math.round(size * 0.55)} />
+  </span>
+);
+
+/**
+ * Which layer the controls edit: the Global Home, or one viewer's overrides.
+ * A searchable dropdown, so it stays one line however many viewers there are;
+ * viewers who already override something are listed first.
+ */
 export function LayerSwitcher({
   layer,
   onChange,
@@ -17,68 +32,62 @@ export function LayerSwitcher({
   viewers: Viewer[];
   draft: HomeLayout;
 }) {
-  const item = (
-    key: LayerKey,
-    label: string,
-    sub: string,
-    icon: React.ReactNode,
-    count?: number,
-  ) => {
-    const on = layer === key;
-    return (
-      <button
-        key={String(key)}
-        type="button"
-        role="radio"
-        aria-checked={on}
-        onClick={() => onChange(key)}
-        className={cn(
-          "flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-          on ? "border-primary/40 bg-primary-subtle" : "border-transparent hover:bg-surface-hover",
-        )}
-      >
-        {icon}
-        <span className="min-w-0 flex-1">
-          <span
-            className={cn("block truncate text-sm font-medium", on ? "text-primary" : "text-fg")}
-          >
-            {label}
-          </span>
-          <span className="block truncate text-xs text-fg-muted">{sub}</span>
-        </span>
-        {count ? (
-          <Badge variant="info" className="shrink-0">
-            {plural(count, "override")}
-          </Badge>
-        ) : null}
-      </button>
+  const options = useMemo(() => {
+    const counted = viewers.map((v) => ({ v, n: overrideCount(draft, v.id) }));
+    counted.sort(
+      (a, b) => Number(b.n > 0) - Number(a.n > 0) || viewerName(a.v).localeCompare(viewerName(b.v)),
     );
-  };
+    const out: ToolbarOption<string>[] = [
+      {
+        value: "global",
+        label: "Global Home",
+        hint: `Everyone · ${plural(viewers.length, "viewer")}`,
+        icon: globe(26),
+      },
+      ...counted.map(({ v, n }) => ({
+        value: String(v.id),
+        label: viewerName(v),
+        hint: v.isOwner ? "Owner" : `@${v.username}`,
+        icon: <Avatar src={v.thumb} name={viewerName(v)} size={26} />,
+        group: "Overrides for one viewer",
+        meta: n ? (
+          <Badge variant="info" className="shrink-0">
+            {plural(n, "override")}
+          </Badge>
+        ) : undefined,
+      })),
+    ];
+    return out;
+  }, [viewers, draft]);
+
+  const current = layer === "global" ? null : viewers.find((v) => v.id === layer);
+  const count = layer === "global" ? 0 : overrideCount(draft, layer);
   return (
-    <section className="space-y-2">
-      <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Editing</h2>
-      <div role="radiogroup" aria-label="Editing layer" className="space-y-1">
-        {item(
-          "global",
-          "Global Home",
-          `Everyone · ${plural(viewers.length, "viewer")}`,
-          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary-subtle text-primary">
-            <Globe2 size={15} />
-          </span>,
-        )}
-        <p className="px-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-fg-subtle">
-          Overrides for one viewer
-        </p>
-        {viewers.map((v) =>
-          item(
-            v.id,
-            viewerName(v),
-            v.isOwner ? "Owner" : `@${v.username}`,
-            <Avatar src={v.thumb} name={viewerName(v)} size={28} />,
-            overrideCount(draft, v.id),
-          ),
-        )}
-      </div>
-    </section>
+    <ToolbarPicker
+      ariaLabel="Editing layer"
+      value={String(layer)}
+      onChange={(v) => onChange(v === "global" ? "global" : Number(v))}
+      options={options}
+      searchable={viewers.length > 6}
+      searchPlaceholder="Find a viewer…"
+      className="min-w-[10rem] flex-1 justify-start"
+      trigger={
+        <>
+          {current ? (
+            <Avatar src={current.thumb} name={viewerName(current)} size={20} />
+          ) : (
+            globe(20)
+          )}
+          <span className="min-w-0 flex-1 truncate text-left">
+            {current ? viewerName(current) : layer === "global" ? "Global Home" : `Viewer ${layer}`}
+          </span>
+          {count ? (
+            <span className="shrink-0 rounded-full bg-info/15 px-1.5 text-[11px] font-semibold tabular-nums text-info">
+              {count}
+            </span>
+          ) : null}
+        </>
+      }
+    />
   );
 }

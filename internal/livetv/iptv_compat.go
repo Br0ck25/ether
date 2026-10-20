@@ -53,7 +53,7 @@ func (s *Service) startIPTVRelay(ss *session, info core.MediaInfo) error {
 	}
 	dec := s.o.Transcoder.Decide(info, caps, core.DecideOptions{DirectStream: !ss.info.Channel.Transcode, AudioStream: -1, SubtitleStream: -1})
 	dec.Container = "mpegts"
-	relay, err := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-" + ss.info.ID, InputURL: ss.info.Channel.StreamURL, Info: info, Decision: dec, SegmentDuration: segmentDuration})
+	relay, err := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-" + ss.info.ID, InputURL: ss.inputURL, Info: info, Decision: dec, SegmentDuration: segmentDuration})
 	if err != nil {
 		return err
 	}

@@ -100,7 +100,7 @@ export default function ViewerProfile() {
                 <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} /> Rebuild rows
               </Button>
               <Button variant="outline" size="sm" onClick={() => navigate("/home-screens")}>
-                <LayoutTemplate size={14} /> Home screens
+                <LayoutTemplate size={14} /> HomeScreen
               </Button>
             </div>
           </div>
@@ -222,7 +222,7 @@ function TheirHome({ viewer }: { viewer: Viewer }) {
           <ContextBar ctx={ctx} onChange={setCtx} />
         </div>
         <Link to="/home-screens" className="text-sm font-medium text-primary hover:underline">
-          Shape it in Home screens →
+          Shape it in HomeScreen →
         </Link>
       </div>
       <div className="rounded-xl bg-bg p-2 sm:p-4">

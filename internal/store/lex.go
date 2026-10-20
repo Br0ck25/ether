@@ -135,9 +135,10 @@ func dollarTag(s string) (string, bool) {
 	return "", false
 }
 
-// Rebind rewrites `?` placeholders as PostgreSQL's $1..$n, leaving any `?`
-// inside string literals, quoted identifiers and comments untouched. The
-// second result is the number of placeholders.
+// Rebind rewrites `?` placeholders as PostgreSQL's $1..$n (a numbered
+// `?NNN` keeps its number), leaving any `?` inside string literals, quoted
+// identifiers and comments untouched. The second result is the number of
+// parameters.
 func Rebind(q string) (string, int) {
 	if strings.IndexByte(q, '?') < 0 {
 		return q, 0
@@ -158,10 +159,23 @@ func Rebind(q string) (string, int) {
 				break
 			}
 			b.WriteString(s[:k])
+			s = s[k+1:]
+			// ?NNN (SQLite numbered parameter) keeps its number.
+			d := 0
+			for d < len(s) && s[d] >= '0' && s[d] <= '9' {
+				d++
+			}
+			if d > 0 {
+				num, _ := strconv.Atoi(s[:d])
+				b.WriteByte('$')
+				b.WriteString(s[:d])
+				n = max(n, num)
+				s = s[d:]
+				continue
+			}
 			n++
 			b.WriteByte('$')
 			b.WriteString(strconv.Itoa(n))
-			s = s[k+1:]
 		}
 	}
 	if n == 0 {

@@ -52,6 +52,11 @@ describe("Viewers", () => {
     fireEvent.click(row);
     expect(await screen.findByRole("heading", { name: /Sam Rivera/ }, WAIT)).toBeInTheDocument();
     expect(await screen.findByText("What Ether has learned", {}, WAIT)).toBeInTheDocument();
+    expect(
+      await screen.findByText("Up First — What They'll Want to Watch Right Now", {}, WAIT),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("#1 Pick Right Now", {}, WAIT)).toBeInTheDocument();
+    expect(await screen.findByText("#2 Pick Right Now", {}, WAIT)).toBeInTheDocument();
   });
 
   it("corrects taste from the genre chart and saves overrides", async () => {

@@ -352,6 +352,8 @@ func TestIPTVRelativeManifestKeysRangesRetryAndReconnect(t *testing.T) {
 			w.Header().Set("Content-Type", "application/x-mpegurl")
 			fmt.Fprint(w, "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:50\n#EXT-X-TARGETDURATION:4\n#EXT-X-KEY:METHOD=AES-128,URI=\"../keys/key.bin\"\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXT-X-DISCONTINUITY\n#EXTINF:4,\n#EXT-X-BYTERANGE:4@0\n../segment.ts\n")
 		case "/hls/keys/key.bin":
+			// Pluto's key endpoint uses the playlist MIME type for a binary key.
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 			fmt.Fprint(w, "0123456789abcdef")
 		case "/hls/segment.ts":
 			if r.Header.Get("Range") != "bytes=0-3" {
@@ -409,8 +411,8 @@ func TestIPTVRelativeManifestKeysRangesRetryAndReconnect(t *testing.T) {
 	}
 	keyURL, _ := url.Parse(uris[0][1])
 	key := request(path.Base(keyURL.Path), nil)
-	if key.Body.String() != "0123456789abcdef" {
-		t.Fatalf("key not proxied: %s", key.Body.String())
+	if key.Code != 200 || key.Body.String() != "0123456789abcdef" || key.Header().Get("Content-Type") != "application/octet-stream" {
+		t.Fatalf("binary key not proxied: status=%d type=%q body=%s", key.Code, key.Header().Get("Content-Type"), key.Body.String())
 	}
 	var segmentKey string
 	for _, line := range strings.Split(b, "\n") {

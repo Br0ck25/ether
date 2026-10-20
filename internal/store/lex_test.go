@@ -27,12 +27,18 @@ func TestRebind(t *testing.T) {
 		{`SELECT 'unterminated ?`, `SELECT 'unterminated ?`},
 		{`SELECT ?-- trailing?`, `SELECT $1-- trailing?`},
 		{`a=?||?`, `a=$1||$2`},
+		{`WHERE (?2='' OR s=?2) AND n>?1 LIMIT ?12`, `WHERE ($2='' OR s=$2) AND n>$1 LIMIT $12`},
+		{`SELECT '?1', ?1`, `SELECT '?1', $1`},
 	}
 	for _, c := range cases {
 		got, _ := Rebind(c.in)
 		if got != c.want {
 			t.Errorf("Rebind(%q)\n got %q\nwant %q", c.in, got, c.want)
 		}
+	}
+	// Numbered parameters count up to the highest number used.
+	if _, n := Rebind(`a=?3 AND b=?1 AND c=?3`); n != 3 {
+		t.Errorf("numbered parameter count = %d, want 3", n)
 	}
 }
 
