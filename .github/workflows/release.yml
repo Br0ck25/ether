@@ -238,17 +238,6 @@ jobs:
         run: |
           if [ -f "$CHANNEL.json" ]; then
             gh release upload "v$VERSION" "$CHANNEL.json" feed/ether-* --clobber
-            # Every channel's current manifest also lives on the rolling
-            # "channels" pre-release, the updater's default feed:
-            # releases/latest never points at a beta, so beta.json could not
-            # be found there. Older installs still read stable.json from
-            # releases/latest, which the upload above keeps serving.
-            if ! gh release view channels >/dev/null 2>&1; then
-              gh release create channels --prerelease --latest=false \
-                --title "Update channels" \
-                --notes "Signed update manifests for each channel, read by Ether's updater. Not a release; do not delete."
-            fi
-            gh release upload channels "$CHANNEL.json" --clobber
           else
             echo "::warning::ETHER_UPDATE_PRIVATE_KEY not set — publishing WITHOUT a signed update manifest. Tray update checks will find nothing."
           fi
@@ -256,4 +245,18 @@ jobs:
             gh release edit "v$VERSION" --draft=false --prerelease --latest=false
           else
             gh release edit "v$VERSION" --draft=false --latest
+          fi
+          # Only once the release (and so every artifact URL in the
+          # manifest) is public: every channel's current manifest also lives
+          # on the rolling "channels" pre-release, the updater's default
+          # feed. releases/latest never points at a beta, so beta.json could
+          # not be found there. Older installs still read stable.json from
+          # releases/latest, which the upload above keeps serving.
+          if [ -f "$CHANNEL.json" ]; then
+            if ! gh release view channels >/dev/null 2>&1; then
+              gh release create channels --prerelease --latest=false \
+                --title "Update channels" \
+                --notes "Signed update manifests for each channel, read by Ether's updater. Not a release; do not delete."
+            fi
+            gh release upload channels "$CHANNEL.json" --clobber
           fi
