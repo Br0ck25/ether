@@ -967,7 +967,91 @@ export function createFakeServer(opts: FakeOptions = {}) {
     };
   }
 
+  const ROW_META: Record<string, { group: string; sections?: string[] }> = {
+    "continue-watching": { group: "picks", sections: ["home", "movies", "shows"] },
+    "up-next": { group: "shows", sections: ["home", "shows"] },
+    "top-10": { group: "picks", sections: ["home"] },
+    "top-10-today": { group: "household", sections: ["home"] },
+    "short-on-time": { group: "picks", sections: ["home", "movies"] },
+    "comfort-rewatches": { group: "picks", sections: ["home"] },
+    "popular-on-server": { group: "household" },
+    trending: { group: "household" },
+  };
+  const SECTION_ROWS = [
+    {
+      hubId: "taste-cluster",
+      title: "<Your taste>",
+      kind: "taste-cluster",
+      description:
+        "Named rows for each of the viewer's strongest taste clusters, e.g. “Slow-burn thrillers”.",
+      group: "explore",
+      sections: ["movies"],
+    },
+    {
+      hubId: "era-lens",
+      title: "Your <decade> favourites",
+      kind: "era-lens",
+      description: "Unseen films from the decades the viewer loves most.",
+      group: "explore",
+      sections: ["movies"],
+    },
+    {
+      hubId: "world-cinema",
+      title: "World cinema",
+      kind: "world-cinema",
+      description: "Films from countries and languages in the viewer's history.",
+      group: "explore",
+      sections: ["movies"],
+    },
+    {
+      hubId: "acclaimed-unseen",
+      title: "Acclaimed and unseen",
+      kind: "acclaimed-unseen",
+      description: "Highly rated films the viewer hasn't watched, ordered by fit.",
+      group: "explore",
+      sections: ["movies"],
+    },
+    {
+      hubId: "new-seasons",
+      title: "New seasons",
+      kind: "new-seasons",
+      description: "Fresh seasons of shows the viewer has watched.",
+      group: "shows",
+      sections: ["shows", "home"],
+    },
+    {
+      hubId: "finish-started",
+      title: "Finish what you started",
+      kind: "finish-started",
+      description: "Shows started and stalled, ordered by how close they are to done.",
+      group: "shows",
+      sections: ["shows"],
+    },
+    {
+      hubId: "start-something",
+      title: "Start something new",
+      kind: "start-something",
+      description: "Unstarted shows that match the viewer's taste, from the pilot.",
+      group: "shows",
+      sections: ["shows"],
+    },
+    {
+      hubId: "binge-complete",
+      title: "Complete series to binge",
+      kind: "binge-complete",
+      description: "Finished series with every episode ready.",
+      group: "shows",
+      sections: ["shows"],
+    },
+  ];
+
   function availableRows() {
+    return baseRows()
+      .map((r) => ({ ...r, ...(ROW_META[r.kind] ?? { group: "picks" }) }))
+      .concat(SECTION_ROWS);
+  }
+
+  function baseRows() {
     return [
       {
         hubId: "continue-watching",
@@ -1696,6 +1780,23 @@ export function createFakeServer(opts: FakeOptions = {}) {
           ),
         );
       }
+      case "GET /insights/ranker":
+        return json({
+          trainedAt: new Date(Date.now() - 3 * 3600e3).toISOString(),
+          examples: 18420,
+          positives: 612,
+          auc: 0.78,
+          baselineAuc: 0.69,
+          active: true,
+          features: [
+            { name: "fit", label: "Taste fit", weight: 1.42 },
+            { name: "session", label: "Matches what they're in the mood for", weight: 0.88 },
+            { name: "recency", label: "Newly released", weight: 0.51 },
+            { name: "fatigue", label: "Shown before without a play", weight: -0.94 },
+            { name: "kind.top-10", label: "In Top 10 for You", weight: 0.47 },
+            { name: "runtime", label: "Longer than they usually watch", weight: -0.33 },
+          ],
+        });
       case "GET /insights/rows":
         return json({
           rows: availableRows()

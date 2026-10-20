@@ -303,9 +303,9 @@ export function provenance(
   if (r.source === "plex" && !r.slot && !r.hidden) return { label: "Plex", variant: "secondary" };
   if (r.layer === "override") return { label: `Override for ${who}`, variant: "info" };
   if (r.layer === "global") {
-    if (r.anchorSlot) return { label: "Global anchor", variant: "success" };
-    if (r.hidden) return { label: "Global", variant: "secondary" };
-    return { label: "Global · always", variant: "success" };
+    if (r.anchorSlot) return { label: "Anchored for everyone", variant: "success" };
+    if (r.hidden) return { label: "Everyone", variant: "secondary" };
+    return { label: "Everyone · always", variant: "success" };
   }
   return { label: "Personalized", variant: "default" };
 }
@@ -406,11 +406,11 @@ function RowCard({
                 variant="ghost"
                 size="sm"
                 className="h-7 gap-1 px-2 text-xs"
-                aria-label={`Reset ${r.title} to global`}
+                aria-label={`Reset ${r.title} to Everyone`}
                 onClick={() => actions.reset(r)}
               >
                 <RotateCcw size={13} />
-                <span className="hidden md:inline">Reset to global</span>
+                <span className="hidden md:inline">Reset to Everyone</span>
               </Button>
             ) : null}
           </div>
@@ -503,7 +503,7 @@ function HiddenRows({ rows, who, actions }: { rows: HomeRow[]; who: string; acti
                         variant="ghost"
                         size="sm"
                         className="h-7 px-2 text-xs"
-                        aria-label={`Reset ${r.title} to global`}
+                        aria-label={`Reset ${r.title} to Everyone`}
                         onClick={() => actions.reset(r)}
                       >
                         <RotateCcw size={12} /> Reset

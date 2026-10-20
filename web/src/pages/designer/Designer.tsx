@@ -15,6 +15,7 @@ import { OverrideList } from "./OverrideList";
 import { PageSettings } from "./PageSettings";
 import { RowPool } from "./RowPool";
 import { AnchoredSlots } from "./AnchoredSlots";
+import { TuningPanel } from "./TuningPanel";
 
 function initialContext(): ViewContext {
   const now = new Date();
@@ -169,6 +170,7 @@ export default function Designer() {
                 tabs={[
                   { key: "layout", label: "Layout" },
                   { key: "rows", label: "Rows" },
+                  { key: "tuning", label: "Tuning" },
                   {
                     key: "overrides",
                     label: "Overrides",
@@ -192,6 +194,7 @@ export default function Designer() {
                   onFocusRow={setFocusRow}
                 />
               )}
+              {tools === "tuning" && <TuningPanel {...editing} />}
               {tools === "overrides" && <OverrideList {...editing} onOpenLayer={switchLayer} />}
             </div>
           </>

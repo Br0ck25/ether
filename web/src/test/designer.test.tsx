@@ -52,7 +52,7 @@ describe("HomeScreen", () => {
   it("previews the typical viewer's Home with each row's provenance", async () => {
     const { fake } = renderApp("/home-screens");
     const cw = await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
-    expect(within(cw).getByText(/Global anchor/)).toBeInTheDocument();
+    expect(within(cw).getByText(/Anchored for everyone/)).toBeInTheDocument();
     expect(within(cw).getByText(/global anchor at slot 1/)).toBeInTheDocument();
     const top = screen.getByRole("region", { name: /Slot \d+: Top 10 on Living Room Ether Today/ });
     expect(within(top).getByText("Personalized")).toBeInTheDocument();
@@ -172,7 +172,7 @@ describe("HomeScreen", () => {
     // Reset to global: the row comes back, the override is gone.
     fireEvent.click(screen.getByRole("tab", { name: "Rows" }));
     fireEvent.click(screen.getByRole("button", { name: "Constraints for Hidden Gems for You" }));
-    fireEvent.click(screen.getByRole("button", { name: "Reset to global: Hidden Gems for You" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset to Everyone: Hidden Gems for You" }));
     await closeEditor();
     await waitFor(
       () =>
@@ -213,7 +213,7 @@ describe("HomeScreen", () => {
       () =>
         expect(
           screen.getByRole("region", { name: `Slot ${slot}: New Releases` }),
-        ).toHaveTextContent("Global anchor"),
+        ).toHaveTextContent("Anchored for everyone"),
       WAIT,
     );
     expect(lastPreview(fake).layout?.global[0]?.rows).toContainEqual({
@@ -238,6 +238,37 @@ describe("HomeScreen", () => {
       WAIT,
     );
     expect(lastPreview(fake).layout?.global[0]?.maxRows).toBe(3);
+  });
+
+  it("tunes a page with dials, keeps Home's picks off it, and shows what the model learned", async () => {
+    const { fake } = renderApp("/home-screens");
+    await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
+    // Switch to the TV page: its catalogue has series rows, not Home-only ones.
+    fireEvent.click(screen.getByRole("button", { name: "Page" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "TV" }));
+    await waitFor(() => expect(screen.queryByRole("menu", { name: "Page" })).toBeNull());
+    fireEvent.click(screen.getByRole("tab", { name: "Rows" }));
+    const series = screen.getByRole("group", { name: "Series" });
+    expect(
+      within(series).getByRole("listitem", { name: "Row Finish what you started" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("listitem", { name: "Row Top 10 for You" })).toBeNull();
+    expect(screen.queryByRole("listitem", { name: "Row Acclaimed and unseen" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Tuning" }));
+    fireEvent.change(screen.getByRole("slider", { name: "Discovery" }), {
+      target: { value: "80" },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Don't repeat what Home shows" }));
+    const learning = await screen.findByRole("region", { name: "How it learns" }, WAIT);
+    expect(within(learning).getByText("Active")).toBeInTheDocument();
+    expect(within(learning).getByText("+47%")).toBeInTheDocument();
+    expect(within(learning).getByText("Taste fit")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Save layout/ }));
+    await waitFor(() => expect(calls(fake, "PUT", "/layout")).toHaveLength(1), WAIT);
+    const shows = savedLayout(fake).global.find((p) => p.section === "shows");
+    expect(shows).toMatchObject({ dedupeHome: false, tuning: { discovery: 0.8 } });
   });
 
   it("adds a custom row pattern from a drawer", async () => {
@@ -271,7 +302,7 @@ describe("HomeScreen", () => {
   it("shows a viewer's saved Home read-only on their profile", async () => {
     const { fake } = renderApp("/viewers/2/home");
     const cw = await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
-    expect(within(cw).getByText("Global anchor")).toBeInTheDocument();
+    expect(within(cw).getByText("Anchored for everyone")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Turn off/ })).toBeNull();
     expect(calls(fake, "GET", "/viewers/2/home")).not.toHaveLength(0);
   });

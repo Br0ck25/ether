@@ -34,10 +34,10 @@ export function PageSettings({
         const own = lengthIn(draft, layer, section, null);
         if (own) return { n: own, from: "this viewer's page length" };
         const gd = lengthIn(draft, "global", section, device);
-        if (gd) return { n: gd, from: "Global" };
+        if (gd) return { n: gd, from: "Everyone" };
       }
       const g = lengthIn(draft, "global", section, null);
-      if (g) return { n: g, from: "Global" };
+      if (g) return { n: g, from: "Everyone" };
       return { n: defaults[section], from: "engine default" };
     }
     if (device) {
