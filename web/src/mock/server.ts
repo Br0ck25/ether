@@ -1195,15 +1195,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return {
       enabled: providers.some((p) => p.enabled && p.apiKey),
       cachedOnly: debrid?.cachedOnly ?? true,
-      search: {
-        enabled: providers.some(
-          (p) => p.kind === "torbox" && p.enabled && p.apiKey && !p.disableSearch,
-        ),
-        searches: 42,
-        failures: 1,
-        results: 1310,
-        averageMs: 380,
-      },
       engine: {
         openFiles: 1,
         blockBytes: 524288,

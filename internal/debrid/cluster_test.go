@@ -64,7 +64,7 @@ func clusterNodeSvc(t *testing.T, db *sql.DB, node clusterbus.Node, prov *fakePr
 	t.Helper()
 	cfg := config.Debrid{CachedOnly: true, RemoveUncached: true,
 		Providers: []config.DebridProvider{{ID: "rd", Name: "rd", Kind: config.DebridRealDebrid, APIKey: "k", Enabled: true}}}
-	s := NewService(cfg, Options{DB: db, Now: now, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), TorBoxSearchURL: "http://127.0.0.1:1",
+	s := NewService(cfg, Options{DB: db, Now: now, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		NewProvider: func(config.DebridProvider, ProviderOptions) (Provider, error) { return prov, nil }})
 	if node != nil {
 		s.SetCluster(node)
