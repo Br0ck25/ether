@@ -392,7 +392,7 @@ func (s *Service) resolveSeason(ctx context.Context, k core.RatingKey) (string, 
 				continue
 			}
 			indexOK := item.Index == nil || *item.Index == seasonNum
-			extOK := hasExternalID(item, seasonExternal, showExternal)
+			extOK := hasExternalID(item, seasonExternal) || (item.Index != nil && hasExternalID(item, showExternal))
 			if !indexOK || !extOK {
 				continue
 			}
@@ -471,7 +471,7 @@ func (s *Service) resolveEpisode(ctx context.Context, k core.RatingKey) (string,
 				continue
 			}
 			indexOK := (item.Index == nil || *item.Index == epNum) && (item.ParentIndex == nil || *item.ParentIndex == seasonNum)
-			extOK := hasExternalID(item, epExternal, showExternal)
+			extOK := hasExternalID(item, epExternal) || (item.Index != nil && item.ParentIndex != nil && hasExternalID(item, showExternal))
 			if !indexOK || !extOK {
 				continue
 			}
