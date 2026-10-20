@@ -65,6 +65,9 @@ func TestShowSeasonsEpisodes(t *testing.T) {
 		t.Fatalf("episodes: %v %v", eps, err)
 	}
 	ep := eps[0]
+	if ep.ShowOriginalTitle != "Spectacle Spatial" {
+		t.Fatalf("episode lost original series title: %q", ep.ShowOriginalTitle)
+	}
 	if ep.Key != core.EpisodeKey(100, 1, 1) || ep.StillPath != "/pilot.jpg" || ep.Runtime != 45*time.Minute || ep.ShowIDs.TVDB != 777 || ep.ShowTitle != "Space Show" || ep.ShowYear != show.Year {
 		t.Fatalf("episode: %+v", ep)
 	}
@@ -75,6 +78,9 @@ func TestShowSeasonsEpisodes(t *testing.T) {
 	}
 	if got.ShowYear != show.Year {
 		t.Fatalf("cached episode lost series year: %d, want %d", got.ShowYear, show.Year)
+	}
+	if got.ShowOriginalTitle != "Spectacle Spatial" {
+		t.Fatalf("cached episode lost original series title: %q", got.ShowOriginalTitle)
 	}
 	if got.IDs.IMDB != "tt5001001" {
 		t.Fatalf("episode imdb: %+v", got.IDs)

@@ -774,7 +774,8 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	// Title / obfuscation.
 	wantTitle := sreq.Title
 	titleOK := releaseparse.TitleMatches(rel.Info, wantTitle) ||
-		(!isEpisode && t.OriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.OriginalTitle))
+		(!isEpisode && t.OriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.OriginalTitle)) ||
+		(isEpisode && t.ShowOriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.ShowOriginalTitle))
 	if !titleOK && !idMatch {
 		obf := releaseparse.IsObfuscated(rel.Info.Title)
 		if obf && !releaseparse.HasUsableInfo(rel.Info) {

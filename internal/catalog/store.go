@@ -150,19 +150,35 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	// ShowIDs for seasons/episodes.
+	// Series identity for seasons/episodes, including its original name.
+	// Reuse one row per show within this slice rather than repeating the
+	// same lookup for every episode in a season.
+	type seriesIdentity struct {
+		imdb, original string
+		tvdb           int64
+		year           int
+	}
+	shows := make(map[core.RatingKey]seriesIdentity)
 	for i := range items {
-		if items[i].ShowKey != 0 && (items[i].ShowYear == 0 || items[i].ShowIDs.IMDB == "" || items[i].ShowIDs.TVDB == 0) {
-			var imdb string
-			var tvdb int64
-			var year int
-			_ = c.db.QueryRowContext(ctx, `SELECT imdb,tvdb,year FROM catalog_titles WHERE key=?`, int64(items[i].ShowKey)).Scan(&imdb, &tvdb, &year)
-			items[i].ShowYear = year
+		if items[i].ShowKey != 0 {
+			show, ok := shows[items[i].ShowKey]
+			if !ok {
+				if err := c.db.QueryRowContext(ctx, `SELECT imdb,tvdb,year,original_title FROM catalog_titles WHERE key=?`, int64(items[i].ShowKey)).Scan(&show.imdb, &show.tvdb, &show.year, &show.original); err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				shows[items[i].ShowKey] = show
+			}
+			if items[i].ShowYear == 0 {
+				items[i].ShowYear = show.year
+			}
+			if show.original != "" {
+				items[i].ShowOriginalTitle = show.original
+			}
 			if items[i].ShowIDs.IMDB == "" {
-				items[i].ShowIDs.IMDB = imdb
+				items[i].ShowIDs.IMDB = show.imdb
 			}
 			if items[i].ShowIDs.TVDB == 0 {
-				items[i].ShowIDs.TVDB = tvdb
+				items[i].ShowIDs.TVDB = show.tvdb
 			}
 		}
 	}

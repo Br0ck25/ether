@@ -42,13 +42,14 @@ type Title struct {
 	IDs  IDs       `json:"ids"`
 
 	// Seasons and episodes.
-	ShowKey     RatingKey `json:"showKey,omitempty"`
-	ShowIDs     IDs       `json:"showIds,omitempty"`
-	ShowTitle   string    `json:"showTitle,omitempty"`
-	ShowYear    int       `json:"showYear,omitempty"` // series premiere year, distinct from episode air year
-	SeasonTitle string    `json:"seasonTitle,omitempty"`
-	Season      int       `json:"season,omitempty"`
-	Episode     int       `json:"episode,omitempty"`
+	ShowKey           RatingKey `json:"showKey,omitempty"`
+	ShowIDs           IDs       `json:"showIds,omitempty"`
+	ShowTitle         string    `json:"showTitle,omitempty"`
+	ShowOriginalTitle string    `json:"showOriginalTitle,omitempty"` // canonical original series name, distinct from episode title
+	ShowYear          int       `json:"showYear,omitempty"`          // series premiere year, distinct from episode air year
+	SeasonTitle       string    `json:"seasonTitle,omitempty"`
+	Season            int       `json:"season,omitempty"`
+	Episode           int       `json:"episode,omitempty"`
 
 	Title         string        `json:"title"`
 	OriginalTitle string        `json:"originalTitle,omitempty"`
