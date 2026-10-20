@@ -401,7 +401,9 @@ func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Relea
 		return r, fmt.Errorf("newznab: torrent %q redirected to a magnet without an info hash: %w", r.Name, core.ErrReleaseRejected)
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return r, apiError(429, "too many requests")
+		// Honor the throttle like API requests do, so the next play does
+		// not immediately hit the throttled indexer again.
+		return r, c.recordRateLimit(ctx, resp.Header.Get("Retry-After"), apiError(429, "too many requests"))
 	}
 	if resp.StatusCode != http.StatusOK {
 		return r, apiError(resp.StatusCode, resp.Status)

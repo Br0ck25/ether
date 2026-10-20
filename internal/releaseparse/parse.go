@@ -88,11 +88,13 @@ func Parse(name string) core.ReleaseInfo {
 
 	// Season / episode.
 	parseEpisodes(spaced, &info)
-	if strings.Contains(upper, " COMPLETE ") || strings.Contains(upper, " COMPLETE PACK") {
+	var yearAt int
+	info.Year, yearAt = parseYearAt(spaced)
+	// "COMPLETE" before the release year is usually part of the title
+	// ("A.Complete.Unknown.2024"), unless it names a pack.
+	if idx := tokenIndex(spaced, "COMPLETE"); idx >= 0 && (idx > yearAt || len(info.Seasons) > 0 || namesPack(spaced[idx+len("COMPLETE"):])) {
 		info.FullSeason = true
 	}
-
-	info.Year = parseYear(spaced, &info)
 	info.Height = parseHeight(upper)
 	info.Source = parseSource(upper)
 	info.VideoCodec = parseVideoCodec(upper)
@@ -115,16 +117,23 @@ func Parse(name string) core.ReleaseInfo {
 	info.Edition = ParseEdition(name)
 	info.Proper = strings.Contains(upper, " PROPER ")
 	info.Repack = strings.Contains(upper, " REPACK ")
+	// Words of the title itself ("The.French.Dispatch.2021", "The Danish
+	// Girl") are not audio languages: only tags after the release year or
+	// the episode marker count when the name has one.
+	floor := yearAt
+	if loc := reSE.FindStringIndex(spaced); loc != nil && (floor <= 0 || loc[0] < floor) {
+		floor = loc[0]
+	}
 	seen := map[string]bool{}
 	for _, l := range languages {
-		if strings.Contains(upper, " "+l.token+" ") || strings.Contains(upper, " "+l.token+"-") {
+		if languageTagAfter(spaced, l.token, floor) {
 			if !seen[l.name] {
 				seen[l.name] = true
 				info.Languages = append(info.Languages, l.name)
 			}
 		}
 	}
-	info.Title = extractTitle(spaced, &info)
+	info.Title = extractTitle(spaced, yearAt, &info)
 	return info
 }
 
@@ -226,20 +235,87 @@ func dedupeInts(in []int) []int {
 	return out
 }
 
+var reResolution = regexp.MustCompile(`(?i)\b\d{3,4}[pi]\b`)
+
 func parseYear(spaced string, info *core.ReleaseInfo) int {
-	ms := reYear.FindAllString(spaced, -1)
-	if len(ms) == 0 {
-		return 0
-	}
-	// If the first token is itself a year-like title ("1917", "2001")
-	// and a second year appears, the second is the release year.
-	fields := strings.Fields(spaced)
-	if len(ms) > 1 && len(fields) > 0 && fields[0] == ms[0] {
-		y, _ := strconv.Atoi(ms[1])
-		return y
-	}
-	y, _ := strconv.Atoi(ms[0])
+	y, _ := parseYearAt(spaced)
 	return y
+}
+
+// parseYearAt returns the release year and its offset in spaced, or (0, -1).
+func parseYearAt(spaced string) (int, int) {
+	locs := reYear.FindAllStringIndex(spaced, -1)
+	if len(locs) == 0 {
+		return 0, -1
+	}
+	// A year-like title ("1917", "Blade Runner 2049", "Wonder Woman 1984")
+	// is followed by the release year: the last year before the episode
+	// or resolution markers is the release year.
+	limit := len(spaced)
+	if loc := reSE.FindStringIndex(spaced); loc != nil {
+		limit = loc[0]
+	}
+	if loc := reResolution.FindStringIndex(spaced); loc != nil && loc[0] < limit {
+		limit = loc[0]
+	}
+	pick := locs[0]
+	for _, l := range locs[1:] {
+		// The end of a span ("1994-2004") is not a release year.
+		rangeEnd := l[0] >= 2 && spaced[l[0]-1] == '-' && spaced[l[0]-2] >= '0' && spaced[l[0]-2] <= '9'
+		if l[0] < limit && !rangeEnd {
+			pick = l
+		}
+	}
+	y, _ := strconv.Atoi(spaced[pick[0]:pick[1]])
+	return y, pick[0]
+}
+
+// namesPack reports whether the words after "COMPLETE" describe a pack.
+func namesPack(rest string) bool {
+	next, _, _ := strings.Cut(strings.TrimLeft(rest, " -"), " ")
+	switch strings.ToUpper(next) {
+	case "SERIES", "SEASON", "SEASONS", "PACK", "COLLECTION", "BOXSET":
+		return true
+	}
+	return false
+}
+
+// languageTagAfter reports whether the ASCII tag occurs in spaced after
+// offset floor, preceded by the start or a space and followed by the end, a
+// space or a hyphen.
+func languageTagAfter(spaced, tag string, floor int) bool {
+	for i := max(floor+1, 0); i+len(tag) <= len(spaced); i++ {
+		if i > 0 && spaced[i-1] != ' ' {
+			continue
+		}
+		end := i + len(tag)
+		if end < len(spaced) && spaced[end] != ' ' && spaced[end] != '-' {
+			continue
+		}
+		if strings.EqualFold(spaced[i:end], tag) {
+			return true
+		}
+	}
+	return false
+}
+
+// tokenIndex returns the offset in s of the first case-insensitive match of
+// the ASCII keyword kw that is a whole token (bounded by the string ends,
+// spaces or hyphens), or -1.
+func tokenIndex(s, kw string) int {
+	for i := 0; i+len(kw) <= len(s); i++ {
+		if i > 0 && s[i-1] != ' ' && s[i-1] != '-' {
+			continue
+		}
+		end := i + len(kw)
+		if end < len(s) && s[end] != ' ' && s[end] != '-' {
+			continue
+		}
+		if strings.EqualFold(s[i:end], kw) {
+			return i
+		}
+	}
+	return -1
 }
 
 func parseHeight(upper string) int {
@@ -347,21 +423,15 @@ var boundaryKeywords = []string{
 	"INTERNAL", "LIMITED", "SUBBED", "DUBBED",
 }
 
-func extractTitle(spaced string, info *core.ReleaseInfo) string {
-	upper := strings.ToUpper(spaced)
+func extractTitle(spaced string, yearAt int, info *core.ReleaseInfo) string {
 	cut := len(spaced)
 	consider := func(idx int) {
 		if idx > 0 && idx < cut {
 			cut = idx
 		}
 	}
-	// Year boundary (use the chosen year occurrence).
-	if info.Year > 0 {
-		ys := strconv.Itoa(info.Year)
-		if idx := strings.Index(spaced, ys); idx > 0 {
-			consider(idx)
-		}
-	}
+	// Year boundary (the occurrence parseYearAt chose).
+	consider(yearAt)
 	if loc := reSE.FindStringIndex(spaced); loc != nil {
 		consider(loc[0])
 	}
@@ -377,7 +447,10 @@ func extractTitle(spaced string, info *core.ReleaseInfo) string {
 		consider(loc[0])
 	}
 	for _, kw := range boundaryKeywords {
-		if idx := strings.Index(upper, kw); idx > 0 {
+		// Keywords are whole tokens ("Multiverse" is not MULTI, "Scam" is
+		// not CAM), and words before the release year belong to the title
+		// ("Charlottes Web 2006", "Internal Affairs 1990").
+		if idx := tokenIndex(spaced, kw); idx > 0 && (idx > yearAt || kw == "COMPLETE" && namesPack(spaced[idx+len(kw):])) {
 			consider(idx)
 		}
 	}

@@ -189,6 +189,12 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 	req.Header.Set("User-Agent", "Ether/1.0")
 	resp, err := c.http.Do(req)
 	if err != nil {
+		// url.Error embeds the request URL, which carries the indexer API
+		// key; callers log and surface this error.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return nil, fmt.Errorf("newznab: request to %q failed: %w", c.Name(), ue.Err)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -277,7 +283,8 @@ func cacheKey(c *Client, req core.SearchRequest) string {
 	// Cached releases include parsed audio-language facts. Earlier names
 	// with regional tags were persisted as unknown language; refresh them
 	// instead of applying corrected ranking only after their TTL expires.
-	fmt.Fprint(h, "regional-language-v1|")
+	// v2: title boundaries and year-like titles parse correctly.
+	fmt.Fprint(h, "release-parse-v2|")
 	if c.Config().IsBuiltin() && (req.Type == core.TypeEpisode || req.Type == core.TypeShow || req.Season > 0) {
 		// Built-in TV keywords no longer require the series premiere year.
 		// Do not reuse persisted empty answers from that narrower search.

@@ -93,9 +93,10 @@ type searchCacheEntry struct {
 }
 
 type inflight struct {
-	done chan struct{}
-	res  *core.Resolution
-	err  error
+	done      chan struct{}
+	res       *core.Resolution
+	err       error
+	abandoned bool // the leader's own context ended the resolution
 }
 
 // Service implements core.Resolver.
@@ -352,27 +353,35 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 	profile := s.ProfileFor(req.Client, req.User)
 	key := flightKey(req, profile)
 
-	s.flightMu.Lock()
-	if f, ok := s.flights[key]; ok {
-		s.flightMu.Unlock()
-		select {
-		case <-f.done:
-			return f.res, f.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
+	for {
+		s.flightMu.Lock()
+		if f, ok := s.flights[key]; ok {
+			s.flightMu.Unlock()
+			select {
+			case <-f.done:
+				if f.abandoned && ctx.Err() == nil {
+					// The leading caller went away (a client cancelling a
+					// duplicate request); its cancellation is not this
+					// caller's answer. Resolve again.
+					continue
+				}
+				return f.res, f.err
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
-	}
-	f := &inflight{done: make(chan struct{})}
-	s.flights[key] = f
-	s.flightMu.Unlock()
+		f := &inflight{done: make(chan struct{})}
+		s.flights[key] = f
+		s.flightMu.Unlock()
 
-	res, err := s.resolve(ctx, req, profile)
-	f.res, f.err = res, err
-	close(f.done)
-	s.flightMu.Lock()
-	delete(s.flights, key)
-	s.flightMu.Unlock()
-	return res, err
+		res, err := s.resolve(ctx, req, profile)
+		f.res, f.err, f.abandoned = res, err, err != nil && ctx.Err() != nil
+		s.flightMu.Lock()
+		delete(s.flights, key)
+		s.flightMu.Unlock()
+		close(f.done)
+		return res, err
+	}
 }
 
 func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile core.QualityProfile) (*core.Resolution, error) {

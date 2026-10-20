@@ -361,6 +361,11 @@ func findItems(v any) []map[string]any {
 		return out
 	case map[string]any:
 		if raw, ok := vv["item"]; ok {
+			// XML-to-JSON converters emit a lone result as an object,
+			// not a one-element array.
+			if m, ok := raw.(map[string]any); ok {
+				return []map[string]any{m}
+			}
 			return findItems(raw)
 		}
 		for _, e := range vv {
