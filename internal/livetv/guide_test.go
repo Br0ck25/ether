@@ -579,7 +579,8 @@ func TestLegacyGuideDataWithoutGuideChannels(t *testing.T) {
 	if src := sourceByID(t, s, "legacy"); src.GuideChannelCount != 2 || src.ChannelCount != 2 || src.ProgrammeCount != 6 {
 		t.Fatalf("fallback stats: %+v", src)
 	}
-	// The disabled channel without a tvg-id matches the fallback by id-name.
+	// The disabled channel, listed by id, matches the fallback by
+	// case-insensitive id.
 	c2, _ := s.Channel(ctx, "c2")
 	c2.Name = "Legacy Two"
 	c2.GuideID = "LEGACY.TWO"
@@ -587,7 +588,7 @@ func TestLegacyGuideDataWithoutGuideChannels(t *testing.T) {
 		t.Fatal(err)
 	}
 	var res GuideMatchResult
-	ownerJSON(t, s, "POST", "/guide/match", `{}`, &res)
+	ownerJSON(t, s, "POST", "/guide/match", `{"channelIds":["c1","c2"]}`, &res)
 	if res.Matched != 1 || res.Skipped != 1 || len(res.Changes) != 1 || res.Changes[0].GuideID != "legacy.two" || res.Changes[0].GuideSourceID != "legacy" {
 		t.Fatalf("fallback match: %+v", res)
 	}
@@ -677,5 +678,42 @@ func TestNextRefreshRules(t *testing.T) {
 		if n, _ := nextRefresh(failed, &near); !n.Equal(failedAt.Add(want)) {
 			t.Fatalf("backoff after %d failures: %v want +%v", failures, n.Sub(failedAt), want)
 		}
+	}
+}
+
+func TestMatchGuidesLeavesDisabledChannelsUnlessListed(t *testing.T) {
+	ctx := context.Background()
+	clock := &testClock{now: guideTestNow}
+	s := testService(t, Options{Now: clock.Now})
+	if _, err := s.ImportSource(ctx, Source{ID: "a-own", Name: "Own", Playlist: m3uFixture("=News Network", "=Sports Central")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportSource(ctx, Source{ID: "b-epg", Name: "EPG", Guide: xmltvFixture(30, "news=News Network", "sports=Sports Central")}); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := s.Channels(ctx)
+	var retired Channel
+	for _, c := range cs {
+		if c.Name == "Sports Central" {
+			c.Enabled = false
+			if _, err := s.SaveChannel(ctx, c); err != nil {
+				t.Fatal(err)
+			}
+			retired = c
+		}
+	}
+	var dry GuideMatchResult
+	if ownerJSON(t, s, "POST", "/guide/match", `{"dryRun":true}`, &dry) != 200 {
+		t.Fatal("dry run failed")
+	}
+	if dry.Matched != 1 || len(dry.Changes) != 1 || dry.Changes[0].ChannelName != "News Network" {
+		t.Fatalf("disabled channel should be left out: %+v", dry)
+	}
+	var listed GuideMatchResult
+	if ownerJSON(t, s, "POST", "/guide/match", `{"dryRun":true,"channelIds":["`+retired.ID+`"]}`, &listed) != 200 {
+		t.Fatal("listed dry run failed")
+	}
+	if listed.Matched != 1 || listed.Changes[0].ChannelID != retired.ID {
+		t.Fatalf("a listed disabled channel should still match: %+v", listed)
 	}
 }

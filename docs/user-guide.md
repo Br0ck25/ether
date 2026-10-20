@@ -209,8 +209,20 @@ restore your server.
 
 Open **Live TV & IPTV** to create a virtual channel or import an M3U source.
 Supply a matching XMLTV guide for programme schedules. Search the channel list
-or filter to favourites; edit a channel in its drawer to change its settings.
+or filter to favourites; select a channel to change its settings.
 Ether includes no channel sources by default.
+
+A channel can have several stream sources in priority order. Enable the inputs
+you want and put the preferred one first. If it fails during tuning, Ether tries
+a backup within the same startup budget. Failed inputs cool down briefly before
+being retried. The channel keeps its number, favourites, sharing and programme
+guide when its input changes. A running stream stays on its selected input;
+retuning after an interruption can select a healthy backup.
+
+Programme guides can come from separate XMLTV sources, including compressed
+`.xml.gz` feeds. Map each channel to its matching guide. URL sources refresh
+automatically and retain existing listings if a refresh fails; uploaded files
+remain snapshots. Guide coverage shows channels that need a mapping or new data.
 
 ## Monitor and troubleshoot
 

@@ -102,8 +102,11 @@ export const PAGES: PageDef[] = [
       { key: "selection", title: "Selection rules", keywords: "cam health blocked terms groups" },
       { key: "scoring", title: "Custom scoring", keywords: "trash custom formats" },
       { key: "startup", title: "Playback start", keywords: "startup race warm" },
-      { key: "search", title: "Search", keywords: "interactive search manual release pick" },
-      { key: "pinned", title: "Pinned", keywords: "pin release override" },
+      {
+        key: "pinned",
+        title: "Pinned",
+        keywords: "pin release override search interactive manual pick find",
+      },
       { key: "blocklist", title: "Blocklist", keywords: "blocked bad release unblock" },
       { key: "history", title: "History", keywords: "traces resolver why release debug decisions" },
     ],

@@ -479,7 +479,8 @@ type guideCandidate struct {
 
 // MatchGuides maps IPTV channels to guide channels from any source: an exact
 // tvg-id wins, then a case-insensitive id, then a normalized display name.
-// Only guide channels with upcoming programmes are considered. Without
+// Only guide channels with upcoming programmes are considered, and disabled
+// channels only when listed in ChannelIDs. Without
 // Overwrite, channels that already have programmes in the next 24 hours are
 // left alone.
 func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (GuideMatchResult, error) {
@@ -538,7 +539,9 @@ func (s *Service) MatchGuides(ctx context.Context, req GuideMatchRequest) (Guide
 	}
 	var changed []Channel
 	for _, c := range cs {
-		if c.Kind != "iptv" || len(want) > 0 && !want[c.ID] {
+		// Off-air channels are only matched when asked for by id; otherwise a
+		// lineup with retired channels floods the proposals.
+		if c.Kind != "iptv" || len(want) > 0 && !want[c.ID] || len(want) == 0 && !c.Enabled {
 			continue
 		}
 		if !req.Overwrite && c.GuideID != "" && stats[guideKey{guideSource(c), c.GuideID}].window > 0 {

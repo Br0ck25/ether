@@ -20,7 +20,7 @@ async function pickTitle(title: string) {
 
 describe("Release search", () => {
   it("ranks a movie's releases as playback would and pins one with a note", async () => {
-    const { fake } = renderApp("/releases/search");
+    const { fake } = renderApp("/releases/pinned");
     const movie = fake.catalog.filter((t) => t.type === "movie")[3]!;
     await pickTitle(movie.title);
     expect(
@@ -48,11 +48,13 @@ describe("Release search", () => {
       note: "best mix",
     });
     expect(await screen.findByText("Pinned release", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText("best mix")).toBeInTheDocument();
+    // The note shows on the search result and in the pinned list below,
+    // which refreshes as soon as the pin is saved.
+    await waitFor(() => expect(screen.getAllByText("best mix")).toHaveLength(2));
   });
 
   it("blocks a release with a reason and searches again without the cache", async () => {
-    const { fake } = renderApp("/releases/search");
+    const { fake } = renderApp("/releases/pinned");
     const movie = fake.catalog.filter((t) => t.type === "movie")[4]!;
     await pickTitle(movie.title);
     await screen.findByText("Plays first", {}, WAIT);
@@ -79,7 +81,7 @@ describe("Release search", () => {
   });
 
   it("ranks with another profile and reports a failed health check", async () => {
-    const { fake } = renderApp("/releases/search");
+    const { fake } = renderApp("/releases/pinned");
     const movie = fake.catalog.filter((t) => t.type === "movie")[5]!;
     await pickTitle(movie.title);
     await screen.findByText("Plays first", {}, WAIT);
@@ -100,7 +102,7 @@ describe("Release search", () => {
   });
 
   it("finds an episode through its show and season", async () => {
-    const { fake } = renderApp("/releases/search");
+    const { fake } = renderApp("/releases/pinned");
     const show = fake.catalog.find((t) => t.type === "show")!;
     await pickTitle(show.title);
     await waitFor(() => expect(screen.getByRole("button", { name: "Season" })).toBeEnabled(), WAIT);
@@ -130,7 +132,7 @@ describe("Pinned releases", () => {
     const name = `${movie.title} (${movie.year})`;
     expect(await screen.findByRole("link", { name }, WAIT)).toHaveAttribute(
       "href",
-      `/releases/search?key=${movie.key}&title=${encodeURIComponent(name)}`,
+      `/releases/pinned?key=${movie.key}&title=${encodeURIComponent(name)}`,
     );
     expect(screen.getByText("Playing")).toBeInTheDocument();
     expect(screen.getByText("The only encode with the original mix")).toBeInTheDocument();
