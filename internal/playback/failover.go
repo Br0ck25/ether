@@ -314,13 +314,30 @@ func (m *Manager) Failover(ctx context.Context, sessionID string, at time.Durati
 	return s.snapshot(m.now()), nil
 }
 
+// FailoverInput handles an exhausted encoder input. The input URL identifies
+// the exact source generation, so an old encoder's delayed exit cannot discard
+// a newer source. Exhausted recovery closes the session and its resources.
+func (m *Manager) FailoverInput(ctx context.Context, sessionID, inputURL string, at time.Duration) error {
+	s := m.lookup(sessionID)
+	if s == nil {
+		return nil // the client already stopped
+	}
+	g := s.current()
+	if g == nil || m.urlFor(g) != inputURL {
+		return nil // another reader already recovered this input
+	}
+	_, err := m.failoverWith(ctx, s, g, at, failoverOpts{reason: "encoder input failed", stopOnFailure: true})
+	return err
+}
+
 // failoverOpts distinguishes a broken-source failover (markBad) from a
 // speed-driven down-failover (down: pick a lower-bitrate candidate, never
 // mark the slow release bad).
 type failoverOpts struct {
-	reason  string
-	markBad bool
-	down    bool
+	reason        string
+	markBad       bool
+	down          bool
+	stopOnFailure bool
 }
 
 func (m *Manager) failover(ctx context.Context, s *session, observed *generation, at time.Duration, reason string) (*generation, error) {
@@ -330,7 +347,7 @@ func (m *Manager) failover(ctx context.Context, s *session, observed *generation
 // failoverWith replaces generation observed. Concurrent callers that
 // observed the same failing generation share one swap: the first does the
 // work and the others return the generation it installed.
-func (m *Manager) failoverWith(ctx context.Context, s *session, observed *generation, at time.Duration, fo failoverOpts) (*generation, error) {
+func (m *Manager) failoverWith(ctx context.Context, s *session, observed *generation, at time.Duration, fo failoverOpts) (result *generation, retErr error) {
 	if err := lock(ctx, s.failSem); err != nil {
 		return nil, err
 	}
@@ -345,6 +362,13 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	}
 	if cur != observed {
 		return cur, nil // someone else already swapped
+	}
+	if fo.stopOnFailure {
+		defer func() {
+			if retErr != nil && !errors.Is(retErr, errRequireRemux) {
+				m.Stop(s.id)
+			}
+		}()
 	}
 	if failovers >= m.opts.MaxFailovers {
 		return nil, fmt.Errorf("%w: session %s gave up after %d failovers", core.ErrNotAvailable, s.id, failovers)

@@ -3,6 +3,7 @@ package playback
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -225,6 +226,13 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			if err == nil && n == 0 {
 				err = io.ErrNoProgress
 			}
+			if err != nil && ctx.Err() == nil && !recoverableSourceFailure(err) {
+				// An active reader cannot produce a usable source after an
+				// unclassified ReadAt failure either. Preserve the cause but
+				// treat it as a transient source failure, never a permanent
+				// release rejection or a reason to use estimated probe facts.
+				err = fmt.Errorf("%w: %w", core.ErrSourceUnavailable, err)
+			}
 			select {
 			case ch <- chunk{bp, n, err}:
 			case <-ctx.Done():
@@ -304,6 +312,7 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 		}
 		if rerr != nil && recoverableSourceFailure(rerr) && r.Context().Err() == nil && !background {
 			g.noteReadFailure(rerr)
+			m.log.Warn("source read failed", "session", s.id, "release", g.releaseID(), "offset", start+n, "err", rerr)
 			if registered {
 				m.backgroundFailover(s, g, g.timeMapSnapshot().TimeAt(start+n))
 			}

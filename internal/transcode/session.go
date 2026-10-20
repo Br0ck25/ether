@@ -48,25 +48,26 @@ type Session struct {
 
 	lastAccess atomic.Int64 // unix nanos
 
-	mu       sync.Mutex
-	input    string
-	info     core.MediaInfo
-	decision core.Decision
-	forceCPU bool           // hardware encoder failed; stay on CPU
-	noPause  bool           // platform cannot suspend ffmpeg
-	resumeAt int            // segment to restart at after a throttle stop; -1 none
-	done     []map[int]bool // finished segments per track
-	cur      *run
-	runSeq   int
-	lastReq  int
-	endSeg   int // last segment of the input once a run hit EOF; -1 unknown
-	initFile string
-	failures int // consecutive runs that failed without output
-	failErr  error
-	closed   bool
-	changed  chan struct{}
-	playlist []byte
-	dash     *dashState // DASH sessions only
+	mu          sync.Mutex
+	input       string
+	info        core.MediaInfo
+	decision    core.Decision
+	forceCPU    bool           // hardware encoder failed; stay on CPU
+	noPause     bool           // platform cannot suspend ffmpeg
+	resumeAt    int            // segment to restart at after a throttle stop; -1 none
+	done        []map[int]bool // finished segments per track
+	cur         *run
+	runSeq      int
+	lastReq     int
+	endSeg      int // last segment of the input once a run hit EOF; -1 unknown
+	initFile    string
+	failures    int // consecutive runs that failed without output
+	failErr     error
+	inputFailed bool // exhausted this input; HTTP retries cannot restart it
+	closed      bool
+	changed     chan struct{}
+	playlist    []byte
+	dash        *dashState // DASH sessions only
 
 	// Adaptive HLS engine: the shared segment plan (HLS only), the config
 	// snapshot, the ABR ladder and measured delivery goodput.
@@ -565,6 +566,11 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			s.mu.Unlock()
 			continue
 		}
+		if s.inputFailed {
+			s.mu.Unlock()
+			writeStartError(w, errInputExhausted)
+			return
+		}
 		if s.endSeg >= 0 && n > s.endSeg {
 			s.mu.Unlock()
 			http.NotFound(w, r)
@@ -589,7 +595,7 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 				if err := s.startRunLocked(n, s.failures > 0); err != nil {
 					s.mu.Unlock()
 					s.log.Error("start ffmpeg", "segment", n, "err", err)
-					http.Error(w, "transcoder failed to start", http.StatusInternalServerError)
+					writeStartError(w, err)
 					return
 				}
 			}
@@ -689,6 +695,11 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			http.Error(w, "init segment missing", http.StatusInternalServerError)
 			return
 		}
+		if s.inputFailed {
+			s.mu.Unlock()
+			writeStartError(w, errInputExhausted)
+			return
+		}
 		// A DASH player requests initialization before media. Selecting a
 		// lazy video representation must start it here; waiting for its
 		// first media request otherwise deadlocks startup. Audio shares the
@@ -717,7 +728,7 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 				}
 				if err := s.startRunLocked(start, s.failures > 0); err != nil {
 					s.mu.Unlock()
-					http.Error(w, "transcoder failed to start", http.StatusInternalServerError)
+					writeStartError(w, err)
 					return
 				}
 			}
@@ -939,6 +950,9 @@ func (s *Session) pruneLocked() {
 func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	if s.closed {
 		return errors.New("transcode: session closed")
+	}
+	if s.inputFailed {
+		return errInputExhausted
 	}
 	s.stopRunLocked()
 	s.resumeAt = -1
@@ -1243,7 +1257,14 @@ func (s *Session) finish(r *run) {
 	} else {
 		s.failErr = fmt.Errorf("ffmpeg: %w: %s", err, tail(stderr, 300))
 	}
-	if h := s.m.opts.onFailure; h != nil {
+	if s.inputFailed {
+		return
+	}
+	s.inputFailed = true
+	if h := s.m.opts.onInputFailure; h != nil {
+		at, input, ferr := s.segStart(r.next()), s.input, s.failErr
+		go h(s.id, input, at, ferr)
+	} else if h := s.m.opts.onFailure; h != nil {
 		at := s.segStart(r.next())
 		ferr := s.failErr
 		go h(s.id, at, ferr)
@@ -1336,6 +1357,7 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	s.endSeg = -1
 	s.failures = 0
 	s.failErr = nil
+	s.inputFailed = false
 	s.lastReq = seg
 	s.seekRampSeg = seg
 	s.log.Info("input swapped", "at", at, "segment", seg)

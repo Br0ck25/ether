@@ -46,6 +46,7 @@ type options struct {
 	dashURLs       DASHURLs
 	manifestWait   time.Duration
 	onFailure      func(sessionID string, at time.Duration, err error)
+	onInputFailure func(sessionID, inputURL string, at time.Duration, err error)
 	// rungDwell is how long a run keeps producing its rung before a
 	// request on another rung may replace it (see Session.rungDwellLocked).
 	rungDwell time.Duration
@@ -127,6 +128,12 @@ func WithManifestWait(d time.Duration) Option { return func(o *options) { o.mani
 // playback had reached. Playback typically answers with SwapInput.
 func WithFailureHandler(f func(sessionID string, at time.Duration, err error)) Option {
 	return func(o *options) { o.onFailure = f }
+}
+
+// WithInputFailureHandler includes the failed input generation, so delayed
+// encoder exits cannot fail over a healthy replacement that is already playing.
+func WithInputFailureHandler(f func(sessionID, inputURL string, at time.Duration, err error)) Option {
+	return func(o *options) { o.onInputFailure = f }
 }
 
 func withFinder(f finder) Option { return func(o *options) { o.finder = &f } }
