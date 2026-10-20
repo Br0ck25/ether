@@ -60,43 +60,6 @@ func TestImportedWatchlistIsVisibleAndExportTracksRemoval(t *testing.T) {
 	}
 }
 
-func TestLegacyWatchlistRecoveryIsAtomicAndDoesNotResurrectRemovals(t *testing.T) {
-	ctx := context.Background()
-	db := store.OpenTest(t)
-	catalog := watchlistCatalog{}
-	svc := New(db, catalog)
-	live := watchlist.New(db, watchlist.Options{Catalog: catalog, RecoverImported: svc.RecoverWatchlist})
-	key := core.MovieKey(11)
-	if _, err := db.Exec(`INSERT INTO migrate_watchlist(viewer,key) VALUES(1,?)`, key); err != nil {
-		t.Fatal(err)
-	}
-	// Recovery must also run when automatic monitoring is disabled (the default).
-	if err := live.Sync(ctx, &core.User{ID: 1}); err != nil {
-		t.Fatal(err)
-	}
-	items, err := live.Items(ctx, &core.User{ID: 1})
-	if err != nil || len(items) != 1 {
-		t.Fatalf("legacy import missing: %+v %v", items, err)
-	}
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM migrate_watchlist`).Scan(&count); err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatal("legacy records were not consumed")
-	}
-	if err := live.Remove(ctx, 1, key); err != nil {
-		t.Fatal(err)
-	}
-	if err := live.Sync(ctx, &core.User{ID: 1}); err != nil {
-		t.Fatal(err)
-	}
-	items, err = live.Items(ctx, &core.User{ID: 1})
-	if err != nil || len(items) != 0 {
-		t.Fatalf("removed item resurrected: %+v %v", items, err)
-	}
-}
-
 func TestWatchlistAndImportBookkeepingRollBackTogether(t *testing.T) {
 	ctx := context.Background()
 	db := store.OpenTest(t)

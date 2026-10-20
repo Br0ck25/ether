@@ -46,20 +46,18 @@ type Settings struct {
 	Recaps        bool `json:"recaps"`
 }
 type Options struct {
-	// RecoverImported migrates legacy import-only entries before a sync.
-	RecoverImported func(context.Context, int64) error
-	Catalog         core.Catalog
-	Resolver        core.Resolver
-	Engine          core.Engine
-	Trakt           Source
-	Tokens          func(context.Context, int64) (string, error)
-	Users           func(context.Context) ([]core.User, error)
-	Allowed         func(*core.User, *core.Title) bool
-	Notifier        Notifier
-	Client          *http.Client
-	PlexBaseURL     string
-	Now             func() time.Time
-	PrewarmBytes    int64
+	Catalog      core.Catalog
+	Resolver     core.Resolver
+	Engine       core.Engine
+	Trakt        Source
+	Tokens       func(context.Context, int64) (string, error)
+	Users        func(context.Context) ([]core.User, error)
+	Allowed      func(*core.User, *core.Title) bool
+	Notifier     Notifier
+	Client       *http.Client
+	PlexBaseURL  string
+	Now          func() time.Time
+	PrewarmBytes int64
 	// SyncInterval is how often Run passes over every viewer (30m).
 	SyncInterval time.Duration
 	// ResumeSchedule makes Run wait until SyncInterval has passed since the
@@ -222,11 +220,8 @@ func (s *Service) Sync(ctx context.Context, u *core.User) error {
 		return core.ErrUnauthorized
 	}
 	var errs []error
-	if s.o.RecoverImported != nil {
-		errs = append(errs, s.o.RecoverImported(ctx, u.ID))
-	}
 	if !cfg.Enabled {
-		return errors.Join(errs...)
+		return nil
 	}
 	if cfg.Plex && s.o.Tokens != nil {
 		token, e := s.o.Tokens(ctx, u.ID)

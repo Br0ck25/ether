@@ -26,7 +26,7 @@ import (
 )
 
 func init() {
-	store.Register("migrate", 1, `CREATE TABLE migrate_plans(id TEXT PRIMARY KEY, document TEXT NOT NULL, created INTEGER NOT NULL, imported INTEGER NOT NULL DEFAULT 0); CREATE TABLE migrate_objects(source TEXT NOT NULL, viewer INTEGER NOT NULL, kind TEXT NOT NULL, external TEXT NOT NULL, local_id INTEGER NOT NULL, PRIMARY KEY(source,viewer,kind,external)); CREATE TABLE migrate_watchlist(viewer INTEGER NOT NULL,key INTEGER NOT NULL,PRIMARY KEY(viewer,key));`)
+	store.Register("migrate", 1, `CREATE TABLE migrate_plans(id TEXT PRIMARY KEY, document TEXT NOT NULL, created INTEGER NOT NULL, imported INTEGER NOT NULL DEFAULT 0); CREATE TABLE migrate_objects(source TEXT NOT NULL, viewer INTEGER NOT NULL, kind TEXT NOT NULL, external TEXT NOT NULL, local_id INTEGER NOT NULL, PRIMARY KEY(source,viewer,kind,external));`)
 }
 
 type Service struct {

@@ -145,9 +145,6 @@ func (s *Service) ExportCSV(ctx context.Context, viewer int64, format, kind stri
 	entries := []entry{}
 	var e error
 	if kind == "watchlist" {
-		if err := s.RecoverWatchlist(ctx, viewer); err != nil {
-			return err
-		}
 		keys, err := watchlist.ExportKeys(ctx, s.db, viewer)
 		if err != nil {
 			return err
