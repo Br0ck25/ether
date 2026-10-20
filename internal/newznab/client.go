@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -94,6 +95,7 @@ type Client struct {
 	capsMu     sync.Mutex
 	caps       *Caps
 	capsAt     time.Time
+	capsEP     string    // capsEndpoint the cached caps came from
 	capsFailAt time.Time // last failed caps request; searches skip caps for capsRetry
 
 	cfgMu sync.RWMutex
@@ -149,9 +151,11 @@ func (c *Client) UpdateConfig(cfg config.Indexer) {
 	c.cfg = cfg
 	c.cfgMu.Unlock()
 	if changed {
-		// A corrected URL or key deserves a fresh caps attempt.
+		// A corrected URL or key deserves a fresh caps attempt, and the
+		// old endpoint's caps no longer describe this indexer.
 		c.capsMu.Lock()
 		c.capsFailAt = time.Time{}
+		c.caps, c.capsAt, c.capsEP = nil, time.Time{}, ""
 		c.capsMu.Unlock()
 	}
 }
@@ -259,10 +263,20 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 	return body, nil
 }
 
-// Caps returns the indexer's capabilities, cached for 24h.
+// capsEndpoint fingerprints the URL and API key caps are fetched from.
+func (c *Client) capsEndpoint() string {
+	cfg := c.Config()
+	sum := sha256.Sum256([]byte(cfg.URL + "\x00" + cfg.APIKey))
+	return hex.EncodeToString(sum[:12])
+}
+
+// Caps returns the indexer's capabilities, cached for 24h per endpoint
+// (URL and API key): an indexer edited to point elsewhere fetches anew,
+// and a response from the old endpoint still in flight is not kept.
 func (c *Client) Caps(ctx context.Context) (*Caps, error) {
+	ep := c.capsEndpoint()
 	c.capsMu.Lock()
-	if c.caps != nil && c.now().Sub(c.capsAt) < 24*time.Hour {
+	if c.caps != nil && c.capsEP == ep && c.now().Sub(c.capsAt) < 24*time.Hour {
 		defer c.capsMu.Unlock()
 		return c.caps, nil
 	}
@@ -271,9 +285,11 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 		return nil, errCapsUnavailable
 	}
 	c.capsMu.Unlock()
-	if caps, ok := c.capsFromDB(ctx); ok {
+	if caps, ok := c.capsFromDB(ctx, ep); ok {
 		c.capsMu.Lock()
-		c.caps, c.capsAt = caps, c.now()
+		if c.capsEndpoint() == ep {
+			c.caps, c.capsAt, c.capsEP = caps, c.now(), ep
+		}
 		c.capsMu.Unlock()
 		return caps, nil
 	}
@@ -281,18 +297,22 @@ func (c *Client) Caps(ctx context.Context) (*Caps, error) {
 		return nil, err
 	}
 	caps, err := c.fetchCaps(ctx)
+	c.capsMu.Lock()
+	current := c.capsEndpoint() == ep // the config did not change meanwhile
 	if err != nil {
-		if ctx.Err() == nil && !errors.Is(err, core.ErrBudgetExhausted) {
-			c.capsMu.Lock()
+		if current && ctx.Err() == nil && !errors.Is(err, core.ErrBudgetExhausted) {
 			c.capsFailAt = c.now()
-			c.capsMu.Unlock()
 		}
+		c.capsMu.Unlock()
 		return nil, err
 	}
-	c.capsMu.Lock()
-	c.caps, c.capsAt, c.capsFailAt = caps, c.now(), time.Time{}
+	if current {
+		c.caps, c.capsAt, c.capsEP, c.capsFailAt = caps, c.now(), ep, time.Time{}
+	}
 	c.capsMu.Unlock()
-	c.capsToDB(ctx, caps)
+	if current {
+		c.capsToDB(ctx, caps, ep)
+	}
 	return caps, nil
 }
 
