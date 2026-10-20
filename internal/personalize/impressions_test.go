@@ -90,6 +90,8 @@ func TestParseHubKind(t *testing.T) {
 		"home.trending":               KindTrending,
 		"tv.popular":                  KindPopular,
 		"home.popular.server":         KindPopularServer,
+		"home.crowd":                  KindCrowd,
+		"movie.crowd.trending":        KindCrowdTrending,
 		"home.person.500":             KindPerson,
 		"home.franchise.9001":         KindFranchise,
 		"home.llm.cosy-mysteries":     KindLLM,

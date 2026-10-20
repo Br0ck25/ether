@@ -56,6 +56,7 @@ func (c *Catalog) getMovie(ctx context.Context, id int64) (*core.Title, error) {
 		if uerr := c.upsert(ctx, t, upsertOpts{browsable: c.meetsThreshold(t), detail: true}); uerr != nil {
 			return nil, uerr
 		}
+		c.harvestMovieCrowd(ctx, key, d.Recommendations)
 		st2, lerr := c.loadByKey(ctx, key)
 		if lerr != nil {
 			return &t, nil
@@ -97,6 +98,7 @@ func (c *Catalog) getShow(ctx context.Context, id int64) (*core.Title, error) {
 				return nil, uerr
 			}
 		}
+		c.harvestTVCrowd(ctx, key, d.Recommendations)
 		st2, lerr := c.loadByKey(ctx, key)
 		if lerr != nil {
 			return &t, nil

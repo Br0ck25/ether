@@ -306,7 +306,8 @@ func (e *Engine) buildModel(ctx context.Context, user core.User, generic bool) (
 		}
 		rows = append(rows, e.runGenerator(g, b)...)
 	}
-	m := &userModel{user: user, generic: generic, taste: b.taste, rows: rows, fatigue: fatigue, builtAt: start}
+	m := &userModel{user: user, generic: generic, taste: b.taste, rows: rows, fatigue: fatigue, builtAt: start,
+		crowd: b.crowd().features(), buzz: b.buzz().scores()}
 	m.took = e.now().Sub(start)
 	return m, nil
 }

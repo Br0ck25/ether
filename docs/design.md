@@ -24,6 +24,13 @@ completions and ratings inform each viewer's taste independently. Continue
 Watching reflects current state. Optional Trakt and model integrations supplement
 the experience; unavailable services must not prevent browsing.
 
+Personal rows also draw on public crowd knowledge with no extra configuration:
+TMDB's co-engagement recommendations aggregated over each viewer's favourites
+(titles several favourites' fans agree on rank highest), trend momentum from
+TMDB trending and, when Trakt is set up, Trakt's public trending, most-watched
+and anticipated lists, and co-watching among the server's own viewers. These
+lists are cached for days and fetched within a per-build budget.
+
 Detail pages can offer a version picker of distinct candidate releases (the
 automatic choice first, then quality tiers and editions such as an extended or
 director's cut) and a per-viewer decision header combining match, the strongest

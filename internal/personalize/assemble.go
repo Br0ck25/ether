@@ -45,6 +45,7 @@ type assembly struct {
 	held        map[*candRow][]core.RatingKey
 	homeDeduped int
 	rk          *rankPass // learned ranker (ranker.go); nil = hand-tuned only
+	minRow      int       // fewest titles an engine row may show (Options.MinRowItems)
 }
 
 // rankedRow is a candidate row during assembly.
@@ -187,6 +188,19 @@ func (a *assembly) run() []core.HomeRow {
 // remaining films, the next episodes, an owner's collection, the viewer's
 // own watchlist): they keep their titles and similarity-driven rows give
 // way.
+// minRowItems is the fewest titles a row may show: a TV screen shows about
+// six posters, and a row of one or two leaves a wall of empty space.
+const minRowItems = 6
+
+// rowFloor is the minimum for a row kind. Continue Watching and Up Next are
+// utility rows: one in-progress title is still worth showing.
+func (a *assembly) rowFloor(kind string) int {
+	if kind == KindContinue || kind == KindUpNext {
+		return 0
+	}
+	return a.minRow
+}
+
 func anchored(c *candRow) bool { return c.keepOrder && c.kind != KindContinue }
 
 // draftsFirst reports rows that take their titles before the round-robin:
@@ -295,6 +309,9 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				continue
 			}
 			min := r.c.minItems
+			if !a.ownerPlaced(r.c, r.hubID) {
+				min = max(min, a.rowFloor(r.c.kind))
+			}
 			if r.d.pinned && min > 1 {
 				min = 1
 			}
@@ -500,6 +517,11 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 			adj += 0.05 * fitR
 		}
 	}
+	// Top 10 for You: a modest freshness term from trend momentum (buzz.go),
+	// 0.04 × buzz at the default Freshness, none at 0, double at 1.
+	if c.kind == KindTop10 {
+		adj += 0.04 * (2 * a.dials().freshness) * a.model.buzz[tasteKey(t.Key)]
+	}
 	// What the viewer is browsing tonight (session intent, #32): a
 	// bounded lift for matching genres/decades/people. Never a vetoed
 	// title; restrictions were already applied by typeOK.
@@ -548,6 +570,14 @@ func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float
 			mult *= 1.25
 		case KindTop10Today:
 			mult *= 0.72
+		case KindCrowd:
+			mult *= 1.2
+		case KindCrowdTrending:
+			mult *= 1.15
+		case KindTrending:
+			// Personal trending (KindCrowdTrending, KindTrendingTaste) ranks
+			// above the generic feed for viewers the engine knows.
+			mult *= 0.8
 		}
 	}
 	// Learned ranker: bounded row multiplier (ranker.go).
@@ -659,7 +689,11 @@ func (a *assembly) hubID(c *candRow) string {
 func (a *assembly) homeRow(r *rankedRow, items []candItem, more bool) core.HomeRow {
 	c := r.c
 	prefix := sectionPrefix(a.section)
-	h := core.Hub{ID: r.hubID, Title: c.title, Context: "hub." + prefix + "." + c.context, Style: "shelf", Promoted: true, More: more, Key: c.collKey}
+	title := c.title
+	if st := c.sectionTitles[a.section]; st != "" && a.section != "" {
+		title = st
+	}
+	h := core.Hub{ID: r.hubID, Title: title, Context: "hub." + prefix + "." + c.context, Style: "shelf", Promoted: true, More: more, Key: c.collKey}
 	if c.hub != nil {
 		if c.hub.Context != "" {
 			h.Context = c.hub.Context
@@ -683,7 +717,7 @@ func (a *assembly) homeRow(r *rankedRow, items []candItem, more bool) core.HomeR
 	h.Items = titles
 	h.Type = rowType(titles, a.section)
 	return core.HomeRow{
-		HubID: r.hubID, Title: c.title, Kind: c.kind, Reason: c.reason, Score: round3(r.score),
+		HubID: r.hubID, Title: title, Kind: c.kind, Reason: c.reason, Score: round3(r.score),
 		Pinned: r.d.pinned, Source: c.source, Items: titles, ItemReasons: reasons, Hub: h,
 	}
 }
@@ -819,6 +853,8 @@ func editorialBoost(kind string) float64 {
 	switch kind {
 	case KindNewReleases:
 		return 1.8
+	case KindCrowdTrending:
+		return 1.7
 	case KindTrending:
 		return 1.65
 	case KindPopular:

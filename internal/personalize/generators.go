@@ -29,6 +29,8 @@ var generators = []generator{
 	{KindBecause, (*builder).genBecause},
 	{KindPerson, (*builder).genPerson},
 	{KindTrendingTaste, (*builder).genTrendingTaste},
+	{KindCrowd, (*builder).genCrowd},
+	{KindCrowdTrending, (*builder).genCrowdTrending},
 	{KindHiddenGems, (*builder).genHiddenGems},
 	{KindNewThisWeek, (*builder).genNewThisWeek},
 	{KindComfort, (*builder).genComfort},
@@ -218,39 +220,72 @@ func (b *builder) genTop10() []*candRow {
 			}
 		}
 	}
-	items := b.rank(b.pool(), func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
+	// The crowd graph (crowd.go) adds what fans of the viewer's favourites
+	// love, and its consensus is the strongest single vote for a title.
+	g := b.crowd()
+	pool := b.pool()
+	for i, t := range g.titles() {
+		if i >= 120 {
+			break
+		}
+		pool = append(pool, t)
+	}
+	items := b.rank(pool, func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
 		if why == "" {
 			why = "Highly rated and widely loved"
 		}
 		mom, momSeed := b.momentumScore(t, recentSeeds, simBoost[t.Key], simSeed[t.Key])
-		pct := int(math.Round(58 + 28*clamp(fit, 0, 1) + 13*clamp(mom, 0, 1)))
+		ce := g.entry(t.Key)
+		crowd, consensus := 0.0, 0
+		if ce != nil {
+			crowd, consensus = ce.score, ce.consensus
+		}
+		pct := int(math.Round(58 + 24*clamp(fit, 0, 1) + 10*clamp(mom, 0, 1) + 6*crowd + 6*consensusStrength(consensus)))
 		if pct < 65 {
 			pct = 65
 		} else if pct > 99 {
 			pct = 99
 		}
-		if simSeed[t.Key] != "" {
+		switch {
+		case ce != nil && ce.consensus >= 2:
+			why = fmt.Sprintf("%d%% Match · %s", pct, crowdReason(ce))
+		case simSeed[t.Key] != "":
 			why = fmt.Sprintf("%d%% Match · Because you watched %s · %s", pct, simSeed[t.Key], why)
-		} else if momSeed != "" && mom >= 0.28 {
+		case momSeed != "" && mom >= 0.28:
 			why = fmt.Sprintf("%d%% Match · Momentum from %s · %s", pct, momSeed, why)
-		} else {
+		case crowd >= 0.3:
+			why = fmt.Sprintf("%d%% Match · %s", pct, crowdReason(ce))
+		default:
 			why = fmt.Sprintf("%d%% Match · %s", pct, why)
 		}
-		return 0.48*fit + 0.30*mom + 0.14*quality(t) + 0.04*popularity(t) + 0.04*recency(t, b.now), why
+		return top10Score(fit, mom, crowd, consensus, t, b.now), why
 	})
 	kept := items[:0:0]
 	for _, it := range items {
+		ce := g.entry(it.t.Key)
+		consensus := ce != nil && ce.consensus >= 2
 		minWR := 6.8
-		if simBoost[it.t.Key] > 0 || it.fit >= 0.22 {
+		if simBoost[it.t.Key] > 0 || it.fit >= 0.22 || consensus {
 			minWR = 6.0
 		}
-		if it.fit > 0 && weightedRating(&it.t) >= minWR && b.taste.headlineOK(&it.t) {
+		// Taste must agree, unless several favourites' fans do.
+		fitOK := it.fit > 0 || consensus && it.fit > -0.1
+		if fitOK && weightedRating(&it.t) >= minWR && b.taste.headlineOK(&it.t) {
 			kept = append(kept, it)
 		}
 	}
-	r := newRow(KindTop10, "top10", "Top 10 for You", "The ten titles your taste model and recent viewing momentum rate highest right now.", capItems(kept, 40))
+	r := newRow(KindTop10, "top10", "Top 10 for You", "The ten titles your taste model, what fans of your favourites love and your recent viewing momentum rate highest right now.", capItems(kept, 40))
 	r.maxItems, r.minItems = 10, 5
 	return []*candRow{r}
+}
+
+// top10Score blends a Top 10 candidate's signals: taste fit, momentum
+// from the latest watches, crowd co-engagement and its consensus
+// (crowd.go), quality, and a little popularity and recency. Trend buzz is
+// added at assembly, scaled by the page's Freshness dial (assemble.go).
+func top10Score(fit, mom, crowd float64, consensus int, t *core.Title, now time.Time) float64 {
+	return 0.32*fit + 0.20*mom + 0.18*crowd + 0.14*consensusStrength(consensus) +
+		0.11*quality(t) + 0.025*popularity(t) + 0.025*recency(t, now)
 }
 
 func (b *builder) seedRecencyWeight(at time.Time, rank int) float64 {
@@ -332,11 +367,26 @@ func (b *builder) genBecause() []*candRow {
 		return nil
 	}
 	var rows []*candRow
+	g := b.crowd()
 	for i, s := range b.seeds(6) {
 		seed := s.Title
 		sim := b.similar(s.Key, 30)
 		items := b.rank(sim, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
-			return 0.4*fit + 0.3*rankScore(idx, n) + 0.3*quality(t), "Because you watched " + seed.Title
+			// Titles fans of several favourites also love rise in the row.
+			why := "Because you watched " + seed.Title
+			crowd := 0.0
+			if ce := g.entry(t.Key); ce != nil {
+				crowd = ce.score
+				if ce.consensus >= 2 {
+					for _, other := range ce.seeds {
+						if other != seed.Title {
+							why += " · Also loved by fans of " + other
+							break
+						}
+					}
+				}
+			}
+			return 0.35*fit + 0.25*rankScore(idx, n) + 0.25*quality(t) + 0.15*crowd, why
 		})
 		if len(items) == 0 {
 			continue
@@ -1066,19 +1116,23 @@ func (b *builder) genTop10Today() []*candRow {
 			ok = append(ok, t)
 		}
 	}
+	bz := b.buzz() // trending lists plus Trakt's public lists when set up
 	items := b.rank(ok, func(t *core.Title, _, _ int, fit float64, _ string) (float64, string) {
 		h := 0.0
 		if maxHere > 0 {
 			h = float64(here[tasteKey(t.Key)]) / float64(maxHere)
 		}
+		trend := math.Max(trendRank[t.Key], bz.score(t.Key))
 		reason := "Trending today"
 		switch {
 		case h > 0:
 			reason = "Popular with viewers here"
-		case trendRank[t.Key] == 0:
+		case trend == 0:
 			reason = "One of the most popular titles right now"
+		case bz.trakt:
+			reason = bz.reason(t.Key)
 		}
-		return 0.45*trendRank[t.Key] + 0.25*popularity(t) + 0.15*quality(t) + 0.1*h + 0.05*fit, reason
+		return 0.45*trend + 0.25*popularity(t) + 0.15*quality(t) + 0.1*h + 0.05*fit, reason
 	})
 	r := newRow(KindTop10Today, "top10.today", "Top 10 on "+b.e.serverName()+" Today",
 		"Today's most watched and talked-about titles with a trustworthy rating: trending now, catalogue popularity and what viewers here are watching.", capItems(items, 40))

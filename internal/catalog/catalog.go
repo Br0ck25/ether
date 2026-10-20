@@ -135,6 +135,7 @@ type Catalog struct {
 	// resumeSchedule: Run waits out the interval since the recorded last
 	// sync (WithResumeSchedule).
 	resumeSchedule bool
+	crowdTTL       time.Duration // co-engagement lists (crowd.go)
 
 	genreMu sync.Mutex
 	genres  map[string]map[int]string // mediaType -> id -> name

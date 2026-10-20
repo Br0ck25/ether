@@ -1,6 +1,7 @@
 package personalize
 
 import (
+	"context"
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -117,5 +118,33 @@ func TestHeadlineAndFeedCuration(t *testing.T) {
 	feed.Items = []core.Title{movie("ko", 3000), movie("en", 1)}
 	if got := curateFeed(feed, ts); !got.Hidden {
 		t.Fatal("a feed with nothing for the viewer should be hidden")
+	}
+}
+
+func TestRowsNeverShowAHandfulOfTitles(t *testing.T) {
+	h := newHarness(t, func(o *Options) { o.MinRowItems = 0 }) // the production default (6)
+	u := core.User{ID: 1}
+	sciFiFan(h, u.ID)
+	h.rebuild(u)
+	for _, section := range []string{"home", "movies", "shows"} {
+		hc := hubContext(testNow, core.DeviceTV)
+		if section == "shows" {
+			hc.SectionID = 2
+		}
+		p, err := h.e.PreviewHome(context.Background(), &u, hc, section, 12)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range p.Rows {
+			if r.Hidden || r.Source == core.RowSourcePlex || r.Kind == KindUpNext {
+				continue
+			}
+			if len(r.Items) < minRowItems {
+				t.Errorf("%s: %s shows only %d titles", section, r.HubID, len(r.Items))
+			}
+			if r.Kind == KindFranchise {
+				t.Errorf("%s: franchise row shown by default", section)
+			}
+		}
 	}
 }

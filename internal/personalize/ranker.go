@@ -49,6 +49,11 @@ type RankerOptions struct {
 	// RetrainLabels retrains early once this many new labels arrived
 	// (default 1000).
 	RetrainLabels int
+	// TrainHour is the local hour training prefers (default 4, the quiet
+	// small hours; negative = any hour). A model older than two days
+	// trains at the next quiet moment regardless. Training never starts
+	// while Options.Busy reports viewers streaming.
+	TrainHour int
 	// MinExamples / MinPositives gate activation (default 2000 / 30).
 	MinExamples, MinPositives int
 	// MinLift is the held-out AUC margin over the baseline required to
@@ -71,6 +76,9 @@ func (o *RankerOptions) defaults(refreshEvery time.Duration) {
 	def(&o.MaxServesPerDay, 48)
 	def(&o.MaxItems, 1_000_000)
 	def(&o.RetrainLabels, 1000)
+	if o.TrainHour == 0 {
+		o.TrainHour = 4
+	}
 	def(&o.MinExamples, 2000)
 	def(&o.MinPositives, 30)
 	if o.Retention <= 0 {
@@ -110,8 +118,13 @@ const (
 // ---- features --------------------------------------------------------------------
 
 // rawFeatureVersion versions the snapshot layout; bump when rawFeatures
-// changes so old snapshots are not misread.
-const rawFeatureVersion = 1
+// changes so old snapshots are not misread. Version 1 snapshots (the first
+// v1Features features) still train, with the later features at zero.
+const rawFeatureVersion = 2
+
+// v1Features is the snapshot length of version 1 (before crowd, consensus
+// and buzz).
+const v1Features = 17
 
 // rawFeature indexes the snapshot captured at assembly time.
 type rawFeature int
@@ -134,6 +147,9 @@ const (
 	fInProgress
 	fNewToViewer
 	fWatched
+	fCrowd     // crowd co-engagement score (crowd.go)
+	fConsensus // independent favourites recommending the title
+	fBuzz      // trend momentum (buzz.go)
 	numRaw
 )
 
@@ -156,6 +172,9 @@ var rawFeatures = [numRaw]struct{ name, label string }{
 	{"in_progress", "In progress"},
 	{"new_to_viewer", "New to the viewer"},
 	{"watched", "Already finished (rewatch)"},
+	{"crowd", "Loved by fans of what they watch"},
+	{"consensus", "Recommended by several of their favourites"},
+	{"buzz", "Trending now"},
 }
 
 // itemSnap is one (row, title)'s snapshot from an assembly.
@@ -288,7 +307,7 @@ func (e *Engine) rankerLoop(ctx context.Context) {
 			fresh := labels - rs.lastLabels
 			rs.trainMu.Unlock()
 			due := now.Sub(lastTrain) >= rs.opts.TrainEvery && fresh > 0
-			if (due || fresh >= rs.opts.RetrainLabels) && labels >= rankMinTrain {
+			if (due || fresh >= rs.opts.RetrainLabels) && labels >= rankMinTrain && e.quietToTrain(now, lastTrain) {
 				lastTrain = now
 				if _, err := e.TrainRanker(ctx); err != nil && ctx.Err() == nil {
 					e.log.Warn("personalize: training ranker failed", "err", err)
@@ -301,6 +320,21 @@ func (e *Engine) rankerLoop(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// quietToTrain reports whether training may start now: never while viewers
+// are streaming, and in the overnight window unless the model is already
+// two days old (or has never been trained).
+func (e *Engine) quietToTrain(now, lastTrain time.Time) bool {
+	if e.opts.Busy != nil && e.opts.Busy() {
+		return false
+	}
+	h := e.rk.opts.TrainHour
+	if h < 0 || lastTrain.IsZero() || now.Sub(lastTrain) >= 48*time.Hour {
+		return true
+	}
+	local := now.In(e.loc).Hour()
+	return (local-h+24)%24 < 3 // a three-hour window from TrainHour
 }
 
 // refreshRankerStats reloads exposure counts and server play rates.
@@ -415,7 +449,7 @@ func (p *rankPass) prepare(a *assembly) {
 	p.inprog = map[core.RatingKey]bool{}
 	all := append(append([]*candRow{}, a.model.rows...), a.owner...)
 	for _, c := range all {
-		trend := c.kind == KindTrending || c.kind == KindTrendingTaste || c.kind == KindTop10Today
+		trend := c.kind == KindTrending || c.kind == KindTrendingTaste || c.kind == KindTop10Today || c.kind == KindCrowdTrending
 		for i := range c.items {
 			p.pops = append(p.pops, c.items[i].t.Popularity)
 			if trend {
@@ -503,6 +537,11 @@ func (p *rankPass) features(a *assembly, it *candItem) [numRaw]float32 {
 	if (ev == nil || ev.Kind == EvidenceIgnored) && x.n == 0 {
 		f[fNewToViewer] = 1
 	}
+	if cf, ok := a.model.crowd[tasteKey(t.Key)]; ok {
+		f[fCrowd] = float64(cf.score)
+		f[fConsensus] = float64(min(cf.consensus, 6))
+	}
+	f[fBuzz] = a.model.buzz[tasteKey(t.Key)]
 	var out [numRaw]float32
 	for i, v := range f {
 		out[i] = float32(v)

@@ -72,6 +72,8 @@ interface RankedPick {
 
 const PERSONAL_ROW_KINDS = new Set([
   "top-10",
+  "fans-also-loved",
+  "trending-with-fans",
   "because-you-watched",
   "trending-in-your-taste",
   "more-from-person",

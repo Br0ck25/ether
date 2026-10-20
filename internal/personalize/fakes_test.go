@@ -77,6 +77,13 @@ type fakeCatalog struct {
 	colls  map[int64][]core.RatingKey
 	lists  map[string][]core.RatingKey
 	calls  map[string]int
+	// recs are planted crowd co-engagement lists (CrowdRecommendations);
+	// titles without one get their genre's most popular titles.
+	recs map[core.RatingKey][]core.RatingKey
+	// crowdStored emulates the catalogue's crowd store: pages stored per
+	// title; crowdPages counts pages "fetched from TMDB".
+	crowdStored map[core.RatingKey]int
+	crowdPages  int
 }
 
 // movieKey / showKey address the synthetic titles: genre index gi, item j.
@@ -89,7 +96,8 @@ const (
 )
 
 func newFakeCatalog(now time.Time) *fakeCatalog {
-	c := &fakeCatalog{titles: map[core.RatingKey]core.Title{}, colls: map[int64][]core.RatingKey{}, lists: map[string][]core.RatingKey{}, calls: map[string]int{}}
+	c := &fakeCatalog{titles: map[core.RatingKey]core.Title{}, colls: map[int64][]core.RatingKey{}, lists: map[string][]core.RatingKey{}, calls: map[string]int{},
+		recs: map[core.RatingKey][]core.RatingKey{}, crowdStored: map[core.RatingKey]int{}}
 	for gi, g := range testGenres {
 		for j := 0; j < 48; j++ {
 			rating := "PG-13"
@@ -425,7 +433,9 @@ func (c *fakeCatalog) List(_ context.Context, name string, t core.MediaType, lim
 	return items, nil
 }
 
-// Similar: same primary genre, by popularity.
+// Similar: planted crowd recommendations first (like the catalogue, whose
+// first page is TMDB's recommendations), then the same primary genre by
+// popularity.
 func (c *fakeCatalog) Similar(_ context.Context, k core.RatingKey, limit int) ([]core.Title, error) {
 	c.count("similar")
 	c.dataMu.RLock()
@@ -434,7 +444,26 @@ func (c *fakeCatalog) Similar(_ context.Context, k core.RatingKey, limit int) ([
 	if !ok || len(src.Genres) == 0 {
 		return nil, nil
 	}
-	var out []core.Title
+	out := c.resolve(c.recs[k])
+	if len(out) > 0 {
+		seen := map[core.RatingKey]bool{}
+		for _, t := range out {
+			seen[t.Key] = true
+		}
+		var rest []core.Title
+		for _, key := range c.order {
+			t := c.titles[key]
+			if key != k && !seen[key] && (t.Type == core.TypeMovie || t.Type == core.TypeShow) && len(t.Genres) > 0 && t.Genres[0] == src.Genres[0] {
+				rest = append(rest, t)
+			}
+		}
+		sort.SliceStable(rest, func(i, j int) bool { return rest[i].Popularity > rest[j].Popularity })
+		out = append(out, rest...)
+		if limit > 0 && len(out) > limit {
+			out = out[:limit]
+		}
+		return out, nil
+	}
 	for _, key := range c.order {
 		t := c.titles[key]
 		if key != k && (t.Type == core.TypeMovie || t.Type == core.TypeShow) && len(t.Genres) > 0 && t.Genres[0] == src.Genres[0] {
@@ -447,6 +476,53 @@ func (c *fakeCatalog) Similar(_ context.Context, k core.RatingKey, limit int) ([
 	}
 	return out, nil
 }
+
+// CrowdRecommendations emulates the catalogue's crowd store: a list is
+// "fetched" (counted per page) when fetch is set and fewer pages are
+// stored; without fetch an unstored list is nil.
+func (c *fakeCatalog) CrowdRecommendations(_ context.Context, k core.RatingKey, pages int, fetch bool) ([]core.Title, bool, error) {
+	c.count("crowd")
+	k = tasteKey(k)
+	c.mu.Lock()
+	stored := c.crowdStored[k]
+	fetched := false
+	switch {
+	case stored >= pages:
+	case fetch:
+		c.crowdStored[k] = pages
+		c.crowdPages += pages - stored
+		fetched, stored = true, pages
+	case stored == 0:
+		c.mu.Unlock()
+		return nil, false, nil
+	}
+	c.mu.Unlock()
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
+	var out []core.Title
+	if keys, ok := c.recs[k]; ok {
+		out = c.resolve(keys)
+	} else if src, ok := c.titles[k]; ok && len(src.Genres) > 0 {
+		for _, key := range c.order {
+			t := c.titles[key]
+			if key != k && (t.Type == core.TypeMovie || t.Type == core.TypeShow) && len(t.Genres) > 0 && t.Genres[0] == src.Genres[0] {
+				out = append(out, t)
+			}
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Popularity > out[j].Popularity })
+	}
+	if n := 20 * stored; len(out) > n {
+		out = out[:n]
+	}
+	return out, fetched, nil
+}
+
+func (c *fakeCatalog) fetchedPages() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.crowdPages
+}
+
 func (c *fakeCatalog) Collection(_ context.Context, id int64) (string, []core.Title, error) {
 	if id == sagaCollection {
 		c.dataMu.RLock()
@@ -518,6 +594,8 @@ func newHarness(t *testing.T, mutate func(*Options)) *harness {
 		Logger: quietLogger(), Now: clk.Now, Location: time.UTC,
 		RefreshEvery: -1, RebuildDebounce: time.Hour, ColdWait: 5 * time.Second, OwnerRowsWait: 2 * time.Second,
 		FlushEvery: time.Hour, ServerName: func() string { return "Test Server" },
+		// The fake catalogue is small; the row floor has its own test.
+		MinRowItems: -1,
 	}
 	if mutate != nil {
 		mutate(&opts)
