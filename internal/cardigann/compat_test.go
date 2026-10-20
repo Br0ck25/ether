@@ -37,7 +37,7 @@ func TestNETUnicodeBlocks(t *testing.T) {
 	}{
 		{`[\p{IsCyrillic}\W]+`, "Матрица 1999", "1999"},
 		{`\p{IsCyrillic}+`, "abc Матрица", "abc "},
-		{`[\p{IsCJKUnifiedIdeographs}\W]+`, "黑客帝国.The.Matrix", "TheMatrix"},
+		{`[\p{IsCJKUnifiedIdeographs}\W]+`, "信号.The.Signal", "TheSignal"},
 		{`\P{IsBasicLatin}`, "café", "caf"},
 	}
 	for _, c := range cases {
@@ -144,7 +144,7 @@ search:
 		t.Fatal(err)
 	}
 	r := testRunner(t, def, srv.URL+"/", runnerSetup{})
-	if _, err := r.Search(context.Background(), core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix"}, nil, nil, nil); err != nil && !strings.Contains(err.Error(), "no results") {
+	if _, err := r.Search(context.Background(), core.SearchRequest{Type: core.TypeMovie, Title: "The Signal"}, nil, nil, nil); err != nil && !strings.Contains(err.Error(), "no results") {
 		t.Logf("search: %v", err)
 	}
 	mu.Lock()

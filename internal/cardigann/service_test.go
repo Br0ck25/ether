@@ -77,7 +77,7 @@ func TestManagerIntegration(t *testing.T) {
 	ix := config.Indexer{ID: "pub", Name: "Public site", URL: site.URL, Kind: config.IndexerKindCardigann, Definition: "fakepublic",
 		Protocol: "torrent", Enabled: true, DailyLimit: 2, DailyGrabs: 1, Settings: map[string]string{"sort": "added"}}
 	m := newznab.NewManager(nil, []config.Indexer{ix}, newznab.Options{Backend: s.Backend, Logger: quietLog()})
-	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix", Year: 1999, IDs: core.IDs{IMDB: "tt0133093"}}
+	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Signal", Year: 1999, IDs: core.IDs{IMDB: "tt0133093"}}
 	rels, err := m.Search(ctx, req)
 	if err != nil {
 		t.Fatal(err)

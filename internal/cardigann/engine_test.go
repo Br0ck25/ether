@@ -19,27 +19,27 @@ const publicPage = `<html><body>
 <tr><td class="date-header" colspan="8">2024-03-07</td></tr>
 <tr>
  <td><a href="browse.php?cat=1">Movies</a></td>
- <td><a class="title" href="details.php?id=101">The Matrix 1999 1080p BluRay x264-GRP</a> <a href="https://www.imdb.com/title/tt0133093/">IMDb</a></td>
+ <td><a class="title" href="details.php?id=101">The Signal 1999 1080p BluRay x264-GRP</a> <a href="https://www.imdb.com/title/tt0133093/">IMDb</a></td>
  <td><a href="download.php?id=101">DL</a></td>
  <td class="size">8.5 GB</td><td class="seeders">120</td><td class="leechers">4</td><td class="snatched">1,500</td>
  <td><img alt="Free"></td>
 </tr>
 <tr>
  <td><a href="browse.php?cat=1">Movies</a></td>
- <td><a class="title" href="details.php?id=102">The Matrix 1999 2160p WEB-DL</a></td>
- <td><a href="magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&amp;dn=matrix">Magnet</a></td>
+ <td><a class="title" href="details.php?id=102">The Signal 1999 2160p WEB-DL</a></td>
+ <td><a href="magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567&amp;dn=signal">Magnet</a></td>
  <td class="size">20 GiB</td><td class="seeders">55</td><td class="leechers">2</td>
  <td class="added">2 hours ago</td>
 </tr>
 <tr>
  <td><a href="browse.php?cat=3">Music</a></td>
- <td><a class="title" href="details.php?id=103">The Matrix 1999 Soundtrack FLAC</a></td>
+ <td><a class="title" href="details.php?id=103">The Signal 1999 Soundtrack FLAC</a></td>
  <td><a href="download.php?id=103">DL</a></td>
  <td class="size">500 MB</td><td class="seeders">3</td><td class="leechers">0</td>
 </tr>
 <tr>
  <td><a href="browse.php?cat=1">Movies</a></td>
- <td><a class="title" href="details.php?id=104">The Matrix 1999 720p</a> <a href="https://www.imdb.com/title/tt9999999/">IMDb</a></td>
+ <td><a class="title" href="details.php?id=104">The Signal 1999 720p</a> <a href="https://www.imdb.com/title/tt9999999/">IMDb</a></td>
  <td><a href="download.php?id=104">DL</a></td>
  <td class="size">2 GB</td><td class="seeders">1</td><td class="leechers">0</td>
 </tr>
@@ -53,7 +53,7 @@ const publicPage = `<html><body>
 
 func publicSite(t *testing.T, seen *[]string, mu *sync.Mutex) *httptest.Server {
 	t.Helper()
-	torrent, _ := torrentFile("The.Matrix.1999.1080p")
+	torrent, _ := torrentFile("The.Signal.1999.1080p")
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		*seen = append(*seen, r.URL.RequestURI())
@@ -85,7 +85,7 @@ func TestPublicHTMLTracker(t *testing.T) {
 	r := testRunner(t, def, srv.URL, runnerSetup{})
 	var b budget
 	ctx := context.Background()
-	rels, err := r.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix", Year: 1999, IDs: core.IDs{IMDB: "tt0133093"}}, nil, nil, b.reserve)
+	rels, err := r.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Signal", Year: 1999, IDs: core.IDs{IMDB: "tt0133093"}}, nil, nil, b.reserve)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestPublicHTMLTracker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, wantHash := torrentFile("The.Matrix.1999.1080p")
+	_, wantHash := torrentFile("The.Signal.1999.1080p")
 	if resolved.InfoHash != wantHash || !strings.Contains(resolved.MagnetURL, wantHash) || !strings.Contains(resolved.MagnetURL, "tracker.test") {
 		t.Fatalf("resolved = %+v", resolved)
 	}
@@ -148,13 +148,13 @@ func TestPublicKeywordSearchAndTVPath(t *testing.T) {
 	defer srv.Close()
 	r := testRunner(t, loadDef(t, "public.yml"), srv.URL, runnerSetup{})
 	ctx := context.Background()
-	rels, err := r.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Matrix: Reloaded?", Year: 1999}, nil, nil, nil)
+	rels, err := r.Search(ctx, core.SearchRequest{Type: core.TypeMovie, Title: "The Signal: Reloaded?", Year: 1999}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Keywords are sanitised then run through keywordsfilters; andmatch
 	// drops rows missing a keyword ("Reloaded").
-	if !strings.Contains(seen[0], "search=The+Matrix+Reloaded+1999") {
+	if !strings.Contains(seen[0], "search=The+Signal+Reloaded+1999") {
 		t.Fatalf("request = %s", seen[0])
 	}
 	if len(rels) != 0 {

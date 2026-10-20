@@ -34,7 +34,7 @@ func (f *torrentIndexer) FetchNZB(_ context.Context, r core.Release) ([]byte, er
 func episodeTitle() *core.Title {
 	return &core.Title{
 		Key: core.EpisodeKey(1396, 1, 3), Type: core.TypeEpisode,
-		ShowTitle: "Breaking Bad", Season: 1, Episode: 3, Runtime: 49 * time.Minute,
+		ShowTitle: "Boundary Bay", Season: 1, Episode: 3, Runtime: 49 * time.Minute,
 		ShowIDs: core.IDs{TVDB: 81189},
 	}
 }
@@ -47,9 +47,9 @@ func torrent(r core.Release) core.Release {
 
 func TestTorrentSeasonPackStreamsTheEpisode(t *testing.T) {
 	idx := &torrentIndexer{fakeIndexer: &fakeIndexer{releases: []core.Release{
-		rel("usenet-pack", "Breaking.Bad.S01.COMPLETE.720p.BluRay.x264-GRP", 10000),
-		torrent(rel("wrong-season", "Breaking.Bad.S02.720p.BluRay.x264-GRP", 10000)),
-		torrent(rel("pack", "Breaking.Bad.S01.720p.BluRay.x264-GRP", 10000)),
+		rel("usenet-pack", "Boundary.Bay.S01.COMPLETE.720p.BluRay.x264-GRP", 10000),
+		torrent(rel("wrong-season", "Boundary.Bay.S02.720p.BluRay.x264-GRP", 10000)),
+		torrent(rel("pack", "Boundary.Bay.S01.720p.BluRay.x264-GRP", 10000)),
 	}}}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: episodeTitle(), Client: webCaps()})
@@ -76,9 +76,9 @@ func TestTorrentSeasonPackStreamsTheEpisode(t *testing.T) {
 
 func TestNotCachedTorrentIsSkippedWithoutCooloffOrBadMark(t *testing.T) {
 	idx := &torrentIndexer{fakeIndexer: &fakeIndexer{releases: []core.Release{
-		torrent(rel("t1", "The.Matrix.1999.1080p.BluRay.x264-AAA", 9000)),
-		torrent(rel("t2", "The.Matrix.1999.1080p.WEB-DL.x264-BBB", 8000)),
-	}}, notCached: map[string]bool{"The.Matrix.1999.1080p.BluRay.x264-AAA": true, "The.Matrix.1999.1080p.WEB-DL.x264-BBB": true}}
+		torrent(rel("t1", "The.Signal.1999.1080p.BluRay.x264-AAA", 9000)),
+		torrent(rel("t2", "The.Signal.1999.1080p.WEB-DL.x264-BBB", 8000)),
+	}}, notCached: map[string]bool{"The.Signal.1999.1080p.BluRay.x264-AAA": true, "The.Signal.1999.1080p.WEB-DL.x264-BBB": true}}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	_, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
 	if !errors.Is(err, core.ErrNotAvailable) || !errors.Is(err, core.ErrNotCached) {
@@ -91,7 +91,7 @@ func TestNotCachedTorrentIsSkippedWithoutCooloffOrBadMark(t *testing.T) {
 		t.Fatal("not-cached results cooled the title off")
 	}
 	// Once one is cached it wins on the next resolve.
-	idx.notCached = map[string]bool{"The.Matrix.1999.1080p.BluRay.x264-AAA": true}
+	idx.notCached = map[string]bool{"The.Signal.1999.1080p.BluRay.x264-AAA": true}
 	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
 	if err != nil || res.Release.ID != "t2" {
 		t.Fatalf("second resolve %+v %v", res, err)
@@ -104,8 +104,8 @@ func TestNotCachedTorrentIsSkippedWithoutCooloffOrBadMark(t *testing.T) {
 func TestPinnedTorrentSeasonPackKeepsItsEpisodeID(t *testing.T) {
 	ctx := context.Background()
 	idx := &torrentIndexer{fakeIndexer: &fakeIndexer{releases: []core.Release{
-		torrent(rel("pack", "Breaking.Bad.S01.720p.BluRay.x264-GRP", 10000)),
-		torrent(rel("single", "Breaking.Bad.S01E03.1080p.WEB-DL.x264-GRP", 2000)),
+		torrent(rel("pack", "Boundary.Bay.S01.720p.BluRay.x264-GRP", 10000)),
+		torrent(rel("single", "Boundary.Bay.S01E03.1080p.WEB-DL.x264-GRP", 2000)),
 	}}}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	ep := episodeTitle()

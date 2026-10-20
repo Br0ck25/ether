@@ -69,13 +69,13 @@ func TestFilters(t *testing.T) {
 }
 
 func TestAndMatch(t *testing.T) {
-	if !andMatch("The.Matrix.1999.1080p", "matrix 1999", 0) {
+	if !andMatch("The.Signal.1999.1080p", "signal 1999", 0) {
 		t.Error("expected match")
 	}
-	if andMatch("The.Matrix.Reloaded", "matrix 1999", 0) {
+	if andMatch("The.Signal.Reloaded", "signal 1999", 0) {
 		t.Error("expected no match")
 	}
-	if !andMatch("The.Matrix.Reloaded", "matrix 1999", 6) {
+	if !andMatch("The.Signal.Reloaded", "signal 1999", 6) {
 		t.Error("limit should cut the query")
 	}
 }

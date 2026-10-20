@@ -9,8 +9,8 @@ import (
 
 func testVars() vars {
 	v := baseVars(map[string]any{"freeleech": "True", "off": "", "sort": "seeders", "cats": []string{"a", "b"}}, time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC))
-	v["Keywords"] = "The Matrix 1999"
-	v["Query"] = map[string]string{"IMDBID": "tt0133093", "IMDBIDShort": "0133093", "Season": "", "Ep": "", "Keywords": "The Matrix 1999"}
+	v["Keywords"] = "The Signal 1999"
+	v["Query"] = map[string]string{"IMDBID": "tt0133093", "IMDBIDShort": "0133093", "Season": "", "Ep": "", "Keywords": "The Signal 1999"}
 	v["Categories"] = []string{"1", "7"}
 	v["Result"] = map[string]string{"title_phase1": "Some.Title", "empty": ""}
 	return v
@@ -20,16 +20,16 @@ func TestRender(t *testing.T) {
 	v := testVars()
 	for _, tc := range []struct{ tpl, want string }{
 		{"plain text", "plain text"},
-		{"{{ .Keywords }}", "The Matrix 1999"},
+		{"{{ .Keywords }}", "The Signal 1999"},
 		{"{{ if .Config.freeleech }}fl=1{{ else }}fl=0{{ end }}", "fl=1"},
 		{"{{ if .Config.off }}on{{ else }}off{{ end }}", "off"},
 		{"{{if .Query.IMDBID}}imdb={{ .Query.IMDBIDShort }}{{else}}q={{ .Keywords }}{{end}}", "imdb=0133093"},
 		{"{{ range .Categories }}cat[]={{.}}&{{end}}", "cat[]=1&cat[]=7&"},
 		{"{{ range $i, $c := .Categories }}{{ $i }}:{{ $c }} {{ end }}", "0:1 1:7 "},
 		{"{{ join .Categories \",\" }}", "1,7"},
-		{`{{ re_replace .Keywords "\s+" "." }}`, "The.Matrix.1999"},
-		{`{{ re_replace .Keywords "[^a-zA-Z0-9]+" "%" }}`, "The%Matrix%1999"},
-		{`{{ re_replace .Keywords "(\w+) (\w+)" "$2-$1" }}`, "Matrix-The 1999"},
+		{`{{ re_replace .Keywords "\s+" "." }}`, "The.Signal.1999"},
+		{`{{ re_replace .Keywords "[^a-zA-Z0-9]+" "%" }}`, "The%Signal%1999"},
+		{`{{ re_replace .Keywords "(\w+) (\w+)" "$2-$1" }}`, "Signal-The 1999"},
 		{"{{ .Result.title_phase1 }}", "Some.Title"},
 		{"[{{ .Result.missing }}]", "[]"},
 		{"[{{ .Config.missing }}]", "[]"},
@@ -38,11 +38,11 @@ func TestRender(t *testing.T) {
 		{`{{ if ne .Config.missing "x" }}ok{{ end }}`, "ok"},
 		{`{{ if and .Config.freeleech .Keywords }}both{{ end }}`, "both"},
 		{`{{ if or .Query.Season .Query.IMDBID }}any{{ end }}`, "any"},
-		{`{{ or .Query.Season .Keywords }}`, "The Matrix 1999"},
+		{`{{ or .Query.Season .Keywords }}`, "The Signal 1999"},
 		{"{{ .Today.Year }}", "2026"},
 		{"{{ .True }}|{{ .False }}", "True|"},
 		{"{{ join .Config.cats \"+\" }}", "a+b"},
-		{"{{- .Keywords -}}", "The Matrix 1999"},
+		{"{{- .Keywords -}}", "The Signal 1999"},
 		{"{{ if .Result.empty }}x{{ else if .Result.title_phase1 }}y{{ end }}", "y"},
 	} {
 		got, err := render(tc.tpl, v, nil)
@@ -62,7 +62,7 @@ func TestRenderModifierEncodesValuesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "search/The+Matrix+1999/free only" {
+	if got != "search/The+Signal+1999/free only" {
 		t.Fatalf("got %q", got)
 	}
 }
