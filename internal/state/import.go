@@ -60,7 +60,10 @@ func (s *State) ImportTransaction(ctx context.Context, prepare func(*sql.Tx) (Im
 func (s *State) importTx(ctx context.Context, tx *sql.Tx, b ImportBatch) ([]Event, error) {
 	now := s.now().UnixNano()
 	var events []Event
-	initial := map[[2]int64]int64{}
+	// Track source timestamps within the batch, not the wall-clock
+	// updated_at written by this import. Older rows still add history, but
+	// must not replace the progress or rating from a newer imported row.
+	latest := map[[2]int64]int64{}
 	addHistory := func(r ImportRecord) error {
 		at := int64(0)
 		if !r.ViewedAt.IsZero() {
@@ -98,12 +101,12 @@ func (s *State) importTx(ctx context.Context, tx *sql.Tx, b ImportBatch) ([]Even
 				}
 			}
 			ident := [2]int64{r.UserID, int64(r.Key)}
-			old, seen := initial[ident]
+			old, seen := latest[ident]
 			if !seen {
 				if err := tx.QueryRowContext(ctx, `SELECT updated_at FROM state_watch WHERE user_id=? AND rating_key=?`, r.UserID, r.Key).Scan(&old); err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return nil, err
 				}
-				initial[ident] = old
+				latest[ident] = old
 			}
 			viewed := int64(0)
 			if !r.ViewedAt.IsZero() {
@@ -115,6 +118,7 @@ func (s *State) importTx(ctx context.Context, tx *sql.Tx, b ImportBatch) ([]Even
 			if _, err := tx.ExecContext(ctx, `INSERT INTO state_watch(user_id,rating_key,view_offset_ns,duration_ns,view_count,counted,last_viewed_at,user_rating,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,rating_key) DO UPDATE SET view_offset_ns=excluded.view_offset_ns,duration_ns=excluded.duration_ns,counted=excluded.counted,view_count=CASE WHEN excluded.view_count>state_watch.view_count THEN excluded.view_count ELSE state_watch.view_count END,last_viewed_at=CASE WHEN excluded.last_viewed_at>state_watch.last_viewed_at THEN excluded.last_viewed_at ELSE state_watch.last_viewed_at END,user_rating=CASE WHEN excluded.user_rating>0 THEN excluded.user_rating ELSE state_watch.user_rating END,updated_at=excluded.updated_at,version=state_watch.version+1`, r.UserID, r.Key, int64(r.Offset), int64(r.Duration), r.Views, b2i(r.Views > 0 && r.Offset == 0), viewed, r.Rating, now); err != nil {
 				return nil, err
 			}
+			latest[ident] = max(old, viewed)
 			events = append(events, Event{Kind: EventProgress, UserID: r.UserID, Key: r.Key, Offset: r.Offset, Duration: r.Duration, State: "stopped", At: s.now()})
 		}
 		if r.Rating != oldRating && (r.RatingsOnly || r.Rating > 0) {
