@@ -466,6 +466,17 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 		}
 	}
 
+	// On a narrow connection, copying high-bitrate surround can consume
+	// most of the entire stream budget. Preserve room for video using
+	// stereo AAC when the client supports it. Fast connections keep the
+	// original audio plan.
+	if a != nil && bitrateCap > 0 && bitrateCap < 3000 && audioKbps > bitrateCap/4 &&
+		(caps.SupportsAudio("aac") || len(caps.AudioCodecs) == 0) {
+		audioCopy, audioCodec = false, "aac"
+		audioKbps = audioBitrateKbps(audioCodec, 2)
+		audioNote = "audio converted to stereo AAC to fit connection bitrate"
+	}
+
 	// 2. Remux: copy video into HLS.
 	videoCopyable := v == nil || (len(videoIssues) == 0 && hlsVideoOK(v.Codec))
 	if opts.DirectStream && videoCopyable && !burn && (bitrateCap == 0 || info.BitrateKbps <= bitrateCap ||

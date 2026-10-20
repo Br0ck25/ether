@@ -181,7 +181,7 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 	var group []candidate
 	var indexes []int
 	for i, c := range cands {
-		eligible := (!c.verified || explicit) && qualityTier(c.rel.Info) == tier && c.rel.Score >= lead.rel.Score-margin
+		eligible := c.bandwidth >= lead.bandwidth && (!c.verified || explicit) && qualityTier(c.rel.Info) == tier && c.rel.Score >= lead.rel.Score-margin
 		if !eligible {
 			if !explicit {
 				break

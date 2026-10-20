@@ -31,7 +31,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		res, cached = warm.res, warm.probe
 	}
 	if res == nil {
-		res = m.resumeResolution(ctx, s.ident.userID, s.ident.key, profile.Name)
+		res = m.resumeResolution(ctx, s.ident.userID, s.ident.key, profile.Name, s.caps)
 		if res != nil && s.prefer != "" && res.Release.ID != s.prefer {
 			res = nil // a picked version wins over the remembered release
 		}
@@ -204,7 +204,7 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		points = indexPointsOf(mi.Keyframes)
 	}
 	mi.Keyframes = keyframesOf(points)
-	needIndex := facts == nil && len(points) == 0 && !mi.Estimated && mi.Duration > 0
+	needIndex := len(points) == 0 && !mi.Estimated && mi.Duration > 0
 	// The loopback server may already hold g; publish under its lock.
 	g.mu.Lock()
 	g.info = mi
@@ -623,7 +623,7 @@ func containerFromName(name string) string {
 
 // resumeResolution rebuilds a Resolution from the stored resume record when
 // it was resolved for the same quality profile.
-func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.RatingKey, profile string) *core.Resolution {
+func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.RatingKey, profile string, caps core.ClientCaps) *core.Resolution {
 	if m.resume == nil {
 		return nil
 	}
@@ -632,7 +632,7 @@ func (m *Manager) resumeResolution(ctx context.Context, userID int64, key core.R
 		m.log.Warn("resume lookup failed", "err", err)
 		return nil
 	}
-	if rec == nil || rec.profile != profile || !m.resumeSourceAllowed(rec.release) {
+	if rec == nil || rec.profile != profile || !m.resumeSourceAllowed(rec.release) || !sourceFitsBitrate(rec.size, rec.duration, 0, caps.MaxBitrateKbps) {
 		return nil
 	}
 	nzb, err := m.resume.readNZB(rec.nzbHash)
@@ -705,7 +705,7 @@ func (m *Manager) Remember(ctx context.Context, user *core.User, key core.Rating
 	if err != nil {
 		return err
 	}
-	if rec != nil && rec.profile == profile && m.resumeSourceAllowed(rec.release) {
+	if rec != nil && rec.profile == profile && m.resumeSourceAllowed(rec.release) && sourceFitsBitrate(rec.size, rec.duration, 0, caps.MaxBitrateKbps) {
 		return nil
 	}
 	return m.resume.save(ctx, resumeRecord{
@@ -728,7 +728,7 @@ func (m *Manager) ResumeFor(ctx context.Context, user *core.User, key core.Ratin
 	if err != nil || rp == nil {
 		return nil, err
 	}
-	if rp.Profile != m.deps.SelectProfile(caps, user).Name || !m.resumeSourceAllowed(rp.Release) {
+	if rp.Profile != m.deps.SelectProfile(caps, user).Name || !m.resumeSourceAllowed(rp.Release) || !sourceFitsBitrate(rp.Size, rp.Duration, 0, caps.MaxBitrateKbps) {
 		return nil, nil
 	}
 	return rp, nil

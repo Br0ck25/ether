@@ -86,7 +86,7 @@ func TestMatroskaHLSArgsAndPlaylist(t *testing.T) {
 	d := core.Decision{Kind: core.DecisionRemux, Container: ContainerMatroska, VideoCopy: true, AudioCopy: true, AudioStream: 1}
 	s := baseSpec(mustParse(t, "mkv_hevc_hdr10.json"), d)
 	args := buildArgs(s)
-	mustContain(t, args, "-f ssegment", "-segment_format matroska", "-individual_header_trailer 0", "-segment_header_filename", "-reset_timestamps 0", "-segment_start_number 50", "-segment_list_type m3u8", "%05d.mkv")
+	mustContain(t, args, "-f ssegment", "-segment_format matroska", "-individual_header_trailer 0", "-segment_header_filename", "-reset_timestamps 0", "-segment_start_number 50", "-segment_list_type m3u8", "-segment_format_options output_ts_offset=10", "%05d.mkv")
 	mustNotContain(t, args, "-hls_segment_type", "-tag:v hvc1", "-hls_fmp4_init_filename")
 	b := string(mediaPlaylist(20*time.Second, 4*time.Second, ContainerMatroska, func(n int) string { return SegmentName(n, ContainerMatroska) }))
 	if !strings.Contains(b, `#EXT-X-MAP:URI="header"`) || !strings.Contains(b, "00000.mkv") || !strings.Contains(b, "#EXT-X-VERSION:7") {
@@ -145,7 +145,7 @@ func TestIntegrationMatroskaHLSDecodeSeekAndSwap(t *testing.T) {
 			t.Fatalf("decode segment %d: %v %s", n, err, out)
 		}
 	}
-	decode(0, "first.mkv", 0)
+	decode(0, "first.mkv", 10)
 	// Native Plex joins EXT-X-MAP and successive fragments into one demuxer
 	// input. Decode across boundaries, rather than only the first few frames.
 	joined := fetch(t, hs, InitSegment)
@@ -156,7 +156,7 @@ func TestIntegrationMatroskaHLSDecodeSeekAndSwap(t *testing.T) {
 	if out, err := exec.Command(e.ffmpeg, "-v", "warning", "-xerror", "-i", path, "-map", "0:v:0", "-f", "null", "-").CombinedOutput(); err != nil || bytes.Contains(out, []byte("File extends beyond end of segment")) || bytes.Contains(out, []byte("EBML number")) {
 		t.Fatalf("continuous Matroska decode: %v %s", err, out)
 	}
-	decode(4, "seek.mkv", 16)
+	decode(4, "seek.mkv", 26)
 	other, err := e.m.Probe(ctx, e.url("mkv-b.mkv"))
 	if err != nil {
 		t.Fatal(err)
@@ -164,5 +164,5 @@ func TestIntegrationMatroskaHLSDecodeSeekAndSwap(t *testing.T) {
 	if err := hs.SwapInput(ctx, e.url("mkv-b.mkv"), *other, 8*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	decode(2, "swap.mkv", 8)
+	decode(2, "swap.mkv", 18)
 }

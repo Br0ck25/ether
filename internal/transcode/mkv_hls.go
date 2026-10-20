@@ -32,6 +32,9 @@ func matroskaHLSMuxArgs(s runSpec, segDur time.Duration) []string {
 		"-avoid_negative_ts", "disabled", "-max_muxing_queue_size", "4096",
 		"-f", "ssegment", "-segment_format", "matroska", "-flags", "+global_header",
 		"-individual_header_trailer", "0", "-reset_timestamps", "0",
+		// PMS uses a positive timestamp origin for non-TS segmented HLS.
+		// Preserve that origin across startup, seeks and release swaps.
+		"-segment_format_options", "output_ts_offset=10",
 		"-segment_header_filename", filepath.Join(s.Dir, s.InitName),
 		"-segment_time", secs(segDur), "-segment_start_number", strconv.Itoa(s.StartSeg),
 		"-segment_list_type", "m3u8", "-segment_list_size", "0",

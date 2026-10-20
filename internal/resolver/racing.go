@@ -12,9 +12,10 @@ import (
 )
 
 type candidate struct {
-	rel      core.Release
-	trace    int
-	verified bool
+	rel       core.Release
+	trace     int
+	verified  bool
+	bandwidth int // fits client cap (+1), unknown (0), or exceeds it (-1)
 }
 type validation struct {
 	index                         int
@@ -200,15 +201,15 @@ func compatibilityScore(r core.Release, c core.ClientCaps, t *core.Title) (float
 			notes = append(notes, "audio transcode required")
 		}
 	}
-	if c.Remote && c.MaxBitrateKbps > 0 && r.Size > 0 && t.Runtime > 0 {
+	if c.MaxBitrateKbps > 0 && r.Size > 0 && t.Runtime > 0 {
 		kbps := float64(r.Size) * 8 / t.Runtime.Seconds() / 1000
 		// NZB sizes include archive overhead; reserve 10% for instantaneous peaks.
 		if kbps*1.1 <= float64(c.MaxBitrateKbps) {
 			score += 200
-			notes = append(notes, fmt.Sprintf("estimated %.0f kbps fits remote cap", kbps))
+			notes = append(notes, fmt.Sprintf("estimated %.0f kbps fits client cap", kbps))
 		} else {
 			score -= 200
-			notes = append(notes, fmt.Sprintf("estimated %.0f kbps exceeds remote cap", kbps))
+			notes = append(notes, fmt.Sprintf("estimated %.0f kbps exceeds client cap", kbps))
 		}
 	}
 	if r.Info.Atmos && c.SupportsAudio(r.Info.AudioCodec) {

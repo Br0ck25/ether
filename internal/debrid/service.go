@@ -572,7 +572,7 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 		return nil, fmt.Errorf("debrid: torrent %q has no info hash: %w", rel.Name, core.ErrReleaseRejected)
 	}
 	key := payloadKey(rel)
-	if p, ok := s.storedPayload(ctx, key); ok && s.entryByID(p.Provider) != nil && p.InfoHash == hash {
+	if p, ok := s.reusablePayload(ctx, rel); ok {
 		return p.Encode(), nil
 	}
 	magnet := rel.MagnetURL

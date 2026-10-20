@@ -101,6 +101,11 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 	}
 	caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
 	applyDecisionQuery(&caps, q)
+	// The decision query can identify WAN even when the metadata request
+	// looked local. Apply the remote ceiling before source resolution too.
+	if limit := s.cfg().Transcode.RemoteMaxBitrateKbps; caps.Remote && limit > 0 && (caps.MaxBitrateKbps == 0 || limit < caps.MaxBitrateKbps) {
+		caps.MaxBitrateKbps = limit
+	}
 	p := playRequest{key: key, caps: caps, audioSel: -1, subSel: -1, protocol: q.Get("protocol"), mde: q.Get("hasMDE") == "1", partReleaseID: partReleaseID}
 	// "Play Version" selection: position in the rendered Media list.
 	// partIndex is always 0 (one Part per Media) and ignored.

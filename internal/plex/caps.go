@@ -411,8 +411,8 @@ func splitDecoders(s string) []decoder {
 // applyDecisionQuery refines caps with per-request transcode parameters
 // (maxVideoBitrate, videoResolution, location).
 func applyDecisionQuery(c *core.ClientCaps, q url.Values) {
-	if v := q.Get("maxVideoBitrate"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && (c.MaxBitrateKbps == 0 || n < c.MaxBitrateKbps) {
+	for _, name := range []string{"maxVideoBitrate", "videoBitrate"} {
+		if n, err := strconv.Atoi(q.Get(name)); err == nil && n > 0 && (c.MaxBitrateKbps == 0 || n < c.MaxBitrateKbps) {
 			c.MaxBitrateKbps = n
 		}
 	}

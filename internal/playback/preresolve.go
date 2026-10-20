@@ -190,16 +190,8 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		if err != nil {
 			return
 		}
-		// Unlike Play, warming waits for the keyframe index so the cached
-		// probe is complete; the warm-up timeout bounds the wait.
-		if generation.indexReady != nil {
-			select {
-			case <-generation.indexReady:
-			case <-ctx.Done():
-			}
-		}
+		defer m.dropGeneration(generation)
 		facts := &probeCache{releaseID: res.Release.ID, info: generation.infoSnapshot(), points: generation.timeMapSnapshot().Points}
-		m.dropGeneration(generation)
 		if facts.info.Estimated {
 			facts = nil
 		}
@@ -210,6 +202,21 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		e.ready.Do(func() { close(e.done) })
 		m.log.Debug("prewarm ready", "key", key, "reason", reason, "release", res.Release.Name, "prefetch", prefetchBytes)
 		_ = m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, 0, prefetchBytes)
+		// Seek indexes are optional for starting playback. Keep filling one
+		// under the warm-up budget, but never hold the ready signal for it.
+		select {
+		case <-generation.indexReady:
+		case <-ctx.Done():
+			return
+		}
+		complete := &probeCache{releaseID: res.Release.ID, info: generation.infoSnapshot(), points: generation.timeMapSnapshot().Points}
+		if !complete.info.Estimated {
+			m.mu.Lock()
+			if m.warm[id] == e {
+				e.probe = complete
+			}
+			m.mu.Unlock()
+		}
 	}()
 	return true
 }
@@ -224,6 +231,7 @@ type warmFacts struct {
 	dv       bool
 	size     int64
 	duration time.Duration
+	bitrate  int
 	known    bool // at least one property was known
 }
 
@@ -232,6 +240,7 @@ func (e *warmEntry) facts() warmFacts {
 	if e.probe != nil {
 		info := e.probe.info
 		f.size, f.duration = info.Size, info.Duration
+		f.bitrate = info.BitrateKbps
 		if v := info.Video(); v != nil {
 			f.height, f.codec = v.Height, v.Codec
 			f.hdr = v.ColorTransfer == "smpte2084" || v.ColorTransfer == "arib-std-b67"
@@ -261,6 +270,9 @@ func warmAcceptable(e *warmEntry, profile core.QualityProfile, caps core.ClientC
 		return false
 	}
 	f := e.facts()
+	if !sourceFitsBitrate(f.size, f.duration, f.bitrate, caps.MaxBitrateKbps) {
+		return false
+	}
 	if !f.known {
 		w := e.profileObj
 		heightOK := profile.MaxHeight == 0 || w.MaxHeight == 0 || profile.MaxHeight >= w.MaxHeight
@@ -332,7 +344,9 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 		return nil
 	}
 	delete(m.warm, id)
-	return e
+	// Return an immutable snapshot: the background index fill may replace
+	// e.probe after the ready signal.
+	return &warmEntry{res: e.res, probe: e.probe}
 }
 
 // InvalidateTitle drops the warm (pre-resolved) entries for a title, from

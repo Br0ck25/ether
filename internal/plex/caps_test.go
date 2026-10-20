@@ -171,3 +171,15 @@ func TestPickAudioPrefersLanguageOverDefaultFlag(t *testing.T) {
 		t.Fatalf("pickAudio(no prefs) = %d, want the default-flagged track", got)
 	}
 }
+
+func TestDecisionVideoBitrateRefinesSourceCapabilities(t *testing.T) {
+	caps := core.ClientCaps{MaxBitrateKbps: 8000}
+	applyDecisionQuery(&caps, url.Values{"videoBitrate": {"2000"}, "maxVideoBitrate": {"4000"}})
+	if caps.MaxBitrateKbps != 2000 {
+		t.Fatalf("resolver would ignore requested output bitrate: %+v", caps)
+	}
+	applyDecisionQuery(&caps, url.Values{"videoBitrate": {"12000"}})
+	if caps.MaxBitrateKbps != 2000 {
+		t.Fatal("query raised an existing limit")
+	}
+}
