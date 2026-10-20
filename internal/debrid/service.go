@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -79,6 +80,14 @@ type Service struct {
 
 	searchMu sync.Mutex
 	search   SearchStats // TorBox search counters
+
+	// Cluster (cluster.go); all nil/zero on a standalone server.
+	clusterMu sync.RWMutex
+	node      clusterbus.Node
+	inval     *clusterbus.Invalidator
+	origin    string
+	unsubs    []func()
+	share     func(configured int) int // concurrency share; nil = configured
 }
 
 type knownState struct {
@@ -91,7 +100,7 @@ type entry struct {
 	cfg config.DebridProvider
 	p   Provider
 	err error // construction error (missing key, unknown kind)
-	sem chan struct{}
+	sem *limiter
 
 	mu        sync.Mutex
 	failures  int
@@ -117,8 +126,13 @@ type ProviderStats struct {
 	NotCached      int64      `json:"notCached"`
 	LinksRefreshed int64      `json:"linksRefreshed"`
 	Reused         int64      `json:"reused"`
-	LastSuccess    *time.Time `json:"lastSuccess,omitempty"`
-	Latency        Latency    `json:"latency"`
+	// Slots is how many API calls this node makes to the provider at once:
+	// AccountSlots on a standalone server, this node's share of it in a
+	// cluster.
+	Slots        int        `json:"slots"`
+	AccountSlots int        `json:"accountSlots"`
+	LastSuccess  *time.Time `json:"lastSuccess,omitempty"`
+	Latency      Latency    `json:"latency"`
 }
 
 // Latency holds exponentially weighted averages of a provider's timings:
@@ -200,7 +214,7 @@ func (s *Service) UpdateConfig(cfg config.Debrid) {
 			next = append(next, e)
 			continue
 		}
-		e := &entry{cfg: pc, sem: make(chan struct{}, providerParallel)}
+		e := &entry{cfg: pc, sem: newLimiter(s.slotsFor(providerParallel))}
 		e.p, e.err = s.opts.NewProvider(pc, s.opts.ProviderOptions)
 		next = append(next, e)
 	}
@@ -253,33 +267,33 @@ func (e *entry) blocked(now time.Time) error {
 	return nil
 }
 
-func (e *entry) acquire(ctx context.Context) error {
-	select {
-	case e.sem <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
+func (e *entry) acquire(ctx context.Context) error { return e.sem.acquire(ctx) }
 
-func (e *entry) release() { <-e.sem }
+func (e *entry) release() { e.sem.release() }
 
-// observe updates the breaker after a provider call.
-func (e *entry) observe(now time.Time, err error) {
+// observe updates the breaker after a provider call. It returns the new
+// pause when the call put the provider into back-off, a clear event when a
+// success ended an earlier pause, and nil otherwise (cluster.go broadcasts
+// the events).
+func (e *entry) observe(now time.Time, err error) *backoffEvent {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.stats.Requests++
 	if err == nil || errors.Is(err, core.ErrNotCached) || errors.Is(err, ErrGone) || errors.Is(err, core.ErrReleaseRejected) {
 		// The provider answered; release-level outcomes are not outages.
+		was := e.state
 		e.failures, e.state = 0, ""
 		if err == nil {
 			t := now
 			e.stats.LastSuccess = &t
 		}
-		return
+		if was != "" && !now.Before(e.until) {
+			return &backoffEvent{Provider: e.cfg.ID}
+		}
+		return nil
 	}
 	if errors.Is(err, context.Canceled) {
-		return
+		return nil
 	}
 	e.stats.Failures++
 	e.lastError = err.Error()
@@ -295,11 +309,13 @@ func (e *entry) observe(now time.Time, err error) {
 		e.state, e.until = "backoff", now.Add(d)
 	default:
 		e.failures++
-		if e.failures >= 3 {
-			d := min(maxBackoff, 30*time.Second<<min(e.failures-3, 4))
-			e.state, e.until = "backoff", now.Add(d)
+		if e.failures < 3 {
+			return nil
 		}
+		d := min(maxBackoff, 30*time.Second<<min(e.failures-3, 4))
+		e.state, e.until = "backoff", now.Add(d)
 	}
+	return &backoffEvent{Provider: e.cfg.ID, State: e.state, Until: e.until.UnixMilli(), Error: shortError(e.lastError)}
 }
 
 func (e *entry) count(fn func(*ProviderStats)) {
@@ -320,6 +336,7 @@ func (s *Service) Stats() []ProviderStats {
 		st := e.stats
 		st.ID, st.Name, st.Kind, st.Enabled, st.Priority = e.cfg.ID, displayName(e.cfg), e.cfg.Kind, e.cfg.Enabled, e.cfg.Priority
 		st.LastError = e.lastError
+		st.Slots, st.AccountSlots = e.sem.size(), providerParallel
 		switch {
 		case !e.cfg.Enabled:
 			st.State = "disabled"
@@ -394,18 +411,27 @@ func ms(d time.Duration) float64 { return float64(d) / float64(time.Millisecond)
 // ---------------------------------------------------------------------------
 // Known cached / uncached hashes.
 
+// setKnown remembers a provider's answer for a hash and tells the other
+// cluster nodes to re-read it.
 func (s *Service) setKnown(ctx context.Context, providerID, hash, torrentID string, cached bool) {
+	s.notifyKnown(s.recordKnown(ctx, providerID, hash, torrentID, cached))
+}
+
+// recordKnown is setKnown without the cluster notification (bulk callers
+// notify once for many hashes); it returns the hash's known-map key.
+func (s *Service) recordKnown(ctx context.Context, providerID, hash, torrentID string, cached bool) string {
 	hash = strings.ToLower(hash)
 	ttl := s.opts.UncachedTTL
 	if cached {
 		ttl = s.opts.CachedTTL
 	}
 	now := s.now()
+	key := knownKey(providerID, hash)
 	s.knownMu.Lock()
-	s.known[providerID+"|"+hash] = knownState{cached: cached, until: now.Add(ttl)}
+	s.known[key] = knownState{cached: cached, until: now.Add(ttl)}
 	s.knownMu.Unlock()
 	if s.db == nil {
-		return
+		return key
 	}
 	cachedInt := 0
 	if cached {
@@ -420,6 +446,7 @@ ON CONFLICT (provider_id, info_hash) DO UPDATE SET
 	if err != nil {
 		s.log.Debug("debrid: record torrent", "err", err)
 	}
+	return key
 }
 
 // knownFor reports a remembered answer for provider+hash.
@@ -427,7 +454,7 @@ func (s *Service) knownFor(ctx context.Context, providerID, hash string) (cached
 	hash = strings.ToLower(hash)
 	now := s.now()
 	s.knownMu.Lock()
-	k, hit := s.known[providerID+"|"+hash]
+	k, hit := s.known[knownKey(providerID, hash)]
 	s.knownMu.Unlock()
 	if hit && now.Before(k.until) {
 		cached, ok = k.cached, true
@@ -462,7 +489,7 @@ func (s *Service) KnownCached(hash string) bool {
 	s.knownMu.Lock()
 	defer s.knownMu.Unlock()
 	for _, e := range entries {
-		if k, ok := s.known[e.cfg.ID+"|"+hash]; ok && k.cached && now.Before(k.until) {
+		if k, ok := s.known[knownKey(e.cfg.ID, hash)]; ok && k.cached && now.Before(k.until) {
 			return true
 		}
 	}
@@ -506,16 +533,18 @@ func (s *Service) CheckCached(ctx context.Context, hashes []string) (map[string]
 			definitive = false
 			continue
 		}
-		e.observe(s.now(), err)
+		s.observe(e, err)
 		if err != nil {
 			definitive = false
 			continue
 		}
+		keys := make([]string, 0, len(ask))
 		for _, h := range ask {
 			c := res[strings.ToLower(h)]
 			out[h] = out[h] || c
-			s.setKnown(ctx, e.cfg.ID, h, "", c)
+			keys = append(keys, s.recordKnown(ctx, e.cfg.ID, h, "", c))
 		}
+		s.notifyKnown(keys...)
 	}
 	return out, definitive
 }
@@ -643,20 +672,38 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 		if id, err := e.p.Find(ctx, hash); err == nil {
 			torrentID = id
 		} else if !errors.Is(err, ErrUnsupported) {
-			e.observe(s.now(), err)
+			s.observe(e, err)
 			if errors.Is(err, ErrAuth) {
 				return Payload{}, err
 			}
 		}
 	}
-	req := AcquireRequest{InfoHash: hash, Magnet: base.Magnet, TorrentID: torrentID, Choose: choose, CachedOnly: cfg.CachedOnly, RemoveUncached: cfg.RemoveUncached}
+	if torrentID == "" {
+		// Adding to the account: in a cluster one node adds, the others
+		// wait for its torrent id (no-op standalone).
+		id, release, err := s.claimAdd(ctx, e, hash)
+		if err != nil {
+			return Payload{}, err
+		}
+		defer release()
+		torrentID = id
+	}
+	req := AcquireRequest{InfoHash: hash, Magnet: base.Magnet, TorrentID: torrentID, Choose: choose, CachedOnly: cfg.CachedOnly,
+		RemoveUncached: cfg.RemoveUncached, MayRemove: s.mayRemove(e.cfg.ID)}
 	acq, err := e.p.Acquire(ctx, req)
 	if err != nil && torrentID != "" && (errors.Is(err, ErrGone) || errors.Is(err, core.ErrNotCached)) {
 		// The remembered torrent is gone or lacks the wanted file: add anew.
 		req.TorrentID = ""
-		acq, err = e.p.Acquire(ctx, req)
+		id, release, cerr := s.reclaimAdd(ctx, e, hash, torrentID)
+		if cerr == nil {
+			defer release()
+			req.TorrentID = id
+			acq, err = e.p.Acquire(ctx, req)
+		} else {
+			err = cerr
+		}
 	}
-	e.observe(s.now(), err)
+	s.observe(e, err)
 	if err != nil {
 		if errors.Is(err, core.ErrNotCached) {
 			e.count(func(st *ProviderStats) { st.NotCached++ })
@@ -676,7 +723,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	p.TorrentID, p.FileID, p.Path, p.Size, p.Link = acq.TorrentID, acq.File.ID, acq.File.Path, acq.File.Size, acq.File.Link
 	linkStart := s.now()
 	dl, err := e.p.Link(ctx, p.handle())
-	e.observe(s.now(), err)
+	s.observe(e, err)
 	if err != nil {
 		return Payload{}, err
 	}
@@ -782,7 +829,7 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 	lctx, cancel := context.WithTimeout(ctx, providerOpTimeout)
 	start := s.now()
 	dl, err := e.p.Link(lctx, p.handle())
-	e.observe(s.now(), err)
+	s.observe(e, err)
 	cancel()
 	e.release()
 	if err == nil {

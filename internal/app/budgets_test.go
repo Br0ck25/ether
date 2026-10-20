@@ -14,6 +14,8 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/cluster"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/debrid"
+	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/tmdb"
 	"github.com/braedonsaunders/ether/internal/usenet"
@@ -76,13 +78,16 @@ func TestRunBudgetsFollowsMembership(t *testing.T) {
 	fm := &liveMembers{fakeMembers: fakeMembers{Solo: solo}}
 	self, b := cluster.Node{ID: "self", Live: true}, cluster.Node{ID: "b", Live: true}
 	fm.set(self, b)
-	a := &App{cluster: fm, fetcher: testFetcher(t, 10), tmdb: tmdb.New("k", quietLog()), log: quietLog()}
+	a := &App{cluster: fm, fetcher: testFetcher(t, 10), tmdb: tmdb.New("k", quietLog()), log: quietLog(), debrid: testDebrid()}
 	defer a.tmdb.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { a.runBudgets(ctx); close(done) }()
 	defer func() { cancel(); <-done }()
 	waitUntil(t, "half the connections", func() bool { return a.fetcher.MaxConnections() == 5 })
+	if st := a.debrid.Stats()[0]; st.Slots != st.AccountSlots/2 {
+		t.Fatalf("debrid slots with two nodes: %d of %d", st.Slots, st.AccountSlots)
+	}
 	if rate, _ := a.tmdb.RateLimit(); rate != 20 {
 		t.Fatalf("TMDB rate with two nodes: %v/s", rate)
 	}
@@ -99,6 +104,28 @@ func TestRunBudgetsFollowsMembership(t *testing.T) {
 	fm.set(self, b)
 	_ = fm.Publish(ctx, cluster.TopicMembers, []byte("c"))
 	waitUntil(t, "half again after c leaves", func() bool { return a.fetcher.MaxConnections() == 5 })
+}
+
+func testDebrid() *debrid.Service {
+	return debrid.NewService(config.Debrid{Providers: []config.DebridProvider{{ID: "rd", Kind: config.DebridRealDebrid, APIKey: "k", Enabled: true}}},
+		debrid.Options{Logger: quietLog()})
+}
+
+// The default server stream limit comes from the account-wide configured
+// connections, not from this node's share of them: the cluster-wide
+// session registry applies it across every node.
+func TestServerStreamLimitUsesAccountConnections(t *testing.T) {
+	cfg := config.Defaults(t.TempDir())
+	cfg.Usenet.Providers = []config.UsenetProvider{{ID: "p", Host: "news.invalid", Enabled: true, Connections: 32}}
+	solo := cluster.NewSolo(cluster.Local{Identity: cluster.Identity{NodeID: "self"}}, nil)
+	a := &App{cluster: &fakeMembers{Solo: solo}, fetcher: testFetcher(t, 32), log: quietLog()}
+	a.applyBudgets(liveBudgetMembers([]cluster.Node{{ID: "b", Live: true}}, cluster.Node{ID: "self"}))
+	if got := a.fetcher.MaxConnections(); got != 16 {
+		t.Fatalf("node share %d", got)
+	}
+	if got := playback.ServerStreamLimit(cfg, 8); got != 4 {
+		t.Fatalf("server stream limit %d, want 32/8", got)
+	}
 }
 
 func TestRunBudgetsStandaloneKeepsConfiguredCounts(t *testing.T) {
