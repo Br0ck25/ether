@@ -12,6 +12,9 @@ import (
 )
 
 func init() {
+	// endpoint fingerprints the URL and API key the caps were fetched
+	// from: an indexer edited to point elsewhere must not reuse them.
+	store.Register("newznab", 3, `ALTER TABLE newznab_caps ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';`)
 	store.Register("newznab", 1, `
 CREATE TABLE newznab_budget (
   indexer_id TEXT NOT NULL,
@@ -252,13 +255,13 @@ func (c *Client) cachePut(ctx context.Context, key string, results []core.Releas
 
 // --- caps cache ---
 
-func (c *Client) capsFromDB(ctx context.Context) (*Caps, bool) {
+func (c *Client) capsFromDB(ctx context.Context, endpoint string) (*Caps, bool) {
 	if c.db == nil {
 		return nil, false
 	}
 	var raw string
 	var at int64
-	if err := c.db.QueryRowContext(ctx, `SELECT caps, fetched_at FROM newznab_caps WHERE indexer_id=?`, c.indexerID()).Scan(&raw, &at); err != nil {
+	if err := c.db.QueryRowContext(ctx, `SELECT caps, fetched_at FROM newznab_caps WHERE indexer_id=? AND endpoint=?`, c.indexerID(), endpoint).Scan(&raw, &at); err != nil {
 		return nil, false
 	}
 	if c.now().Sub(time.Unix(at, 0)) > 24*time.Hour {
@@ -271,7 +274,7 @@ func (c *Client) capsFromDB(ctx context.Context) (*Caps, bool) {
 	return &caps, true
 }
 
-func (c *Client) capsToDB(ctx context.Context, caps *Caps) {
+func (c *Client) capsToDB(ctx context.Context, caps *Caps, endpoint string) {
 	if c.db == nil || caps == nil {
 		return
 	}
@@ -280,7 +283,7 @@ func (c *Client) capsToDB(ctx context.Context, caps *Caps) {
 		return
 	}
 	_, _ = c.db.ExecContext(ctx,
-		`INSERT INTO newznab_caps(indexer_id, caps, fetched_at) VALUES (?,?,?)
-		 ON CONFLICT(indexer_id) DO UPDATE SET caps=excluded.caps, fetched_at=excluded.fetched_at`,
-		c.indexerID(), string(raw), c.now().Unix())
+		`INSERT INTO newznab_caps(indexer_id, caps, fetched_at, endpoint) VALUES (?,?,?,?)
+		 ON CONFLICT(indexer_id) DO UPDATE SET caps=excluded.caps, fetched_at=excluded.fetched_at, endpoint=excluded.endpoint`,
+		c.indexerID(), string(raw), c.now().Unix(), endpoint)
 }

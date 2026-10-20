@@ -130,3 +130,46 @@ func TestFeedWithUnescapedAmpersandParses(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// Caps belong to the endpoint they were fetched from: an indexer edited to
+// a new URL or key fetches the new server's caps, in memory and from a
+// fresh client sharing the database.
+func TestCapsFollowEndpointChange(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	a, b := newFakeIndexer(t, ""), newFakeIndexer(t, "")
+	cfg := testConfig(a.server.URL)
+	c := New(cfg, db, Options{SearchCacheTTL: -1})
+	if _, err := c.Caps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cfg.URL = b.server.URL
+	c.UpdateConfig(cfg)
+	if _, err := c.Caps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b.hitsFor("caps") != 1 {
+		t.Fatalf("edited client: new endpoint caps hits = %d, want 1", b.hitsFor("caps"))
+	}
+	// A fresh client for the same indexer id at a third endpoint must not
+	// load the stored caps of the previous one.
+	c3 := newFakeIndexer(t, "")
+	cfg.URL = c3.server.URL
+	if _, err := New(cfg, db, Options{SearchCacheTTL: -1}).Caps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if c3.hitsFor("caps") != 1 {
+		t.Fatalf("fresh client: caps hits = %d, want 1", c3.hitsFor("caps"))
+	}
+	// The same endpoint again is served from the database.
+	if _, err := New(cfg, db, Options{SearchCacheTTL: -1}).Caps(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if c3.hitsFor("caps") != 1 {
+		t.Fatalf("same endpoint refetched: caps hits = %d", c3.hitsFor("caps"))
+	}
+}
