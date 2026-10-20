@@ -482,7 +482,7 @@ func (s *Service) CheckRelease(ctx context.Context, releaseID string, titleKey c
 		res.Healthy = true
 		res.Reason = "no health checker configured"
 	default:
-		healthy, herr := s.health.Check(ctx, nzb)
+		healthy, herr := core.CheckReleaseHealth(ctx, s.health, releaseID, nzb)
 		switch {
 		case healthy && herr == nil:
 			res.Healthy = true

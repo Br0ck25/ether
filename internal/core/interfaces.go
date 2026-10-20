@@ -249,6 +249,25 @@ type HealthChecker interface {
 	Check(ctx context.Context, nzb []byte) (healthy bool, err error)
 }
 
+// ReleaseHealthChecker is a HealthChecker that is also told which release
+// the NZB belongs to, so what the check reads (the PAR2 index, archive
+// headers) lands in the segment cache under the ID a following Open uses.
+// Optional: callers fall back to Check when it is not implemented
+// (additive).
+type ReleaseHealthChecker interface {
+	HealthChecker
+	CheckRelease(ctx context.Context, releaseID string, nzb []byte) (healthy bool, err error)
+}
+
+// CheckReleaseHealth runs hc.CheckRelease when hc implements it, else
+// hc.Check.
+func CheckReleaseHealth(ctx context.Context, hc HealthChecker, releaseID string, nzb []byte) (bool, error) {
+	if rc, ok := hc.(ReleaseHealthChecker); ok {
+		return rc.CheckRelease(ctx, releaseID, nzb)
+	}
+	return hc.Check(ctx, nzb)
+}
+
 // ---------------------------------------------------------------------------
 // Usenet (internal/usenet)
 

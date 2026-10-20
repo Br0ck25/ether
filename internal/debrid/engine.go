@@ -261,11 +261,18 @@ func (e *Engine) Prefetch(ctx context.Context, releaseID string, payload []byte,
 // expected size, caching the head block it read; others go to the inner
 // checker.
 func (e *Engine) Check(ctx context.Context, payload []byte) (bool, error) {
+	return e.CheckRelease(ctx, "", payload)
+}
+
+// CheckRelease is Check with the release ID, passed through to the inner
+// checker for Usenet payloads so its reads are cached under that ID.
+// Implements core.ReleaseHealthChecker.
+func (e *Engine) CheckRelease(ctx context.Context, releaseID string, payload []byte) (bool, error) {
 	if !IsPayload(payload) {
 		if e.inHC == nil {
 			return true, nil
 		}
-		return e.inHC.Check(ctx, payload)
+		return core.CheckReleaseHealth(ctx, e.inHC, releaseID, payload)
 	}
 	p, err := DecodePayload(payload)
 	if err != nil {

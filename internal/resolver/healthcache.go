@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -68,7 +69,7 @@ func (s *Service) checkHealthCached(ctx context.Context, releaseID string, nzb [
 	if s.recentlyVerified(ctx, releaseID) {
 		return true, true, nil
 	}
-	ok, err = s.health.Check(ctx, nzb)
+	ok, err = core.CheckReleaseHealth(ctx, s.health, releaseID, nzb)
 	if ok && err == nil {
 		s.markVerified(ctx, releaseID)
 	}

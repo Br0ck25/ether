@@ -12,6 +12,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/archive/archivetest"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/par2/par2test"
+	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
 // par2Index builds a PAR2 index file describing files (real name -> data).
@@ -333,5 +334,40 @@ func TestPar2CheckOfObfuscatedPost(t *testing.T) {
 	src := openSource(t, e, "c", doc)
 	if src.Name() != "Real.mkv" || f.totalCalls() != 0 {
 		t.Fatalf("name %q, Open fetched %d", src.Name(), f.totalCalls())
+	}
+}
+
+// A check that knows its release ID keeps the PAR2 index and the heads it
+// read in the disk segment cache under that ID, so an Open on a fresh
+// engine (empty hot buffer) with no provider at all still names and opens
+// the release from the cache.
+func TestCheckReleaseKeepsPar2AndHeadsInDiskCache(t *testing.T) {
+	cache, err := segcache.Open(t.TempDir(), 1<<30, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	f := newFakeFetcher()
+	video := mkvBytes(49, 600_000)
+	doc := post(t, f, 100_000,
+		postFile{name: obfName(1), data: video},
+		postFile{name: "x.par2", data: par2Index(16_384, par2test.File{Name: "Real.mkv", Data: video})},
+	)
+	e := newTestEngine(t, f, cache, Options{HealthSamples: 4})
+	if ok, err := e.CheckRelease(context.Background(), "rel-par2", doc); !ok || err != nil {
+		t.Fatalf("CheckRelease = %v %v", ok, err)
+	}
+	_ = e.Close() // cache writes are asynchronous; Close waits for them
+	if used, _ := cache.Usage(); used == 0 {
+		t.Fatal("check cached nothing on disk")
+	}
+	// Plain Check (no ID) must not have been what filled it: a fresh engine
+	// over a dead fetcher can only succeed from the disk cache.
+	dead := newFakeFetcher()
+	dead.failAll = true
+	e2 := newTestEngine(t, dead, cache, Options{HealthSamples: 4})
+	src := openSource(t, e2, "rel-par2", doc)
+	if src.Name() != "Real.mkv" {
+		t.Fatalf("name %q from cache", src.Name())
 	}
 }
