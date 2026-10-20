@@ -1,0 +1,70 @@
+package debrid
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
+)
+
+func TestCDNRateLimitFailsFastAndSharesRetryAfterAcrossFiles(t *testing.T) {
+	r := newEngineRig(t, 1<<20, -1)
+	clock := &testClock{t: time.Now()}
+	r.eng.now = clock.now
+	var calls atomic.Int64
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer cdn.Close()
+	p, err := DecodePayload(r.pl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.URL = cdn.URL + "/first?signature=secret"
+	f, err := r.eng.acquireFile(t.Context(), "first", p.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.eng.releaseFile(f)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	_, _, err = f.rangeGet(ctx, 0, 100, false)
+	if !errors.Is(err, core.ErrSourceUnavailable) || !errors.Is(err, ErrRateLimited) || calls.Load() != 1 {
+		t.Fatalf("rate limit retried or misclassified: calls=%d err=%v", calls.Load(), err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatal("signed URL leaked into error")
+	}
+	if errors.Is(err, core.ErrArticleMissing) || errors.Is(err, core.ErrReleaseRejected) {
+		t.Fatal("temporary CDN limit became permanent")
+	}
+	p.URL = cdn.URL + "/another?signature=other"
+	other, err := r.eng.acquireFile(ctx, "second", p.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.eng.releaseFile(other)
+	_, _, err = other.rangeGet(ctx, 0, 100, false)
+	if !errors.Is(err, ErrRateLimited) || calls.Load() != 1 {
+		t.Fatalf("parallel file ignored Retry-After: %v calls=%d", err, calls.Load())
+	}
+	clock.add(61 * time.Second)
+	_, _, _ = other.rangeGet(ctx, 0, 100, false)
+	if calls.Load() != 2 {
+		t.Fatalf("cooldown never recovered: %d", calls.Load())
+	}
+	if err := r.eng.checkMediaPause("another-account", p.URL); err != nil {
+		t.Fatal("one account paused another")
+	}
+	if err := r.eng.checkMediaPause(p.Provider, "https://other-cdn.invalid/file"); err != nil {
+		t.Fatal("one CDN paused another")
+	}
+}

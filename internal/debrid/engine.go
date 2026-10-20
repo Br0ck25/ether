@@ -80,8 +80,10 @@ type Engine struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu    sync.Mutex
-	files map[string]*remoteFile
+	mu           sync.Mutex
+	files        map[string]*remoteFile
+	mediaPauseMu sync.Mutex
+	mediaPauses  map[string]mediaPause
 
 	stats engineCounters
 
@@ -857,14 +859,18 @@ type timing struct{ connect, ttfb time.Duration }
 func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool) (io.ReadCloser, timing, error) {
 	var lastErr error
 	for attempt := 0; attempt < maxRangeAttempts; attempt++ {
+		u, gen, err := f.link(ctx, false)
+		if err != nil {
+			return nil, timing{}, err
+		}
+		payload, _ := f.payload()
+		if err := f.e.checkMediaPause(payload.Provider, u); err != nil {
+			return nil, timing{}, err
+		}
 		if attempt > 0 {
 			if err := sleep(ctx, time.Duration(attempt*attempt)*150*time.Millisecond); err != nil {
 				return nil, timing{}, err
 			}
-		}
-		u, gen, err := f.link(ctx, false)
-		if err != nil {
-			return nil, timing{}, err
 		}
 		resp, tm, err := f.e.get(ctx, u, start, end, urgent, f.conns)
 		if err != nil {
@@ -932,10 +938,12 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 			ra := retryAfter(resp.Header.Get("Retry-After"))
 			drain(resp)
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			if ra > 0 {
-				if err := sleep(ctx, min(ra, 5*time.Second)); err != nil {
-					return nil, tm, err
-				}
+			if resp.StatusCode == http.StatusTooManyRequests || ra > 0 {
+				// A rate-limited CDN cannot become a healthy candidate by
+				// retrying each block four times before Retry-After expires.
+				// Share its pause across this account's files, return promptly
+				// to source selection, and preserve transient classification.
+				return nil, tm, f.e.pauseMedia(payload.Provider, u, resp.StatusCode, ra)
 			}
 		default:
 			drain(resp)
