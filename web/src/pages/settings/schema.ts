@@ -596,3 +596,148 @@ export const DEBRID: FieldGroup[] = [
     ],
   },
 ];
+
+/** Plex offline downloads (General › Downloads). */
+export const DOWNLOADS: FieldGroup[] = [
+  {
+    title: "Downloads",
+    description:
+      "Lets Plex apps save titles for offline viewing. Ether remuxes each one on demand.",
+    fields: [
+      { key: "enabled", label: "Allow downloads", kind: "bool" },
+      {
+        key: "allowFriends",
+        label: "Friends can download",
+        kind: "bool",
+        help: "Off lets only you download. A viewer's access policy can still allow or deny it.",
+      },
+      {
+        key: "maxHeight",
+        label: "Highest resolution",
+        kind: "number",
+        min: 0,
+        step: 1,
+        unit: "p",
+        help: "Downloads are capped at this height. 0 uses 1080p.",
+      },
+    ],
+  },
+  {
+    title: "Limits",
+    fields: [
+      {
+        key: "maxConcurrent",
+        label: "Downloads at once",
+        kind: "number",
+        min: 0,
+        step: 1,
+        help: "Across the whole server. 0 uses 2.",
+      },
+      {
+        key: "maxConcurrentPerUser",
+        label: "Downloads at once per viewer",
+        kind: "number",
+        min: 0,
+        step: 1,
+        help: "0 uses 1.",
+      },
+      {
+        key: "diskBudgetBytes",
+        label: "Temporary disk space",
+        kind: "bytes",
+        unit: "GiB",
+        help: "Prepared files waiting to be fetched. 0 uses 20 GiB.",
+      },
+      {
+        key: "expiry",
+        label: "Keep prepared files for",
+        kind: "duration",
+        help: "A finished download is deleted after this long if the app hasn't fetched it.",
+      },
+    ],
+  },
+];
+
+/** Per-viewer touches in Plex apps (General › Personalization). */
+export const PERSONALIZE: FieldGroup[] = [
+  {
+    title: "Personalization",
+    description: "Per-viewer touches in Plex apps. Turn any off for plain Plex behaviour.",
+    fields: [
+      {
+        key: "postPlay",
+        label: "Personal “up next” picks",
+        kind: "bool",
+        help: "After a movie or finale, suggest what this viewer is most likely to watch next.",
+      },
+      {
+        key: "postPlayPrebuffer",
+        label: "Pre-buffer the top pick",
+        kind: "bool",
+        help: "Warm the first suggestion in the last minutes so it starts instantly.",
+      },
+      {
+        key: "microReasons",
+        label: "Match and finish time on details",
+        kind: "bool",
+        help: "Show “96% Match · Ends at 10:45 PM” on a title's detail page.",
+      },
+      {
+        key: "sessionIntent",
+        label: "Adapt Home to tonight's browsing",
+        kind: "bool",
+        help: "Titles a viewer opened but didn't play steer the rows they see next.",
+      },
+      {
+        key: "clockFormat",
+        label: "Finish time format",
+        kind: "select",
+        options: [
+          { value: "", label: "From the language" },
+          { value: "12h", label: "12-hour" },
+          { value: "24h", label: "24-hour" },
+        ],
+      },
+    ],
+  },
+];
+
+/** Trailers and extras (General › Trailers & extras). */
+export const EXTRAS: FieldGroup[] = [
+  {
+    title: "Trailers & extras",
+    description:
+      "TMDB only lists YouTube and Vimeo trailers, which Plex apps can't play. Point Ether at a yt-dlp-compatible tool you install to turn them into playable streams.",
+    fields: [
+      {
+        key: "enabled",
+        label: "Trailers and Cinema Trailers",
+        kind: "bool",
+        help: "Without a working tool no extras are offered.",
+      },
+      {
+        key: "resolverCommand",
+        label: "Resolver command",
+        kind: "text",
+        wide: true,
+        placeholder: "yt-dlp",
+        help: "Path or command name. Ether doesn't ship one.",
+      },
+      {
+        key: "resolverArgs",
+        label: "Arguments",
+        kind: "list",
+        placeholder: "-g, -f, b[ext=mp4]/b, --no-playlist, {url}",
+        help: "Leave empty for the yt-dlp default. {url}, {site}, {key} and {id} are filled in; no shell is used.",
+      },
+      { key: "resolverTimeout", label: "Give up after", kind: "duration" },
+      {
+        key: "prewarmBytes",
+        label: "Pre-buffer the feature",
+        kind: "bytes",
+        unit: "MiB",
+        help: "Buffered while the trailer plays, 32–64 MiB. 0 uses 48 MiB.",
+      },
+    ],
+  },
+];
