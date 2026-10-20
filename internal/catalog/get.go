@@ -11,7 +11,10 @@ import (
 )
 
 func (c *Catalog) fresh(st *storedTitle) bool {
-	return st != nil && st.detail && !st.fetchedAt.IsZero() && c.now().Sub(st.fetchedAt) < c.staleAfter
+	// detailAt, not fetchedAt: summary upserts from sync, lists and search
+	// refresh fetchedAt and would otherwise keep popular titles' details
+	// (seasons, credits, release dates) from ever being refetched.
+	return st != nil && st.detail && !st.detailAt.IsZero() && c.now().Sub(st.detailAt) < c.staleAfter
 }
 
 // Get returns a title from the mirror, fetching on demand when missing/stale.

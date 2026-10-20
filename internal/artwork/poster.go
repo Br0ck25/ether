@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -123,8 +124,10 @@ func (r *Renderer) Poster(ctx context.Context, req PosterRequest) ([]byte, strin
 	r.flights[key] = f
 	r.mu.Unlock()
 
-	data, err := r.render(context.WithoutCancel(ctx), req)
-	if err == nil && path != "" {
+	data, transient, err := r.render(context.WithoutCancel(ctx), req)
+	// A poster drawn while member art was temporarily unreachable is served
+	// but not persisted, so the next request retries the real artwork.
+	if err == nil && path != "" && !transient {
 		tmp := path + ".tmp"
 		if werr := os.WriteFile(tmp, data, 0o644); werr == nil {
 			if os.Rename(tmp, path) != nil {
@@ -154,11 +157,14 @@ func cacheKey(req PosterRequest) string {
 	return hex.EncodeToString(sum[:])[:24]
 }
 
-func (r *Renderer) render(ctx context.Context, req PosterRequest) ([]byte, error) {
+// render draws the poster. transient reports that some member art failed
+// for a reason other than being absent upstream (timeout, 5xx, ...).
+func (r *Renderer) render(ctx context.Context, req PosterRequest) (data []byte, transient bool, err error) {
 	w := req.Width
 	type loaded struct {
-		img image.Image
-		ok  bool
+		img       image.Image
+		ok        bool
+		transient bool
 	}
 	posters := make([]loaded, len(req.Posters))
 	backdrops := make([]loaded, len(req.Backdrops))
@@ -170,6 +176,7 @@ func (r *Renderer) render(ctx context.Context, req PosterRequest) ([]byte, error
 		}
 		data, _, err := r.src.Get(ctx, path, width)
 		if err != nil {
+			dst.transient = !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrInvalidPath)
 			return
 		}
 		img, _, err := image.Decode(bytes.NewReader(data))
@@ -196,18 +203,20 @@ func (r *Renderer) render(ctx context.Context, req PosterRequest) ([]byte, error
 		if p.ok {
 			ps = append(ps, p.img)
 		}
+		transient = transient || p.transient
 	}
 	for _, b := range backdrops {
 		if b.ok {
 			bs = append(bs, b.img)
 		}
+		transient = transient || b.transient
 	}
 	img := Compose(req, ps, bs)
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 88}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), transient, nil
 }
 
 // Compose draws a poster from already-decoded images. It is pure, so tests

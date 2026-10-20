@@ -3,6 +3,7 @@ package tmdb
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -107,8 +108,12 @@ func (c *Client) Close() {
 }
 
 func (c *Client) buildURL(path string, q url.Values, cfg clientSettings) string {
+	// Work on a copy: the caller's values may be reused (a coalesced
+	// waiter retries with them) and must never accumulate the api_key.
 	if q == nil {
 		q = url.Values{}
+	} else {
+		q = cloneValues(q)
 	}
 	if q.Get("language") == "" && cfg.language != "" {
 		q.Set("language", cfg.language)
@@ -159,6 +164,11 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 			return nil, ctx.Err()
 		case <-f.done:
 			if f.err != nil {
+				// The leader's own context ended its request; that says
+				// nothing about this caller, which retries with its own.
+				if f.abandoned && ctx.Err() == nil {
+					return c.get(ctx, path, q)
+				}
 				return nil, f.err
 			}
 			return append([]byte(nil), f.body...), nil
@@ -191,6 +201,7 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 		}
 	}
 	f.body, f.err = body, err
+	f.abandoned = err != nil && ctx.Err() != nil
 	close(f.done)
 	c.mu.Unlock()
 	if err != nil {
@@ -220,7 +231,7 @@ func (c *Client) doWithRetry(ctx context.Context, full, etag string, cfg clientS
 		}
 		resp, err := c.opts.httpClient.Do(req)
 		if err != nil {
-			lastErr = err
+			lastErr = redactURLError(err)
 			if ctx.Err() != nil {
 				return nil, "", false, ctx.Err()
 			}
@@ -268,6 +279,24 @@ func (c *Client) doWithRetry(ctx context.Context, full, etag string, cfg clientS
 		return nil, "", false, lastErr
 	}
 	return nil, "", false, fmt.Errorf("tmdb: request failed")
+}
+
+// redactURLError strips the query (which carries a v3 api_key) from the
+// URL net/http embeds in transport errors, so the key never reaches logs or
+// API responses.
+func redactURLError(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	if u, perr := url.Parse(ue.URL); perr == nil {
+		if q := u.Query(); q.Has("api_key") {
+			q.Set("api_key", "REDACTED")
+			u.RawQuery = q.Encode()
+		}
+		return &url.Error{Op: ue.Op, URL: u.String(), Err: ue.Err}
+	}
+	return &url.Error{Op: ue.Op, URL: "tmdb", Err: ue.Err}
 }
 
 func parseHTTPError(code int, b []byte) *HTTPError {

@@ -104,6 +104,8 @@ var (
 	srtTimeRe = regexp.MustCompile(`(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})`)
 	vttTimeRe = regexp.MustCompile(`(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})`)
 	tagRe     = regexp.MustCompile(`\{\\[^}]*\}`)
+	// blankLineRe matches the horizontal whitespace of a whitespace-only line.
+	blankLineRe = regexp.MustCompile(`(?m)^[ \t\x{00a0}\x{feff}]+$`)
 )
 
 func ts(h, m, s, ms string) time.Duration {
@@ -120,6 +122,9 @@ func ts(h, m, s, ms string) time.Duration {
 // ParseCues parses SRT or WebVTT text (already UTF-8) into cues.
 func ParseCues(text string) ([]Cue, error) {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	// A separator line holding only spaces/tabs still ends a cue; without
+	// this the next cue's number and timing would be read as body text.
+	text = blankLineRe.ReplaceAllString(text, "")
 	isVTT := strings.HasPrefix(strings.TrimSpace(text), "WEBVTT")
 	blocks := strings.Split(text, "\n\n")
 	var cues []Cue

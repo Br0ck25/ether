@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -151,7 +152,7 @@ type XMLGuide struct {
 }
 
 func xmlTime(s string) (time.Time, error) {
-	for _, layout := range []string{"20060102150405 -0700", "200601021504 -0700", "20060102150405", "200601021504"} {
+	for _, layout := range []string{"20060102150405 -0700", "200601021504 -0700", "20060102150405-0700", "200601021504-0700", "20060102150405", "200601021504"} {
 		if t, e := time.Parse(layout, strings.TrimSpace(s)); e == nil {
 			return t.UTC(), nil
 		}
@@ -204,14 +205,21 @@ func ParseXMLTV(r io.Reader) (XMLGuide, error) {
 			if err != nil {
 				return g, err
 			}
-			end, err := xmlTime(p.Stop)
-			if err != nil {
-				return g, err
+			// stop is optional in XMLTV; such a programme runs until the
+			// channel's next one (resolved after the whole guide is read).
+			var end time.Time
+			if strings.TrimSpace(p.Stop) != "" {
+				if end, err = xmlTime(p.Stop); err != nil {
+					return g, err
+				}
+				if !end.After(start) {
+					return g, fmt.Errorf("programme stop must follow start")
+				}
 			}
-			if !end.After(start) {
-				return g, fmt.Errorf("programme stop must follow start")
+			item := Item{Thumb: p.Icon.Src}
+			if !end.IsZero() {
+				item.DurationMS = end.Sub(start).Milliseconds()
 			}
-			item := Item{DurationMS: end.Sub(start).Milliseconds(), Thumb: p.Icon.Src}
 			if len(p.Title) > 0 {
 				item.Title = p.Title[0].Value
 			}
@@ -227,5 +235,43 @@ func ParseXMLTV(r io.Reader) (XMLGuide, error) {
 	if !root {
 		return g, fmt.Errorf("empty XMLTV guide")
 	}
+	g.Programmes = inferMissingStops(g.Programmes)
 	return g, nil
+}
+
+// inferMissingStops ends each programme without a stop time at the start
+// of the next later programme on its channel; one with no successor has no
+// knowable end and is dropped.
+func inferMissingStops(ps []Programme) []Programme {
+	open := false
+	for _, p := range ps {
+		if p.End.IsZero() {
+			open = true
+			break
+		}
+	}
+	if !open {
+		return ps
+	}
+	starts := map[string][]time.Time{}
+	for _, p := range ps {
+		starts[p.ChannelID] = append(starts[p.ChannelID], p.Start)
+	}
+	for _, ts := range starts {
+		sort.Slice(ts, func(i, j int) bool { return ts[i].Before(ts[j]) })
+	}
+	out := ps[:0]
+	for _, p := range ps {
+		if p.End.IsZero() {
+			ts := starts[p.ChannelID]
+			i := sort.Search(len(ts), func(i int) bool { return ts[i].After(p.Start) })
+			if i == len(ts) {
+				continue
+			}
+			p.End = ts[i]
+			p.Item.DurationMS = p.End.Sub(p.Start).Milliseconds()
+		}
+		out = append(out, p)
+	}
+	return out
 }

@@ -65,6 +65,13 @@ func TestRuleEvaluationTable(t *testing.T) {
 		{"popularity", cr("popularity", "between", []float64{50, 80}), true},
 		{"runtime", cr("runtime", "lte", 120), true},
 		{"released between", cr("released", "between", []string{"1985-01-01", "1985-12-31"}), true},
+		// Year/month-precision upper bounds include the whole period.
+		{"released between years", cr("released", "between", []string{"1980", "1985"}), true},
+		{"released lte year", cr("released", "lte", "1985"), true},
+		{"released lte month", cr("released", "lte", "1985-07"), true},
+		{"released lte earlier month", cr("released", "lte", "1985-06"), false},
+		{"released lte day", cr("released", "lte", "1985-07-03"), true},
+		{"released gte year", cr("released", "gte", "1986"), false},
 		{"released gte relative", cr("released", "gte", "-2y"), false},
 		{"released within", cr("released", "within", "45y"), true},
 		{"released within days", cr("released", "within", 30), false},

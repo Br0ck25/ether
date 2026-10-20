@@ -21,16 +21,30 @@ type storedTitle struct {
 	addedAt   time.Time
 	fetchedAt time.Time
 	detail    bool
+	// detailAt is when the detail payload was last fetched (zero if never).
+	detailAt time.Time
 }
 
+// extraScan appends trailing columns to a titleCols scan.
+type extraScan struct {
+	s     scanner
+	extra []any
+}
+
+func (e extraScan) Scan(dest ...any) error { return e.s.Scan(append(dest, e.extra...)...) }
+
 func (c *Catalog) loadByKey(ctx context.Context, key core.RatingKey) (*storedTitle, error) {
-	row := c.db.QueryRowContext(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key=?`, int64(key))
-	st, err := scanTitle(row)
+	row := c.db.QueryRowContext(ctx, `SELECT `+titleCols+`,detail_at FROM catalog_titles WHERE key=?`, int64(key))
+	var detailAt int64
+	st, err := scanTitle(extraScan{row, []any{&detailAt}})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, core.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
+	}
+	if detailAt != 0 {
+		st.detailAt = time.Unix(detailAt, 0).UTC()
 	}
 	items := []core.Title{st.t}
 	if err := c.hydrateSlice(ctx, items); err != nil {
@@ -157,6 +171,7 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 		imdb, original string
 		tvdb           int64
 		year           int
+		keywords       []string
 	}
 	shows := make(map[core.RatingKey]seriesIdentity)
 	for i := range items {
@@ -166,7 +181,21 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 				if err := c.db.QueryRowContext(ctx, `SELECT imdb,tvdb,year,original_title FROM catalog_titles WHERE key=?`, int64(items[i].ShowKey)).Scan(&show.imdb, &show.tvdb, &show.year, &show.original); err != nil && !errors.Is(err, sql.ErrNoRows) {
 					return err
 				}
+				// Seasons and episodes carry the show's keywords (as they do
+				// its genres and rating) so keyword policies and rules that
+				// hide a show also hide its children.
+				showIdx := map[core.RatingKey]int{items[i].ShowKey: 0}
+				var kws []string
+				if err := c.scanPairs(ctx, `SELECT key,keyword FROM catalog_keywords WHERE key=? ORDER BY keyword`, []any{int64(items[i].ShowKey)}, func(_ int, v string) {
+					kws = append(kws, v)
+				}, showIdx); err != nil {
+					return err
+				}
+				show.keywords = kws
 				shows[items[i].ShowKey] = show
+			}
+			if len(items[i].Keywords) == 0 && len(show.keywords) > 0 && (items[i].Type == core.TypeSeason || items[i].Type == core.TypeEpisode) {
+				items[i].Keywords = append([]string(nil), show.keywords...)
 			}
 			if items[i].ShowYear == 0 {
 				items[i].ShowYear = show.year
@@ -288,8 +317,8 @@ func upsertOne(ctx context.Context, tx *sql.Tx, t core.Title, o upsertOpts, now 
 INSERT INTO catalog_titles (key,type,tmdb_id,imdb,tvdb,show_key,show_tmdb,show_title,season_title,season,episode,
  title,original_title,sort_title,tagline,summary,year,released_ts,runtime_sec,status,language,
  content_rating,content_rating_rank,rating,vote_count,popularity,poster,backdrop,still,logo,
- collection_id,collection_name,child_count,leaf_count,browsable,added_at,fetched_at,detail,adult)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ collection_id,collection_name,child_count,leaf_count,browsable,added_at,fetched_at,detail,adult,detail_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(key) DO UPDATE SET
  type=excluded.type, tmdb_id=excluded.tmdb_id, adult=excluded.adult,
  imdb=CASE WHEN excluded.imdb<>'' THEN excluded.imdb ELSE catalog_titles.imdb END,
@@ -321,11 +350,12 @@ ON CONFLICT(key) DO UPDATE SET
  added_at=CASE WHEN catalog_titles.added_at<>0 THEN catalog_titles.added_at
                WHEN excluded.browsable=1 THEN excluded.added_at ELSE 0 END,
  fetched_at=excluded.fetched_at,
- detail=CASE WHEN excluded.detail>catalog_titles.detail THEN excluded.detail ELSE catalog_titles.detail END`,
+ detail=CASE WHEN excluded.detail>catalog_titles.detail THEN excluded.detail ELSE catalog_titles.detail END,
+ detail_at=CASE WHEN excluded.detail=1 THEN excluded.detail_at ELSE catalog_titles.detail_at END`,
 		int64(t.Key), string(t.Type), t.IDs.TMDB, t.IDs.IMDB, t.IDs.TVDB, int64(t.ShowKey), showTMDB, t.ShowTitle, t.SeasonTitle, t.Season, t.Episode,
 		t.Title, t.OriginalTitle, t.SortTitle, t.Tagline, t.Summary, t.Year, releasedTS, int64(t.Runtime.Seconds()), t.Status, t.Language,
 		t.ContentRating, RatingRank(t.ContentRating), t.Rating, t.VoteCount, t.Popularity, t.PosterPath, t.BackdropPath, t.StillPath, t.LogoPath,
-		t.CollectionID, t.CollectionName, t.ChildCount, t.LeafCount, browsableInt, addedAtFor(browsableInt, now), now, detailInt, t.Adult)
+		t.CollectionID, t.CollectionName, t.ChildCount, t.LeafCount, browsableInt, addedAtFor(browsableInt, now), now, detailInt, t.Adult, detailAtFor(detailInt, now))
 	if err != nil {
 		return fmt.Errorf("catalog: upsert %d: %w", t.Key, err)
 	}
@@ -375,6 +405,13 @@ ON CONFLICT(key) DO UPDATE SET
 		}
 	}
 	return nil
+}
+
+func detailAtFor(detail int, now int64) int64 {
+	if detail != 0 {
+		return now
+	}
+	return 0
 }
 
 func addedAtFor(browsable int, now int64) int64 {

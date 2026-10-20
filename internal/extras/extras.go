@@ -209,9 +209,11 @@ func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]
 	s.mu.Unlock()
 
 	var out []Extra
+	fetchFailed := false
 	if s.CommandAvailable() && s.videos != nil {
 		vs, err := s.fetchVideos(ctx, parent, lang)
 		if err != nil {
+			fetchFailed = true
 			s.log.Debug("tmdb videos", "key", parent.Key, "err", err)
 		}
 		out = append(out, videosToExtras(parent, vs)...)
@@ -226,13 +228,17 @@ func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]
 	for i := range out {
 		out[i] = s.registerLocked(out[i])
 	}
-	if len(s.lists) >= maxListEntries {
-		for k := range s.lists {
-			delete(s.lists, k)
-			break
+	// A failed TMDB lookup is not "this title has no extras": caching it
+	// would hide every trailer for the whole TTL.
+	if !fetchFailed {
+		if len(s.lists) >= maxListEntries {
+			for k := range s.lists {
+				delete(s.lists, k)
+				break
+			}
 		}
+		s.lists[cacheKey] = listEntry{extras: append([]Extra(nil), out...), expires: s.now().Add(s.ttl)}
 	}
-	s.lists[cacheKey] = listEntry{extras: append([]Extra(nil), out...), expires: s.now().Add(s.ttl)}
 	s.mu.Unlock()
 	return out, nil
 }

@@ -112,6 +112,8 @@ type flight struct {
 	done chan struct{}
 	body []byte
 	err  error
+	// abandoned reports that the leader's own context ended the request.
+	abandoned bool
 }
 
 // New creates a client with an explicit key (v3 api_key or v4 bearer).

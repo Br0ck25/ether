@@ -591,3 +591,26 @@ func TestAbandonedTunesReclaimedOnlyForSameViewerAndClient(t *testing.T) {
 		t.Fatalf("active media session was reaped: %v", err)
 	}
 }
+
+// XMLTV's stop attribute is optional; a programme without one runs until the
+// channel's next programme instead of failing the whole guide import.
+func TestXMLTVMissingStopAndCompactOffset(t *testing.T) {
+	guide := `<tv><channel id="one"><display-name>One</display-name></channel>` +
+		`<programme channel="one" start="20261019090000 +0000"><title>A</title></programme>` +
+		`<programme channel="one" start="20261019100000+0000" stop="20261019110000+0000"><title>B</title></programme>` +
+		`<programme channel="one" start="20261019110000 +0000"><title>Tail</title></programme></tv>`
+	g, err := ParseXMLTV(strings.NewReader(guide))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Programmes) != 2 {
+		t.Fatalf("programmes = %+v", g.Programmes)
+	}
+	a := g.Programmes[0]
+	if a.Item.Title != "A" || a.End.Sub(a.Start) != time.Hour || a.Item.DurationMS != time.Hour.Milliseconds() {
+		t.Fatalf("inferred stop wrong: %+v", a)
+	}
+	if b := g.Programmes[1]; b.Item.Title != "B" || b.Start.Hour() != 10 {
+		t.Fatalf("compact offset parse wrong: %+v", b)
+	}
+}

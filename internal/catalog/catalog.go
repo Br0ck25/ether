@@ -90,6 +90,10 @@ CREATE TABLE catalog_keywords (key INTEGER NOT NULL, keyword TEXT NOT NULL, PRIM
 CREATE INDEX catalog_keywords_keyword ON catalog_keywords(keyword, key);
 `)
 	store.Register("catalog", 3, `ALTER TABLE catalog_titles ADD COLUMN adult INTEGER NOT NULL DEFAULT 0;`)
+	// detail_at is when the full detail payload was last fetched. fetched_at
+	// also moves on every summary upsert (sync, lists, search), so it cannot
+	// decide when details are stale.
+	store.Register("catalog", 5, `ALTER TABLE catalog_titles ADD COLUMN detail_at INTEGER NOT NULL DEFAULT 0;`)
 }
 
 // TMDB is the subset of the TMDB client the catalogue needs.

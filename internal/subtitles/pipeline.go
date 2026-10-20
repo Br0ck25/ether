@@ -111,7 +111,9 @@ func assTime(raw string) time.Duration {
 	if e1 != nil || e2 != nil || e3 != nil || h < 0 || h > 999 || m < 0 || m > 59 || math.IsNaN(sec) || math.IsInf(sec, 0) || sec < 0 || sec >= 60 {
 		return -1
 	}
-	return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(sec*float64(time.Second))
+	// Round to whole milliseconds: 2.01 s is 2.009999999 s in float64, which
+	// would truncate to a cue one millisecond early.
+	return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute + time.Duration(math.Round(sec*1000))*time.Millisecond
 }
 
 // Shift applies an offset and playback-rate correction without mutating input.

@@ -46,6 +46,17 @@ type dateValue struct {
 	abs    time.Time
 	rel    bool
 	offset time.Duration
+	// last is the final second of the period an absolute date names
+	// ("2019" ends 2019-12-31 23:59:59), used when it is an upper bound.
+	last time.Time
+}
+
+// upper returns d as an inclusive upper bound.
+func (d dateValue) upper() dateValue {
+	if !d.rel && !d.last.IsZero() {
+		d.abs = d.last
+	}
+	return d
 }
 
 func (d dateValue) at(now time.Time) time.Time {
@@ -184,9 +195,9 @@ func compileRule(cr core.CollectionRule) (*rule, error) {
 		case "gte":
 			r.from = dv[0]
 		case "lte":
-			r.to = dv[0]
+			r.to = dv[0].upper()
 		case "between":
-			r.from, r.to = dv[0], dv[1]
+			r.from, r.to = dv[0], dv[1].upper()
 		}
 	case classBool:
 		var b bool
@@ -410,9 +421,18 @@ func parseDateValue(s string) (dateValue, error) {
 		}
 		return dateValue{set: true, rel: true, offset: d}, nil
 	}
-	for _, layout := range []string{"2006-01-02", time.RFC3339, "2006-01", "2006"} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return dateValue{set: true, abs: t.UTC()}, nil
+	for _, p := range []struct {
+		layout       string
+		y, m, d      int
+		exactInstant bool
+	}{{"2006-01-02", 0, 0, 1, false}, {time.RFC3339, 0, 0, 0, true}, {"2006-01", 0, 1, 0, false}, {"2006", 1, 0, 0, false}} {
+		if t, err := time.Parse(p.layout, s); err == nil {
+			t = t.UTC()
+			dv := dateValue{set: true, abs: t}
+			if !p.exactInstant {
+				dv.last = t.AddDate(p.y, p.m, p.d).Add(-time.Second)
+			}
+			return dv, nil
 		}
 	}
 	return dateValue{}, fmt.Errorf("%q is not a date (use YYYY-MM-DD, now, or an offset like -30d)", s)
