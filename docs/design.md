@@ -146,7 +146,8 @@ At most one node at a time holds leadership, through a PostgreSQL session lock.
 Only the leader runs singleton work: plex.tv publication and certificate
 renewal, catalogue synchronization, collection refresh, Trakt and watchlist
 synchronization, scheduled backups and newsletters. Leadership passes to another
-node within seconds of the holder losing its database session. Queued work such
+node within seconds of the holder losing its database session; the new leader
+continues periodic work from its last recorded run. Queued work such
 as notifications and imports is claimed with row locks and delivered once. A
 node never closes or alters another live node's sessions at startup.
 
@@ -154,8 +155,12 @@ Nodes publish heartbeats with their addresses, capabilities and load. Session
 lists, stream limits and termination apply across the cluster. Cache
 invalidations, timeline updates and termination requests reach every node
 promptly. Usenet connection limits and indexer and metadata request budgets are
-account-wide, so the cluster divides them among live nodes and redistributes a
-departed node's share.
+account-wide, so the cluster divides them among live nodes, in proportion to an
+optional per-node weight, and redistributes a departed node's share. A node
+whose identity is in use by another running node, such as a cloned machine,
+refuses to join. Each node maps its own port forward. Every backup is recorded
+with the node that holds it, and the owner may choose a backup directory that
+all nodes reach.
 
 When a node fails, clients reconnect through another published connection.
 Playback resumes from the last reported position; an interrupted response is
