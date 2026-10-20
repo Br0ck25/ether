@@ -104,6 +104,10 @@ func TestStatusLine(t *testing.T) {
 	if got != "Ether: running" {
 		t.Errorf("default name: %q", got)
 	}
+	got = statusLine(Status{Running: true, Version: "1.43.4", VersionIsPMS: true})
+	if got != "Ether: running" {
+		t.Errorf("PMS compatibility version shown as Ether release: %q", got)
+	}
 }
 
 func TestAutostartDarwinAndLinux(t *testing.T) {

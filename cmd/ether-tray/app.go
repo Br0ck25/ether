@@ -202,7 +202,7 @@ func statusLine(st Status) string {
 	if st.FriendlyName != "" && st.FriendlyName != "Ether" {
 		line += " (" + st.FriendlyName + ")"
 	}
-	if st.Version != "" {
+	if st.Version != "" && !st.VersionIsPMS {
 		line += " · v" + st.Version
 	}
 	if st.SetupComplete != nil && !*st.SetupComplete {

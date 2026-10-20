@@ -173,5 +173,5 @@ Section "Uninstall"
   ; Data under %ProgramData%\Ether is intentionally kept. Delete it
   ; manually (as an administrator) to purge configuration, database,
   ; cache and logs.
-  MessageBox MB_OK "Ether was removed. Your settings, cache and logs in %ProgramData%\Ether were kept — delete that folder (as an administrator) to purge everything."
+  MessageBox MB_OK "Ether was removed. Your settings, cache and logs in %ProgramData%\Ether were kept — delete that folder (as an administrator) to purge everything." /SD IDOK
 SectionEnd

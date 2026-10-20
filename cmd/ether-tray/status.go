@@ -16,6 +16,7 @@ type Status struct {
 	MachineID     string
 	FriendlyName  string
 	Version       string
+	VersionIsPMS  bool  // identity reports a compatibility version, not Ether's release
 	SetupComplete *bool // nil when /ether/api/status is unreachable/unknown
 	Streams       int   // active streams, -1 when unknown
 }
@@ -69,6 +70,7 @@ func (c *StatusClient) Poll(ctx context.Context) (Status, error) {
 	st.MachineID = id.MachineIdentifier
 	st.FriendlyName = id.FriendlyName
 	st.Version = strings.TrimPrefix(id.Version, "v")
+	st.VersionIsPMS = true
 
 	// Richer status is best-effort.
 	if body, err := c.get(ctx, "/ether/api/status"); err == nil {
@@ -76,6 +78,7 @@ func (c *StatusClient) Poll(ctx context.Context) (Status, error) {
 		if json.Unmarshal(body, &api) == nil {
 			if api.Version != "" {
 				st.Version = strings.TrimPrefix(api.Version, "v")
+				st.VersionIsPMS = false
 			}
 			if api.FriendlyName != "" {
 				st.FriendlyName = api.FriendlyName

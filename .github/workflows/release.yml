@@ -153,6 +153,11 @@ jobs:
           $env:Path += ";C:\Program Files (x86)\NSIS"
           # signtool ships with the Windows SDK on the runner image.
           packaging/windows/build-installer.ps1 -Version $env:VERSION
+      - name: Smoke-test installed service and desktop launcher
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.goreleaser.outputs.version }}
+        run: packaging/windows/smoke-installer.ps1 -Version $env:VERSION
       - name: Attach installer to the (draft) release
         shell: bash
         env:
