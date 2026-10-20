@@ -228,6 +228,35 @@ func healthSample(files []*postedFile, n int) []slotRef {
 	return out
 }
 
+// healthHeadSlots are the leading articles every health check confirms on
+// top of the spread sample: playback reads them within its first seconds,
+// so a gap there fails the start (or forces an immediate failover) however
+// healthy the rest of the post is. Twelve articles are about 9 MB, and STAT
+// is pipelined, so they cost one round trip.
+const healthHeadSlots = 12
+
+// withHead adds the first k slots of files to a sample, without repeats.
+func withHead(refs []slotRef, files []*postedFile, k int) []slotRef {
+	seen := map[slotRef]bool{}
+	for _, r := range refs {
+		seen[r] = true
+	}
+	for _, pf := range files {
+		for i := 0; i < pf.numSlots() && k > 0; i++ {
+			k--
+			ref := slotRef{pf, i}
+			if !seen[ref] {
+				seen[ref] = true
+				refs = append(refs, ref)
+			}
+		}
+		if k == 0 {
+			break
+		}
+	}
+	return refs
+}
+
 type slotRef struct {
 	pf   *postedFile
 	slot int
@@ -296,6 +325,9 @@ func bodyProbeSlots(n int) map[int]bool {
 // than awaited.
 func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sampleOutcome) {
 	refs := healthSample(files, e.opts.HealthSamples)
+	// BODY probes stay on the spread sample; the head is STAT-only.
+	probes := bodyProbeSlots(len(refs))
+	refs = withHead(refs, files, healthHeadSlots)
 	out.total = len(refs)
 	if len(refs) == 0 {
 		return out
@@ -315,7 +347,6 @@ func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sa
 	}
 	events := make(chan event, len(refs)+1)
 
-	probes := bodyProbeSlots(len(refs))
 	var statIDs []string
 	for i, ref := range refs {
 		id := ref.pf.msgID(ref.slot)

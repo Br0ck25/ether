@@ -59,8 +59,10 @@ func TestCheckHealthy(t *testing.T) {
 	f.mu.Lock()
 	stats := f.statCalls
 	f.mu.Unlock()
-	if stats != 10 {
-		t.Fatalf("STATs = %d, want 10 plus two BODY samples", stats)
+	// Ten spread STATs and two BODY probes, plus the ten head articles the
+	// spread sample did not already cover (slots 0 and 9 are shared).
+	if stats != 20 {
+		t.Fatalf("STATs = %d, want 20 plus two BODY samples", stats)
 	}
 	// Open after Check reuses the index: no further header fetch.
 	f.resetCounts()
@@ -263,7 +265,7 @@ func TestCheckHealthyTrace(t *testing.T) {
 		t.Fatalf("Check = %v %v", ok, err)
 	}
 	tr := e.HealthTimings()
-	if tr.Samples != 12 || tr.BodyProbes != 2 || tr.BodyOK != 2 || tr.FailFast || tr.FailReason != "" {
+	if tr.Samples != 22 || tr.BodyProbes != 2 || tr.BodyOK != 2 || tr.FailFast || tr.FailReason != "" {
 		t.Fatalf("trace = %+v", tr)
 	}
 }
@@ -315,5 +317,19 @@ func TestBodyTakedownCancelsSlowHeaderAndStatProbes(t *testing.T) {
 	}
 	if time.Since(started) > time.Second {
 		t.Fatal("waited for slow header/STAT instead of cancelling")
+	}
+}
+
+func TestCheckRejectsAGapInTheFirstArticles(t *testing.T) {
+	f := newFakeFetcher()
+	doc := post(t, f, 10_000, postFile{name: "gap.mkv", data: mkvBytes(1, 1_000_000)})
+	// Article 6 (about 60 KB in) is missing: the spread sample skips it,
+	// but playback would hit it in its first second.
+	f.mu.Lock()
+	f.missing[postID("gap.mkv", 7)] = true
+	f.mu.Unlock()
+	e := newTestEngine(t, f, nil, Options{HealthSamples: 12})
+	if ok, err := e.Check(context.Background(), doc); ok || !errors.Is(err, core.ErrArticleMissing) {
+		t.Fatalf("Check = %v %v, want a missing-article rejection", ok, err)
 	}
 }
