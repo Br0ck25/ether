@@ -145,6 +145,8 @@ func (s *Service) searchTorBox(ctx context.Context, req core.SearchRequest) (rel
 	}
 	now := s.now()
 	cached = map[string]bool{}
+	var known []string
+	defer func() { s.notifyKnown(known...) }()
 	for _, t := range data.Torrents {
 		r, isCached, keep := torBoxRelease(t, now)
 		if !keep {
@@ -152,7 +154,7 @@ func (s *Service) searchTorBox(ctx context.Context, req core.SearchRequest) (rel
 		}
 		cached[r.InfoHash] = isCached
 		if isCached {
-			s.setKnown(ctx, e.cfg.ID, r.InfoHash, "", true)
+			known = append(known, s.recordKnown(ctx, e.cfg.ID, r.InfoHash, "", true))
 		}
 		rels = append(rels, r)
 	}

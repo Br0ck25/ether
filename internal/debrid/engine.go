@@ -84,6 +84,11 @@ type Engine struct {
 	files map[string]*remoteFile
 
 	stats engineCounters
+
+	// Streaming leases (cluster.go), clustered only.
+	leaseOnce sync.Once
+	leaseKick chan struct{}
+	leaseDone chan struct{}
 }
 
 type engineCounters struct {
@@ -161,9 +166,17 @@ func NewEngine(svc *Service, opts EngineOptions) *Engine {
 // Inner returns the wrapped engine.
 func (e *Engine) Inner() core.Engine { return e.inner }
 
-// Close cancels in-flight fetches. The inner engine is closed by its owner.
+// Close cancels in-flight fetches and drops this node's streaming leases.
+// The inner engine is closed by its owner.
 func (e *Engine) Close() error {
 	e.cancel()
+	e.leaseOnce.Do(func() {}) // no worker may start after Close
+	if e.leaseDone != nil {
+		select {
+		case <-e.leaseDone:
+		case <-time.After(10 * time.Second):
+		}
+	}
 	return nil
 }
 
@@ -317,8 +330,12 @@ func (e *Engine) acquireFile(ctx context.Context, releaseID string, payload []by
 		f.adopt(p)
 	}
 	f.refs++
+	first := f.refs == 1
 	f.lastUsed = e.now()
 	e.mu.Unlock()
+	if first {
+		e.kickLeases()
+	}
 	if _, _, err := f.link(ctx, false); err != nil {
 		e.releaseFile(f)
 		return nil, err
@@ -340,6 +357,7 @@ func (e *Engine) releaseFile(f *remoteFile) {
 	}
 	if idle {
 		f.dropMemory()
+		e.kickLeases()
 	}
 }
 
@@ -467,10 +485,14 @@ func (f *remoteFile) link(ctx context.Context, force bool, gen ...int) (string, 
 		f.mu.Unlock()
 		return "", g, fmt.Errorf("debrid: %s changed size: %w", p.Name(), core.ErrArticleCorrupt)
 	}
+	moved := out.TorrentID != p.TorrentID || out.Provider != p.Provider
 	f.pl = out
 	f.gen++
 	g = f.gen
 	f.mu.Unlock()
+	if moved {
+		f.e.kickLeases() // lease the torrent the file now streams from
+	}
 	return out.URL, g, nil
 }
 

@@ -63,6 +63,9 @@ type Caps struct {
 	// Weight is the node's share weight for account-wide budgets such as
 	// Usenet connections (config server.clusterWeight; 0 means 1).
 	Weight int `json:"weight,omitempty"`
+	// EgressIP is the public address the node reaches the internet from,
+	// when known (providers may flag one account used from several).
+	EgressIP string `json:"egressIp,omitempty"`
 }
 
 // Node is one cluster member.

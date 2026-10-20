@@ -2,7 +2,9 @@ package resolver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -104,6 +106,7 @@ func (s *Service) Pin(ctx context.Context, key core.RatingKey, titleName string,
 	s.con.mu.Lock()
 	s.con.pins[key] = p
 	s.con.mu.Unlock()
+	s.notifyPin(key)
 	return p, nil
 }
 
@@ -120,6 +123,7 @@ func (s *Service) Unpin(ctx context.Context, key core.RatingKey) (bool, error) {
 	if err != nil {
 		return had, err
 	}
+	s.notifyPin(key)
 	n, _ := res.RowsAffected()
 	return had || n > 0, nil
 }
@@ -149,33 +153,67 @@ func (s *Service) PinFor(key core.RatingKey) (Pin, bool) {
 	return p, ok
 }
 
+// pinColumns are the resolver_pins columns scanPin reads.
+const pinColumns = `rating_key, release_json, title_name, note, pinned_at, last_status, last_reason, last_checked_at`
+
+// scanPin reads one resolver_pins row (pinColumns).
+func scanPin(row interface{ Scan(...any) error }) (Pin, error) {
+	var key, pinnedAt, checkedAt int64
+	var raw, status string
+	var p Pin
+	if err := row.Scan(&key, &raw, &p.TitleName, &p.Note, &pinnedAt, &status, &p.LastReason, &checkedAt); err != nil {
+		return p, err
+	}
+	p.TitleKey = core.RatingKey(key)
+	if err := json.Unmarshal([]byte(raw), &p.Release); err != nil || p.Release.ID == "" {
+		return p, fmt.Errorf("resolver pin %d unreadable: %v", key, err)
+	}
+	p.PinnedAt = time.Unix(pinnedAt, 0)
+	p.LastStatus = PinStatus(status)
+	if checkedAt > 0 {
+		p.LastCheckedAt = time.Unix(checkedAt, 0)
+	}
+	return p, nil
+}
+
+// loadPins replaces the in-memory pins with the stored ones.
 func (s *Service) loadPins(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `SELECT rating_key, release_json, title_name, note, pinned_at, last_status, last_reason, last_checked_at FROM resolver_pins`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+pinColumns+` FROM resolver_pins`)
 	if err != nil {
 		s.log.Warn("resolver pins unavailable", "err", err)
 		return
 	}
 	defer rows.Close()
+	pins := map[core.RatingKey]Pin{}
+	for rows.Next() {
+		p, err := scanPin(rows)
+		if err != nil {
+			s.log.Warn("resolver pin unreadable", "err", err)
+			continue
+		}
+		pins[p.TitleKey] = p
+	}
+	if rows.Err() != nil {
+		return
+	}
+	s.con.mu.Lock()
+	s.con.pins = pins
+	s.con.mu.Unlock()
+}
+
+// reloadPin re-reads one title's pin after another node changed it.
+func (s *Service) reloadPin(ctx context.Context, key core.RatingKey) {
+	if s.db == nil || key == 0 {
+		return
+	}
+	p, err := scanPin(s.db.QueryRowContext(ctx, `SELECT `+pinColumns+` FROM resolver_pins WHERE rating_key=?`, int64(key)))
 	s.con.mu.Lock()
 	defer s.con.mu.Unlock()
-	for rows.Next() {
-		var key, pinnedAt, checkedAt int64
-		var raw, status string
-		var p Pin
-		if err := rows.Scan(&key, &raw, &p.TitleName, &p.Note, &pinnedAt, &status, &p.LastReason, &checkedAt); err != nil {
-			continue
-		}
-		if err := json.Unmarshal([]byte(raw), &p.Release); err != nil || p.Release.ID == "" {
-			s.log.Warn("resolver pin unreadable", "title", key, "err", err)
-			continue
-		}
-		p.TitleKey = core.RatingKey(key)
-		p.PinnedAt = time.Unix(pinnedAt, 0)
-		p.LastStatus = PinStatus(status)
-		if checkedAt > 0 {
-			p.LastCheckedAt = time.Unix(checkedAt, 0)
-		}
-		s.con.pins[p.TitleKey] = p
+	switch {
+	case err == nil:
+		s.con.pins[key] = p
+	case errors.Is(err, sql.ErrNoRows):
+		delete(s.con.pins, key) // unpinned on another node
 	}
 }
 
@@ -198,7 +236,9 @@ func (s *Service) notePin(ctx context.Context, key core.RatingKey, releaseID str
 		string(status), reason, now.Unix(), int64(key), releaseID)
 	if err != nil {
 		s.log.Debug("resolver pin status not saved", "title", key, "err", err)
+		return
 	}
+	s.notifyPin(key)
 }
 
 // notePinsBlocked marks pins of a newly blocklisted release as failing, so

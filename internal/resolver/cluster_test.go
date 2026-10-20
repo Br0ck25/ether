@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/clusterbus"
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -95,4 +96,44 @@ func TestOwnerBlockAndUnblockFollowOtherNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitUntil(t, "B drops the unblocked release", func() bool { return !b.isBad("rel-9") })
+}
+
+// Owner pins made, updated and removed on one node reach the other node's
+// in-memory pins.
+func TestPinsFollowOtherNode(t *testing.T) {
+	ctx := context.Background()
+	db := store.OpenTest(t)
+	a := New(&fakeIndexer{}, nil, db, testCfg(), Options{})
+	b := New(&fakeIndexer{}, nil, db, testCfg(), Options{})
+	defer a.Close()
+	defer b.Close()
+	hub := clusterbus.NewHub()
+	a.SetBus(hub.Node("a"))
+	b.SetBus(hub.Node("b"))
+	key := matrixTitle().Key
+	rel := core.Release{ID: "rel-pin", Name: "The.Matrix.1999.1080p.BluRay.x264-GRP", Indexer: "idx"}
+
+	if _, err := a.Pin(ctx, key, "The Matrix (1999)", rel, "keep"); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "B sees the pin", func() bool { p, ok := b.PinFor(key); return ok && p.Release.ID == "rel-pin" && p.Note == "keep" })
+	a.notePin(ctx, key, "rel-pin", PinUnhealthy, "health: missing")
+	waitUntil(t, "B sees the pin status", func() bool { p, _ := b.PinFor(key); return p.LastStatus == PinUnhealthy })
+	if _, err := a.Unpin(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "B drops the pin", func() bool { _, ok := b.PinFor(key); return !ok })
+
+	// A resync reloads the stored pins, dropping ones removed meanwhile.
+	if _, err := a.Pin(ctx, key, "", rel, ""); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "B sees the new pin", func() bool { _, ok := b.PinFor(key); return ok })
+	b.SetBus(nil) // misses the unpin
+	if _, err := a.Unpin(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	b.SetBus(hub.Node("b"))
+	hub.Resync("b")
+	waitUntil(t, "resync drops the stale pin", func() bool { _, ok := b.PinFor(key); return !ok })
 }

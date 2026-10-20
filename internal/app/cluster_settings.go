@@ -66,7 +66,11 @@ func (a *App) connectClusterHooks() {
 	a.personalize.SetBus(bus)
 	a.collections.SetBus(bus)
 	a.episodeorder.SetBus(bus)
+	// Debrid accounts: back-off, add claims, streaming leases and
+	// known-cached answers are shared (internal/debrid/cluster.go).
+	a.debrid.SetCluster(bus)
 	a.closers = append(a.closers, func() {
+		a.debrid.SetCluster(nil)
 		a.users.Close()
 		a.safety.Close()
 		a.resolver.SetBus(nil)

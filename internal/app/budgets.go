@@ -22,6 +22,12 @@ import (
 // also catches crashed nodes expiring). A standalone server keeps the
 // configured counts.
 //
+// Debrid providers limit concurrent API calls per account the same way,
+// so each provider's concurrency is divided with the same weights
+// (debrid.Service.SetConcurrencyShare). The engine's media connections
+// (debrid.maxConnections) are a per-open-file, node-local setting, not an
+// account limit, and are not divided.
+//
 // TMDB limits requests per API key (all nodes share the bundled or owner
 // key), so each node's request rate is the configured rate divided by the
 // number of live nodes, with a floor (tmdb.MinClusterRate).
@@ -55,9 +61,11 @@ func liveBudgetMembers(nodes []cluster.Node, self cluster.Node) budgetMembers {
 
 // applyBudgets divides the account-wide budgets over m.
 func (a *App) applyBudgets(m budgetMembers) {
-	a.fetcher.SetConnectionShare(func(configured int) int {
-		return usenet.ShareOf(configured, m.self, m.weights)
-	})
+	share := func(configured int) int { return usenet.ShareOf(configured, m.self, m.weights) }
+	a.fetcher.SetConnectionShare(share)
+	if a.debrid != nil {
+		a.debrid.SetConcurrencyShare(share)
+	}
 	if a.tmdb != nil {
 		a.tmdb.SetRateShare(len(m.weights))
 	}
@@ -78,10 +86,11 @@ func (a *App) runBudgets(ctx context.Context) {
 	})()
 	t := time.NewTicker(budgetPoll)
 	defer t.Stop()
-	last := ""
+	last, lastEgress := "", ""
 	for {
 		nodes, err := a.cluster.Nodes(ctx)
 		if err == nil {
+			a.noteEgress(nodes, &lastEgress)
 			m := liveBudgetMembers(nodes, a.cluster.Self())
 			if key := m.key(); key != last {
 				last = key
