@@ -81,6 +81,9 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	if cfg.Server.MaxStreams < 0 {
 		v.add("server.maxStreams", "must be >= 0")
 	}
+	if cfg.Server.ClusterWeight < 0 || cfg.Server.ClusterWeight > 100 {
+		v.add("server.clusterWeight", "must be between 0 and 100")
+	}
 
 	v.port("plex.publicPort", cfg.Plex.PublicPort, true)
 	if cfg.Plex.SecureConnections != "" {

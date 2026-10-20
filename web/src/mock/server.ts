@@ -22,7 +22,15 @@ import type {
 import { daypartOf, overrideCount, pageOf } from "../lib/layout";
 import { assemble } from "./assemble";
 import { normalizeSpec } from "../lib/rules";
-import type { Bootstrap, EtherConfig, EtherUser, LogEntry } from "../lib/types";
+import type {
+  Bootstrap,
+  ClusterNode,
+  ClusterStatus,
+  EtherConfig,
+  EtherUser,
+  JoinTokenInfo,
+  LogEntry,
+} from "../lib/types";
 import {
   COLLECTIONS,
   GENRES,
@@ -49,6 +57,8 @@ export interface FakeOptions {
   llm?: boolean;
   /** Artificial latency for realism in the browser; 0 in tests. */
   latencyMs?: number;
+  /** Serve as a node of a three-node PostgreSQL cluster instead of a standalone server. */
+  cluster?: boolean;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -386,7 +396,52 @@ export function createFakeServer(opts: FakeOptions = {}) {
     logs: [] as LogEntry[],
     calls: [] as { method: string; path: string; body: unknown }[],
     llm: opts.llm ?? true,
+    clustered: opts.cluster ?? false,
+    joinTokens: [] as JoinTokenInfo[],
+    backupSettings: { intervalHours: 24, retain: 7, lastRun: 0, sharedDir: "" },
+    backups: [] as {
+      name: string;
+      size: number;
+      created: string;
+      node?: string;
+      nodeId?: string;
+      shared?: boolean;
+      remote?: boolean;
+    }[],
   };
+  {
+    const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+    const stamp = (h: number) => `ether-${ago(h).slice(0, 19).replace(/[-:]/g, "")}.tar.gz`;
+    state.backups = state.clustered
+      ? [
+          { name: stamp(2), size: 6_200_000, created: ago(2), node: "den", nodeId: "n-den" },
+          {
+            name: stamp(26),
+            size: 6_100_000,
+            created: ago(26),
+            node: "attic",
+            nodeId: "n-attic",
+            remote: true,
+          },
+        ]
+      : [{ name: stamp(2), size: 4_200_000, created: ago(2) }];
+    state.joinTokens = state.clustered
+      ? [
+          {
+            id: "t7k2",
+            createdAt: ago(30),
+            expiresAt: ago(29),
+            usedAt: ago(29.5),
+            usedBy: "attic",
+          },
+          {
+            id: "q9wd",
+            createdAt: ago(0.2),
+            expiresAt: new Date(Date.now() + 40 * 60_000).toISOString(),
+          },
+        ]
+      : [];
+  }
   let seq = 1;
 
   // Seed collections from templates so the gallery isn't empty.
@@ -1223,6 +1278,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
           kind: p.kind,
           enabled: p.enabled,
           priority: p.priority,
+          accountSlots: 6,
+          slots: state.clustered ? 2 : 6,
         };
         const idle = {
           resolveMs: 0,
@@ -1336,6 +1393,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
           state: "ok",
           configuredConnections: p.connections,
           activeConnections: i === 0 ? 6 : 0,
+          ...(state.clustered ? { nodeShare: Math.ceil(p.connections / 3) } : {}),
         })),
         remote: {
           claimed: true,
@@ -1406,6 +1464,81 @@ export function createFakeServer(opts: FakeOptions = {}) {
       activeSessions: 1,
       quietPeriodSeconds: 600,
       confirming: false,
+    };
+  }
+
+  // ---- Cluster -----------------------------------------------------------------------
+
+  function clusterNodes(): ClusterNode[] {
+    const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
+    const node = (n: Partial<ClusterNode> & { id: string; name: string }): ClusterNode => ({
+      version: state.boot.version,
+      addrs: [],
+      caps: { transcode: true, hwAccel: "videotoolbox", egressIp: "203.0.113.7" },
+      load: 0,
+      startedAt: ago(86400),
+      lastSeen: ago(3),
+      leader: false,
+      live: true,
+      ...n,
+    });
+    if (!state.clustered)
+      return [node({ id: "n-solo", name: state.boot.serverName, leader: true, load: 1 })];
+    return [
+      node({ id: "n-den", name: "den", leader: true, load: 1 }),
+      node({
+        id: "n-attic",
+        name: "attic",
+        load: 2,
+        caps: { transcode: true, hwAccel: "nvenc", weight: 2, egressIp: "198.51.100.20" },
+      }),
+      node({
+        id: "n-garage",
+        name: "garage",
+        version: "0.8.4",
+        live: false,
+        lastSeen: ago(3 * 3600),
+        caps: { transcode: true, egressIp: "198.51.100.20" },
+      }),
+    ];
+  }
+
+  function clusterStatus(): ClusterStatus {
+    const nodes = clusterNodes();
+    const self = nodes[0]!;
+    // Mirrors internal/app egressWarning: live nodes reaching out from several IPs.
+    const byIP = new Map<string, string[]>();
+    for (const n of nodes)
+      if (n.live && n.caps.egressIp)
+        byIP.set(n.caps.egressIp, [...(byIP.get(n.caps.egressIp) ?? []), n.name]);
+    const warnings =
+      byIP.size > 1
+        ? [
+            `nodes reach the internet from different public addresses (${[...byIP]
+              .sort()
+              .map(([ip, names]) => `${ip}: ${names.sort().join(", ")}`)
+              .join(
+                "; ",
+              )}); debrid providers may flag simultaneous use of one account from several IPs`,
+          ]
+        : undefined;
+    return {
+      warnings,
+      mode: state.clustered ? "postgres" : "solo",
+      self,
+      leader: self.id,
+      epoch: state.clustered ? 4 : 1,
+      nodes,
+      ...(state.clustered
+        ? {
+            health: {
+              channel: "ether_cluster",
+              busConnected: true,
+              lastHeartbeat: new Date(Date.now() - 2000).toISOString(),
+              clockSkewNs: 12_000_000,
+            },
+          }
+        : {}),
     };
   }
 
@@ -1506,6 +1639,80 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json(updateStatus(), 202);
       case "GET /users":
         return json({ users: state.users });
+      case "GET /cluster":
+        return json(clusterStatus());
+      case "GET /cluster/settings":
+        return json(
+          state.clustered
+            ? {
+                clustered: true,
+                keyFingerprint: "3f9c2a71d04be6a8",
+                sharedVersion: 42,
+                joinTokens: state.joinTokens,
+              }
+            : { clustered: false, keyFingerprint: "3f9c2a71d04be6a8" },
+        );
+      case "POST /cluster/join-tokens": {
+        if (!state.clustered)
+          return err(409, "not_clustered", "clustering is not enabled: this server uses SQLite.");
+        const ttl = Number((body as { ttlMinutes?: number } | null)?.ttlMinutes ?? 0);
+        const minutes = ttl > 0 && ttl < 60 ? ttl : 60;
+        const id = `m${seq++}x`;
+        const info: JoinTokenInfo = {
+          id,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + minutes * 60_000).toISOString(),
+        };
+        state.joinTokens.unshift(info);
+        return json(
+          {
+            token: `ether-join-v1:mock-${id}-c2VjcmV0LWRvLW5vdC1zaGFyZQ`,
+            id,
+            expiresAt: info.expiresAt,
+            command: "ether cluster join <token>",
+            warning:
+              "This token is a secret: it contains the cluster database password and the credential key that decrypts every stored credential. Use it once, within the hour, and do not paste it into chats or tickets.",
+          },
+          201,
+        );
+      }
+      case "GET /adoption/backups":
+        return json({
+          snapshots: state.backups,
+          settings: state.backupSettings,
+          warning: "",
+        });
+      case "POST /adoption/backups/settings": {
+        const next = body as { intervalHours: number; retain: number; sharedDir?: string };
+        if (next.sharedDir && !state.clustered)
+          return err(
+            400,
+            "invalid_request",
+            "a shared backup directory applies only to clustered servers",
+          );
+        state.backupSettings = {
+          ...state.backupSettings,
+          intervalHours: next.intervalHours,
+          retain: next.retain,
+          ...(next.sharedDir !== undefined ? { sharedDir: next.sharedDir } : {}),
+        };
+        return json({ ok: true });
+      }
+      case "POST /adoption/backups": {
+        const created = new Date().toISOString();
+        const snap = {
+          name: `ether-${created.slice(0, 19).replace(/[-:]/g, "")}.tar.gz`,
+          size: 4_300_000,
+          created,
+          ...(state.clustered
+            ? state.backupSettings.sharedDir
+              ? { node: "den", nodeId: "n-den", shared: true }
+              : { node: "den", nodeId: "n-den" }
+            : {}),
+        };
+        state.backups.unshift(snap);
+        return json(snap);
+      }
       case "GET /logs": {
         const lvl = q.get("level") ?? "";
         const order = ["debug", "info", "warn", "error"];
@@ -1850,6 +2057,14 @@ export function createFakeServer(opts: FakeOptions = {}) {
       const key = seg[1] === "opensubtitles" ? "openSubtitles" : seg[1];
       (state.config as unknown as Record<string, unknown>)[key] = body;
       return json({ section: key, value: body });
+    }
+    if (seg[0] === "cluster" && seg[1] === "join-tokens" && seg[2] && method === "DELETE") {
+      if (!state.clustered) return err(409, "not_clustered", "clustering is not enabled");
+      const id = decodeURIComponent(seg[2]);
+      const i = state.joinTokens.findIndex((t) => t.id === id && !t.usedAt);
+      if (i < 0) return err(404, "not_found", "no unused token with that id");
+      state.joinTokens.splice(i, 1);
+      return new Response(null, { status: 204 });
     }
     if (seg[0] === "auth" && seg[1] === "pin" && seg[2])
       return json({ done: true, token: "mock-owner-token" });

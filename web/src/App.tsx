@@ -16,6 +16,7 @@ import {
   Activity as ActivityIcon,
   ArchiveRestore,
   ArrowDownToLine,
+  Boxes,
   Globe,
   LifeBuoy,
   Plug,
@@ -77,6 +78,7 @@ const RemoteAccessPage = settingsPage("RemoteAccessPage");
 const ServicesPage = settingsPage("ServicesPage");
 const BackupsPage = settingsPage("BackupsPage");
 const UpdatesPage = settingsPage("UpdatesPage");
+const ClusterPage = settingsPage("ClusterPage");
 const TroubleshootingPage = settingsPage("TroubleshootingPage");
 const Setup = lazy(() => import("./pages/Setup"));
 const Logs = lazy(() => import("./pages/Logs"));
@@ -151,6 +153,7 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
         { href: "/server", label: "General", icon: <Server size={icon} /> },
         { href: "/remote-access", label: "Plex & remote access", icon: <Globe size={icon} /> },
         { href: "/services", label: "Connected services", icon: <Plug size={icon} /> },
+        { href: "/cluster", label: "Cluster", icon: <Boxes size={icon} /> },
         { href: "/notifications", label: "Notifications", icon: <Bell size={icon} /> },
       ],
     },
@@ -336,6 +339,7 @@ function Shell() {
             <Route path="/server" element={<GeneralPage />} />
             <Route path="/remote-access" element={<RemoteAccessPage />} />
             <Route path="/services" element={<ServicesPage />} />
+            <Route path="/cluster" element={<ClusterPage />} />
             <Route path="/backups" element={<BackupsPage />} />
             <Route path="/updates" element={<UpdatesPage />} />
             <Route path="/troubleshooting" element={<TroubleshootingPage />} />

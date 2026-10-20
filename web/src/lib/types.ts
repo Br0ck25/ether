@@ -120,6 +120,10 @@ export interface DebridProviderStatus {
   reused?: number;
   latency?: DebridLatency;
   lastSuccess?: string;
+  /** API calls this node makes at once: the account's limit, or this node's share in a cluster. */
+  slots?: number;
+  /** The account-wide concurrent API call limit. */
+  accountSlots?: number;
 }
 
 export interface EtherConfig {
@@ -131,6 +135,8 @@ export interface EtherConfig {
     logLevel: string;
     defaultStreamLimit: number;
     maxStreams: number;
+    /** Node-local share weight for account-wide budgets in a cluster; 0/absent = 1. */
+    clusterWeight?: number;
   };
   plex: {
     token: string;
@@ -389,4 +395,65 @@ export interface SourceStartup {
   average: number;
   last: number;
   samples: number;
+}
+
+// ---- Cluster (GET /cluster/, /cluster/settings) ------------------------------------------
+
+/** One Ether node (internal/cluster.Node). */
+export interface ClusterNode {
+  id: string;
+  name: string;
+  version: string;
+  addrs: string[] | null;
+  caps: { transcode: boolean; hwAccel?: string; weight?: number; egressIp?: string };
+  /** Active playback sessions on the node. */
+  load: number;
+  startedAt: string;
+  lastSeen: string;
+  leader: boolean;
+  live: boolean;
+}
+
+export interface ClusterHealth {
+  channel: string;
+  busConnected: boolean;
+  lastHeartbeat?: string;
+  /** This node's clock minus the database server's, in nanoseconds. */
+  clockSkewNs: number;
+}
+
+export interface ClusterStatus {
+  mode: "solo" | "postgres";
+  self: ClusterNode;
+  leader?: string;
+  epoch: number;
+  nodes: ClusterNode[] | null;
+  health?: ClusterHealth;
+  /** Membership could not be read (usually the database). */
+  error?: string;
+  warnings?: string[] | null;
+}
+
+export interface JoinTokenInfo {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt?: string;
+  usedBy?: string;
+}
+
+export interface ClusterSettings {
+  clustered: boolean;
+  keyFingerprint: string;
+  sharedVersion?: number;
+  joinTokens?: JoinTokenInfo[] | null;
+}
+
+/** POST /cluster/join-tokens: the token is returned once and never again. */
+export interface CreatedJoinToken {
+  token: string;
+  id: string;
+  expiresAt: string;
+  command: string;
+  warning: string;
 }

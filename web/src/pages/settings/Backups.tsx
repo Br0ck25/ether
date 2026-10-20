@@ -11,6 +11,7 @@ import {
 import { Download, FileUp, Plus } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
+import { useClustered } from "./Cluster";
 import { NumberInput } from "../../components/fields";
 import { Section } from "../../components/layout";
 import { SaveBar, useDraft } from "../../components/SaveBar";
@@ -26,12 +27,32 @@ type Plan = {
   lists: { name: string; kind: string; keys: number[] }[];
   warnings: string[];
 };
-type Schedule = { intervalHours: number; retain: number };
+type Schedule = { intervalHours: number; retain: number; sharedDir?: string };
+type Snapshot = {
+  name: string;
+  size: number;
+  created: string;
+  /** Clustered servers: the node that wrote (and, unless shared, holds) the bundle. */
+  node?: string;
+  nodeId?: string;
+  /** In the shared backup directory every node reaches. */
+  shared?: boolean;
+  /** On another node's disk: download it from that node. */
+  remote?: boolean;
+};
 type Backups = {
-  snapshots: { name: string; size: number; created: string }[];
+  snapshots: Snapshot[] | null;
   settings: Schedule;
   warning: string;
 };
+
+/** Where a clustered snapshot lives, for the Location column. */
+function snapshotLocation(s: Snapshot): string {
+  if (s.shared) return "Shared folder";
+  const node = s.node || s.nodeId || "";
+  if (!node) return "";
+  return s.remote ? node : `${node} (this node)`;
+}
 
 const base = "/adoption";
 const post = <T,>(path: string, body: unknown = {}) =>
@@ -132,6 +153,7 @@ function FilePick({
  */
 export function BackupsAndImport() {
   const users = useImportViewers();
+  const clustered = useClustered();
   const [data, setData] = useState<Backups | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [restored, setRestored] = useState("");
@@ -157,7 +179,11 @@ export function BackupsAndImport() {
     setSaving(true);
     setSaveError(null);
     try {
-      await post("/backups/settings", { intervalHours: draft.intervalHours, retain: draft.retain });
+      await post("/backups/settings", {
+        intervalHours: draft.intervalHours,
+        retain: draft.retain,
+        ...(clustered ? { sharedDir: (draft.sharedDir ?? "").trim() } : {}),
+      });
       toast.success("Settings saved", { description: "Automatic backups" });
       await load();
     } catch (e) {
@@ -214,6 +240,20 @@ export function BackupsAndImport() {
                     />
                   }
                 />
+                {clustered ? (
+                  <SettingsRow
+                    stacked
+                    title={<label htmlFor="backup-shared-dir">Shared backup folder</label>}
+                    description="A folder every node reaches at the same path, such as a network share. Leave empty to keep each backup on the node that made it."
+                  >
+                    <Input
+                      id="backup-shared-dir"
+                      placeholder="/mnt/backups/ether"
+                      value={draft.sharedDir ?? ""}
+                      onChange={(e) => setDraft({ ...draft, sharedDir: e.currentTarget.value })}
+                    />
+                  </SettingsRow>
+                ) : null}
               </>
             ) : (
               <div className="px-5 py-4">
@@ -263,6 +303,19 @@ export function BackupsAndImport() {
                     sortValue: (s) => s.size,
                     cell: (s) => <span className="tabular-nums">{formatBytes(s.size)}</span>,
                   },
+                  ...((data.snapshots ?? []).some((s) => snapshotLocation(s))
+                    ? [
+                        {
+                          key: "location",
+                          header: "Location",
+                          search: snapshotLocation,
+                          sortValue: snapshotLocation,
+                          cell: (s: Snapshot) => (
+                            <span className="text-fg-muted">{snapshotLocation(s) || "—"}</span>
+                          ),
+                        },
+                      ]
+                    : []),
                   {
                     key: "download",
                     header: "",
@@ -271,7 +324,12 @@ export function BackupsAndImport() {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={busy}
+                        disabled={busy || s.remote}
+                        title={
+                          s.remote
+                            ? `Stored on ${s.node || "another node"}: download it from that node's admin page`
+                            : undefined
+                        }
                         aria-label={`Download ${s.name}`}
                         onClick={() =>
                           void run(() =>

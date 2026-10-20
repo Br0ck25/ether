@@ -10,6 +10,7 @@ import { api } from "../../lib/api";
 import { humanizeKey, isPlainObject } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import { BackupsAndImport } from "./Backups";
+import { ClusterOverview, useClustered } from "./Cluster";
 import { ConnectedServices } from "./ConnectedServices";
 import { inferField } from "./SchemaForm";
 import * as S from "./schema";
@@ -47,6 +48,7 @@ type Obj = Record<string, unknown>;
 /** Server name, port, limits and logging, plus any config section this UI has no page for. */
 export function GeneralPage() {
   const { reloadBoot } = useApp();
+  const clustered = useClustered();
   const config = useAsync(() => api.getConfig(), []);
   const cfg = config.data as Obj | null | undefined;
   const extras = useMemo(
@@ -62,7 +64,9 @@ export function GeneralPage() {
       <ConfigSection
         configKey="server"
         endpoint="server"
-        groups={S.SERVER}
+        groups={clustered ? S.clusterServerGroups() : S.SERVER}
+        // Node weight only matters in a cluster.
+        omit={clustered ? undefined : ["clusterWeight"]}
         label="General"
         onSaved={() => void reloadBoot()}
       />
@@ -160,6 +164,18 @@ export function UpdatesPage() {
         label="Updates"
         before={() => <UpdatesStatus />}
       />
+    </DomainPage>
+  );
+}
+
+export function ClusterPage() {
+  return (
+    <DomainPage
+      title="Cluster"
+      description="Ether servers sharing one database and appearing in Plex as one server."
+      base="/cluster"
+    >
+      <ClusterOverview />
     </DomainPage>
   );
 }
