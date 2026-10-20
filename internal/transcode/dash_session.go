@@ -109,9 +109,11 @@ func (s *Session) ServeManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delay := s.m.opts.manifestWait
+	s.mu.Lock() // SwapInput replaces s.info
 	if s.info.Duration <= 0 {
 		delay = s.m.opts.segmentTimeout
 	}
+	s.mu.Unlock()
 	wait := time.NewTimer(delay)
 	defer wait.Stop()
 	timedOut, restarted := false, false

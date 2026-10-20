@@ -67,6 +67,7 @@ type Session struct {
 	closed      bool
 	changed     chan struct{}
 	playlist    []byte
+	listed      []int      // unknown duration: per-track listed prefix; never shrinks
 	dash        *dashState // DASH sessions only
 
 	// Adaptive HLS engine: the shared segment plan (HLS only), the config
@@ -295,15 +296,25 @@ func (s *Session) renderPlaylistLocked(t int) []byte {
 		return planPlaylist(s.plan, s.container, s.segName, discont, false, true, 0)
 	}
 	// Unknown duration: list the contiguous completed prefix.
-	done := s.done[0]
-	if t >= 0 && t < len(s.done) {
-		done = s.done[t]
+	return planPlaylist(s.plan, s.container, s.segName, discont, true, s.endSeg >= 0, s.listedLocked(t))
+}
+
+// listedLocked advances and returns how many segments track t's
+// unknown-duration EVENT playlist lists: the contiguous completed prefix.
+// It never shrinks, so pruning segments far behind the player (pruneLocked)
+// cannot remove them from the playlist, which EVENT playlists forbid.
+func (s *Session) listedLocked(t int) int {
+	if t < 0 || t >= len(s.done) {
+		t = 0
 	}
-	limit := 0
-	for done[limit] {
-		limit++
+	for len(s.listed) <= t {
+		s.listed = append(s.listed, 0)
 	}
-	return planPlaylist(s.plan, s.container, s.segName, discont, true, s.endSeg >= 0, limit)
+	done := s.done[t]
+	for done[s.listed[t]] {
+		s.listed[t]++
+	}
+	return s.listed[t]
 }
 
 // rampTranscodesLocked reports whether the ramp replaces the first
@@ -944,6 +955,9 @@ func (s *Session) pruneLocked() {
 		farAhead = 2*s.aheadLimit() + 8
 	}
 	for t, done := range s.done {
+		if s.total == 0 && !s.isDASH() {
+			s.listedLocked(t) // keep pruned segments in the EVENT playlist
+		}
 		for n := range done {
 			if n < s.lastReq-behind || (farAhead >= 0 && n > s.lastReq+farAhead) {
 				if err := os.Remove(s.trackSegPath(t, n)); err == nil || errors.Is(err, os.ErrNotExist) {

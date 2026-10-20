@@ -328,6 +328,9 @@ func mp4aCodecs(esds []byte) string {
 		es = es[2:]
 	}
 	if flags&0x40 != 0 && len(es) >= 1 {
+		if 1+int(es[0]) > len(es) {
+			return "mp4a.40.2"
+		}
 		es = es[1+int(es[0]):]
 	}
 	if flags&0x20 != 0 && len(es) >= 2 {

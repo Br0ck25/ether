@@ -163,6 +163,12 @@ func TestCodecsStrings(t *testing.T) {
 	if got := mp4aCodecs(nil); got != "mp4a.40.2" {
 		t.Errorf("empty esds: %q", got)
 	}
+	// An ES_Descriptor whose URL length runs past the descriptor must not
+	// panic the session's collector goroutine.
+	badURL := []byte{0, 0, 0, 0, 0x03, 4, 0x00, 0x01, 0x40, 0xff}
+	if got := mp4aCodecs(badURL); got != "mp4a.40.2" {
+		t.Errorf("truncated URL esds: %q", got)
+	}
 }
 
 func TestParseInitErrors(t *testing.T) {
