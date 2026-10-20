@@ -90,7 +90,12 @@ func (t *tray) onReady() {
 	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit", "Quit the Ether tray (the server keeps running)")
 
-	go t.pollLoop()
+	go func() {
+		if err := t.a.ensureMacServer(t.ctx); err != nil {
+			t.a.log.Error("tray: start server", "err", err)
+		}
+		t.pollLoop()
+	}()
 	go t.updateLoop()
 
 	go func() {

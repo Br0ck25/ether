@@ -96,11 +96,13 @@ func newApp(log *slog.Logger) *app {
 	opts.DataDir = dataDir
 	if exe := serverExecutable(); exe != "" {
 		opts.Executable = exe
-	}
-	if svc, err := service.New(nil, opts); err == nil {
-		a.svc = svc
+		if svc, err := service.New(nil, opts); err == nil {
+			a.svc = svc
+		} else {
+			log.Warn("tray: service control unavailable", "err", err)
+		}
 	} else {
-		log.Warn("tray: service control unavailable", "err", err)
+		log.Warn("tray: server executable not found; service control unavailable")
 	}
 	if uc, err := newUpdateClient(cfg, log); err == nil {
 		a.updates, a.installer = uc, uc

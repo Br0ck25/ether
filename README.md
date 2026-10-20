@@ -65,7 +65,7 @@ Standard media servers show the same static shelves to every account. Ether runs
 
 ## Quick Start
 
-**Pre-release:** there are no published installer downloads yet. Packaging is configured for Windows, macOS, Linux, and Docker; published builds will appear on the [Releases page](https://github.com/braedonsaunders/ether/releases).
+Download the macOS app, Windows installer, or Linux packages from the [Releases page](https://github.com/braedonsaunders/ether/releases/latest). Docker images are published to `ghcr.io/braedonsaunders/ether`. Check the release notes for platform requirements and signing status.
 
 ### Docker
 

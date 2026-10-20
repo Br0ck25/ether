@@ -13,6 +13,8 @@ project_name: ether
 before:
   hooks:
     - go mod tidy
+    # --clean removes dist before hooks run; stage dependencies here.
+    - sh scripts/fetch-ffmpeg.sh all
     # darwin-universal ffmpeg for the universal macOS tarball (needs the
     # darwin builds staged; needs lipo or llvm-lipo on the runner).
     - sh scripts/stage-universal-ffmpeg.sh

@@ -20,8 +20,15 @@ if command -v lipo >/dev/null 2>&1; then
 elif command -v llvm-lipo >/dev/null 2>&1; then
   LIPO=llvm-lipo
 else
-  echo "stage-universal-ffmpeg: need lipo or llvm-lipo (apt install llvm)" >&2
-  exit 1
+  # Debian/Ubuntu LLVM packages expose a version-suffixed command.
+  LIPO=
+  for candidate in /usr/bin/llvm-lipo-* /usr/lib/llvm-*/bin/llvm-lipo; do
+    if [ -x "$candidate" ]; then LIPO=$candidate; break; fi
+  done
+  if [ -z "$LIPO" ]; then
+    echo "stage-universal-ffmpeg: need lipo or llvm-lipo (apt install llvm)" >&2
+    exit 1
+  fi
 fi
 
 mkdir -p "$BASE/darwin-universal"

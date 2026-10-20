@@ -29,7 +29,7 @@ vet:
 
 ## web: build the admin/setup SPA (embedded via go:embed)
 web:
-	@if [ -f web/package.json ]; then cd web && npm ci && npm run build; else echo "web/ not present yet"; fi
+	cd web && pnpm install --frozen-lockfile && pnpm build
 
 ## spike: run the server in spike mode (local files library)
 spike:
@@ -51,9 +51,8 @@ ffmpeg:
 icons:
 	$(GO) run scripts/generate-tray-icons.go cmd/ether-tray/assets
 
-## release-snapshot: goreleaser dry run (needs ffmpeg staged + goreleaser)
+## release-snapshot: goreleaser dry run (fetches pinned ffmpeg)
 release-snapshot:
-	scripts/fetch-ffmpeg.sh all
 	goreleaser release --snapshot --clean --skip=docker,publish
 
 ## keys: generate an update-signing keypair (prints env lines; keep private!)

@@ -51,11 +51,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
       - name: Build web UI (embedded by go:embed)
-        run: |
-          if [ -f web/package.json ]; then (cd web && npm ci && npm run build); fi
-      - name: Fetch pinned ffmpeg (all platforms)
-        run: scripts/fetch-ffmpeg.sh all
+        working-directory: web
+        run: pnpm install --frozen-lockfile && pnpm build
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

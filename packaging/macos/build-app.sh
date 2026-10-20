@@ -76,7 +76,14 @@ if [ -n "${SIGN_IDENTITY:-}" ]; then
   codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
   codesign --verify --deep --strict "$APP"
 else
-  echo "==> SIGN_IDENTITY unset: leaving Ether.app unsigned (dev build)"
+  # lipo invalidates input signatures. Apple Silicon needs a valid ad-hoc
+  # signature even when no Developer ID is available for distribution.
+  echo "==> SIGN_IDENTITY unset: ad-hoc signing (not notarised)"
+  for bin in "$RES/ether" "$RES/ffmpeg" "$RES/ffprobe" "$MACOS/ether-tray"; do
+    codesign --force --sign - "$bin"
+  done
+  codesign --force --sign - "$APP"
+  codesign --verify --deep --strict "$APP"
 fi
 
 echo "==> built $APP"

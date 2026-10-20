@@ -1,12 +1,14 @@
 # Installing Ether
 
-Ether is currently pre-release. **No desktop installers or release packages
-have been published yet.** Check the [Releases page](https://github.com/braedonsaunders/ether/releases)
-for available downloads before following the package instructions below.
+Download a macOS DMG, Windows setup EXE, Linux DEB/RPM, or standalone
+archive from the [Releases page](https://github.com/braedonsaunders/ether/releases/latest).
+Docker images are available at `ghcr.io/braedonsaunders/ether`. Packaged
+installers and archives bundle FFmpeg and FFprobe.
 
-The planned package formats are a Windows setup EXE, a macOS DMG, Linux DEB/RPM
-and Docker images. Packaging configuration exists; this is not a claim that
-these packages have been built, signed or tested on your device.
+The v0.2.0 macOS app is ad-hoc signed and **not notarised**; macOS may require
+**System Settings › Privacy & Security › Open Anyway** after you attempt to
+open it. The Windows installer is unsigned and may trigger SmartScreen.
+The automatic-update manifest is signed separately with Ether's release key.
 
 If you already have an Ether executable, run it and open
 <http://localhost:32400/ether/>. The setup wizard walks you through Plex sign-in,
@@ -40,10 +42,10 @@ from an elevated prompt, or from the tray menu.
    Applications, and launch it. Ether appears as a menu-bar icon (no
    Dock icon).
 2. On first launch the tray installs a per-user LaunchAgent
-   (`~/Library/LaunchAgents/io.github.braedonsaunders.ether.plist`) that runs the
+   (`~/Library/LaunchAgents/ether.plist`) that runs the
    server (`Ether.app/Contents/Resources/ether`) while you are logged in.
 3. Data lives in `~/Library/Application Support/Ether`, logs in
-   `~/Library/Logs/Ether`.
+   `~/Library/Application Support/Ether/logs`.
 
 Requires macOS 13+. Signing and notarisation depend on the published package;
 check its release notes before installing.
