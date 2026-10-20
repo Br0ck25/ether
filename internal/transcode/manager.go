@@ -366,6 +366,14 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	adapt := adaptiveFromConfig(m.cfg)
 	m.mu.Unlock()
 	rungs := buildRungs(req.Info, d, adapt)
+	if proto == core.ProtocolHLS && d.Container == ContainerMatroska && len(rungs) > 1 {
+		// Plex's native player probes every rendition's initialization and
+		// early segments concurrently. These rungs share one encoder, so
+		// those probes would repeatedly stop the active run. Advertise the
+		// selected quality alone until rungs can produce independently.
+		// Explicit Plex quality changes still start a separate decision.
+		rungs = rungs[:1]
+	}
 
 	// HLS playlists start at the offset; a DASH MPD always spans the whole
 	// title and the first run starts at the offset's segment.
