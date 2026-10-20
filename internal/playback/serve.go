@@ -106,6 +106,10 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			srcpos = alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, ng.infoSnapshot().Duration)))
 			g = ng
 			continue
+		case errors.Is(rerr, io.EOF) && srcpos >= g.src.Size():
+			// The source reached its real end before the virtual range did
+			// (a spliced lower-bitrate release): not a read failure.
+			return errShortSource
 		case recoverableSourceFailure(rerr) && ctx.Err() == nil:
 			if retry, ok := g.src.(interface{ RetryDirectPlay() bool }); ok && retry.RetryDirectPlay() && errors.Is(rerr, core.ErrSourceUnavailable) && !permanentSourceFailure(rerr) {
 				// Native players retry this part URL with its original byte

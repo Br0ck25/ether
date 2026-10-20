@@ -694,11 +694,16 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		return nil, err
 	}
 	s.adopt(g)
+	// Pin before the session becomes visible: a Stop racing registration
+	// (a replacing Prepare, Close) must find the pin it releases, or the
+	// pin taken afterwards would never be dropped.
+	m.pinLive(g.releaseID())
 
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
 		m.dropGeneration(g)
+		m.unpinLive(g.releaseID())
 		return nil, errors.New("playback: shutting down")
 	}
 	// Distinct picked-release flights can race to register the same
@@ -707,6 +712,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	if existing := m.byIdent[id]; existing != nil {
 		m.mu.Unlock()
 		m.dropGeneration(g)
+		m.unpinLive(g.releaseID())
 		return existing, nil
 	}
 	var replaced []string
@@ -729,7 +735,6 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 		m.Stop(old)
 	}
 	m.reg.poke()
-	m.pinLive(g.releaseID())
 	m.saveResume(ctx, s, g)
 	ginfo := g.infoSnapshot()
 	log.Info("playback session started", "session", s.id, "release", g.res.Release.Name,

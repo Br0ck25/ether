@@ -497,10 +497,14 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		remuxSwitch = false
 	}
 
+	// Pin before publishing g: a Stop right after the swap unpins s.cur,
+	// and must find this pin rather than leave one taken later behind.
+	m.pinLive(g.releaseID())
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		m.dropGeneration(g)
+		m.unpinLive(g.releaseID())
 		return nil, fmt.Errorf("playback: session %s ended: %w", s.id, core.ErrNotFound)
 	}
 	s.cur = g
@@ -523,7 +527,6 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	delete(m.tokens, s.id+"/"+cur.token)
 	m.mu.Unlock()
 	cur.retire()
-	m.pinLive(g.releaseID())
 	m.unpinLive(cur.releaseID())
 	m.saveResume(ctx, s, g)
 	s.resetSpeed(m.now(), m.opts.SpeedGrace)
