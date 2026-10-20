@@ -362,8 +362,8 @@ func TestSegmentNumber(t *testing.T) {
 			t.Errorf("%s: %d %v", in, n, ok)
 		}
 	}
-	if _, ok := segmentNumber("header"); ok {
-		t.Error("header should not parse")
+	if n, ok := segmentNumber("header"); !ok || n != -1 {
+		t.Error("Matroska header should select initialization")
 	}
 }
 

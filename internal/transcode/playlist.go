@@ -22,6 +22,20 @@ const InitSegment = -1
 // InitSegmentName is the init segment's URI in media playlists.
 const InitSegmentName = "init.mp4"
 
+// MatroskaHeaderName matches Plex's segmented-Matroska initialization URI.
+const MatroskaHeaderName = "header"
+
+func initSegmentName(container string) string {
+	if container == ContainerMatroska {
+		return MatroskaHeaderName
+	}
+	return InitSegmentName
+}
+
+func hasInitSegment(container string) bool {
+	return container == ContainerFMP4 || container == ContainerMatroska
+}
+
 // segmentCount is how many segments cover a span. A remainder shorter than
 // a quarter segment is folded into the last segment: ffmpeg only cuts at
 // hls_time boundaries, so it never produces such a sliver on its own.
@@ -53,7 +67,7 @@ func mediaPlaylist(span, segDur time.Duration, container string, name func(n int
 	var b bytes.Buffer
 	n := segmentCount(span, segDur)
 	version := 3
-	if container == ContainerFMP4 {
+	if hasInitSegment(container) {
 		version = 7
 	}
 	target := int(math.Ceil(segDur.Seconds()))
@@ -68,8 +82,8 @@ func mediaPlaylist(span, segDur time.Duration, container string, name func(n int
 	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
 	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
 	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
-	if container == ContainerFMP4 {
-		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", InitSegmentName)
+	if hasInitSegment(container) {
+		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", initSegmentName(container))
 	}
 	for i := 0; i < n; i++ {
 		d := segmentLength(i, n, span, segDur)
@@ -84,7 +98,7 @@ func mediaPlaylist(span, segDur time.Duration, container string, name func(n int
 func eventPlaylist(done []int, segDur time.Duration, container string, ended bool, name func(n int) string) []byte {
 	var b bytes.Buffer
 	version := 3
-	if container == ContainerFMP4 {
+	if hasInitSegment(container) {
 		version = 7
 	}
 	b.WriteString("#EXTM3U\n")
@@ -92,8 +106,8 @@ func eventPlaylist(done []int, segDur time.Duration, container string, ended boo
 	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", int(math.Ceil(segDur.Seconds())))
 	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
 	b.WriteString("#EXT-X-PLAYLIST-TYPE:EVENT\n")
-	if container == ContainerFMP4 {
-		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", InitSegmentName)
+	if hasInitSegment(container) {
+		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", initSegmentName(container))
 	}
 	for i, n := range done {
 		if n != i {
@@ -117,7 +131,7 @@ func eventPlaylist(done []int, segDur time.Duration, container string, ended boo
 func planPlaylist(tl *Timeline, container string, name func(n int) string, discont func(n int) bool, event, ended bool, limit int) []byte {
 	var b bytes.Buffer
 	version := 3
-	if container == ContainerFMP4 {
+	if hasInitSegment(container) {
 		version = 7
 	}
 	b.WriteString("#EXTM3U\n")
@@ -130,8 +144,8 @@ func planPlaylist(tl *Timeline, container string, name func(n int) string, disco
 		b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
 		b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
 	}
-	if container == ContainerFMP4 {
-		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", InitSegmentName)
+	if hasInitSegment(container) {
+		fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", initSegmentName(container))
 	}
 	n := tl.Total()
 	if n == 0 {
@@ -140,8 +154,8 @@ func planPlaylist(tl *Timeline, container string, name func(n int) string, disco
 	for i := 0; i < n; i++ {
 		if i > 0 && discont != nil && discont(i) {
 			b.WriteString("#EXT-X-DISCONTINUITY\n")
-			if container == ContainerFMP4 {
-				fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", InitSegmentName)
+			if hasInitSegment(container) {
+				fmt.Fprintf(&b, "#EXT-X-MAP:URI=%q\n", initSegmentName(container))
 			}
 		}
 		fmt.Fprintf(&b, "#EXTINF:%.6f,\n%s\n", tl.Dur(i).Seconds(), name(i))
@@ -164,7 +178,7 @@ func ParseSegmentName(name string) (int, bool) {
 	if i := strings.LastIndexByte(name, '/'); i >= 0 {
 		name = name[i+1:]
 	}
-	if name == InitSegmentName {
+	if name == InitSegmentName || name == MatroskaHeaderName {
 		return InitSegment, true
 	}
 	base, ext, ok := strings.Cut(name, ".")

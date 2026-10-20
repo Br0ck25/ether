@@ -505,15 +505,9 @@ func (s *Server) handleLiveTVPlayback(w http.ResponseWriter, r *http.Request) bo
 		s.d.LiveTV.ServeDASH(w, r, id, pr.User)
 		return true
 	}
-	q := url.Values{}
-	if token := FromContext(r.Context()).Token; token != "" {
-		q.Set("X-Plex-Token", token)
-	}
-	target := "/livetv/sessions/" + id + "/0/index.m3u8"
-	if len(q) > 0 {
-		target += "?" + q.Encode()
-	}
-	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+	// Native players can retry this endpoint without following a redirect.
+	// The Live TV playlist already uses rooted, authenticated child URLs.
+	s.d.LiveTV.ServePlaylist(w, r, id, pr.User)
 	return true
 }
 func (s *Server) handleLiveLogo(w http.ResponseWriter, r *http.Request) {

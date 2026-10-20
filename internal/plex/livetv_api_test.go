@@ -131,8 +131,8 @@ func TestLiveTVDVRGuideProviderAndTuneShapes(t *testing.T) {
 		t.Fatalf("live decision %d %s", decision.Code, decision.Body.String())
 	}
 	start := f.request(t, "GET", "/video/:/transcode/universal/start.m3u8?path="+sessionPath, nil)
-	if start.Code != 307 || !strings.Contains(start.Header().Get("Location"), sessionID+"/0/index.m3u8") {
-		t.Fatalf("live start %d %s", start.Code, start.Header().Get("Location"))
+	if start.Code != 200 || !strings.Contains(start.Body.String(), "#EXTM3U") || start.Header().Get("Location") != "" {
+		t.Fatalf("live start %d %s", start.Code, start.Body.String())
 	}
 	playlist := f.request(t, "GET", sessionPath+"/0/index.m3u8", nil)
 	if playlist.Code != 200 || !strings.Contains(playlist.Body.String(), "/resource/") {
@@ -293,11 +293,8 @@ func TestNativeLiveSubscriptionOwnershipAndPlayback(t *testing.T) {
 		t.Fatalf("selected live item cannot reach MDE: %d %s", decision.Code, decision.Body.String())
 	}
 	start := f.request(t, "GET", "/video/:/transcode/universal/start.m3u8?path="+url.QueryEscape(path), headers)
-	if start.Code != http.StatusTemporaryRedirect || !strings.Contains(start.Header().Get("Location"), id+"/0/index.m3u8") {
+	if start.Code != http.StatusOK || !strings.Contains(start.Body.String(), "#EXTM3U") || start.Header().Get("Location") != "" {
 		t.Fatalf("live playback bootstrap did not reach media: %d %s", start.Code, start.Body.String())
-	}
-	if media := f.request(t, "GET", start.Header().Get("Location"), headers); media.Code != 200 || !strings.Contains(media.Body.String(), "#EXTM3U") {
-		t.Fatalf("live subscription cannot obtain a media playlist: %d %s", media.Code, media.Body.String())
 	}
 	for _, state := range []string{"playing", "stopped"} {
 		timeline := f.request(t, "GET", "/:/timeline?key="+url.QueryEscape(path)+"&ratingKey="+id+"&state="+state, headers)

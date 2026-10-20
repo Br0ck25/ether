@@ -301,6 +301,7 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 	if argValue(args, "-segment_format") == "matroska" {
 		pattern, playlist = playlist, argValue(args, "-segment_list")
 		start, _ = strconv.Atoi(argValue(args, "-segment_start_number"))
+		init = filepath.Base(argValue(args, "-segment_header_filename"))
 	}
 	if failStart {
 		if cmd.Stderr != nil {
