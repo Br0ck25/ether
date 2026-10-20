@@ -57,3 +57,17 @@ func TestAutoSourceKeepsRememberedRelease(t *testing.T) {
 		t.Fatal("auto must reuse the remembered source")
 	}
 }
+
+func TestRememberedRebootCannotBypassSeriesIdentity(t *testing.T) {
+	h := newHarness(t, []*fakeRelease{mkv("old", 10000, time.Minute), mkv("correct", 10000, time.Minute)}, []string{"correct"})
+	h.catalog.titles[epKey].ShowYear = 2005
+	caps := defaultCaps("series-client")
+	old := core.Release{ID: "old", Info: core.ReleaseInfo{Year: 2023}}
+	if err := h.m.Remember(t.Context(), owner, epKey, caps, &core.Resolution{Release: old, NZB: []byte("nzb-old")}); err != nil {
+		t.Fatal(err)
+	}
+	ps := h.prepare(owner, epKey, "series-client")
+	if ps.Resolution.Release.ID != "correct" || h.resolver.callCount() != 1 {
+		t.Fatalf("stored reboot bypassed identity: %+v", ps.Resolution.Release)
+	}
+}

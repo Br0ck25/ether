@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -36,6 +37,11 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		if res != nil && s.prefer != "" && res.Release.ID != s.prefer {
 			res = nil // a picked version wins over the remembered release
 		}
+	}
+	if res != nil && s.title != nil && !releaseparse.SeriesYearMatches(res.Release.Info.Year, s.title.ShowYear) {
+		// An older stored/warmed selection may predate the series identity
+		// gate. Do not reuse a same-named reboot for this show's episode.
+		res, cached = nil, nil
 	}
 	var (
 		tried      []string

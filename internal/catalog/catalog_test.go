@@ -65,13 +65,16 @@ func TestShowSeasonsEpisodes(t *testing.T) {
 		t.Fatalf("episodes: %v %v", eps, err)
 	}
 	ep := eps[0]
-	if ep.Key != core.EpisodeKey(100, 1, 1) || ep.StillPath != "/pilot.jpg" || ep.Runtime != 45*time.Minute || ep.ShowIDs.TVDB != 777 || ep.ShowTitle != "Space Show" {
+	if ep.Key != core.EpisodeKey(100, 1, 1) || ep.StillPath != "/pilot.jpg" || ep.Runtime != 45*time.Minute || ep.ShowIDs.TVDB != 777 || ep.ShowTitle != "Space Show" || ep.ShowYear != show.Year {
 		t.Fatalf("episode: %+v", ep)
 	}
 	// Episode external ids enrich on Get.
 	got, err := c.Get(ctx, core.EpisodeKey(100, 1, 2))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got.ShowYear != show.Year {
+		t.Fatalf("cached episode lost series year: %d, want %d", got.ShowYear, show.Year)
 	}
 	if got.IDs.IMDB != "tt5001001" {
 		t.Fatalf("episode imdb: %+v", got.IDs)

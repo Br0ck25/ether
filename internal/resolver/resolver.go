@@ -326,7 +326,7 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 		if title == "" {
 			title = t.Title
 		}
-		return core.SearchRequest{Type: core.TypeEpisode, IDs: ids, Title: title, Year: t.Year, Season: season, Episode: episode}
+		return core.SearchRequest{Type: core.TypeEpisode, IDs: ids, Title: title, Year: t.ShowYear, Season: season, Episode: episode}
 	}
 	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, Year: t.Year}
 }
@@ -782,6 +782,9 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		}
 	}
 	if isEpisode {
+		if !releaseparse.SeriesYearMatches(rel.Info.Year, sreq.Year) {
+			return "series year mismatch"
+		}
 		if rel.Info.FullSeason {
 			// Usenet season packs are skipped in v1; a torrent pack streams
 			// the wanted episode's file through debrid (Release.Target).

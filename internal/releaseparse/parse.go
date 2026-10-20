@@ -395,3 +395,10 @@ func extractTitle(spaced string, info *core.ReleaseInfo) string {
 	title = strings.Trim(strings.Join(fields, " "), " -")
 	return title
 }
+
+// SeriesYearMatches distinguishes same-named series and reboots. A year
+// explicitly present in a TV release identifies the series, not the episode's
+// air year. Releases omitting a year remain eligible.
+func SeriesYearMatches(releaseYear, showYear int) bool {
+	return releaseYear == 0 || showYear == 0 || releaseYear == showYear
+}

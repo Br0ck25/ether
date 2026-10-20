@@ -328,7 +328,7 @@ func seasonToTitle(show core.Title, s tmdb.SeasonSummary) core.Title {
 	}
 	t := core.Title{
 		Key: core.SeasonKey(show.IDs.TMDB, s.SeasonNumber), Type: core.TypeSeason,
-		IDs: core.IDs{TMDB: s.ID}, ShowKey: show.Key, ShowIDs: show.IDs, ShowTitle: show.Title,
+		IDs: core.IDs{TMDB: s.ID}, ShowKey: show.Key, ShowIDs: show.IDs, ShowTitle: show.Title, ShowYear: show.Year,
 		SeasonTitle: name, Season: s.SeasonNumber, Title: name, SortTitle: sortTitle(name),
 		Summary: s.Overview, Released: rel, PosterPath: s.PosterPath, BackdropPath: show.BackdropPath,
 		ChildCount: s.EpisodeCount, Rating: s.VoteAverage,
@@ -351,7 +351,7 @@ func episodeToTitle(show core.Title, seasonName string, e tmdb.Episode) core.Tit
 	}
 	t := core.Title{
 		Key: core.EpisodeKey(show.IDs.TMDB, e.SeasonNumber, e.EpisodeNumber), Type: core.TypeEpisode,
-		IDs: core.IDs{TMDB: e.ID}, ShowKey: show.Key, ShowIDs: show.IDs, ShowTitle: show.Title,
+		IDs: core.IDs{TMDB: e.ID}, ShowKey: show.Key, ShowIDs: show.IDs, ShowTitle: show.Title, ShowYear: show.Year,
 		SeasonTitle: seasonName, Season: e.SeasonNumber, Episode: e.EpisodeNumber,
 		Title: title, SortTitle: sortTitle(title), Summary: e.Overview, Released: rel,
 		StillPath: e.StillPath, PosterPath: e.StillPath, BackdropPath: show.BackdropPath,

@@ -152,10 +152,12 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 	}
 	// ShowIDs for seasons/episodes.
 	for i := range items {
-		if items[i].ShowKey != 0 && (items[i].ShowIDs.IMDB == "" || items[i].ShowIDs.TVDB == 0) {
+		if items[i].ShowKey != 0 && (items[i].ShowYear == 0 || items[i].ShowIDs.IMDB == "" || items[i].ShowIDs.TVDB == 0) {
 			var imdb string
 			var tvdb int64
-			_ = c.db.QueryRowContext(ctx, `SELECT imdb,tvdb FROM catalog_titles WHERE key=?`, int64(items[i].ShowKey)).Scan(&imdb, &tvdb)
+			var year int
+			_ = c.db.QueryRowContext(ctx, `SELECT imdb,tvdb,year FROM catalog_titles WHERE key=?`, int64(items[i].ShowKey)).Scan(&imdb, &tvdb, &year)
+			items[i].ShowYear = year
 			if items[i].ShowIDs.IMDB == "" {
 				items[i].ShowIDs.IMDB = imdb
 			}
