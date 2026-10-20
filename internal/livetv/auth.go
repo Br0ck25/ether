@@ -313,12 +313,14 @@ func (s *Service) sourceAuth(ctx context.Context, id string) (*SourceAuth, error
 
 // upstreamHeaders returns the request headers for fetching one channel input
 // (its playlists, keys and segments, and ffmpeg's input). Credentials come
-// from the input's AuthSourceID, or the channel's own source when that is
-// empty; an input never receives another provider's credentials. The result
-// is empty, never nil, when no authentication applies.
+// from the input's AuthSourceID. Without one, only the playlist's own entry
+// (the import-owned input, or a legacy channel's single input) inherits the
+// channel's source; owner-added backups stay anonymous, so an input never
+// receives another provider's credentials. The result is empty, never nil,
+// when no authentication applies.
 func (s *Service) upstreamHeaders(ctx context.Context, c Channel, input StreamSource) (http.Header, error) {
 	id := input.AuthSourceID
-	if id == "" {
+	if id == "" && c.SourceID != "" && (input.ID == stableID(c.ID, "playlist") || len(c.StreamSources) <= 1) {
 		id = c.SourceID
 	}
 	a, err := s.sourceAuth(ctx, id)

@@ -121,8 +121,9 @@ func TestUpstreamHeadersUseOnlyTheInputsProvider(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	ch := Channel{ID: "x", SourceID: "a"}
-	own, _ := s.upstreamHeaders(ctx, ch, StreamSource{ID: "1"})
+	imported := StreamSource{ID: stableID("x", "playlist")}
+	ch := Channel{ID: "x", SourceID: "a", StreamSources: []StreamSource{imported, {ID: "added"}}}
+	own, _ := s.upstreamHeaders(ctx, ch, imported)
 	if own.Get("Authorization") != "Bearer token-a" || own.Get("User-Agent") != "UA-A" {
 		t.Fatalf("own provider headers: %v", own)
 	}
@@ -133,6 +134,14 @@ func TestUpstreamHeadersUseOnlyTheInputsProvider(t *testing.T) {
 	plain, _ := s.upstreamHeaders(ctx, ch, StreamSource{ID: "3", AuthSourceID: "c"})
 	if len(plain) != 0 {
 		t.Fatalf("unauthenticated provider received credentials: %v", plain)
+	}
+	added, _ := s.upstreamHeaders(ctx, ch, StreamSource{ID: "added"})
+	if len(added) != 0 {
+		t.Fatalf("owner-added backup inherited the playlist login: %v", added)
+	}
+	legacy, _ := s.upstreamHeaders(ctx, Channel{ID: "y", SourceID: "a"}, StreamSource{ID: "only"})
+	if legacy.Get("Authorization") != "Bearer token-a" {
+		t.Fatalf("legacy single input lost its login: %v", legacy)
 	}
 	manual, _ := s.upstreamHeaders(ctx, Channel{ID: "v"}, StreamSource{ID: "4"})
 	if len(manual) != 0 {
