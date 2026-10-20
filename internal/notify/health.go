@@ -8,8 +8,8 @@ import (
 // SampleHealth emits one alert on entering an unhealthy state, rather than one
 // alert for every sample. Normal recovery allows a later outage to alert again.
 func (s *Service) SampleHealth(ctx context.Context) error {
-	s.healthMu.Lock()
-	defer s.healthMu.Unlock()
+	s.sampleMu.Lock()
+	defer s.sampleMu.Unlock()
 	if s.providerStates == nil {
 		s.providerStates = map[string]string{}
 	}

@@ -75,6 +75,7 @@ type Options struct {
 type Service struct {
 	drainMu        sync.Mutex
 	healthMu       sync.Mutex
+	sampleMu       sync.Mutex // serializes provider/cache sampling independently of indexer callbacks
 	providerStates map[string]string
 	indexerAlerts  map[string]*indexerAlert // indexer+kind -> notification state
 	indexerLog     *faillog.Tracker
