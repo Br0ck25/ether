@@ -250,10 +250,10 @@ describe("HomeScreen", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Rows" }));
     const series = screen.getByRole("group", { name: "Series" });
     expect(
-      within(series).getByRole("listitem", { name: "Row Finish what you started" }),
+      within(series).getByRole("listitem", { name: "Row Finish What You Started" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("listitem", { name: "Row Top 10 for You" })).toBeNull();
-    expect(screen.queryByRole("listitem", { name: "Row Acclaimed and unseen" })).toBeNull();
+    expect(screen.queryByRole("listitem", { name: "Row Acclaimed & Unseen" })).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "Tuning" }));
     fireEvent.change(screen.getByRole("slider", { name: "Discovery" }), {
