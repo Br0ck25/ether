@@ -506,7 +506,7 @@ function RowsPanel({ state }: { state: ReturnType<typeof useAsync<RowInsight[]>>
       icon={<TrendingUp size={16} />}
       actions={
         <Link to="/home-screens" className="text-xs font-medium text-primary hover:underline">
-          Home screens
+          HomeScreen
         </Link>
       }
     >

@@ -40,6 +40,7 @@ import {
 } from "./data";
 import { createReleaseConsoleMock } from "./releases";
 import { createSitesMock } from "./sites";
+import { createLiveTVMock } from "./livetv";
 import { TEMPLATES } from "./templates";
 
 const NOW = () => new Date();
@@ -325,6 +326,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const byKey = new Map(catalog.map((t) => [t.key, t]));
   const releaseConsole = createReleaseConsoleMock(catalog);
   const sites = createSitesMock();
+  const liveTV = createLiveTVMock(catalog);
   const state = {
     boot: {
       ok: true,
@@ -1370,6 +1372,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
     const site = sites.handle(method, seg, body, state.config);
     if (site) return json(site.body, site.status);
+
+    const tvr = liveTV.handle(method, seg, q, body);
+    if (tvr) return json(tvr.body, tvr.status);
 
     const rc = releaseConsole.handle(method, seg, q, body);
     if (rc)

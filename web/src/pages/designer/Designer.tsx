@@ -1,20 +1,13 @@
-import {
-  Badge,
-  Button,
-  EmptyState,
-  PageHeader,
-  SubtabNav,
-  Spinner,
-  toast,
-} from "@braedonsaunders/appkit-ui";
+import { Badge, Button, EmptyState, SubtabNav, Spinner, toast } from "@braedonsaunders/appkit-ui";
 import { RefreshCw, Save, Undo2, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ErrorPanel } from "../../components/feedback";
 import { useViewers, viewerName } from "../../components/pickers";
 import { api, errorMessage } from "../../lib/api";
 import type { HomeLayout } from "../../lib/contract";
-import { useAsync, useMediaQuery } from "../../lib/hooks";
-import { EMPTY_LAYOUT, prune, sameLayout, type LayerKey } from "../../lib/layout";
+import { useAsync } from "../../lib/hooks";
+import { Workspace, PanelHead } from "../../components/workspace";
+import { EMPTY_LAYOUT, overrideCount, prune, sameLayout, type LayerKey } from "../../lib/layout";
 import { ContextBar, type ViewContext } from "./ContextBar";
 import { HomeCanvas } from "./HomeCanvas";
 import { LayerSwitcher } from "./LayerSwitcher";
@@ -29,7 +22,7 @@ function initialContext(): ViewContext {
 }
 
 /**
- * Home screens: a Global Home everyone starts from, personalization
+ * HomeScreen: a Global Home everyone starts from, personalization
  * within it, and per-viewer overrides on top. Controls on the left third,
  * the live Plex Home (rendered server-side from the draft) on the right.
  */
@@ -44,7 +37,6 @@ export default function Designer() {
   const [nonce, setNonce] = useState(0);
   const [tools, setTools] = useState("layout");
   const [focusRow, setFocusRow] = useState<string | null>(null);
-  const wide = useMediaQuery("(min-width: 1024px)");
 
   const saved = doc.data?.layout ?? EMPTY_LAYOUT;
   useEffect(() => {
@@ -55,6 +47,7 @@ export default function Designer() {
   const defaults = doc.data?.defaults.maxRows ?? { home: 14, movies: 10, shows: 10 };
 
   const viewerId = layer === "global" ? spotCheck : layer;
+  const overrideTotal = (viewers ?? []).reduce((n, v) => n + overrideCount(draft, v.id), 0);
   const viewerById = useMemo(() => new Map((viewers ?? []).map((v) => [v.id, v])), [viewers]);
   const layerName =
     layer === "global"
@@ -118,59 +111,57 @@ export default function Designer() {
     viewers: viewers ?? [],
   };
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b border-border bg-surface px-3 py-3 sm:px-6">
-        <PageHeader
-          title="Home screens"
-          description="Shape the Global Home everyone starts from. Personalization fills it for each viewer, and per-viewer overrides sit on top."
-          actions={wide ? actions : undefined}
-        />
-        {!wide ? <div className="mt-3">{actions}</div> : null}
-      </div>
+  const switchLayer = (l: LayerKey) => {
+    setLayer(l);
+    setFocusRow(null);
+  };
 
-      {viewersError ? (
-        <div className="p-6">
-          <ErrorPanel error={viewersError} />
-        </div>
-      ) : doc.error ? (
-        <div className="p-6">
-          <ErrorPanel error={doc.error} onRetry={() => void doc.reload()} />
-        </div>
-      ) : !viewers || !doc.data ? (
-        <div className="grid flex-1 place-items-center">
-          <Spinner size={22} label="Loading the Home layout" />
-        </div>
-      ) : viewers.length === 0 ? (
-        <div className="p-6">
-          <EmptyState
-            icon={<Users />}
-            title="No viewers yet"
-            description="Share this server from plex.tv; each person appears here once they sign in."
-          />
-        </div>
-      ) : (
-        <div className="app-scroll min-h-0 flex-1 overflow-y-auto lg:grid lg:grid-cols-3 lg:overflow-hidden">
-          <aside
-            className="app-scroll space-y-5 border-b border-border bg-bg-subtle p-3 sm:p-5 lg:col-span-1 lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r"
-            aria-label="Designer controls"
-          >
-            <LayerSwitcher
-              layer={layer}
-              onChange={(l) => {
-                setLayer(l);
-                setFocusRow(null);
-              }}
-              viewers={viewers}
-              draft={draft}
-            />
-            <section aria-label="Preview context" className="space-y-2">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-                Context
-              </h2>
-              <ContextBar ctx={ctx} onChange={setCtx} />
-            </section>
-            <div className="border-b border-border">
+  const state = viewersError ? (
+    <div className="p-6">
+      <ErrorPanel error={viewersError} />
+    </div>
+  ) : doc.error ? (
+    <div className="p-6">
+      <ErrorPanel error={doc.error} onRetry={() => void doc.reload()} />
+    </div>
+  ) : !viewers || !doc.data ? (
+    <div className="grid flex-1 place-items-center">
+      <Spinner size={22} label="Loading the Home layout" />
+    </div>
+  ) : viewers.length === 0 ? (
+    <div className="p-6">
+      <EmptyState
+        icon={<Users />}
+        title="No viewers yet"
+        description="Share this server from plex.tv; each person appears here once they sign in."
+      />
+    </div>
+  ) : null;
+
+  return (
+    <Workspace
+      title="HomeScreen"
+      subtitle="The Global Home everyone starts from, personalized per viewer, with per-viewer overrides on top."
+      actions={actions}
+      asideLabel="Designer controls"
+      mainLabel="Home preview"
+      mainClassName="p-3 sm:p-6"
+      aside={
+        viewers ? (
+          <>
+            <PanelHead>
+              <div
+                className="flex min-w-0 flex-wrap items-center gap-1"
+                aria-label="Editing and context"
+              >
+                <LayerSwitcher
+                  layer={layer}
+                  onChange={switchLayer}
+                  viewers={viewers}
+                  draft={draft}
+                />
+                <ContextBar ctx={ctx} onChange={setCtx} className="shrink-0" />
+              </div>
               <SubtabNav
                 ariaLabel="Designer tools"
                 active={tools}
@@ -178,58 +169,57 @@ export default function Designer() {
                 tabs={[
                   { key: "layout", label: "Layout" },
                   { key: "rows", label: "Rows" },
-                  { key: "overrides", label: "Overrides" },
+                  {
+                    key: "overrides",
+                    label: "Overrides",
+                    count: overrideTotal || undefined,
+                  },
                 ]}
               />
+            </PanelHead>
+            <div className="space-y-5 p-3 sm:p-4">
+              {tools === "layout" && (
+                <>
+                  <PageSettings {...editing} defaults={defaults} />
+                  <AnchoredSlots {...editing} available={available} />
+                </>
+              )}
+              {tools === "rows" && (
+                <RowPool
+                  {...editing}
+                  available={available}
+                  focusRow={focusRow}
+                  onFocusRow={setFocusRow}
+                />
+              )}
+              {tools === "overrides" && <OverrideList {...editing} onOpenLayer={switchLayer} />}
             </div>
-            {tools === "layout" && (
-              <>
-                <PageSettings {...editing} defaults={defaults} />
-                <AnchoredSlots {...editing} available={available} />
-              </>
-            )}
-            {tools === "rows" && (
-              <RowPool
-                {...editing}
-                available={available}
-                focusRow={focusRow}
-                onFocusRow={setFocusRow}
-              />
-            )}
-            {tools === "overrides" && (
-              <OverrideList
-                {...editing}
-                onOpenLayer={(l) => {
-                  setLayer(l);
-                  setFocusRow(null);
-                }}
-              />
-            )}
-          </aside>
-          <main
-            className="app-scroll min-w-0 bg-bg p-3 sm:p-6 lg:col-span-2 lg:min-h-0 lg:overflow-y-auto"
-            aria-label="Home preview"
-          >
-            <HomeCanvas
-              draft={draft}
-              dirty={dirty}
-              saved={saved}
-              layer={layer}
-              layerName={layerName}
-              ctx={ctx}
-              viewers={viewers}
-              viewerId={viewerId}
-              onSpotCheck={setSpotCheck}
-              refreshNonce={nonce}
-              onChange={setDraft}
-              onEditRow={(row) => {
-                setTools("rows");
-                setFocusRow(row);
-              }}
-            />
-          </main>
-        </div>
-      )}
-    </div>
+          </>
+        ) : null
+      }
+      main={
+        viewers ? (
+          <HomeCanvas
+            draft={draft}
+            dirty={dirty}
+            saved={saved}
+            layer={layer}
+            layerName={layerName}
+            ctx={ctx}
+            viewers={viewers}
+            viewerId={viewerId}
+            onSpotCheck={setSpotCheck}
+            refreshNonce={nonce}
+            onChange={setDraft}
+            onEditRow={(row) => {
+              setTools("rows");
+              setFocusRow(row);
+            }}
+          />
+        ) : null
+      }
+    >
+      {state}
+    </Workspace>
   );
 }
