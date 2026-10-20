@@ -36,6 +36,10 @@ Installers and the Docker image bundle `ffmpeg` and `ffprobe` from the
 | Go fonts (`golang.org/x/image/font/gofont`: Go Bold, Go Medium), embedded | Title text on generated collection posters, `internal/artwork` | BSD-3-Clause-style (© 2016 Bigelow & Holmes Inc., distributed by the Go Authors; see `golang.org/x/image/font/gofont/ttfs/README`) |
 | `github.com/dlclark/regexp2` | Bounded native custom-format expressions, `internal/resolver` | MIT (© Doug Clark) |
 | `github.com/go-chi/chi/v5` | HTTP routing (wired by other packages) | MIT |
+| `github.com/PuerkitoBio/goquery` | HTML/XML selection for built-in indexer definitions, `internal/cardigann` | BSD-3-Clause (© Martin Angers and contributors) |
+| `github.com/andybalholm/cascadia` | CSS selector engine used with goquery, `internal/cardigann` | BSD-2-Clause (© Andy Balholm) |
+| `golang.org/x/net` (`html`) | HTML parsing for built-in indexer definitions, `internal/cardigann` | BSD-3-Clause |
+| `go.yaml.in/yaml/v3` | Reading owner-supplied indexer definitions, `internal/cardigann` | MIT and Apache-2.0 (© Canonical Ltd. and the YAML maintainers) |
 | `fyne.io/systray` | Tray/menu-bar icon, `cmd/ether-tray` | Apache-2.0 |
 | `github.com/godbus/dbus/v5` | Linux StatusNotifier (systray transport) | BSD-2-Clause |
 | `github.com/google/uuid` | IDs (via modernc / components) | BSD-3-Clause |

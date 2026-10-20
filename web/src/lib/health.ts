@@ -31,7 +31,7 @@ function errorOf(v: unknown): string {
   return isPlainObject(v) && typeof v.error === "string" ? v.error : "";
 }
 
-export function usenetHealth(v: unknown): HealthItem {
+export function usenetHealth(v: unknown, debrid?: unknown): HealthItem {
   const base = {
     id: "usenet" as const,
     label: "Usenet",
@@ -42,7 +42,9 @@ export function usenetHealth(v: unknown): HealthItem {
   if (!Array.isArray(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const providers = v.filter(isPlainObject);
   if (providers.length === 0)
-    return { ...base, level: "error", summary: "No providers configured", details: [] };
+    return debridOn(debrid)
+      ? { ...base, level: "off", summary: "Not used · streaming through debrid", details: [] }
+      : { ...base, level: "error", summary: "No providers configured", details: [] };
   const primary = providers.filter((p) => !p.backfill);
   const bad = providers.filter((p) => str(p.state) && str(p.state) !== "ok");
   const primaryBad = primary.filter((p) => str(p.state) && str(p.state) !== "ok");
@@ -69,6 +71,11 @@ export function usenetHealth(v: unknown): HealthItem {
     details,
     fill: configured > 0 ? active / configured : undefined,
   };
+}
+
+/** A debrid account is enabled (from the "debrid" status section). */
+function debridOn(v: unknown): boolean {
+  return isPlainObject(v) && v.enabled === true;
 }
 
 export function indexersHealth(v: unknown): HealthItem {
@@ -239,7 +246,7 @@ export function computeHealth(
 ): HealthItem[] {
   const s = sections ?? {};
   return [
-    usenetHealth(s.providers),
+    usenetHealth(s.providers, s.debrid),
     indexersHealth(s.indexers),
     cacheHealth(s.cache),
     catalogHealth(s.catalog, now),

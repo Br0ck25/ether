@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { EtherConfig, UsenetProvider } from "../lib/types";
-import { normalizeTraces } from "../pages/releases/Traces";
+import { normalizeTraces } from "../pages/releases/History";
 import { calls, renderApp } from "./harness";
 
 const WAIT = { timeout: 4000 };
@@ -144,6 +144,21 @@ describe("Releases", () => {
   });
 });
 
+describe("Source routing", () => {
+  it("shows measured startup per source and saves the preference", async () => {
+    const { fake } = renderApp("/releases/startup");
+    expect(await screen.findByText(/debrid 410 ms \(22 plays\)/, {}, WAIT)).toBeInTheDocument();
+    expect(screen.getByText(/Usenet 2\.1 s \(37 plays\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Source for equal-quality releases" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Prefer Usenet" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/resolver")).toHaveLength(1));
+    expect(calls(fake, "PUT", "/config/resolver")[0]!.body).toMatchObject({
+      sourcePreference: "usenet",
+    });
+  });
+});
+
 describe("Release traces", () => {
   it("normalizes typed and loosely shaped traces", () => {
     const t = normalizeTraces([
@@ -151,11 +166,16 @@ describe("Release traces", () => {
         titleName: "Dune",
         candidates: [{ name: "Dune.1080p", score: 5, rejected: true, reason: "too big" }],
         err: "no luck",
+        pinStatus: "unhealthy: health: unhealthy",
       },
       "junk",
     ]);
     expect(t).toHaveLength(1);
-    expect(t[0]).toMatchObject({ titleName: "Dune", err: "no luck" });
+    expect(t[0]).toMatchObject({
+      titleName: "Dune",
+      err: "no luck",
+      pinStatus: "unhealthy: health: unhealthy",
+    });
     expect(t[0]!.candidates![0]).toMatchObject({
       name: "Dune.1080p",
       rejected: true,
@@ -163,13 +183,10 @@ describe("Release traces", () => {
     });
   });
 
-  it("lists traces and opens one in a drawer", async () => {
-    renderApp("/releases/traces");
-    const row = await screen.findByText(/\(\d{4}\)/, {}, WAIT);
-    fireEvent.click(row);
-    const drawer = await screen.findByRole("dialog");
-    expect(within(drawer).getByText("CAM releases are disabled")).toBeInTheDocument();
-    expect(within(drawer).getAllByText("Picked").length).toBeGreaterThan(0);
+  it("opens the release history tab", async () => {
+    renderApp("/releases/history");
+    expect(await screen.findByRole("heading", { name: "Releases" }, WAIT)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "History" })).toHaveAttribute("aria-selected", "true");
   });
 });
 

@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -19,6 +20,12 @@ import (
 // core.ErrArticleMissing (sampled articles are gone or the NZB is
 // incomplete), one of the package's rejection errors (see IsRejection), or a
 // transient error (network, context).
+//
+// When the release carries a small PAR2 index it is read alongside, and the
+// first article of the main video (or first archive volume) is checked
+// against the recorded length, first-16 KiB MD5 and covered slice
+// checksums; a mismatch is reported as unhealthy with an error wrapping
+// ErrPar2Mismatch (a rejection). A missing or unusable PAR2 is ignored.
 //
 // The index built here is kept, so an Open of the same NZB right after a
 // successful Check does not repeat the header fetches.
@@ -70,6 +77,18 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 		trace.FailFast, trace.FailReason = res.out.failFast, res.out.reason
 	}
 
+	// Read the PAR2 index (if small) alongside, so the first volume can be
+	// checked against it as soon as the plan is ready.
+	par2Done := make(chan struct{})
+	if idx := rel.par2IndexFile(); idx != nil {
+		go func() {
+			defer close(par2Done)
+			rel.loadPar2(sctx, core.PriorityLive, fetchOpts{}, idx)
+		}()
+	} else {
+		close(par2Done)
+	}
+
 	type planned struct {
 		p       *plan
 		err     error
@@ -92,7 +111,13 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 		if !gotPlan {
 			<-planCh
 		}
+		<-par2Done
 	}()
+	par2Fail := func(err error) {
+		if errors.Is(err, ErrPar2Mismatch) {
+			trace.FailReason = par2Reason(err)
+		}
+	}
 	for !gotStats || !gotPlan {
 		select {
 		case <-ctx.Done():
@@ -112,7 +137,14 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 			gotPlan = true
 			trace.Plan = ready.elapsed
 			if ready.err != nil {
+				par2Fail(ready.err)
 				return false, ready.err
+			}
+			// Beside the STAT/BODY probes still running: the first
+			// volume's head (fetched by the plan) against PAR2.
+			if err := rel.verifyPar2(ctx, ready.p, core.PriorityLive, fetchOpts{}, true); err != nil {
+				par2Fail(err)
+				return false, err
 			}
 		}
 	}

@@ -93,7 +93,11 @@ or administration, and are removed when the session ends.
 
 Playback selects releases according to viewer policy, device capabilities,
 quality preferences and source health. Provider priorities and backfill remain
-owner-controlled. Source selection must distinguish unavailable articles or
+owner-controlled. The owner can search a title's releases ranked as playback
+ranks them, pin a release to a movie or episode (tried first, overriding
+profile policy but not codec or failover limits, and kept with its failing
+state when it breaks), block and unblock releases, and review a bounded
+persistent history of resolution decisions. Owner blocks never expire. Source selection must distinguish unavailable articles or
 invalid media from a temporary provider outage. Timeouts, network errors and
 missing configuration do not permanently blacklist releases or hide titles for a
 long cooling-off period.
@@ -114,6 +118,21 @@ separate bounded budget at background priority. Warm-ups never reserve a stream
 or write history. Health checks inspect archive headers, read the yEnc headers of
 mid-file article bodies as well as testing article existence, and stop as soon as
 one sampled article is confirmed missing on every provider.
+
+PAR2 is never used for repair while streaming: a recovery block combines every
+slice of the set, so rebuilding one article means reading the whole file. Only a
+release's PAR2 index file (at most 1 MiB, read in parallel with the first article
+fetches at the same priority and kept in the segment caches) is used. For
+obfuscated posts, the MD5 of each file's first 16 KiB, taken from its first
+article, finds the file description carrying its real name and exact length (a
+unique exact length is the fallback); real names classify files and order archive
+volumes, and when one obfuscated file dominates the post and is named a video, the
+other files are not probed at all. Health checks verify the first article of the
+main video, or of the first archive volume, against the recorded length,
+first-16 KiB MD5 and any slice checksums it covers; a mismatch marks the release
+unhealthy as wrong or damaged content, and Play rejects it too. A missing,
+oversize, unparseable or foreign PAR2 never fails or delays a release; the engine
+falls back to probing articles.
 
 Source validation continues past missing top-ranked releases, within a bounded
 candidate count and time budget. Confirmed source failures are skipped briefly
@@ -168,6 +187,36 @@ post-credits scene. Different cuts without usable subtitle timing can still
 produce a timestamp discontinuity.
 
 ## Sources, history and live television
+
+Torrent releases from Torznab indexers and built-in torrent sites stream
+through owner-configured debrid services over HTTPS range requests; Ether never
+joins a swarm. Only torrents a service already holds are used, nothing is
+downloaded in full, and "not cached" skips a release without marking it bad.
+Torrents a service holds stay on the owner's account and are reused, and
+detail-page preparation obtains the link and reads the file's head and tail, so
+Play needs no provider request.
+
+Indexers are Newznab or Torznab APIs, or built-in sites. A built-in site runs
+from an owner-installed definition in the Cardigann YAML format (caps and
+category mappings, settings, sign-in, search requests over HTML, JSON or XML
+responses, row and field selectors, filters and download steps). Ether
+bundles no definitions or definitions source; the owner uploads definitions
+or names a source to install them from, and definitions are stored in the
+database. Built-in sites share the Newznab indexers' daily budgets, result
+cache, events, search order and download routing. Sign-in sessions are stored
+per indexer in the database, versioned, and established by one sign-in at a
+time, so a node reuses a session another node created. A site behind a
+browser challenge is reached through an owner-configured FlareSolverr, or
+reports that it needs one. Password-type settings are sealed and redacted
+like API keys.
+
+Source routing never trades quality for speed. Among candidates in the leading
+quality tier whose scores are within a margin of the leader, the source with the
+lower measured startup goes first: NZB or payload fetch plus a health check that
+actually ran, averaged per source. Until both sources have enough samples,
+popular titles prefer torrents known to be cached; an owner may instead always
+prefer one source. The best candidate of the other source is validated alongside
+and both remain failover alternates.
 
 Ether does not index local media; owners who keep their own files run a Plex
 Media Server alongside it. Owners may supply M3U playlists and XMLTV guides or assemble virtual channels.

@@ -373,3 +373,25 @@ func FuzzNameFromSubject(f *testing.F) {
 		_, _ = subjectFileCounter(s)
 	})
 }
+
+func TestPar2Index(t *testing.T) {
+	mk := func(name string, bytes int64) *File {
+		return &File{Name: name, Info: Classify(name), Segments: []Segment{{Number: 1, Bytes: bytes, MessageID: name}}}
+	}
+	files := []*File{
+		mk("Movie.mkv", 1<<30),
+		mk("Movie.vol00+01.par2", 100),
+		mk("Movie.vol01+02.PAR2", 200),
+		mk("Movie.par2", 5000),
+		mk("Movie.sample.par2", 4000),
+	}
+	if got := Par2Index(files); got != files[3] {
+		t.Fatalf("Par2Index = %v", got)
+	}
+	if got := Par2Index(files[:3]); got != nil {
+		t.Fatalf("volumes only = %v", got.Name)
+	}
+	if !IsPar2Volume(`dir\x.vol12+34.par2`) || IsPar2Volume("x.par2") || IsPar2Volume("x.mkv") {
+		t.Fatal("IsPar2Volume")
+	}
+}

@@ -38,6 +38,8 @@ import {
   posterFor,
   type FakeTitle,
 } from "./data";
+import { createReleaseConsoleMock } from "./releases";
+import { createSitesMock } from "./sites";
 import { TEMPLATES } from "./templates";
 
 const NOW = () => new Date();
@@ -142,7 +144,42 @@ function defaultConfig(): EtherConfig {
         movieCategories: null,
         tvCategories: null,
       },
+      {
+        id: "i3",
+        name: "Torrent Tracker",
+        url: "https://tracker.example.org/api/v2.0/indexers/example/results/torznab",
+        apiKey: "••••",
+        dailyLimit: 0,
+        dailyGrabs: 0,
+        priority: 2,
+        enabled: true,
+        movieCategories: null,
+        tvCategories: null,
+        protocol: "torrent",
+      },
     ],
+    debrid: {
+      providers: [
+        {
+          id: "rd-1",
+          name: "Real-Debrid",
+          kind: "realdebrid",
+          apiKey: "••••",
+          priority: 0,
+          enabled: true,
+        },
+        {
+          id: "tb-1",
+          name: "TorBox backup",
+          kind: "torbox",
+          apiKey: "••••",
+          priority: 1,
+          enabled: true,
+        },
+      ],
+      cachedOnly: true,
+      removeUncached: true,
+    },
     cache: {
       dir: "/var/lib/ether/cache",
       budgetBytes: 200 * 1024 ** 3,
@@ -286,6 +323,8 @@ function durationMs(w: string): number {
 export function createFakeServer(opts: FakeOptions = {}) {
   const catalog = buildCatalog();
   const byKey = new Map(catalog.map((t) => [t.key, t]));
+  const releaseConsole = createReleaseConsoleMock(catalog);
+  const sites = createSitesMock();
   const state = {
     boot: {
       ok: true,
@@ -1143,10 +1182,103 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return out;
   }
 
+  function debridStatus() {
+    const debrid = state.config.debrid;
+    const providers = debrid?.providers ?? [];
+    return {
+      enabled: providers.some((p) => p.enabled && p.apiKey),
+      cachedOnly: debrid?.cachedOnly ?? true,
+      engine: {
+        openFiles: 1,
+        blockBytes: 524288,
+        memoryHits: 10,
+        diskHits: 40,
+        blocksFetched: 120,
+        bytesFetched: 62914560,
+        hedges: 2,
+        hedgeWins: 1,
+        linkRefreshes: 3,
+        errors: 0,
+      },
+      providers: providers.map((p, i) => {
+        const base = {
+          id: p.id,
+          name: p.name,
+          kind: p.kind,
+          enabled: p.enabled,
+          priority: p.priority,
+        };
+        const idle = {
+          resolveMs: 0,
+          linkMs: 0,
+          connectMs: 0,
+          ttfbMs: 0,
+          throughputBps: 0,
+          samples: 0,
+        };
+        if (!p.enabled || !p.apiKey)
+          return {
+            ...base,
+            state: "disabled",
+            requests: 0,
+            failures: 0,
+            cached: 0,
+            notCached: 0,
+            reused: 0,
+            latency: idle,
+          };
+        if (i === 0)
+          return {
+            ...base,
+            state: "ok",
+            lastError: "",
+            requests: 48,
+            failures: 1,
+            cached: 17,
+            notCached: 6,
+            linksRefreshed: 3,
+            reused: 5,
+            latency: {
+              resolveMs: 812.5,
+              linkMs: 140.2,
+              connectMs: 35.1,
+              ttfbMs: 92.4,
+              throughputBps: 48_000_000,
+              samples: 12,
+            },
+            lastSuccess: new Date(Date.now() - 4 * 60_000).toISOString(),
+          };
+        return {
+          ...base,
+          state: "backoff",
+          lastError: "rate limited by the service; retrying shortly",
+          backoffUntil: new Date(Date.now() + 5 * 60_000).toISOString(),
+          requests: 9,
+          failures: 3,
+          cached: 2,
+          notCached: 4,
+          linksRefreshed: 0,
+          reused: 0,
+          latency: idle,
+          lastSuccess: new Date(Date.now() - 3 * 3600_000).toISOString(),
+        };
+      }),
+    };
+  }
+
   function dashboard() {
     const session = catalog[3]!;
     return {
-      names: ["cache", "catalog", "hwaccel", "indexers", "providers", "remote", "sessions"],
+      names: [
+        "cache",
+        "catalog",
+        "debrid",
+        "hwaccel",
+        "indexers",
+        "providers",
+        "remote",
+        "sessions",
+      ],
       setupComplete: state.config.setupComplete,
       version: state.boot.version,
       sections: {
@@ -1158,6 +1290,13 @@ export function createFakeServer(opts: FakeOptions = {}) {
           browsableShows: 24298,
           lastSync: new Date(Date.now() - 5 * 3600_000).toISOString(),
           sync: { running: false, titlesSeen: 63500 },
+        },
+        debrid: debridStatus(),
+        sources: {
+          startup: [
+            { protocol: "usenet", average: 2_140_000_000, last: 1_980_000_000, samples: 37 },
+            { protocol: "torrent", average: 410_000_000, last: 380_000_000, samples: 22 },
+          ],
         },
         hwaccel: {
           ffmpeg: "8.0.1",
@@ -1229,6 +1368,13 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const seg = p.split("/").filter(Boolean);
     const route = `${method} /${seg.join("/")}`;
 
+    const site = sites.handle(method, seg, body, state.config);
+    if (site) return json(site.body, site.status);
+
+    const rc = releaseConsole.handle(method, seg, q, body);
+    if (rc)
+      return rc.status === 204 ? new Response(null, { status: 204 }) : json(rc.body, rc.status);
+
     // Static routes
     switch (route) {
       case "GET /bootstrap":
@@ -1263,11 +1409,40 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ handle: "h1", code: "ABCD", authUrl: "https://app.plex.tv/auth#?code=ABCD" });
       case "POST /test/usenet":
       case "POST /test/indexer":
+      case "POST /test/debrid":
       case "POST /test/tmdb":
       case "POST /test/llm":
       case "POST /test/trakt":
       case "POST /test/opensubtitles":
         return json({ ok: true, durationMs: 40 + (hash(route) % 200) });
+      case "POST /playback/prowlarr": {
+        const req = body as {
+          config?: { dailyLimit?: number; dailyGrabs?: number };
+          import?: boolean;
+        };
+        const found = [
+          { id: "prowlarr-1", name: "Prowlarr Usenet", protocol: "usenet" as const },
+          { id: "prowlarr-2", name: "Prowlarr Torrents", protocol: "torrent" as const },
+        ].map((ix, i) => ({
+          ...ix,
+          url: `http://localhost:9696/${i + 1}/`,
+          apiKey: "••••",
+          dailyLimit: req.config?.dailyLimit ?? 0,
+          dailyGrabs: req.config?.dailyGrabs ?? 0,
+          priority: (state.config.indexers ?? []).length + i,
+          enabled: true,
+          movieCategories: null,
+          tvCategories: null,
+        }));
+        if (req.import) {
+          const have = new Set((state.config.indexers ?? []).map((ix) => ix.id));
+          state.config.indexers = [
+            ...(state.config.indexers ?? []),
+            ...found.filter((ix) => !have.has(ix.id)),
+          ];
+        }
+        return json({ indexers: found, imported: Boolean(req.import) });
+      }
       case "GET /disk":
         return json({
           path: q.get("path") ?? "",
@@ -1296,57 +1471,6 @@ export function createFakeServer(opts: FakeOptions = {}) {
       case "DELETE /logs":
         state.logs = [];
         return json({ ok: true });
-      case "GET /traces":
-        return json({
-          traces: [
-            {
-              titleKey: catalog[3]!.key,
-              titleName: `${catalog[3]!.title} (${catalog[3]!.year})`,
-              profile: "1080p",
-              at: new Date(Date.now() - 41 * 60000).toISOString(),
-              searchDuration: 1.8e9,
-              winner: "r1",
-              candidates: [
-                {
-                  releaseId: "r1",
-                  name: `${catalog[3]!.title.replace(/ /g, ".")}.1080p.WEB-DL.H264-GRP`,
-                  indexer: "Indexer One",
-                  score: 812,
-                  rejected: false,
-                  healthChecked: true,
-                  healthy: true,
-                  fetchDuration: 3.1e8,
-                  healthDuration: 6.4e8,
-                },
-                {
-                  releaseId: "r2",
-                  name: `${catalog[3]!.title.replace(/ /g, ".")}.2160p.REMUX-GRP`,
-                  indexer: "Indexer Two",
-                  score: 640,
-                  rejected: true,
-                  reason: "above the 1080p profile cap",
-                  healthChecked: false,
-                  healthy: false,
-                  fetchDuration: 0,
-                  healthDuration: 0,
-                },
-                {
-                  releaseId: "r3",
-                  name: `${catalog[3]!.title.replace(/ /g, ".")}.CAM`,
-                  indexer: "Indexer One",
-                  score: 0,
-                  rejected: true,
-                  reason: "CAM releases are disabled",
-                  healthChecked: false,
-                  healthy: false,
-                  fetchDuration: 0,
-                  healthDuration: 0,
-                },
-              ],
-            },
-          ],
-        });
-
       case "GET /collections":
         return json({ collections: state.collections });
       case "POST /collections": {
@@ -1710,7 +1834,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     return handle(method, url, body);
   }
 
-  return { fetch: fetchImpl, state, catalog, evaluate, homeFor };
+  return { fetch: fetchImpl, state, catalog, evaluate, homeFor, releaseConsole, sites };
 }
 
 export type FakeServer = ReturnType<typeof createFakeServer>;

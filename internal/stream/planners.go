@@ -11,6 +11,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/archive"
 	"github.com/braedonsaunders/ether/internal/nzb"
+	"github.com/braedonsaunders/ether/internal/par2"
 )
 
 // planPlain maps a posted video file directly.
@@ -360,9 +361,9 @@ func (b *builder) shouldProbe(cands []candidate) bool {
 	return unknown > best
 }
 
-// probeObfuscated fetches the first article of unidentified files and
-// re-classifies them from the yEnc name or the content's magic bytes.
-func (b *builder) probeObfuscated(ctx context.Context) error {
+// unknownFiles lists the unidentified files, largest first, at most
+// MaxProbes of them.
+func (b *builder) unknownFiles() []*postedFile {
 	var unknown []*postedFile
 	for _, pf := range b.rel.files {
 		if pf.file.Info.Kind == nzb.KindUnknown {
@@ -373,6 +374,63 @@ func (b *builder) probeObfuscated(ctx context.Context) error {
 	if len(unknown) > b.e.opts.MaxProbes {
 		unknown = unknown[:b.e.opts.MaxProbes]
 	}
+	return unknown
+}
+
+// identifyObfuscated identifies unidentified files from their first
+// articles. Without a PAR2 index every candidate's head is probed at once.
+// With one, the index is fetched in parallel with the heads: when one
+// unknown file dominates the post (a plain video beside small extras),
+// only its head is fetched first, and if that names it a video the other
+// probes are skipped; otherwise (archive volumes) every head is fetched in
+// the same wave as the index, and PAR2 names and orders them.
+func (b *builder) identifyObfuscated(ctx context.Context) error {
+	unknown := b.unknownFiles()
+	if len(unknown) == 0 {
+		return nil
+	}
+	idx := b.rel.par2IndexFile()
+	if idx == nil {
+		_, err := b.probeObfuscated(ctx, unknown, nil)
+		return err
+	}
+	wave := unknown
+	if len(unknown) > 1 && unknown[0].file.Bytes() >= 2*unknown[1].file.Bytes() {
+		wave = unknown[:1]
+	}
+	setCh := make(chan *par2.Set, 1)
+	go func() { setCh <- b.rel.loadPar2(ctx, b.prio, b.fo, idx) }()
+	_ = b.parallel(ctx, len(wave), func(ctx context.Context, i int) error {
+		_, _ = b.e.segment(ctx, b.rel, wave[i], 0, b.prio, b.fo)
+		return nil
+	})
+	set := <-setCh
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if len(wave) < len(unknown) {
+		named, err := b.probeObfuscated(ctx, wave, set)
+		if err != nil {
+			return err
+		}
+		info := wave[0].file.Info
+		if info.Kind == nzb.KindVideo && !info.Sample && !info.Extra && !b.shouldProbe(b.candidates(b.rel.files)) {
+			if named[wave[0]] {
+				b.e.par2Saved.Add(int64(len(unknown) - len(wave)))
+			}
+			return nil
+		}
+	}
+	_, err := b.probeObfuscated(ctx, unknown, set)
+	return err
+}
+
+// probeObfuscated fetches the first article of the given unidentified files
+// and re-classifies them: from the PAR2 description their head matches
+// (set may be nil; a PAR2 index found among the heads is used too), else
+// from the yEnc name or the content's magic bytes. It returns the files
+// named from PAR2.
+func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, set *par2.Set) (map[*postedFile]bool, error) {
 	type probe struct {
 		seg *segData
 		err error
@@ -384,8 +442,23 @@ func (b *builder) probeObfuscated(ctx context.Context) error {
 		return nil // one dead file must not stop the others
 	})
 	if ctx.Err() != nil {
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
+	if set == nil {
+		// An obfuscated PAR2 index among the heads: the smallest readable
+		// file starting with a PAR2 packet.
+		var idx *postedFile
+		for i, pf := range unknown {
+			if pr := probes[i]; pr.err == nil && pr.seg != nil && pr.seg.begin == 0 && isPar2Head(pr.seg.data) &&
+				par2Readable(pf) && (idx == nil || pf.file.Bytes() < idx.file.Bytes()) {
+				idx = pf
+			}
+		}
+		if idx != nil {
+			set = b.rel.loadPar2(ctx, b.prio, b.fo, idx)
+		}
+	}
+	named := map[*postedFile]bool{}
 	type rarVol struct {
 		pf     *postedFile
 		number int // -1 unknown
@@ -394,6 +467,14 @@ func (b *builder) probeObfuscated(ctx context.Context) error {
 	for i, pf := range unknown {
 		pr := probes[i]
 		if pr.err != nil || pr.seg == nil {
+			continue
+		}
+		if pr.seg.begin == 0 && isPar2Head(pr.seg.data) {
+			pf.file.Info = nzb.FileInfo{Kind: nzb.KindPar2, Ext: "par2", Volume: -1, SetName: pf.file.Info.SetName}
+			continue
+		}
+		if f := identifyByPar2(set, pf, pr.seg); f != nil && b.nameFromPar2(pf, f) {
+			named[pf] = true
 			continue
 		}
 		if yn := path.Base(strings.ReplaceAll(pr.seg.name, `\`, "/")); yn != "" && yn != "." {
@@ -427,7 +508,7 @@ func (b *builder) probeObfuscated(ctx context.Context) error {
 		}
 	}
 	if len(rars) == 0 {
-		return nil
+		return named, nil
 	}
 	allNumbered := true
 	for _, r := range rars {
@@ -455,7 +536,7 @@ func (b *builder) probeObfuscated(ctx context.Context) error {
 		}
 		r.pf.file.Info = nzb.FileInfo{Kind: nzb.KindRAR, Ext: "rar", Volume: vol, SetName: "\x00obfuscated-rar", NewStyle: true}
 	}
-	return nil
+	return named, nil
 }
 
 // looksLikeVideo recognises common container signatures.

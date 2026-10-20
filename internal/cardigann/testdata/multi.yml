@@ -1,0 +1,40 @@
+---
+# Synthetic definition for tests: JSON rows with nested torrents.
+id: fakemulti
+name: Fake Multi
+links:
+  - https://fakemulti.invalid/
+caps:
+  categories:
+    1: Movies
+  modes:
+    search: [q]
+search:
+  paths:
+    - path: list.json
+      response:
+        type: json
+  inputs:
+    query_term: "{{ .Keywords }}"
+  rows:
+    selector: data.movies
+    attribute: torrents
+    multiple: true
+    missingAttributeEqualsNoResults: true
+  fields:
+    _title:
+      selector: ..title
+    year:
+      selector: ..year
+    quality:
+      selector: quality
+    title:
+      text: "{{ .Result._title }} {{ .Result.year }} {{ .Result.quality }}"
+    download:
+      selector: url
+    size:
+      selector: size
+    seeders:
+      selector: seeds
+    category:
+      text: 1

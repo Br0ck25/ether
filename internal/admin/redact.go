@@ -34,8 +34,43 @@ func RedactConfig(cfg config.Config) config.Config {
 		out.Indexers = make([]config.Indexer, len(cfg.Indexers))
 		for i, ix := range cfg.Indexers {
 			ix.APIKey = redact(ix.APIKey)
+			ix.SecretSettings = redactMap(ix.SecretSettings)
 			out.Indexers[i] = ix
 		}
+	}
+	if cfg.Debrid.Providers != nil {
+		out.Debrid.Providers = make([]config.DebridProvider, len(cfg.Debrid.Providers))
+		for i, p := range cfg.Debrid.Providers {
+			p.APIKey = redact(p.APIKey)
+			out.Debrid.Providers[i] = p
+		}
+	}
+	return out
+}
+
+// redactMap redacts every value of a secrets map (a copy).
+func redactMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = redact(v)
+	}
+	return out
+}
+
+// unredactMap restores placeholder values in next from prev (a copy).
+func unredactMap(next, prev map[string]string) map[string]string {
+	if next == nil {
+		return nil
+	}
+	out := make(map[string]string, len(next))
+	for k, v := range next {
+		if isRedacted(v) {
+			v = prev[k]
+		}
+		out[k] = v
 	}
 	return out
 }
@@ -65,7 +100,50 @@ func UnredactConfig(next, prev config.Config) config.Config {
 	out.LLM.APIKey = preserve(out.LLM.APIKey, prev.LLM.APIKey)
 	out.Usenet.Providers = unredactProviders(next.Usenet.Providers, prev.Usenet.Providers)
 	out.Indexers = unredactIndexers(next.Indexers, prev.Indexers)
+	out.Debrid.Providers = unredactDebrid(next.Debrid.Providers, prev.Debrid.Providers)
 	return out
+}
+
+func unredactDebrid(next, prev []config.DebridProvider) []config.DebridProvider {
+	if next == nil {
+		return nil
+	}
+	byID := make(map[string]string, len(prev))
+	for _, p := range prev {
+		if p.ID != "" {
+			byID[p.ID] = p.APIKey
+		}
+	}
+	out := make([]config.DebridProvider, len(next))
+	for i, p := range next {
+		if isRedacted(p.APIKey) {
+			switch {
+			case p.ID != "" && byID[p.ID] != "":
+				p.APIKey = byID[p.ID]
+			case i < len(prev):
+				p.APIKey = prev[i].APIKey
+			default:
+				p.APIKey = ""
+			}
+		}
+		out[i] = p
+	}
+	return out
+}
+
+// unredactDebridProvider restores one debrid provider's key (test calls).
+func unredactDebridProvider(p config.DebridProvider, prev config.Config) config.DebridProvider {
+	if !isRedacted(p.APIKey) {
+		return p
+	}
+	for _, old := range prev.Debrid.Providers {
+		if (p.ID != "" && old.ID == p.ID) || (p.ID == "" && old.Kind == p.Kind) {
+			p.APIKey = old.APIKey
+			return p
+		}
+	}
+	p.APIKey = ""
+	return p
 }
 
 func unredactProviders(next, prev []config.UsenetProvider) []config.UsenetProvider {
@@ -99,24 +177,32 @@ func unredactIndexers(next, prev []config.Indexer) []config.Indexer {
 	if next == nil {
 		return nil
 	}
-	byID := make(map[string]string, len(prev))
+	byID := make(map[string]config.Indexer, len(prev))
 	for _, ix := range prev {
 		if ix.ID != "" {
-			byID[ix.ID] = ix.APIKey
+			byID[ix.ID] = ix
 		}
 	}
 	out := make([]config.Indexer, len(next))
 	for i, ix := range next {
-		if isRedacted(ix.APIKey) {
-			switch {
-			case ix.ID != "" && byID[ix.ID] != "":
-				ix.APIKey = byID[ix.ID]
-			case i < len(prev):
-				ix.APIKey = prev[i].APIKey
-			default:
-				ix.APIKey = ""
+		// Match by ID, falling back to list position.
+		old, found := byID[ix.ID]
+		if ix.ID == "" || !found || (isRedacted(ix.APIKey) && old.APIKey == "") {
+			if i < len(prev) {
+				old, found = prev[i], true
 			}
 		}
+		if isRedacted(ix.APIKey) {
+			ix.APIKey = ""
+			if found {
+				ix.APIKey = old.APIKey
+			}
+		}
+		var oldSecrets map[string]string
+		if found {
+			oldSecrets = old.SecretSettings
+		}
+		ix.SecretSettings = unredactMap(ix.SecretSettings, oldSecrets)
 		out[i] = ix
 	}
 	return out
@@ -138,15 +224,25 @@ func unredactProvider(p config.UsenetProvider, prev config.Config) config.Usenet
 }
 
 func unredactIndexer(ix config.Indexer, prev config.Config) config.Indexer {
-	if !isRedacted(ix.APIKey) {
-		return ix
-	}
 	for _, old := range prev.Indexers {
 		if (ix.ID != "" && old.ID == ix.ID) || (ix.ID == "" && old.URL == ix.URL) {
-			ix.APIKey = old.APIKey
+			if isRedacted(ix.APIKey) {
+				ix.APIKey = old.APIKey
+			}
+			ix.SecretSettings = unredactMap(ix.SecretSettings, old.SecretSettings)
 			return ix
 		}
 	}
-	ix.APIKey = ""
+	if isRedacted(ix.APIKey) {
+		ix.APIKey = ""
+	}
+	ix.SecretSettings = unredactMap(ix.SecretSettings, nil)
 	return ix
+}
+
+// UnredactIndexer restores an indexer's API key and secret settings that
+// the UI sent back as placeholders, from the stored config (for tests of
+// unsaved edits run outside this package).
+func UnredactIndexer(ix config.Indexer, prev config.Config) config.Indexer {
+	return unredactIndexer(ix, prev)
 }

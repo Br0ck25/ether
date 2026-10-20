@@ -55,7 +55,7 @@ func SetupStatus(cfg config.Config) (steps []SetupStep, complete bool) {
 		{ID: "plex", Title: "Sign in to plex.tv and claim", Complete: plexDone, Required: true, Detail: plexDetail},
 		{ID: "usenet", Title: "Usenet providers", Complete: enabledProviders > 0, Required: true,
 			Detail: fmt.Sprintf("%d enabled", enabledProviders)},
-		{ID: "indexers", Title: "Newznab indexers", Complete: enabledIndexers > 0, Required: true,
+		{ID: "indexers", Title: "Indexers", Complete: enabledIndexers > 0, Required: true,
 			Detail: fmt.Sprintf("%d enabled", enabledIndexers)},
 		{ID: "cache", Title: "Cache folder and disk budget", Complete: cacheDone, Required: true, Detail: cfg.Cache.Dir},
 		{ID: "optional", Title: "Optional integrations", Complete: true, Required: false,
@@ -212,6 +212,22 @@ func (h *Handler) handleTestIndexer(w http.ResponseWriter, r *http.Request) {
 	}
 	ix = unredactIndexer(ix, h.deps.Config.Get())
 	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestIndexer(ctx, ix) })
+}
+
+func (h *Handler) handleTestDebrid(w http.ResponseWriter, r *http.Request) {
+	var p config.DebridProvider
+	if err := decodeJSONLenient(r, &p); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
+		return
+	}
+	p = unredactDebridProvider(p, h.deps.Config.Get())
+	c := config.Defaults(os.TempDir())
+	c.Debrid.Providers = []config.DebridProvider{p}
+	if errs := ValidateConfig(c); len(errs) > 0 {
+		writeValidationError(w, errs)
+		return
+	}
+	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestDebrid(ctx, p) })
 }
 
 func (h *Handler) handleTestTMDB(w http.ResponseWriter, r *http.Request) {

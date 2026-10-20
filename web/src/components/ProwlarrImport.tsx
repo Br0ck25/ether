@@ -1,14 +1,21 @@
-import { Button, Input, SettingsSection, toast } from "@braedonsaunders/appkit-ui";
+import { Badge, Button, Input, SettingsSection, toast } from "@braedonsaunders/appkit-ui";
 import { useState } from "react";
 import { apiFetch, errorMessage } from "../lib/api";
 import { SettingsRow } from "./SettingsRow";
 
 type Result = {
-  indexers: { id: string; name: string; dailyLimit: number; dailyGrabs: number }[];
+  indexers: {
+    id: string;
+    name: string;
+    dailyLimit: number;
+    dailyGrabs: number;
+    /** "torrent" for Torznab indexers; empty or "usenet" for Newznab. */
+    protocol?: string;
+  }[];
   imported: boolean;
 };
 
-/** Preview and import the Usenet indexers a Prowlarr instance already manages. */
+/** Preview and import the Usenet and torrent indexers a Prowlarr instance already manages. */
 export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
   const [url, setURL] = useState("");
   const [key, setKey] = useState("");
@@ -39,7 +46,10 @@ export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-fg-muted">
-        Connect your existing Usenet indexers. Prowlarr manages their service limits.
+        Bring in the Usenet (Newznab) and torrent (Torznab) indexers a Prowlarr instance manages.
+        Ether handles their service limits automatically. Torrent indexers stream through a debrid
+        account. You don't need Prowlarr: built-in sites and Newznab/Torznab URLs can be added
+        directly.
       </p>
       <SettingsSection title="Prowlarr">
         <SettingsRow
@@ -89,7 +99,10 @@ export function ProwlarrImport({ onImported }: { onImported?: () => void }) {
       {result && (
         <ul className="space-y-2 text-sm">
           {result.indexers.map((i) => (
-            <li key={i.id}>{i.name} · Automatic limits</li>
+            <li key={i.id} className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{i.protocol === "torrent" ? "Torznab" : "Newznab"}</Badge>
+              <span>{i.name} · Automatic limits</span>
+            </li>
           ))}
         </ul>
       )}

@@ -1,0 +1,41 @@
+---
+# Synthetic definition for tests: POST login with an error message.
+id: fakepost
+name: Fake Post
+links:
+  - https://fakepost.invalid/
+settings:
+  - {name: username, type: text, label: Username}
+  - {name: password, type: password, label: Password}
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies}
+  modes:
+    search: [q]
+login:
+  path: takelogin.php
+  method: post
+  inputs:
+    username: "{{ .Config.username }}"
+    password: "{{ .Config.password }}"
+    keeplogged: 1
+  error:
+    - selector: div.error
+      message:
+        selector: div.error span.msg
+  test:
+    path: index.php
+    selector: a.logout
+search:
+  paths:
+    - path: s.php
+  inputs:
+    q: "{{ .Keywords }}"
+  rows:
+    selector: li.r
+  fields:
+    title:
+      selector: b
+    magnet:
+      selector: a
+      attribute: href

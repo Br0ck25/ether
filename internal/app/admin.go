@@ -24,7 +24,7 @@ func (a *App) buildAdmin() http.Handler {
 	return admin.New(admin.Deps{
 		Config:        a.cfg,
 		Extensions:    a.extensionHandlers(),
-		ValidateExtra: validatePlaybackConfig,
+		ValidateExtra: a.validateExtra,
 		Logger:        a.log.With("component", "admin"),
 		Logs:          a.logs,
 		Version:       a.opts.Version,
@@ -38,7 +38,16 @@ func (a *App) buildAdmin() http.Handler {
 			return usenet.TestProvider(ctx, p)
 		},
 		TestIndexer: func(ctx context.Context, ix config.Indexer) error {
+			if ix.IsBuiltin() {
+				if res := a.sites.Test(ctx, ix, false); !res.OK {
+					return errors.New(res.Error)
+				}
+				return nil
+			}
 			return newznab.Test(ctx, ix)
+		},
+		TestDebrid: func(ctx context.Context, p config.DebridProvider) error {
+			return a.debrid.Test(ctx, p)
 		},
 		TestTMDB: func(ctx context.Context, key string) error {
 			c := tmdb.New(key, a.log)
@@ -81,6 +90,8 @@ func (a *App) buildAdmin() http.Handler {
 			"stream":   func(context.Context) any { return a.engine.Stats() },
 			"widget":   a.widgetStatus,
 			"prefetch": func(context.Context) any { return a.prefetch.Stats() },
+			"debrid":   a.debridStatus,
+			"sources":  func(context.Context) any { return map[string]any{"startup": a.resolver.SourceStartups()} },
 		},
 		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
 		Users:           a.users,
@@ -89,6 +100,15 @@ func (a *App) buildAdmin() http.Handler {
 		CatalogHelper:   a.collections,
 		Images:          a.images,
 	})
+}
+
+// debridStatus is provider health, counters and latency EWMAs plus the
+// streaming engine's counters.
+func (a *App) debridStatus(context.Context) any {
+	st := a.debrid.Status()
+	es := a.media.Stats()
+	st.Engine = &es
+	return st
 }
 
 func (a *App) cacheStatus(context.Context) any {

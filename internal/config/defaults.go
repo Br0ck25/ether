@@ -19,6 +19,7 @@ func randomID(n int) string {
 func Defaults(dataDir string) Config {
 	return Config{
 		Usenet:  Usenet{MinIdle: 2},
+		Debrid:  Debrid{CachedOnly: true, RemoveUncached: true},
 		Markers: Markers{TheIntroDB: true},
 		Personalize: Personalize{
 			PostPlay: true, PostPlayPrebuffer: true, MicroReasons: true, SessionIntent: true,

@@ -213,6 +213,7 @@ function OtherIntegrations({ cfg }: { cfg: EtherConfig }) {
   const catalog = health.find((h) => h.id === "catalog");
   const remote = health.find((h) => h.id === "remote");
   const markers = asObj((cfg as unknown as Obj).markers);
+  const debridAccounts = (cfg.debrid?.providers ?? []).filter((p) => p.enabled && p.apiKey).length;
   const providerName = ratings?.provider === "mdblist" ? "MDBList" : "OMDb";
 
   const rows: {
@@ -258,10 +259,23 @@ function OtherIntegrations({ cfg }: { cfg: EtherConfig }) {
     },
     {
       name: "Prowlarr",
-      description: "Import the Usenet indexers you already manage.",
+      description: "Import the Usenet and torrent indexers you already manage.",
       status: null,
       href: "/sources/indexers",
       where: "Sources › Indexers",
+    },
+    {
+      name: "Debrid",
+      description: "Stream torrent releases through your own debrid account.",
+      status: debridAccounts ? (
+        <Badge variant="success">
+          {debridAccounts === 1 ? "1 account" : `${debridAccounts} accounts`}
+        </Badge>
+      ) : (
+        <Badge variant="secondary">Not connected</Badge>
+      ),
+      href: "/sources/debrid",
+      where: "Sources › Debrid",
     },
     {
       name: "Plex",

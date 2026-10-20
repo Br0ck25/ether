@@ -98,11 +98,20 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	for i, ix := range cfg.Indexers {
 		f := fmt.Sprintf("indexers[%d]", i)
 		v.httpURL(f+".url", ix.URL, true)
+		if ix.Kind != "" {
+			v.oneOf(f+".kind", ix.Kind, config.IndexerKindNewznab, config.IndexerKindCardigann)
+		}
+		if ix.IsBuiltin() && strings.TrimSpace(ix.Definition) == "" {
+			v.add(f+".definition", "is required for a built-in site")
+		}
 		if ix.DailyLimit < 0 {
 			v.add(f+".dailyLimit", "must be >= 0")
 		}
 		if ix.DailyGrabs < 0 {
 			v.add(f+".dailyGrabs", "must be >= 0")
+		}
+		if ix.Protocol != "" {
+			v.oneOf(f+".protocol", ix.Protocol, "usenet", "torrent")
 		}
 		if ix.ID != "" {
 			if seenIx[ix.ID] {
@@ -110,6 +119,33 @@ func ValidateConfig(cfg config.Config) []FieldError {
 			}
 			seenIx[ix.ID] = true
 		}
+	}
+
+	v.httpURL("indexerSites.definitionsUrl", cfg.IndexerSites.DefinitionsURL, false)
+	v.httpURL("indexerSites.flareSolverrUrl", cfg.IndexerSites.FlareSolverrURL, false)
+
+	seenDebrid := map[string]bool{}
+	for i, p := range cfg.Debrid.Providers {
+		f := fmt.Sprintf("debrid.providers[%d]", i)
+		v.oneOf(f+".kind", p.Kind, config.DebridKinds...)
+		if p.Enabled && strings.TrimSpace(p.APIKey) == "" {
+			v.add(f+".apiKey", "is required when the provider is enabled")
+		}
+		if p.ID != "" {
+			if seenDebrid[p.ID] {
+				v.add(f+".id", "duplicate provider id %q", p.ID)
+			}
+			seenDebrid[p.ID] = true
+		}
+	}
+	if cfg.Debrid.ChunkBytes != 0 && (cfg.Debrid.ChunkBytes < 256<<10 || cfg.Debrid.ChunkBytes > 64<<20) {
+		v.add("debrid.chunkBytes", "must be between 256 KiB and 64 MiB")
+	}
+	if cfg.Debrid.MaxConnections < 0 || cfg.Debrid.MaxConnections > 16 {
+		v.add("debrid.maxConnections", "must be between 0 and 16")
+	}
+	if cfg.Debrid.ReadAheadChunks > 32 {
+		v.add("debrid.readAheadChunks", "must be at most 32")
 	}
 
 	if strings.TrimSpace(cfg.Cache.Dir) == "" {
@@ -134,6 +170,14 @@ func ValidateConfig(cfg config.Config) []FieldError {
 
 	if cfg.Resolver.HealthSamples < 0 {
 		v.add("resolver.healthSamples", "must be >= 0")
+	}
+	switch cfg.Resolver.SourcePreference {
+	case "", "auto", "usenet", "debrid":
+	default:
+		v.add("resolver.sourcePreference", `must be "auto", "usenet" or "debrid"`)
+	}
+	if cfg.Resolver.SourceScoreMargin < 0 {
+		v.add("resolver.sourceScoreMargin", "must be >= 0")
 	}
 	if cfg.Resolver.MaxCandidates < 0 {
 		v.add("resolver.maxCandidates", "must be >= 0")

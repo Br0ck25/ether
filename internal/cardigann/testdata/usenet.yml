@@ -1,0 +1,34 @@
+---
+# Synthetic definition for tests: a Usenet site serving NZB downloads.
+id: fakeusenet
+name: Fake Usenet
+protocol: usenet
+links:
+  - https://fakeusenet.invalid/
+caps:
+  categorymappings:
+    - {id: m, cat: Movies/HD}
+  modes:
+    search: [q]
+search:
+  paths:
+    - path: find
+  inputs:
+    q: "{{ .Keywords }}"
+  rows:
+    selector: tr.release
+  fields:
+    title:
+      selector: td.name
+    download:
+      selector: a.nzb
+      attribute: href
+    size:
+      selector: td.size
+    date:
+      selector: td.posted
+      filters:
+        - name: dateparse
+          args: "yyyy-MM-dd"
+    category:
+      text: m

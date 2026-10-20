@@ -334,3 +334,38 @@ func (m *Manager) takeWarmResolution(ctx context.Context, id identity, profile c
 	delete(m.warm, id)
 	return e
 }
+
+// InvalidateTitle drops the warm (pre-resolved) entries for a title, from
+// both the detail and speculative budgets, so the next Play resolves
+// afresh — after the owner pins, unpins, blocks or unblocks a release, or
+// forgets a title's search. A show or season key also drops its
+// episodes' entries. A warm-up still in flight finishes into nothing. It
+// returns how many entries were dropped.
+func (m *Manager) InvalidateTitle(key core.RatingKey) int {
+	if key == 0 {
+		return 0
+	}
+	matches := func(k core.RatingKey) bool {
+		switch {
+		case k == key:
+			return true
+		case k.Kind() != core.KindEpisode:
+			return false
+		case key.Kind() == core.KindShow:
+			return k.TMDB() == key.TMDB()
+		case key.Kind() == core.KindSeason:
+			return k.Parent() == key
+		}
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id := range m.warm {
+		if matches(id.key) {
+			delete(m.warm, id)
+			n++
+		}
+	}
+	return n
+}

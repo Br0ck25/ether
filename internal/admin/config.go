@@ -15,6 +15,7 @@ var configSections = map[string]string{
 	"cache": "cache", "catalog": "catalog", "resolver": "resolver", "quality": "quality",
 	"transcode": "transcode", "trakt": "trakt", "opensubtitles": "openSubtitles",
 	"openSubtitles": "openSubtitles", "llm": "llm", "updates": "updates", "spike": "spike",
+	"debrid": "debrid", "indexerSites": "indexerSites",
 }
 
 func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {

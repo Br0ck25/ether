@@ -35,6 +35,8 @@ type Config struct {
 	Markers       Markers       `json:"markers"`
 	Personalize   Personalize   `json:"personalize"`
 	Extras        Extras        `json:"extras"`
+	Debrid        Debrid        `json:"debrid"`
+	IndexerSites  IndexerSites  `json:"indexerSites"`
 	SetupComplete bool          `json:"setupComplete"`
 }
 
@@ -118,7 +120,34 @@ type Indexer struct {
 	// Categories override; empty uses Newznab defaults (2000 movies, 5000 TV).
 	MovieCategories []int `json:"movieCategories"`
 	TVCategories    []int `json:"tvCategories"`
+	// Protocol is "usenet" (Newznab, the default when empty) or "torrent"
+	// (Torznab; results stream through a debrid provider).
+	Protocol string `json:"protocol,omitempty"`
+	// Kind selects how the indexer is searched: "" or IndexerKindNewznab
+	// for a Newznab/Torznab API at URL, IndexerKindCardigann for a built-in
+	// site run from an owner-installed definition. For a built-in site URL
+	// is the site address and Protocol follows the definition.
+	Kind string `json:"kind,omitempty"`
+	// Definition is the installed definition id of a built-in site.
+	Definition string `json:"definition,omitempty"`
+	// Settings are the definition's setting values by name.
+	Settings map[string]string `json:"settings,omitempty"`
+	// SecretSettings are the definition's password-type settings. They are
+	// sealed at rest and redacted in API responses like API keys.
+	SecretSettings map[string]string `json:"secretSettings,omitempty"`
 }
+
+// Indexer kinds (Indexer.Kind).
+const (
+	IndexerKindNewznab   = "newznab"
+	IndexerKindCardigann = "cardigann"
+)
+
+// IsTorrent reports whether the indexer is a Torznab (torrent) indexer.
+func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
+
+// IsBuiltin reports whether the indexer is a built-in site.
+func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
 
 type Cache struct {
 	Dir         string `json:"dir"`
@@ -153,6 +182,16 @@ type Resolver struct {
 	MaxCandidates        int                 `json:"maxCandidates"`
 	BlockedGroups        []string            `json:"blockedGroups"`
 	BlockedTerms         []string            `json:"blockedTerms"`
+	// SourcePreference orders releases of equivalent quality by source:
+	// "auto" (or empty) puts the source that measurably starts faster
+	// first, and cached debrid first for popular titles until both
+	// sources have measurements; "usenet" or "debrid" always prefer one.
+	// Quality is never traded for speed (see resolver/routing.go).
+	SourcePreference string `json:"sourcePreference,omitempty"`
+	// SourceScoreMargin is how far below the leader's score a release of
+	// the same quality tier may be and still be moved first for its
+	// source (0 = 25).
+	SourceScoreMargin float64 `json:"sourceScoreMargin,omitempty"`
 }
 
 type Quality struct {

@@ -7,12 +7,14 @@ import { Section } from "../../components/layout";
 import { SaveBar, useDraft } from "../../components/SaveBar";
 import { SettingsRow } from "../../components/SettingsRow";
 import { api } from "../../lib/api";
+import { formatNanos } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
 import type { EtherConfig } from "../../lib/types";
 
 type ResolverPolicy = EtherConfig["resolver"] & {
   optimisticStart?: boolean;
   healthRace?: number;
+  sourcePreference?: string;
   customFormats?: unknown[];
   customFormatScores?: Record<string, number>;
 };
@@ -165,6 +167,31 @@ const RACE = [
   ...[2, 3, 4].map((n) => ({ value: String(n), label: `First healthy of ${n}` })),
 ];
 
+const SOURCE_PREFERENCE = [
+  { value: "auto", label: "Fastest (automatic)" },
+  { value: "usenet", label: "Prefer Usenet" },
+  { value: "debrid", label: "Prefer debrid" },
+];
+
+/** Measured startup per source, as the resolver sees it. */
+function SourceStartupNote() {
+  const startup = useAsync(() => api.sourceStartup().catch(() => []), []);
+  const rows = startup.data ?? [];
+  if (rows.length === 0) return <>No plays measured yet.</>;
+  return (
+    <>
+      Measured so far:{" "}
+      {rows
+        .map(
+          (r) =>
+            `${r.protocol === "torrent" ? "debrid" : "Usenet"} ${formatNanos(r.average)} (${r.samples} ${r.samples === 1 ? "play" : "plays"})`,
+        )
+        .join(", ")}
+      .
+    </>
+  );
+}
+
 /** How playback starts: ranked health checks, or racing / optimistic start. */
 export function StartupTab() {
   const { config, resolver, save } = useResolver();
@@ -174,6 +201,7 @@ export function StartupTab() {
         ? {
             optimisticStart: resolver.optimisticStart ?? false,
             healthRace: resolver.healthRace ?? 0,
+            sourcePreference: resolver.sourcePreference || "auto",
           }
         : null,
     [resolver],
@@ -225,6 +253,28 @@ export function StartupTab() {
                 onChange={(v) => setDraft({ ...draft, healthRace: Number(v) })}
                 options={RACE}
                 ariaLabel="Concurrent checks"
+                searchable={false}
+              />
+            </div>
+          }
+        />
+        <SettingsRow
+          title="Source for equal-quality releases"
+          description={
+            <>
+              Never trades quality for speed. Among releases of the same quality, automatic puts the
+              source that starts faster first, and cached debrid first for popular titles until both
+              sources have measurements. The other source is checked alongside as a fallback.{" "}
+              <SourceStartupNote />
+            </>
+          }
+          control={
+            <div className="w-48">
+              <SearchSelect
+                value={draft.sourcePreference}
+                onChange={(v) => setDraft({ ...draft, sourcePreference: v })}
+                options={SOURCE_PREFERENCE}
+                ariaLabel="Source for equal-quality releases"
                 searchable={false}
               />
             </div>

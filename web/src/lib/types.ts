@@ -27,6 +27,168 @@ export interface Indexer {
   enabled: boolean;
   movieCategories: number[] | null;
   tvCategories: number[] | null;
+  /** "usenet" (Newznab, the default when empty or absent) or "torrent" (Torznab). */
+  protocol?: IndexerProtocol | "";
+  /** "cardigann" for a built-in site; empty or "newznab" for a Newznab/Torznab URL. */
+  kind?: IndexerKind | "";
+  /** Installed definition id of a built-in site. */
+  definition?: string;
+  /** A built-in site's setting values by name. */
+  settings?: Record<string, string> | null;
+  /** A built-in site's password settings; each set value is redacted to "••••". */
+  secretSettings?: Record<string, string> | null;
+}
+
+export type IndexerProtocol = "usenet" | "torrent";
+export type IndexerKind = "newznab" | "cardigann";
+
+/** Definitions source and FlareSolverr for built-in sites (config.indexerSites). */
+export interface IndexerSitesConfig {
+  definitionsUrl?: string;
+  flareSolverrUrl?: string;
+}
+
+/** One setting a site definition declares. */
+export interface SiteSetting {
+  name: string;
+  /** text, password, checkbox, select, multi-select, or info* (read-only guidance). */
+  type: string;
+  label?: string;
+  default?: string;
+  defaults?: string[];
+  options?: { value: string; label: string }[];
+}
+
+/** An installed site definition (GET /indexer-sites/definitions). */
+export interface SiteDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  language?: string;
+  /** public, semi-private or private. */
+  type?: string;
+  protocol: IndexerProtocol;
+  links: string[];
+  settings: SiteSetting[];
+  movies: boolean;
+  tv: boolean;
+  /** Login method when the site needs an account. */
+  login?: string;
+  /** "upload" or "source". */
+  source: string;
+  warnings?: string[];
+  installedAt: string;
+  updatedAt: string;
+}
+
+/** A definition offered by the owner's definitions source. */
+export interface CatalogEntry {
+  id: string;
+  file: string;
+  installed: boolean;
+  updateAvailable?: boolean;
+}
+
+/** POST /indexer-sites/test. */
+export interface SiteTestResult {
+  ok: boolean;
+  results: number;
+  titles?: string[] | null;
+  error?: string;
+  durationMs: number;
+}
+
+/** A built-in indexer's last test (GET /indexer-sites/status). */
+export interface SiteTestStatus {
+  indexerId: string;
+  ok: boolean;
+  message?: string;
+  results: number;
+  testedAt: string;
+}
+
+/** POST /indexer-sites/update. */
+export interface SiteUpdateReport {
+  updated: string[];
+  unchanged: number;
+  failed: { id: string; error: string }[];
+}
+
+export type DebridKind = "realdebrid" | "torbox" | "alldebrid" | "premiumize";
+
+/** One owner-supplied debrid account. `apiKey` is redacted to "••••" when set. */
+export interface DebridProvider {
+  id: string;
+  name: string;
+  kind: DebridKind;
+  apiKey: string;
+  /** Lower is tried first. */
+  priority: number;
+  enabled: boolean;
+}
+
+export interface DebridConfig {
+  providers: DebridProvider[] | null;
+  cachedOnly: boolean;
+  removeUncached: boolean;
+  /** Largest HTTP range request; requests start at 512 KiB and grow. 0 = 8 MiB; max 64 MiB. */
+  chunkBytes?: number;
+  /** Fixed read-ahead window in chunks; 0 = adaptive to throughput, negative disables; max 32. */
+  readAheadChunks?: number;
+  /** 0 = 4; max 16. */
+  maxConnections?: number;
+}
+
+/** GET /status/debrid. */
+export interface DebridStatus {
+  enabled: boolean;
+  cachedOnly: boolean;
+  providers: DebridProviderStatus[] | null;
+  /** Streaming engine counters; absent until the engine is wired. */
+  engine?: DebridEngineStatus;
+}
+
+/** Moving averages (EWMA) of one provider's timings; all 0 until `samples` > 0. */
+export interface DebridLatency {
+  resolveMs?: number;
+  linkMs?: number;
+  connectMs?: number;
+  ttfbMs?: number;
+  throughputBps?: number;
+  samples?: number;
+}
+
+export interface DebridEngineStatus {
+  openFiles?: number;
+  blockBytes?: number;
+  memoryHits?: number;
+  diskHits?: number;
+  blocksFetched?: number;
+  bytesFetched?: number;
+  hedges?: number;
+  hedgeWins?: number;
+  linkRefreshes?: number;
+  errors?: number;
+}
+
+export interface DebridProviderStatus {
+  id: string;
+  name: string;
+  kind: string;
+  enabled: boolean;
+  priority: number;
+  state: "ok" | "backoff" | "auth_failed" | "disabled" | string;
+  lastError?: string;
+  backoffUntil?: string;
+  requests?: number;
+  failures?: number;
+  cached?: number;
+  notCached?: number;
+  linksRefreshed?: number;
+  /** Torrents reused from the account instead of re-added. */
+  reused?: number;
+  latency?: DebridLatency;
+  lastSuccess?: string;
 }
 
 export interface EtherConfig {
@@ -57,6 +219,9 @@ export interface EtherConfig {
   };
   usenet: { providers: UsenetProvider[] | null };
   indexers: Indexer[] | null;
+  indexerSites?: IndexerSitesConfig;
+  /** Absent on servers without debrid support. */
+  debrid?: DebridConfig;
   cache: {
     dir: string;
     budgetBytes: number;
@@ -212,6 +377,13 @@ export interface CandidateTrace {
   healthy: boolean;
   fetchDuration: number;
   healthDuration: number;
+  size?: number;
+  /** The owner's pin for the title. */
+  pinned?: boolean;
+  customFormats?: { id: string; name: string; score: number }[] | null;
+  compatibilityReason?: string;
+  /** Why source routing moved this candidate. */
+  route?: string;
 }
 export interface ResolverTrace {
   titleKey: string;
@@ -222,4 +394,22 @@ export interface ResolverTrace {
   winner?: string;
   err?: string;
   searchDuration: number;
+  /** The resolution excluded releases already tried (mid-play failover). */
+  failover?: boolean;
+  /** Pinned release id and what became of it ("used", "unhealthy: …"). */
+  pinned?: string;
+  pinStatus?: string;
+  /** Candidates left out of a stored trace. */
+  omitted?: number;
+  /** The source-routing decision, e.g. "debrid first: popular title". */
+  routing?: string;
+}
+
+/** A source's measured startup (NZB or payload fetch plus a real health check). */
+export interface SourceStartup {
+  protocol: "usenet" | "torrent";
+  /** Exponentially weighted average, nanoseconds. */
+  average: number;
+  last: number;
+  samples: number;
 }

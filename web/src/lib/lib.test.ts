@@ -387,6 +387,10 @@ describe("health", () => {
     expect(cacheHealth(LIVE.cache).summary).toBe("925.4 MiB of 20.0 GiB");
     expect(worstLevel(h.map((x) => x.level))).toBe("warn");
   });
+  it("accepts debrid in place of Usenet", () => {
+    expect(usenetHealth([], { enabled: true }).level).toBe("off");
+    expect(usenetHealth([], { enabled: false }).level).toBe("error");
+  });
   it("flags real problems", () => {
     expect(usenetHealth([]).level).toBe("error");
     expect(usenetHealth({ error: "boom" }).summary).toBe("boom");

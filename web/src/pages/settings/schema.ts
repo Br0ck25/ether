@@ -475,3 +475,56 @@ export const MARKERS: FieldGroup[] = [
     ],
   },
 ];
+
+/** Debrid section settings, edited in place under the provider list (Sources › Debrid). */
+export const DEBRID: FieldGroup[] = [
+  {
+    title: "Torrent handling",
+    fields: [
+      {
+        key: "cachedOnly",
+        label: "Cached torrents only",
+        kind: "bool",
+        help: "Only use torrents your debrid service already holds. Nothing is downloaded and playback never waits.",
+      },
+      {
+        key: "removeUncached",
+        label: "Remove uncached torrents",
+        kind: "bool",
+        help: "Remove torrents Ether added that turned out not to be cached. Cached torrents stay on your account so the next play starts instantly and they are reused instead of re-added.",
+      },
+    ],
+  },
+  {
+    title: "Advanced",
+    description: "Leave at 0 for the built-in behaviour.",
+    fields: [
+      {
+        key: "chunkBytes",
+        label: "Largest range request",
+        kind: "bytes",
+        unit: "MiB",
+        help: "Requests start at 512 KiB for a fast first byte and grow up to this size. 0 = 8 MiB; at most 64 MiB.",
+      },
+      {
+        key: "readAheadChunks",
+        label: "Fixed read-ahead",
+        kind: "number",
+        min: -1,
+        max: 32,
+        step: 1,
+        unit: "chunks",
+        help: "0 adapts read-ahead to the measured download speed. Set up to 32 chunks to fix the window; -1 turns read-ahead off.",
+      },
+      {
+        key: "maxConnections",
+        label: "Connections per file",
+        kind: "number",
+        min: 0,
+        max: 16,
+        step: 1,
+        help: "Concurrent range requests per open file. 0 = 4; at most 16.",
+      },
+    ],
+  },
+];

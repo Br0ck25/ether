@@ -21,6 +21,7 @@ type validation struct {
 	nzb                           []byte
 	err                           error
 	healthy, healthChecked        bool
+	healthCached                  bool // answered by the verified cache, not a check
 	fetchDuration, healthDuration time.Duration
 }
 
@@ -123,7 +124,7 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 					if s.health != nil {
 						v.healthChecked = true
 						phase = time.Now()
-						v.healthy, v.err = s.checkHealth(checkCtx, cands[i].rel.ID, v.nzb)
+						v.healthy, v.healthCached, v.err = s.checkHealthCached(checkCtx, cands[i].rel.ID, v.nzb)
 						v.healthDuration = time.Since(phase)
 					}
 				}
@@ -151,6 +152,9 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				return -1, nil, ctx.Err()
 			}
 			if ct.Healthy {
+				if v.healthChecked && !v.healthCached {
+					s.noteStartup(cands[v.index].rel, v.fetchDuration+v.healthDuration)
+				}
 				s.recordReputation(ctx, cands[v.index].rel.Indexer, true)
 				winner = v.index
 				nzb = v.nzb
