@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -263,6 +264,25 @@ func (c *Client) get(ctx context.Context, rawURL string, limit int64) ([]byte, e
 	return body, nil
 }
 
+// searchIdentity fingerprints every indexer setting that changes what a
+// search returns.
+func searchIdentity(cfg config.Indexer) string {
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%s\x00%s\x00%v\x00%v", cfg.URL, cfg.APIKey, cfg.Protocol, cfg.Kind, cfg.Definition, cfg.MovieCategories, cfg.TVCategories)
+	for _, m := range []map[string]string{cfg.Settings, cfg.SecretSettings} {
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Fprintf(h, "\x00%s=%s", k, m[k])
+		}
+		h.Write([]byte{1})
+	}
+	return hex.EncodeToString(h.Sum(nil)[:12])
+}
+
 // capsEndpoint fingerprints the URL and API key caps are fetched from.
 func (c *Client) capsEndpoint() string {
 	cfg := c.Config()
@@ -352,6 +372,10 @@ func cacheKey(c *Client, req core.SearchRequest) string {
 		// Do not reuse persisted empty answers from that narrower search.
 		fmt.Fprint(h, "tv-keywords-v2|")
 	}
+	// The indexer's search identity: an edited URL, key, category list or
+	// built-in site setting must not be answered from the old config's
+	// results (in memory, or persisted for a fresh client).
+	fmt.Fprintf(h, "%s|", searchIdentity(c.Config()))
 	fmt.Fprintf(h, "%s|%s|%d|%s|%d|%s|%d|%d|%d",
 		c.indexerID(), req.Type, req.IDs.TMDB, req.IDs.IMDB, req.IDs.TVDB,
 		strings.ToLower(strings.TrimSpace(req.Title)), req.Year, req.Season, req.Episode)

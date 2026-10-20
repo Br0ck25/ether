@@ -173,3 +173,43 @@ func TestCapsFollowEndpointChange(t *testing.T) {
 		t.Fatalf("same endpoint refetched: caps hits = %d", c3.hitsFor("caps"))
 	}
 }
+
+// Cached search results belong to the indexer config that produced them:
+// an edited endpoint or category list searches again, in memory and from a
+// fresh client sharing the database, while an unchanged config still hits
+// the cache.
+func TestSearchCacheFollowsIndexerConfig(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	a, b := newFakeIndexer(t, ""), newFakeIndexer(t, "")
+	cfg := testConfig(a.server.URL)
+	c := New(cfg, db, Options{SearchCacheTTL: time.Hour})
+	req := core.SearchRequest{Type: core.TypeMovie, Title: "The Signal", Year: 1999}
+	search := func(c *Client) {
+		t.Helper()
+		if _, err := c.Search(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	search(c)
+	cfg.URL = b.server.URL
+	c.UpdateConfig(cfg)
+	search(c)
+	if b.hitsFor("search") != 1 {
+		t.Fatalf("edited endpoint answered from cache: hits=%d", b.hitsFor("search"))
+	}
+	cfg.MovieCategories = []int{2040}
+	c.UpdateConfig(cfg)
+	search(c)
+	if b.hitsFor("search") != 2 {
+		t.Fatalf("edited categories answered from cache: hits=%d", b.hitsFor("search"))
+	}
+	search(New(cfg, db, Options{SearchCacheTTL: time.Hour}))
+	if b.hitsFor("search") != 2 {
+		t.Fatalf("unchanged config missed the persisted cache: hits=%d", b.hitsFor("search"))
+	}
+}
