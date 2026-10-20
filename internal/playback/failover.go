@@ -204,7 +204,7 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		points = indexPointsOf(mi.Keyframes)
 	}
 	mi.Keyframes = keyframesOf(points)
-	needIndex := facts == nil && len(points) == 0 && !mi.Estimated && mi.Duration > 0
+	needIndex := len(points) == 0 && !mi.Estimated && mi.Duration > 0
 	// The loopback server may already hold g; publish under its lock.
 	g.mu.Lock()
 	g.info = mi

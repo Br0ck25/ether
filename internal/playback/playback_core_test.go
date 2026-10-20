@@ -626,6 +626,22 @@ func TestWarmCachesKeyframes(t *testing.T) {
 		t.Fatal("warm skipped")
 	}
 	waitWarm(t, h, owner.ID, "c1", movieKey)
+	// Readiness no longer waits for an optional seek index. Once it has
+	// finished in the background, later Play should reuse it too.
+	deadline := time.Now().Add(time.Second)
+	for {
+		h.m.mu.Lock()
+		entry := h.m.warm[identity{owner.ID, caps.ClientID, movieKey}]
+		ready := entry != nil && entry.probe != nil && len(entry.probe.points) == len(want)
+		h.m.mu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("warm keyframe cache never filled")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	ps, err := h.m.Prepare(context.Background(), owner, movieKey, caps)
 	if err != nil {
 		t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -21,8 +22,10 @@ type TorrentResolver interface {
 // provider offers a bulk check), and FetchNZB returns a debrid payload for
 // torrents while Usenet releases go to the inner indexer unchanged.
 type Indexer struct {
-	inner core.Indexer
-	svc   *Service
+	inner   core.Indexer
+	svc     *Service
+	mu      sync.Mutex
+	flights map[string]*payloadFlight
 }
 
 var _ core.Indexer = (*Indexer)(nil)
@@ -95,16 +98,36 @@ func (x *Indexer) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) 
 	if !x.svc.Enabled() {
 		return nil, fmt.Errorf("torrent release %q: %w", r.Name, ErrNoProvider)
 	}
+	return x.fetchTorrent(ctx, r)
+}
+
+func (x *Indexer) fetchTorrentOnce(ctx context.Context, r core.Release) (data []byte, err error) {
+	started := time.Now()
+	var descriptor, provider time.Duration
+	reused := false
+	defer func() {
+		x.svc.log.Info("debrid payload prepared", "release", r.ID, "reused", reused,
+			"descriptor", descriptor, "provider", provider, "took", time.Since(started), "success", err == nil)
+	}()
+	if p, ok := x.svc.reusablePayload(ctx, r); ok {
+		reused = true
+		return p.Encode(), nil
+	}
 	if r.InfoHash == "" {
 		tr, ok := x.inner.(TorrentResolver)
 		if !ok {
 			return nil, fmt.Errorf("debrid: torrent %q has no info hash: %w", r.Name, core.ErrReleaseRejected)
 		}
+		phase := time.Now()
 		resolved, err := tr.ResolveTorrent(ctx, r)
+		descriptor = time.Since(phase)
 		if err != nil {
 			return nil, err
 		}
 		r = resolved
 	}
-	return x.svc.Acquire(ctx, r)
+	phase := time.Now()
+	data, err = x.svc.Acquire(ctx, r)
+	provider = time.Since(phase)
+	return data, err
 }

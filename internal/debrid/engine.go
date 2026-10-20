@@ -385,12 +385,13 @@ type remoteFile struct {
 	refs     int
 	lastUsed time.Time
 
-	linkMu    sync.Mutex // serializes refreshes
-	mu        sync.Mutex
-	pl        Payload
-	gen       int
-	linkFails int // link generations that failed in a row
-	failedGen int // last generation counted in linkFails (-1 = none)
+	linkMu           sync.Mutex // serializes refreshes
+	mu               sync.Mutex
+	pl               Payload
+	gen              int
+	linkFails        int       // link generations that failed in a row
+	failedGen        int       // last generation counted in linkFails (-1 = none)
+	transportRetryAt time.Time // bound link regeneration during a CDN outage
 
 	bmu     sync.Mutex
 	flights map[int64]*blockFlight
@@ -817,6 +818,23 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 				return nil, tm, ctx.Err()
 			}
 			lastErr = err
+			// A still-valid signed URL can point at a dead CDN node. One
+			// bounded regeneration gives the provider a chance to route us
+			// elsewhere instead of retrying the dead endpoint four times.
+			// A network outage never establishes that the file is missing.
+			if attempt == 0 && urgent {
+				f.mu.Lock()
+				refresh := !f.e.now().Before(f.transportRetryAt)
+				if refresh {
+					f.transportRetryAt = f.e.now().Add(5 * time.Second)
+				}
+				f.mu.Unlock()
+				if refresh {
+					if _, _, refreshErr := f.link(ctx, true, gen); refreshErr != nil {
+						return nil, tm, refreshErr
+					}
+				}
+			}
 			continue
 		}
 		switch {
