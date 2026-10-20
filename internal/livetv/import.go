@@ -95,6 +95,7 @@ func ParseM3U(r io.Reader, sourceID string) ([]Channel, error) {
 			}
 		}
 		seen[pending.ID] = true
+		pending.StreamSources = []StreamSource{{ID: stableID(pending.ID, "playlist"), Name: "Imported stream", URL: line, Enabled: true}}
 		if pending.Name == "" {
 			pending.Name = pending.GuideID
 		}

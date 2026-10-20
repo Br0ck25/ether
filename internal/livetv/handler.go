@@ -20,6 +20,10 @@ func (s *Service) Handler() http.Handler {
 	r := chi.NewRouter()
 	owner := &core.User{IsOwner: true}
 	r.Get("/channels", func(w http.ResponseWriter, r *http.Request) { v, e := s.Channels(r.Context()); ownerResult(w, v, e) })
+	r.Get("/channels/{id}/sources/status", func(w http.ResponseWriter, r *http.Request) {
+		v, e := s.StreamSourceStatuses(r.Context(), chi.URLParam(r, "id"))
+		ownerResult(w, v, e)
+	})
 	save := func(w http.ResponseWriter, r *http.Request) {
 		var c Channel
 		if !ownerBody(w, r, &c) {

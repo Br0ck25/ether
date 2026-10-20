@@ -29,6 +29,8 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
+	sourceMu         sync.Mutex
+	sourceHealth     map[string]streamSourceHealth
 	transMu          sync.RWMutex
 	transcodes       map[string]core.HLSSession
 	o                Options
@@ -274,8 +276,10 @@ func validateChannel(c *Channel) error {
 	if c.Kind != "virtual" && c.Kind != "iptv" {
 		return fmt.Errorf("kind must be virtual or iptv")
 	}
-	if c.Kind == "iptv" && !validHTTP(c.StreamURL) {
-		return fmt.Errorf("IPTV stream must use HTTP(S)")
+	if c.Kind == "iptv" {
+		if err := normalizeStreamSources(c); err != nil {
+			return err
+		}
 	}
 	if c.Kind == "virtual" && len(c.Items) == 0 {
 		return fmt.Errorf("virtual channel needs base programming")
@@ -441,6 +445,7 @@ func (s *Service) AllowedChannels(ctx context.Context, u *core.User) ([]Channel,
 		}
 		if s.allowed(ctx, u, c, p) {
 			c.StreamURL = ""
+			c.StreamSources = nil
 			out = append(out, c)
 		}
 	}
@@ -607,6 +612,10 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 			c.AllowedUsers = previous.AllowedUsers
 			c.Rating = previous.Rating
 			c.GuideID = previous.GuideID
+			c.StreamSources = mergeImportedStreams(c, previous)
+			if err := normalizeStreamSources(&c); err != nil {
+				return src, err
+			}
 		}
 		if guide, ok := g.Channels[c.GuideID]; ok && c.Logo == "" {
 			c.Logo = guide.Logo

@@ -29,25 +29,26 @@ type Block struct {
 	Shuffle bool   `json:"shuffle"`
 }
 type Channel struct {
-	Transcode    bool      `json:"transcode"` // IPTV: normalize codecs through the transcoder
-	ID           string    `json:"id"`
-	Number       string    `json:"number"`
-	Name         string    `json:"name"`
-	Kind         string    `json:"kind"` // virtual or iptv
-	Enabled      bool      `json:"enabled"`
-	Favorite     bool      `json:"favorite"`
-	Logo         string    `json:"logo,omitempty"`
-	Rating       string    `json:"rating,omitempty"`
-	AllowedUsers []int64   `json:"allowedUsers,omitempty"`
-	SourceID     string    `json:"sourceId,omitempty"`
-	GuideID      string    `json:"guideId,omitempty"`
-	StreamURL    string    `json:"streamUrl,omitempty"` // owner API only
-	Group        string    `json:"group,omitempty"`
-	Epoch        time.Time `json:"epoch"`
-	Seed         int64     `json:"seed"`
-	Shuffle      bool      `json:"shuffle"`
-	Items        []Item    `json:"items"`
-	Blocks       []Block   `json:"blocks,omitempty"`
+	Transcode     bool           `json:"transcode"` // IPTV: normalize codecs through the transcoder
+	ID            string         `json:"id"`
+	Number        string         `json:"number"`
+	Name          string         `json:"name"`
+	Kind          string         `json:"kind"` // virtual or iptv
+	Enabled       bool           `json:"enabled"`
+	Favorite      bool           `json:"favorite"`
+	Logo          string         `json:"logo,omitempty"`
+	Rating        string         `json:"rating,omitempty"`
+	AllowedUsers  []int64        `json:"allowedUsers,omitempty"`
+	SourceID      string         `json:"sourceId,omitempty"`
+	GuideID       string         `json:"guideId,omitempty"`
+	StreamURL     string         `json:"streamUrl,omitempty"`     // owner API only
+	StreamSources []StreamSource `json:"streamSources,omitempty"` // ordered inputs; independent of channel/guide identity
+	Group         string         `json:"group,omitempty"`
+	Epoch         time.Time      `json:"epoch"`
+	Seed          int64          `json:"seed"`
+	Shuffle       bool           `json:"shuffle"`
+	Items         []Item         `json:"items"`
+	Blocks        []Block        `json:"blocks,omitempty"`
 	// Collection/Filter are expanded into a stable item snapshot when saved.
 	Collection core.RatingKey `json:"collection,omitempty"`
 	Filter     *core.Filter   `json:"filter,omitempty"`
@@ -103,6 +104,7 @@ type Options struct {
 	Warm func(context.Context, core.RatingKey) error
 }
 type SessionInfo struct {
+	ActiveSourceID string `json:"activeSourceId,omitempty"`
 	// Plex's rolling subscription identity is numeric; the stream UUID remains
 	// separate. These are ephemeral identities, scoped to this service lifetime.
 	SubscriptionID  int64           `json:"-"`
