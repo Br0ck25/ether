@@ -327,18 +327,29 @@ func (m *Manager) serveLoopback(w http.ResponseWriter, r *http.Request) {
 // backgroundFailover fails a session over outside any request, for errors
 // seen by ffmpeg on the loopback server.
 func (m *Manager) backgroundFailover(s *session, g *generation, at time.Duration) {
+	if s.isClosed() || !g.backgroundFailover.CompareAndSwap(false, true) {
+		return
+	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
+		g.backgroundFailover.Store(false)
 		return
 	}
 	m.wg.Add(1)
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
+		defer g.backgroundFailover.Store(false)
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.FailoverTimeout)
 		defer cancel()
-		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil && !errors.Is(err, errRequireRemux) {
+		// Retiring the old generation is part of a successful input swap;
+		// only stopping the session should cancel that swap's context.
+		if s.stopCtx != nil {
+			stop := context.AfterFunc(s.stopCtx, cancel)
+			defer stop()
+		}
+		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil && ctx.Err() == nil && !errors.Is(err, errRequireRemux) {
 			m.log.Error("background failover failed", "session", s.id, "err", err)
 		}
 	}()

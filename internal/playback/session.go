@@ -41,8 +41,9 @@ type generation struct {
 	cancel     context.CancelFunc
 
 	// articleMissing records that a read hit core.ErrArticleMissing.
-	articleMissing atomic.Bool
-	readFailure    error // protected by mu; distinguishes transient failover from bad data
+	articleMissing     atomic.Bool
+	backgroundFailover atomic.Bool // at most one recovery worker for this source
+	readFailure        error       // protected by mu; distinguishes transient failover from bad data
 
 	mu      sync.Mutex
 	refs    int
@@ -167,9 +168,13 @@ type session struct {
 	container   string
 	name        string
 
-	failSem chan struct{} // serialises failovers
-	bytes   atomic.Int64
-	rate    rateMeter
+	// stopCtx cancels background recovery when playback ends. Unlike a
+	// generation context, it survives retiring an input during a healthy swap.
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+	failSem    chan struct{} // serialises failovers
+	bytes      atomic.Int64
+	rate       rateMeter
 
 	mu             sync.Mutex
 	cur            *generation
@@ -200,8 +205,11 @@ type session struct {
 }
 
 func newSession(id string, ident identity, user *core.User, caps core.ClientCaps, title *core.Title, profile string, now time.Time) *session {
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	return &session{
 		id:         id,
+		stopCtx:    stopCtx,
+		stopCancel: stopCancel,
 		ident:      ident,
 		user:       *user,
 		caps:       caps,

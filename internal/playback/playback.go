@@ -802,6 +802,9 @@ func (m *Manager) Stop(id string) {
 	}
 	s.mu.Lock()
 	s.closed = true
+	if s.stopCancel != nil {
+		s.stopCancel()
+	}
 	g := s.cur
 	s.mu.Unlock()
 	if g != nil {
