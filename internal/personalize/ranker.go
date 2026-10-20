@@ -110,8 +110,13 @@ const (
 // ---- features --------------------------------------------------------------------
 
 // rawFeatureVersion versions the snapshot layout; bump when rawFeatures
-// changes so old snapshots are not misread.
-const rawFeatureVersion = 1
+// changes so old snapshots are not misread. Version 1 snapshots (the first
+// v1Features features) still train, with the later features at zero.
+const rawFeatureVersion = 2
+
+// v1Features is the snapshot length of version 1 (before crowd, consensus
+// and buzz).
+const v1Features = 17
 
 // rawFeature indexes the snapshot captured at assembly time.
 type rawFeature int
@@ -134,6 +139,9 @@ const (
 	fInProgress
 	fNewToViewer
 	fWatched
+	fCrowd     // crowd co-engagement score (crowd.go)
+	fConsensus // independent favourites recommending the title
+	fBuzz      // trend momentum (buzz.go)
 	numRaw
 )
 
@@ -156,6 +164,9 @@ var rawFeatures = [numRaw]struct{ name, label string }{
 	{"in_progress", "In progress"},
 	{"new_to_viewer", "New to the viewer"},
 	{"watched", "Already finished (rewatch)"},
+	{"crowd", "Loved by fans of what they watch"},
+	{"consensus", "Recommended by several of their favourites"},
+	{"buzz", "Trending now"},
 }
 
 // itemSnap is one (row, title)'s snapshot from an assembly.
@@ -415,7 +426,7 @@ func (p *rankPass) prepare(a *assembly) {
 	p.inprog = map[core.RatingKey]bool{}
 	all := append(append([]*candRow{}, a.model.rows...), a.owner...)
 	for _, c := range all {
-		trend := c.kind == KindTrending || c.kind == KindTrendingTaste || c.kind == KindTop10Today
+		trend := c.kind == KindTrending || c.kind == KindTrendingTaste || c.kind == KindTop10Today || c.kind == KindCrowdTrending
 		for i := range c.items {
 			p.pops = append(p.pops, c.items[i].t.Popularity)
 			if trend {
@@ -503,6 +514,11 @@ func (p *rankPass) features(a *assembly, it *candItem) [numRaw]float32 {
 	if (ev == nil || ev.Kind == EvidenceIgnored) && x.n == 0 {
 		f[fNewToViewer] = 1
 	}
+	if cf, ok := a.model.crowd[tasteKey(t.Key)]; ok {
+		f[fCrowd] = float64(cf.score)
+		f[fConsensus] = float64(min(cf.consensus, 6))
+	}
+	f[fBuzz] = a.model.buzz[tasteKey(t.Key)]
 	var out [numRaw]float32
 	for i, v := range f {
 		out[i] = float32(v)

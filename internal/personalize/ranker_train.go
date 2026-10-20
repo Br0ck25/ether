@@ -595,7 +595,7 @@ func loadExamples(ctx context.Context, db *sql.DB, limit int) ([]rankExample, in
 			return nil, 0, err
 		}
 		total++
-		if fv != rawFeatureVersion || !decodeFeatures(blob, x.raw[:]) {
+		if !decodeSnapshot(fv, blob, &x.raw) {
 			continue
 		}
 		x.kind, x.surface = intern(x.kind), intern(x.surface)

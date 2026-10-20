@@ -12,9 +12,11 @@
 //     device, binge and rewatch tendencies) and owner overrides;
 //   - candidate rows from generators (generators.go): Continue Watching,
 //     Up Next, Top 10, Because you watched, More from <person>, Trending in
-//     your taste, Hidden gems, New this week, Comfort rewatches, Something
-//     different, Short on time, Finish the franchise, owner collections,
-//     LLM themes, Trakt, and popularity rows for new viewers;
+//     your taste, Fans of what you watch also loved and Trending with fans
+//     of what you watch (crowd.go, buzz.go), Hidden gems, New this week,
+//     Comfort rewatches, Something different, Short on time, Finish the
+//     franchise, owner collections, LLM themes, Trakt, and popularity rows
+//     for new viewers;
 //   - assembly per request context (assemble.go): context-aware item
 //     scoring, MMR diversity, cross-row dedupe, bandit row ranking with
 //     daily-seeded Thompson exploration (bandit.go), the owner's Home

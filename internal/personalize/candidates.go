@@ -57,6 +57,9 @@ type candRow struct {
 	// group: at most one row per group of the same kind on a screen
 	// (showcase genre clusters).
 	group string
+	// sectionTitles name the row on the Movies and TV Shows pages when it
+	// differs from its Home title (crowd rows).
+	sectionTitles map[core.MediaType]string
 }
 
 // userModel is everything precomputed for one viewer: the taste model and
@@ -67,7 +70,11 @@ type userModel struct {
 	taste   *Taste
 	rows    []*candRow
 	fatigue map[core.RatingKey]float64 // item key -> 0..1
-	arms    map[string]arm             // this viewer's per-kind row stats
+	// crowd and buzz are the build's crowd graph and trend momentum by
+	// taste key (crowd.go, buzz.go): ranker features and Top 10 freshness.
+	crowd   map[core.RatingKey]crowdFeat
+	buzz    map[core.RatingKey]float64
+	arms    map[string]arm // this viewer's per-kind row stats
 	builtAt time.Time
 	took    time.Duration
 	// version identifies the build (memo keys).
@@ -91,6 +98,11 @@ type builder struct {
 	hydrateLeft int
 	fits        map[core.RatingKey]fitMemo
 	rowsOut     []*candRow
+	// crowd graph and trend momentum, computed on first use (crowd.go,
+	// buzz.go).
+	crowdDone bool
+	crowdG    *crowdGraph
+	buzzM     *buzzMap
 }
 
 type fitMemo struct {

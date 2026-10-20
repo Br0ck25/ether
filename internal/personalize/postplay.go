@@ -137,7 +137,7 @@ func (e *Engine) rankPostPlay(ctx context.Context, user *core.User, justWatched,
 	if m != nil {
 		for _, r := range m.rows {
 			switch r.kind {
-			case KindBecause, KindTop10, KindTrendingTaste, KindPerson, KindHiddenGems, KindFranchise:
+			case KindBecause, KindTop10, KindTrendingTaste, KindPerson, KindHiddenGems, KindFranchise, KindCrowd, KindCrowdTrending:
 			default:
 				continue
 			}

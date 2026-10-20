@@ -263,6 +263,20 @@ func encodeFeatures(v []float32) []byte {
 	return b
 }
 
+// decodeSnapshot reads a stored snapshot of any known version into the
+// current layout: version 1 lacks the crowd, consensus and buzz features,
+// which read as zero.
+func decodeSnapshot(fv int, b []byte, out *[numRaw]float32) bool {
+	switch fv {
+	case rawFeatureVersion:
+		return decodeFeatures(b, out[:])
+	case 1:
+		*out = [numRaw]float32{}
+		return decodeFeatures(b, out[:v1Features])
+	}
+	return false
+}
+
 func decodeFeatures(b []byte, out []float32) bool {
 	if len(b) != 4*len(out) {
 		return false

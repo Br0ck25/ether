@@ -124,7 +124,7 @@ func (t tuning) rowMult(l rowLean) float64 {
 }
 
 // tuneItem is the dials' part of an item's context score (one hook in
-// adjust), at most ±0.26.
+// adjust), at most ±0.32.
 func (a *assembly) tuneItem(it *candItem) float64 {
 	t := &it.t
 	dd, df := a.dials().discovery-0.5, a.dials().freshness-0.5
@@ -136,7 +136,7 @@ func (a *assembly) tuneItem(it *candItem) float64 {
 		adj += dd * (0.30*novelty(a.model.taste, t) + 0.14*(1-popularity(t)) - 0.20*clamp(it.fit, -1, 1))
 	}
 	if df != 0 {
-		adj += df * (0.36*recency(t, a.hc.Now) - 0.24*evergreen(t, a.hc.Now))
+		adj += df * (0.36*recency(t, a.hc.Now) - 0.24*evergreen(t, a.hc.Now) + 0.12*a.model.buzz[tasteKey(t.Key)])
 	}
 	return adj
 }

@@ -27,6 +27,10 @@ const (
 	KindFranchise     = "finish-the-franchise"
 	KindLLM           = "llm"
 	KindTrending      = "trending"
+	// Crowd rows (crowd.go): public co-engagement over the viewer's
+	// favourites, and its intersection with what is trending now.
+	KindCrowd         = "fans-also-loved"
+	KindCrowdTrending = "trending-with-fans"
 	KindPopularServer = "popular-on-server"
 	KindNewReleases   = "new-releases"
 	KindTopRated      = "top-rated"
@@ -133,6 +137,10 @@ var kinds = []kindInfo{
 		prior: 0.09, slug: "franchise", context: "franchise", cap: 2, dynamic: true, surfaces: map[string]float64{}, fits: fitsMovies, group: groupExplore, lean: leanFamiliar}, // off unless the owner places it: usually one or two titles
 	{kind: KindLLM, title: "Themed Rows (AI)", description: "Natural-language themed rows from the owner's LLM, seeded by recent favourites.",
 		prior: 0.06, slug: "llm", context: "llm", cap: 2, dynamic: true, surfaces: map[string]float64{surfHome: 1, surfMovies: 0.7, surfShows: 0.7}, group: groupPicks},
+	{kind: KindCrowd, title: "Fans of What You Watch Also Loved", description: "What people who loved the viewer's favourites also loved: TMDB's crowd recommendations aggregated over up to 20 recent favourites, strongest where several favourites agree, plus what similar viewers here watched. Films and series separately on the Movies and TV pages.",
+		prior: 0.09, slug: "crowd", context: "crowd", surfaces: map[string]float64{surfHome: 1, surfMovies: 0.9, surfShows: 0.9}, group: groupPicks},
+	{kind: KindCrowdTrending, title: "Trending With Fans of What You Watch", description: "Titles trending right now (TMDB, and Trakt when it is set up) that fans of the viewer's favourites love: trendy, but personal.",
+		prior: 0.08, slug: "crowd.trending", context: "crowd.trending", surfaces: everywhere, group: groupPicks, lean: leanFresh},
 	{kind: KindTrending, title: "Trending This Week", description: "What is trending on TMDB this week.",
 		prior: 0.06, slug: "trending", context: "trending", surfaces: everywhere, group: groupExplore, lean: leanFresh},
 	{kind: KindPopularServer, title: "Popular on This Server", description: "What other viewers on this server watched most in the last 30 days.",
