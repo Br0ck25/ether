@@ -153,12 +153,21 @@ func (s *Service) knownCached(rel core.Release) bool {
 // routeSources reorders ranked candidates (best first) by source, as
 // described above. It never changes which quality tier leads.
 func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) []candidate {
-	// A leader recently verified playable is reused as is: it is already
-	// the quickest, surest start, and availability outranks routing.
-	if len(cands) < 2 || cands[0].verified {
+	if len(cands) < 2 {
 		return cands
 	}
 	rcfg := s.resolverCfg()
+	mode := strings.ToLower(strings.TrimSpace(rcfg.SourcePreference))
+	explicit := mode == PreferDebrid || mode == PreferUsenet
+	preferredProtocol := core.ProtocolUsenet
+	if mode == PreferDebrid {
+		preferredProtocol = core.ProtocolTorrent
+	}
+	// Automatic routing reuses a verified source. An explicit owner change
+	// still takes effect for equal-quality releases, even after prior plays.
+	if cands[0].verified && (!explicit || protocolOf(cands[0].rel) == preferredProtocol) {
+		return cands
+	}
 	margin := rcfg.SourceScoreMargin
 	if margin <= 0 {
 		margin = defaultSourceScoreMargin
@@ -166,7 +175,7 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 	lead := cands[0]
 	tier := qualityTier(lead.rel.Info)
 	group := 0 // cands[:group] are equivalent to the leader
-	for group < len(cands) && !cands[group].verified && qualityTier(cands[group].rel.Info) == tier && cands[group].rel.Score >= lead.rel.Score-margin {
+	for group < len(cands) && (!cands[group].verified || explicit) && qualityTier(cands[group].rel.Info) == tier && cands[group].rel.Score >= lead.rel.Score-margin {
 		group++
 	}
 	hasUsenet, hasTorrent := false, false
@@ -181,7 +190,6 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 		return cands // nothing to choose between
 	}
 
-	mode := strings.ToLower(strings.TrimSpace(rcfg.SourcePreference))
 	var want, why string
 	switch mode {
 	case PreferUsenet:

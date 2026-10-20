@@ -100,6 +100,33 @@ func TestRoutingNeverTradesQualityForSpeed(t *testing.T) {
 	}
 }
 
+func TestExplicitSourcePreferenceOverridesPreviousVerifiedSource(t *testing.T) {
+	for _, mode := range []string{PreferAuto, PreferDebrid, PreferUsenet} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := testCfg()
+			cfg.Resolver.SourcePreference = mode
+			svc := New(nil, fakeHealth{}, nil, cfg, Options{})
+			releases := routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")
+			releases[0].Score, releases[1].Score = 100, 95
+			cands := []candidate{{rel: releases[0], verified: true}, {rel: releases[1]}}
+			got := svc.routeSources(cands, routingTitle(true), nil)
+			want := "usenet"
+			if mode == PreferDebrid {
+				want = "torrent"
+			}
+			if got[0].rel.ID != want {
+				t.Fatalf("source preference %q ignored after previous play: got %s", mode, got[0].rel.ID)
+			}
+			// The owner preference still cannot promote a lower-resolution input.
+			releases[1].Info.Height = 720
+			got = svc.routeSources([]candidate{{rel: releases[0], verified: true}, {rel: releases[1]}}, routingTitle(true), nil)
+			if got[0].rel.ID != "usenet" {
+				t.Fatal("source preference reduced the selected quality tier")
+			}
+		})
+	}
+}
+
 func TestRoutingFollowsMeasuredStartup(t *testing.T) {
 	feed := func(svc *Service, usenet, debrid time.Duration) {
 		for i := 0; i < minStartupSamples; i++ {
