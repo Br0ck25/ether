@@ -187,3 +187,38 @@ func TestDASHLadderMPDAndLazyRep(t *testing.T) {
 		t.Fatalf("rep 2 segment 0: %d", rec.Code)
 	}
 }
+
+// A request on another rung inside the running rung's dwell waits it out
+// instead of restarting the shared encoder: rendition probes cannot keep
+// stopping the active run, and the real switch still happens.
+func TestRungSwitchWaitsOutDwell(t *testing.T) {
+	fr := newFakeRunner()
+	m := newTestManager(t, fr, config.Transcode{ABRLadder: true}, withRungDwell(400*time.Millisecond))
+	s := startSession(t, m, remuxRequest(t, "dwell", 10*time.Minute))
+	if r := get(t, s, 0); r.Code != 200 {
+		t.Fatalf("base segment 0: %d", r.Code)
+	}
+	primary := fr.lastProc()
+	started := time.Now()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		s.ServeRungSegment(rec, httptest.NewRequest(http.MethodGet, "/720p4m/00001.ts", nil), "720p4m", 1)
+		done <- rec
+	}()
+	time.Sleep(150 * time.Millisecond)
+	if fr.startCount() != 1 || primary.wasKilled() {
+		t.Fatalf("a rung probe replaced the encoder inside the dwell: starts=%d killed=%v", fr.startCount(), primary.wasKilled())
+	}
+	rec := <-done
+	if rec.Code != 200 || !strings.HasPrefix(rec.Body.String(), "segment 1") {
+		t.Fatalf("rung segment after dwell: %d %q", rec.Code, rec.Body.String())
+	}
+	if waited := time.Since(started); waited < 350*time.Millisecond {
+		t.Errorf("switched after %v, before the dwell passed", waited)
+	}
+	if fr.startCount() != 2 || !primary.wasKilled() {
+		t.Errorf("encoder not switched to the rung after the dwell: starts=%d", fr.startCount())
+	}
+	mustContain(t, fr.lastStart(), "scale=1280:720", "-start_number 1")
+}

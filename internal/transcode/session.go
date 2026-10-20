@@ -131,6 +131,22 @@ func (s *Session) Decision() core.Decision {
 	return s.decision
 }
 
+// encoding reports whether the session counts against the transcode cap:
+// it is a transcode by decision, or a copy session whose current run
+// encodes (a fast-start ramp, a governor clamp or a lower rung).
+func (s *Session) encoding() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.decision.VideoCopy {
+		return true
+	}
+	r := s.cur
+	if r == nil || r.finished || r.stopped || r.err != nil {
+		return false
+	}
+	return r.mode != ModeCopy || r.track != 0
+}
+
 // Info is the media info of the current input.
 func (s *Session) Info() core.MediaInfo {
 	s.mu.Lock()
@@ -402,7 +418,8 @@ func (s *Session) vbvRateLocked(t int) rateControl {
 }
 
 // maybeGovernLocked re-plans upcoming copy segments as clamped transcodes
-// when their bitrate spikes over the measured goodput (governor.go).
+// when their bitrate spikes over the measured goodput (the clamp plan lives
+// in Timeline.Clamp, segment_plan.go).
 func (s *Session) maybeGovernLocked() {
 	if !s.governorOn || s.plan == nil || s.goodput.Samples() < 2 || len(s.segSizes) == 0 {
 		return
@@ -542,34 +559,55 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			http.NotFound(w, r)
 			return
 		}
+		var dwell *time.Timer
 		if !waitTail && s.needsRestartLocked(n) {
-			if restarts >= 2 {
-				err := s.failErr
-				s.mu.Unlock()
-				s.log.Warn("segment unavailable after restarts", "segment", n, "err", err)
-				http.Error(w, "segment unavailable", http.StatusBadGateway)
-				return
-			}
-			restarts++
-			s.seekRampSeg = n
-			if err := s.startRunLocked(n, s.failures > 0); err != nil {
-				s.mu.Unlock()
-				s.log.Error("start ffmpeg", "segment", n, "err", err)
-				http.Error(w, "transcoder failed to start", http.StatusInternalServerError)
-				return
+			if left := s.rungDwellLocked(); left > 0 {
+				// Another rung's run is inside its dwell: wait it out
+				// instead of restarting the encoder now.
+				dwell = time.NewTimer(left)
+			} else {
+				if restarts >= 2 {
+					err := s.failErr
+					s.mu.Unlock()
+					s.log.Warn("segment unavailable after restarts", "segment", n, "err", err)
+					http.Error(w, "segment unavailable", http.StatusBadGateway)
+					return
+				}
+				restarts++
+				s.seekRampSeg = n
+				if err := s.startRunLocked(n, s.failures > 0); err != nil {
+					s.mu.Unlock()
+					s.log.Error("start ffmpeg", "segment", n, "err", err)
+					http.Error(w, "transcoder failed to start", http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 		ch := s.changed
 		s.mu.Unlock()
+		var dwellC <-chan time.Time
+		if dwell != nil {
+			dwellC = dwell.C
+		}
 		select {
 		case <-ch:
+		case <-dwellC:
 		case <-r.Context().Done():
+			stopTimer(dwell)
 			return
 		case <-timeout.C:
+			stopTimer(dwell)
 			s.log.Warn("timed out waiting for segment", "segment", n)
 			http.Error(w, "timed out waiting for segment", http.StatusGatewayTimeout)
 			return
 		}
+		stopTimer(dwell)
+	}
+}
+
+func stopTimer(t *time.Timer) {
+	if t != nil {
+		t.Stop()
 	}
 }
 
@@ -593,6 +631,24 @@ func (s *Session) needsRestartLocked(n int) bool {
 		ahead = 2
 	}
 	return n > r.next()+ahead
+}
+
+// rungDwellLocked is how much longer the current run must keep producing
+// its track before a request on another track may replace it; zero when
+// no switch is pending or the dwell has passed. Rungs share one encoder,
+// so a player that probes every rendition's opening segments would stop
+// the run on each probe and never let it get ahead. Waiting out the dwell
+// bounds that to one restart per dwell; a real quality switch still
+// happens, a dwell later at most.
+func (s *Session) rungDwellLocked() time.Duration {
+	r := s.cur
+	if r == nil || r.finished || r.stopped || r.err != nil || r.track == s.wantTrack || s.m.opts.rungDwell <= 0 {
+		return 0
+	}
+	if left := s.m.opts.rungDwell - time.Since(r.started); left > 0 {
+		return left
+	}
+	return 0
 }
 
 // serveInit writes the init segment of track t, waiting for ffmpeg to
@@ -625,28 +681,43 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 		if !s.isDASH() {
 			s.wantTrack = t
 		}
+		var dwell *time.Timer
 		if (s.cur == nil || s.cur.finished || s.cur.stopped || (!s.isDASH() && s.cur.track != t)) && !restarted {
-			restarted = true
-			start := s.lastReq
-			if start < 0 {
-				start = 0
-			}
-			if err := s.startRunLocked(start, s.failures > 0); err != nil {
-				s.mu.Unlock()
-				http.Error(w, "transcoder failed to start", http.StatusInternalServerError)
-				return
+			if left := s.rungDwellLocked(); left > 0 && !s.isDASH() {
+				// A rendition probe for another rung's init segment waits
+				// out the running rung's dwell (see rungDwellLocked).
+				dwell = time.NewTimer(left)
+			} else {
+				restarted = true
+				start := s.lastReq
+				if start < 0 {
+					start = 0
+				}
+				if err := s.startRunLocked(start, s.failures > 0); err != nil {
+					s.mu.Unlock()
+					http.Error(w, "transcoder failed to start", http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 		ch := s.changed
 		s.mu.Unlock()
+		var dwellC <-chan time.Time
+		if dwell != nil {
+			dwellC = dwell.C
+		}
 		select {
 		case <-ch:
+		case <-dwellC:
 		case <-r.Context().Done():
+			stopTimer(dwell)
 			return
 		case <-timeout.C:
+			stopTimer(dwell)
 			http.Error(w, "timed out waiting for init segment", http.StatusGatewayTimeout)
 			return
 		}
+		stopTimer(dwell)
 	}
 }
 

@@ -456,6 +456,7 @@ func newTestManager(t *testing.T, fr *fakeRunner, cfg config.Transcode, opts ...
 		WithBuffering(24*time.Second, 0, 0),
 		withPollInterval(5 * time.Millisecond),
 		WithSegmentTimeout(5 * time.Second),
+		withRungDwell(0), // rung switches are immediate unless a test opts in
 	}, opts...)
 	m, err := New(cfg, testLogger(t), all...)
 	if err != nil {
