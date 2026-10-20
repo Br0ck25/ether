@@ -66,6 +66,12 @@ type Outbox[K comparable, V any] struct {
 	lastErr string
 	closed  bool
 	seq     uint64 // orders Write calls
+	// latest is the newest Write seq per key, kept while a direct write for
+	// the key is in flight (inflight counts them): a direct write failing
+	// after a newer value for its key was queued and already replayed must
+	// not be queued again on top of it.
+	latest   map[K]uint64
+	inflight map[K]int
 
 	kick chan struct{}
 	stop chan struct{}
@@ -105,7 +111,7 @@ func NewOutbox[K comparable, V any](o OutboxOptions[K, V]) *Outbox[K, V] {
 	}
 	ob := &Outbox[K, V]{
 		o: o, avail: o.Availability, log: o.Logger.With("outbox", o.Name),
-		order: list.New(), entries: map[K]*list.Element{},
+		order: list.New(), entries: map[K]*list.Element{}, latest: map[K]uint64{}, inflight: map[K]int{},
 		kick: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	go ob.loop()
@@ -119,6 +125,9 @@ func (ob *Outbox[K, V]) Write(ctx context.Context, key K, v V) (queued bool, err
 	ob.mu.Lock()
 	ob.seq++
 	seq := ob.seq
+	if ob.inflight[key] > 0 {
+		ob.latest[key] = seq
+	}
 	_, pending := ob.entries[key]
 	closed := ob.closed
 	if !closed && (pending || ob.avail.Down()) {
@@ -128,11 +137,20 @@ func (ob *Outbox[K, V]) Write(ctx context.Context, key K, v V) (queued bool, err
 		ob.wake()
 		return true, nil
 	}
+	ob.inflight[key]++
+	ob.latest[key] = max(ob.latest[key], seq)
 	ob.mu.Unlock()
 
 	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ob.o.Timeout)
 	err = ob.o.Apply(actx, key, v)
 	cancel()
+	ob.mu.Lock()
+	newer := ob.latest[key] > seq
+	if ob.inflight[key]--; ob.inflight[key] <= 0 {
+		delete(ob.inflight, key)
+		delete(ob.latest, key)
+	}
+	ob.mu.Unlock()
 	if err == nil {
 		ob.avail.OK()
 		return false, nil
@@ -144,7 +162,12 @@ func (ob *Outbox[K, V]) Write(ctx context.Context, key K, v V) (queued bool, err
 	ob.mu.Lock()
 	ob.lastErr = err.Error()
 	// A later Write for key may have been queued while this one was in
-	// flight; enqueueLocked keeps that newer value on top.
+	// flight; enqueueLocked keeps that newer value on top. If it was
+	// already replayed (no entry left), this older value is obsolete.
+	if _, pending := ob.entries[key]; newer && !pending {
+		ob.mu.Unlock()
+		return true, nil
+	}
 	ob.enqueueLocked(key, v, seq)
 	ob.mu.Unlock()
 	ob.wake()
