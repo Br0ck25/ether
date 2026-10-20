@@ -9,6 +9,7 @@ package extras
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -192,7 +193,7 @@ func ISO639(lang string) string {
 // trailers in the viewer's language ahead of everything else. It returns
 // nothing when extras are disabled or no source can play them.
 func (s *Service) List(ctx context.Context, parent *core.Title, lang string) ([]Extra, error) {
-	if parent == nil || !s.cfg().Enabled {
+	if parent == nil || !s.Enabled() {
 		return nil, nil
 	}
 	iso := ISO639(lang)
@@ -332,17 +333,27 @@ func (s *Service) Resolve(ctx context.Context, e Extra) (Resolved, error) {
 }
 
 func (s *Service) resolveCommand(ctx context.Context, e Extra) (Resolved, error) {
-	if !s.CommandAvailable() {
+	cfg := s.cfg()
+	if !cfg.Enabled {
+		return Resolved{}, fmt.Errorf("extras disabled")
+	}
+	if _, err := s.look(cfg.ResolverCommand); strings.TrimSpace(cfg.ResolverCommand) == "" || err != nil {
 		return Resolved{}, fmt.Errorf("extras: resolver command unavailable")
 	}
-	cacheKey := strings.ToLower(e.Site) + ":" + e.SiteKey
+	// A new command or argument template may choose a different format or
+	// credentials. Do not reuse a URL produced by the previous settings.
+	identity, _ := json.Marshal(struct {
+		Command string
+		Args    []string
+	}{cfg.ResolverCommand, cfg.ResolverArgs})
+	cacheKey := string(identity) + ":" + strings.ToLower(e.Site) + ":" + e.SiteKey
 	s.mu.Lock()
 	if r, ok := s.resolved[cacheKey]; ok && (r.Expires.IsZero() || s.now().Before(r.Expires)) {
 		s.mu.Unlock()
 		return r, nil
 	}
 	s.mu.Unlock()
-	r, err := runResolver(ctx, s.cfg(), e, s.runner, s.now)
+	r, err := runResolver(ctx, cfg, e, s.runner, s.now)
 	if err != nil {
 		return Resolved{}, err
 	}

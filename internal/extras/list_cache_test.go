@@ -33,3 +33,25 @@ func TestListDoesNotCacheFetchFailure(t *testing.T) {
 		t.Fatalf("recovered fetch still served cached failure: %+v", got)
 	}
 }
+
+func TestListFollowsResolverAvailability(t *testing.T) {
+	available := false
+	v := &fakeVideos{[]tmdb.Video{{Site: "YouTube", Key: "trlOffEN001", Type: "Trailer", Official: true}}}
+	s := New(Options{Videos: v, Config: enabledCfg("yt-dlp"), LookPath: func(name string) (string, error) {
+		if !available {
+			return "", errors.New("not installed")
+		}
+		return name, nil
+	}})
+	if got, _ := s.List(context.Background(), movie(), "en"); len(got) != 0 {
+		t.Fatal("advertised unavailable resolver")
+	}
+	available = true
+	if got, _ := s.List(context.Background(), movie(), "en"); len(got) != 1 {
+		t.Fatalf("installation hidden by empty cache: %+v", got)
+	}
+	available = false
+	if got, _ := s.List(context.Background(), movie(), "en"); len(got) != 0 {
+		t.Fatal("advertised cached extras after resolver removal")
+	}
+}
