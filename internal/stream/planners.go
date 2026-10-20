@@ -354,6 +354,8 @@ func chooseMember(members []archive.Member) *archive.Member {
 
 // shouldProbe: unidentifiable files outweigh every recognised candidate.
 func (b *builder) shouldProbe(cands []candidate) bool {
+	b.rel.infoMu.RLock()
+	defer b.rel.infoMu.RUnlock()
 	var unknown int64
 	for _, pf := range b.rel.files {
 		if pf.file.Info.Kind == nzb.KindUnknown {
@@ -370,6 +372,8 @@ func (b *builder) shouldProbe(cands []candidate) bool {
 // unknownFiles lists the unidentified files, largest first, at most
 // MaxProbes of them.
 func (b *builder) unknownFiles() []*postedFile {
+	b.rel.infoMu.RLock()
+	defer b.rel.infoMu.RUnlock()
 	var unknown []*postedFile
 	for _, pf := range b.rel.files {
 		if pf.file.Info.Kind == nzb.KindUnknown {
@@ -476,7 +480,9 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 			continue
 		}
 		if pr.seg.begin == 0 && isPar2Head(pr.seg.data) {
-			pf.file.Info = nzb.FileInfo{Kind: nzb.KindPar2, Ext: "par2", Volume: -1, SetName: pf.file.Info.SetName}
+			b.rel.setFileInfo(func() {
+				pf.file.Info = nzb.FileInfo{Kind: nzb.KindPar2, Ext: "par2", Volume: -1, SetName: pf.file.Info.SetName}
+			})
 			continue
 		}
 		if f := identifyByPar2(set, pf, pr.seg); f != nil && b.nameFromPar2(pf, f) {
@@ -485,7 +491,7 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 		}
 		if yn := path.Base(strings.ReplaceAll(pr.seg.name, `\`, "/")); yn != "" && yn != "." {
 			if info := nzb.Classify(yn); info.Kind != nzb.KindUnknown && !nzb.IsObfuscated(yn) {
-				pf.file.Name, pf.file.Info, pf.file.Obfuscated = yn, info, false
+				b.rel.setFileInfo(func() { pf.file.Name, pf.file.Info, pf.file.Obfuscated = yn, info, false })
 				pf.setName(yn)
 				continue
 			}
@@ -506,10 +512,14 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 			}
 			rars = append(rars, rarVol{pf, num})
 		case archive.Format7z:
-			pf.file.Info = nzb.FileInfo{Kind: nzb.KindSevenZip, Ext: "7z", Volume: 0, SetName: fmt.Sprintf("\x00obfuscated-7z-%d", pf.idx)}
+			b.rel.setFileInfo(func() {
+				pf.file.Info = nzb.FileInfo{Kind: nzb.KindSevenZip, Ext: "7z", Volume: 0, SetName: fmt.Sprintf("\x00obfuscated-7z-%d", pf.idx)}
+			})
 		default:
 			if looksLikeVideo(head) {
-				pf.file.Info = nzb.FileInfo{Kind: nzb.KindVideo, Ext: "", Volume: -1, SetName: pf.file.Info.SetName}
+				b.rel.setFileInfo(func() {
+					pf.file.Info = nzb.FileInfo{Kind: nzb.KindVideo, Ext: "", Volume: -1, SetName: pf.file.Info.SetName}
+				})
 			}
 		}
 	}
@@ -540,7 +550,9 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 		if allNumbered {
 			vol = r.number
 		}
-		r.pf.file.Info = nzb.FileInfo{Kind: nzb.KindRAR, Ext: "rar", Volume: vol, SetName: "\x00obfuscated-rar", NewStyle: true}
+		b.rel.setFileInfo(func() {
+			r.pf.file.Info = nzb.FileInfo{Kind: nzb.KindRAR, Ext: "rar", Volume: vol, SetName: "\x00obfuscated-rar", NewStyle: true}
+		})
 	}
 	return named, nil
 }

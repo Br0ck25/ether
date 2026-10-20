@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -83,6 +84,14 @@ type resumeStore struct {
 	// held keeps resume records (and their keyframe indexes) through a
 	// database outage on a clustered node; nil writes synchronously.
 	held *store.Outbox[resumeKey, resumeWrite]
+
+	// nzbMu orders NZB file writes against gcNZB's count-then-remove;
+	// nzbRefs counts NZBs written (or found on disk) whose row may not be
+	// committed yet, which gcNZB must not remove: another record dropping
+	// the last committed reference to the same NZB would otherwise delete
+	// the file under a row about to point at it.
+	nzbMu   sync.Mutex
+	nzbRefs map[string]int
 }
 
 type resumeKey struct {
@@ -130,15 +139,22 @@ func (s *resumeStore) put(ctx context.Context, rec resumeRecord, nzb []byte, poi
 	if len(nzb) == 0 {
 		return errors.New("playback: empty nzb")
 	}
-	hash, err := s.writeNZB(nzb)
+	hash, err := s.acquireNZB(nzb)
 	if err != nil {
 		return fmt.Errorf("playback: store nzb: %w", err)
 	}
 	if s.held != nil {
-		_, err := s.held.Write(ctx, resumeKey{rec.userID, rec.key}, resumeWrite{rec: rec, hash: hash, points: points})
+		queued, err := s.held.Write(ctx, resumeKey{rec.userID, rec.key}, resumeWrite{rec: rec, hash: hash, points: points})
+		if !queued {
+			s.releaseNZB(hash)
+		}
+		// A queued record keeps its NZB referenced for the rest of the
+		// process (the startup sweep reclaims it if the row never lands).
 		return err
 	}
-	if err := s.saveRow(ctx, rec, hash); err != nil {
+	err = s.saveRow(ctx, rec, hash)
+	s.releaseNZB(hash)
+	if err != nil {
 		return err
 	}
 	return s.saveIndex(ctx, rec.userID, rec.key, rec.release.ID, points)
@@ -149,7 +165,7 @@ func newResumeStore(db *sql.DB, dataDir string) (*resumeStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("playback: nzb dir: %w", err)
 	}
-	s := &resumeStore{db: db, dir: dir}
+	s := &resumeStore{db: db, dir: dir, nzbRefs: map[string]int{}}
 	s.sweep(context.Background())
 	return s, nil
 }
@@ -196,6 +212,26 @@ func nzbHash(b []byte) string {
 
 func (s *resumeStore) nzbPath(hash string) string { return filepath.Join(s.dir, hash+".nzb") }
 
+// acquireNZB stores an NZB and holds it against gcNZB until releaseNZB.
+func (s *resumeStore) acquireNZB(nzb []byte) (string, error) {
+	s.nzbMu.Lock()
+	defer s.nzbMu.Unlock()
+	hash, err := s.writeNZB(nzb)
+	if err != nil {
+		return "", err
+	}
+	s.nzbRefs[hash]++
+	return hash, nil
+}
+
+func (s *resumeStore) releaseNZB(hash string) {
+	s.nzbMu.Lock()
+	defer s.nzbMu.Unlock()
+	if s.nzbRefs[hash]--; s.nzbRefs[hash] <= 0 {
+		delete(s.nzbRefs, hash)
+	}
+}
+
 func (s *resumeStore) writeNZB(nzb []byte) (string, error) {
 	hash := nzbHash(nzb)
 	p := s.nzbPath(hash)
@@ -238,10 +274,11 @@ func (s *resumeStore) save(ctx context.Context, rec resumeRecord, nzb []byte) er
 	if len(nzb) == 0 {
 		return errors.New("playback: empty nzb")
 	}
-	hash, err := s.writeNZB(nzb)
+	hash, err := s.acquireNZB(nzb)
 	if err != nil {
 		return fmt.Errorf("playback: store nzb: %w", err)
 	}
+	defer s.releaseNZB(hash)
 	return s.saveRow(ctx, rec, hash)
 }
 
@@ -345,6 +382,11 @@ func (s *resumeStore) delete(ctx context.Context, userID int64, key core.RatingK
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_resume WHERE user_id=? AND rating_key=?`, userID, int64(key)); err != nil {
 		return err
 	}
+	// The record expired: nothing prunes its keyframe index any more (a
+	// later save only replaces other releases' indexes for a live record).
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_index WHERE user_id=? AND rating_key=?`, userID, int64(key)); err != nil {
+		return err
+	}
 	s.gcNZB(ctx, hash)
 	return nil
 }
@@ -373,6 +415,11 @@ func (s *resumeStore) invalidateTitle(ctx context.Context, key core.RatingKey) e
 
 // gcNZB removes an NZB file no row references any more.
 func (s *resumeStore) gcNZB(ctx context.Context, hash string) {
+	s.nzbMu.Lock()
+	defer s.nzbMu.Unlock()
+	if s.nzbRefs[hash] > 0 {
+		return // a record being written is about to reference it
+	}
 	var n int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM playback_resume WHERE nzb_hash=?`, hash).Scan(&n); err != nil || n > 0 {
 		return

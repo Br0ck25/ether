@@ -48,6 +48,7 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 	key := segKey{rel.digest, pf.segBase + i}
 	if seg, ok := e.hot.get(key); ok {
 		e.hotHits.Add(1)
+		e.learnHot(rel, pf, i, seg)
 		return seg, false, nil
 	}
 
@@ -61,6 +62,7 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 	if seg, ok := e.hot.get(key); ok {
 		e.mu.Unlock()
 		e.hotHits.Add(1)
+		e.learnHot(rel, pf, i, seg)
 		return seg, false, nil
 	}
 	fl, joined := e.flights[key]
@@ -96,6 +98,19 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 		e.mu.Unlock()
 		return nil, false, ctx.Err()
 	}
+}
+
+// learnHot records a hot-buffer segment's exact range in pf. Usually the
+// fetch that filled the buffer taught this release state already, but hot
+// entries are keyed by NZB digest and can outlive the state that fetched
+// them (a fetch finishing after its release was trimmed), so a fresh state
+// for the same NZB would otherwise locate offsets from estimates forever.
+func (e *Engine) learnHot(rel *release, pf *postedFile, i int, seg *segData) {
+	if pf.slotKnown(i) {
+		return
+	}
+	pf.learn(i, seg.begin, seg.end(), seg.fileSize, seg.total)
+	rel.notePartSize(pf)
 }
 
 func (e *Engine) run(ctx context.Context, fl *flight, key segKey, rel *release, pf *postedFile, i int, id string, prio core.Priority, fo fetchOpts) {

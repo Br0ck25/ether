@@ -268,16 +268,10 @@ func (s *source) schedule(from, to int64) int64 {
 		if !s.plan.isVerified(pc.vol) {
 			// Check the volume in the background; its data follows on the
 			// next read once verified.
-			if !s.acquireRA() {
-				return from + pc.bufOff
-			}
 			vol := pc.vol
-			s.raWG.Add(1)
-			go func() {
-				defer s.raWG.Done()
-				defer s.releaseRA()
+			s.startRA(func() {
 				_ = s.plan.ensure(s.ctx, verifier{e: s.e, prio: core.PriorityReadahead, fo: s.fo}, []int{vol})
-			}()
+			})
 			return from + pc.bufOff
 		}
 		for _, i := range pf.slotsFor(pc.off, pc.n) {
@@ -285,35 +279,48 @@ func (s *source) schedule(from, to int64) int64 {
 			if s.e.hot.has(key) {
 				continue
 			}
-			if !s.acquireRA() {
-				b, _, _ := pf.rangeOf(i)
-				inner := from + pc.bufOff + max(0, b-pc.off)
-				return inner
-			}
-			s.raWG.Add(1)
-			go func(i int) {
-				defer s.raWG.Done()
-				defer s.releaseRA()
+			started := s.startRA(func() {
 				_, err := s.e.segment(s.ctx, s.rel, pf, i, core.PriorityReadahead, s.fo)
 				if err != nil && s.ctx.Err() == nil && !isMissing(err) {
 					s.e.log.Debug("read-ahead fetch failed", "name", s.plan.name, "part", i+1, "err", err)
 				}
-			}(i)
+			})
+			if !started {
+				b, _, _ := pf.rangeOf(i)
+				inner := from + pc.bufOff + max(0, b-pc.off)
+				return inner
+			}
 		}
 	}
 	return to
 }
 
-func (s *source) acquireRA() bool {
+// startRA runs fn as a read-ahead worker when a slot is free and the
+// source is still open. The closed check and raWG.Add happen under s.mu, the
+// lock Close sets closed under before raWG.Wait, so no worker starts once
+// Close is waiting for them (Add must not race Wait, and a worker must not
+// outlive the release reference Close drops).
+func (s *source) startRA(fn func()) bool {
 	select {
 	case s.raSem <- struct{}{}:
-		return true
 	default:
 		return false
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		<-s.raSem
+		return false
+	}
+	s.raWG.Add(1)
+	s.mu.Unlock()
+	go func() {
+		defer s.raWG.Done()
+		defer func() { <-s.raSem }()
+		fn()
+	}()
+	return true
 }
-
-func (s *source) releaseRA() { <-s.raSem }
 
 // prefetchRange warms a byte range of the video into the segment cache.
 func (e *Engine) prefetchRange(ctx context.Context, rel *release, p *plan, releaseID string, offset, length int64) error {

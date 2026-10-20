@@ -92,10 +92,13 @@ func (p *Prefetcher) onTimelinePostPlay(user *core.User, key core.RatingKey, off
 		return
 	}
 	u := *user
+	// The session's probed/fired flags dedupe within a session. The jobs
+	// carry no done-TTL: a new session for the same title after a stop (a
+	// resume, a rewatch) must probe and warm again, not be suppressed for
+	// hours by the previous session's finished jobs.
 	if !probed {
 		p.enqueue(job{
 			id:  "ppprobe:" + id,
-			ttl: p.opts.DoneTTL,
 			run: func(ctx context.Context) error { return p.probePostPlay(ctx, &u, key, duration) },
 		})
 		return
@@ -108,7 +111,6 @@ func (p *Prefetcher) onTimelinePostPlay(user *core.User, key core.RatingKey, off
 		p.ppMu.Unlock()
 		p.enqueue(job{
 			id:  "postplay:" + id,
-			ttl: p.opts.DoneTTL,
 			run: func(ctx context.Context) error { return p.firePostPlay(ctx, &u, key) },
 		})
 	}
@@ -125,6 +127,18 @@ func (p *Prefetcher) prunePostPlayLocked(now time.Time) {
 		if now.Sub(s.at) > postplaySessionTTL {
 			delete(p.ppSessions, id)
 		}
+	}
+	// Still full (sessions that never sent "stopped" within the TTL):
+	// forget the least recently updated so the map stays bounded.
+	for len(p.ppSessions) >= postplayMaxSessions {
+		var oldest string
+		var at time.Time
+		for id, s := range p.ppSessions {
+			if oldest == "" || s.at.Before(at) {
+				oldest, at = id, s.at
+			}
+		}
+		delete(p.ppSessions, oldest)
 	}
 }
 

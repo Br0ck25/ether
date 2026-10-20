@@ -242,6 +242,13 @@ func (pf *postedFile) learn(i int, begin, end, fileSize int64, total int) (chang
 	return changed
 }
 
+// slotKnown reports whether slot i's exact range has been learned.
+func (pf *postedFile) slotKnown(i int) bool {
+	pf.mu.RLock()
+	defer pf.mu.RUnlock()
+	return i >= 0 && i < len(pf.slots) && pf.slots[i].known
+}
+
 func (pf *postedFile) msgID(i int) string {
 	pf.mu.RLock()
 	defer pf.mu.RUnlock()
