@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/admin"
@@ -123,9 +124,12 @@ type App struct {
 	prefetch   *prefetch.Prefetcher
 	plextv     *plextv.Client
 	users      *auth.Service
-	certs      *plextv.CertManager
-	registrar  *plextv.Registrar
-	gdm        *remote.GDMResponder
+	// usersLate publishes users to components started before auth is
+	// built (the personalization scheduler); see usersSource.
+	usersLate atomic.Pointer[auth.Service]
+	certs     *plextv.CertManager
+	registrar *plextv.Registrar
+	gdm       *remote.GDMResponder
 
 	episodeorder      *episodeorder.Service
 	watchlist         *watchlist.Service
@@ -402,6 +406,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}); err != nil {
 		return fmt.Errorf("auth: %w", err)
 	}
+	a.usersLate.Store(a.users)
 	a.collections.SetAuth(a.users)
 	if cfg.Plex.Token != "" {
 		if err := a.users.BootstrapOwner(context.Background(), cfg.Plex); err != nil {
@@ -688,8 +693,9 @@ func (a *App) usersSource() lateUsers { return lateUsers{a} }
 type lateUsers struct{ a *App }
 
 func (l lateUsers) Users(ctx context.Context) ([]core.User, error) {
-	if l.a.users == nil {
+	users := l.a.usersLate.Load()
+	if users == nil {
 		return nil, nil
 	}
-	return l.a.users.Users(ctx)
+	return users.Users(ctx)
 }
