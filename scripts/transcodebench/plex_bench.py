@@ -66,16 +66,17 @@ class Profile:
             "X-Plex-Device": "Linux", "X-Plex-Provides": "player",
         }
 
+DECISION_OK = {"1000", "1001"}  # 1000=playable, 1001=direct play N/A but conversion OK
 def validate_decision(root) -> None:
-    """Reject transcode failures before start.m3u8. 1000 = success."""
+    """Reject transcode failures before start.m3u8 (2000/3000/4005 = failure)."""
     general = root.get("generalDecisionCode")
-    if general is not None and general != "1000":
+    if general is not None and general not in DECISION_OK:
         raise BenchError(f"decision rejected: generalDecisionCode={general} "
                          f"text={root.get('generalDecisionText')} "
                          f"transcodeDecisionCode={root.get('transcodeDecisionCode')} "
                          f"text={root.get('transcodeDecisionText')}")
     transcode = root.get("transcodeDecisionCode")
-    if transcode is not None and transcode != "1000":
+    if transcode is not None and transcode not in DECISION_OK:
         raise BenchError(f"decision transcode failed: transcodeDecisionCode={transcode} "
                          f"text={root.get('transcodeDecisionText')}")
     for el in root.iter():

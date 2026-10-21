@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import plex_bench as pb
 
-DECISION = b'''<MediaContainer size="1" generalDecisionCode="1000" transcodeDecisionCode="1000">
+DECISION = b'''<MediaContainer size="1" generalDecisionCode="1001" transcodeDecisionCode="1001">
 <Video ratingKey="1"><Media id="1" videoCodec="h264" audioCodec="aac" videoResolution="640x360" width="640" height="360"/></Video>
 </MediaContainer>'''
 MASTER = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000\nmedia.m3u8\n"
