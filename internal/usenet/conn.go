@@ -75,11 +75,13 @@ type Conn struct {
 	// Greeting is the server's welcome text.
 	Greeting string
 
-	broken  bool
-	inBody  bool
-	group   string
-	created time.Time
-	used    time.Time // last time a command completed
+	recoveryProbe bool // pool-owned half-open breaker lease
+	bodyStarted   bool // current pipeline reply accepted BODY before transport failed
+	broken        bool
+	inBody        bool
+	group         string
+	created       time.Time
+	used          time.Time // last time a command completed
 	// idleSince is when the pool last got the connection back from a
 	// request; keepalive pings do not move it.
 	idleSince time.Time

@@ -23,13 +23,14 @@ type identity struct {
 // generation is one opened source of a session. A failover creates a new
 // generation; the old one is retired and closed once in-flight reads end.
 type generation struct {
-	sess  *session
-	n     int
-	token string // loopback path component; unguessable
-	src   core.MediaSource
-	res   *core.Resolution
-	info  core.MediaInfo
-	tmap  TimeMap
+	damage damageState
+	sess   *session
+	n      int
+	token  string // loopback path component; unguessable
+	src    core.MediaSource
+	res    *core.Resolution
+	info   core.MediaInfo
+	tmap   TimeMap
 
 	// indexReady is closed once the container keyframe index has been
 	// read (or given up on); the prewarm path waits for it, Play does not.

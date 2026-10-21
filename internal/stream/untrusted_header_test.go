@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -18,20 +19,19 @@ func TestNormalizeIgnoresImplausiblePartHeader(t *testing.T) {
 	e := newTestEngine(t, newFakeFetcher(), nil, Options{})
 	pf := twoPartFile()
 	data := []byte("short article")
-	seg := e.normalize(pf, 0, data, core.ArticlePart{Name: "x.mkv", FileSize: 1 << 40, Part: 1, Total: 2, Begin: 1, End: 1 << 40})
+	seg, err := e.normalize(pf, 0, data, core.ArticlePart{Name: "x.mkv", FileSize: 1 << 40, Part: 1, Total: 2, Begin: 1, End: 1 << 40})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(seg.data) != len(data) || seg.fileSize != 0 || seg.begin != 0 {
 		t.Fatalf("implausible header applied: len=%d fileSize=%d begin=%d", len(seg.data), seg.fileSize, seg.begin)
 	}
-	// A plausibly damaged article keeps its alignment by zero-filling.
-	seg = e.normalize(pf, 0, data, core.ArticlePart{FileSize: 1000, Begin: 1, End: 100})
-	if len(seg.data) != 100 || seg.fileSize != 1000 {
-		t.Fatalf("short article: len=%d fileSize=%d", len(seg.data), seg.fileSize)
-	}
-	// A long article is still truncated to its header.
-	long := make([]byte, 200)
-	seg = e.normalize(pf, 0, long, core.ArticlePart{FileSize: 1000, Begin: 1, End: 100})
-	if len(seg.data) != 100 {
-		t.Fatalf("long article: len=%d", len(seg.data))
+	// A damaged decoded body is never silently turned into container bytes.
+	for _, data := range [][]byte{data, make([]byte, 200)} {
+		_, err = e.normalize(pf, 0, data, core.ArticlePart{FileSize: 1000, Begin: 1, End: 100})
+		if !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("length mismatch: %v", err)
+		}
 	}
 }
 

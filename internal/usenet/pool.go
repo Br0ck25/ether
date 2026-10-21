@@ -13,7 +13,6 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/yenc"
 )
 
 // pool holds the connections of one provider. At most target() connections
@@ -23,12 +22,20 @@ import (
 // dialled by a slot holder when no idle one is left. After the target
 // shrinks, connections above it close as they are returned.
 type pool struct {
-	key string // unique per pool instance (provider id + generation)
-	cfg config.UsenetProvider
-	o   *Options
-	log *slog.Logger
-	sem *prioSem
-	brk *breaker
+	bodyMu        sync.Mutex
+	bodyWG        sync.WaitGroup
+	bodyQueue     [numPriorities][]*bodyFlight
+	bodyWorkers   [numPriorities]int
+	bodyFlights   map[bodyKey]*bodyFlight
+	bodyAdmission *prioSem
+	bodyBatches   atomic.Int64
+	bodyPipelined atomic.Int64
+	key           string // unique per pool instance (provider id + generation)
+	cfg           config.UsenetProvider
+	o             *Options
+	log           *slog.Logger
+	sem           *prioSem
+	brk           *breaker
 
 	mu     sync.Mutex
 	warmMu sync.Mutex
@@ -112,17 +119,20 @@ func newPool(key string, cfg config.UsenetProvider, o *Options, log *slog.Logger
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &pool{
-		size:   size,
-		key:    key,
-		cfg:    cfg,
-		o:      o,
-		log:    log.With("provider", providerLabel(cfg)),
-		sem:    newPrioSem(size, prefetchSlots(size, o.PrefetchFraction)),
-		brk:    newBreaker(o.BackoffMin, o.BackoffMax, o.FailThreshold, time.Now),
-		ctx:    ctx,
-		cancel: cancel,
-		stop:   make(chan struct{}),
+		size:          size,
+		bodyFlights:   make(map[bodyKey]*bodyFlight),
+		bodyAdmission: newPrioSem(max(64, size*16), max(16, size*4)),
+		key:           key,
+		cfg:           cfg,
+		o:             o,
+		log:           log.With("provider", providerLabel(cfg)),
+		sem:           newPrioSem(size, prefetchSlots(size, o.PrefetchFraction)),
+		brk:           newBreaker(o.BackoffMin, o.BackoffMax, o.FailThreshold, time.Now),
+		ctx:           ctx,
+		cancel:        cancel,
+		stop:          make(chan struct{}),
 	}
+	p.sem.reserveLive = true
 	if o.AuthRetryMin > 0 {
 		p.brk.authMin = o.AuthRetryMin
 	}
@@ -200,9 +210,20 @@ func (p *pool) get(ctx context.Context, prio core.Priority) (*Conn, error) {
 		if err := p.sem.Acquire(ctx, prio); err != nil {
 			return nil, err
 		}
+		// A waiter may have queued before a different command opened the
+		// breaker. Recheck even when reusing an idle socket.
+		probe, err := p.brk.admit()
+		if err != nil {
+			p.sem.Release(prio)
+			return nil, err
+		}
 		c, err := p.conn(ctx)
 		if err == nil {
+			c.recoveryProbe = probe
 			return c, nil
+		}
+		if probe {
+			p.brk.releaseProbe()
 		}
 		p.sem.Release(prio)
 		if !errors.Is(err, errAtLimit) || try >= 3 {
@@ -318,6 +339,8 @@ func (p *pool) dropLive() {
 
 // put returns a connection and its slot. Broken connections are closed.
 func (p *pool) put(c *Conn, prio core.Priority) {
+	probe := c.recoveryProbe
+	c.recoveryProbe = false
 	if c.Broken() {
 		p.discard(c)
 	} else {
@@ -332,6 +355,9 @@ func (p *pool) put(c *Conn, prio core.Priority) {
 			p.idle = append(p.idle, c)
 			p.mu.Unlock()
 		}
+	}
+	if probe {
+		p.brk.releaseProbe()
 	}
 	p.sem.Release(prio)
 }
@@ -572,10 +598,17 @@ func (p *pool) keepAliveOne(now time.Time) bool {
 
 // close stops the pool. Waiters fail with ErrPoolClosed, idle connections
 // are closed now and busy ones when they are returned.
-func (p *pool) close() {
+func (p *pool) close() { p.closeMode(true) }
+
+// closeMode permits a provider configuration reload to finish active article
+// windows; explicit fetcher shutdown cancels and joins them.
+func (p *pool) closeMode(abort bool) {
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
+		if abort {
+			p.abortBodies()
+		}
 		return
 	}
 	p.closed = true
@@ -583,50 +616,20 @@ func (p *pool) close() {
 	p.idle = nil
 	p.live -= len(idle)
 	p.mu.Unlock()
-	p.cancel() // interrupt any background warm dial
+	p.cancel() // interrupt background dials
+	if abort {
+		p.cancelBodies()
+	}
+	p.bodyAdmission.Close()
 	p.sem.Close()
 	close(p.stop)
 	p.wg.Wait()
+	if abort {
+		p.bodyWG.Wait()
+	}
 	for _, c := range idle {
 		go c.Quit()
 	}
-}
-
-// body fetches and decodes one article on one connection.
-func (p *pool) body(ctx context.Context, id string, groups []string, prio core.Priority) (*yenc.Part, error) {
-	c, err := p.get(ctx, prio)
-	if err != nil {
-		return nil, err
-	}
-	reused := c.uses > 0
-	c.uses++
-	start := time.Now()
-	if p.o.UseGroup && len(groups) > 0 && !slices.Contains(groups, c.CurrentGroup()) {
-		if gerr := c.Group(ctx, groups[0]); gerr != nil && !errors.Is(gerr, ErrNoSuchGroup) {
-			p.put(c, prio)
-			return nil, p.failed(gerr, reused, ctx)
-		}
-	}
-	part, err := c.BodyDecode(ctx, id, &yenc.DecodeOptions{MaxSize: p.o.MaxArticleSize})
-	rtt := c.lastRTT
-	p.put(c, prio)
-	if err != nil {
-		if errors.Is(err, ErrNoSuchArticle) {
-			p.bodyMisses.Add(1)
-			var pe *ProtocolError
-			if errors.As(err, &pe) && pe.Code == 451 {
-				p.bodyTakedowns.Add(1)
-			}
-		}
-		return nil, p.failed(err, reused, ctx)
-	}
-	p.brk.success()
-	p.articles.Add(1)
-	p.latMu.Lock()
-	p.latency.add(rtt)
-	p.fetching.add(time.Since(start))
-	p.latMu.Unlock()
-	return part, nil
 }
 
 // stat runs STAT on one connection.
@@ -635,7 +638,7 @@ func (p *pool) stat(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	reused := c.uses > 0
+	reused := c.uses > 0 || !c.idleSince.IsZero()
 	c.uses++
 	ok, err := c.Stat(ctx, id)
 	rtt := c.lastRTT
@@ -662,7 +665,7 @@ func (p *pool) statMany(ctx context.Context, ids []string) (map[string]bool, err
 	if err != nil {
 		return nil, err
 	}
-	reused := c.uses > 0
+	reused := c.uses > 0 || !c.idleSince.IsZero()
 	c.uses++
 	started := time.Now()
 	result, err = c.StatMany(ctx, ids)
@@ -845,6 +848,8 @@ type ProviderStats struct {
 	TLSHandshakeTime time.Duration `json:"tlsHandshakeTime"`
 	GreetingTime     time.Duration `json:"greetingTime"`
 	AuthTime         time.Duration `json:"authTime"`
+	BODYBatches      int64         `json:"bodyBatches"`
+	BODYPipelined    int64         `json:"bodyPipelined"`
 	STATBatches      int64         `json:"statBatches"`
 	STATBatchTime    time.Duration `json:"statBatchTime"`
 }
@@ -870,6 +875,11 @@ func (p *pool) stats() ProviderStats {
 	st.WaitingLive = ss.Waiting[core.PriorityLive]
 	st.WaitingReadahead = ss.Waiting[core.PriorityReadahead]
 	st.WaitingPrefetch = ss.Waiting[core.PriorityPrefetch]
+	p.bodyMu.Lock()
+	st.WaitingLive += len(p.bodyQueue[core.PriorityLive])
+	st.WaitingReadahead += len(p.bodyQueue[core.PriorityReadahead])
+	st.WaitingPrefetch += len(p.bodyQueue[core.PriorityPrefetch])
+	p.bodyMu.Unlock()
 	st.MinIdle = p.idleFloor()
 	p.mu.Lock()
 	if p.share > 0 {
@@ -896,6 +906,8 @@ func (p *pool) stats() ProviderStats {
 	st.TLSHandshakeTime = time.Duration(p.tlsTime.Load())
 	st.GreetingTime = time.Duration(p.greetingTime.Load())
 	st.AuthTime = time.Duration(p.authTime.Load())
+	st.BODYBatches = p.bodyBatches.Load()
+	st.BODYPipelined = p.bodyPipelined.Load()
 	st.STATBatches = p.statBatches.Load()
 	st.STATBatchTime = time.Duration(p.statBatchTime.Load())
 	p.latMu.Lock()
@@ -968,6 +980,7 @@ func (p *pool) setShare(n int) bool {
 	if !limited || p.sem.stats().Size > target {
 		p.sem.setSize(target, p.o.PrefetchFraction)
 	}
+	p.wakeBodyWorkers()
 	p.log.Info("usenet: connection share changed", "configured", p.size, "from", before, "to", target, "closed_idle", len(drop))
 	return true
 }

@@ -18,14 +18,20 @@ import (
 
 // fakeFetcher is an in-memory core.ArticleFetcher. Articles are stored
 // decoded with the yEnc part header the real fetcher would report.
+type bodyCallKey struct {
+	id       string
+	priority core.Priority
+}
+
 type fakeFetcher struct {
-	mu        sync.Mutex
-	articles  map[string]fakeArticle
-	missing   map[string]bool // listed in the NZB but gone from every provider
-	failures  map[string]int  // transient failures before success
-	bodyCalls map[string]int
-	prioCalls map[core.Priority]int
-	statCalls int
+	mu            sync.Mutex
+	articles      map[string]fakeArticle
+	missing       map[string]bool // listed in the NZB but gone from every provider
+	failures      map[string]int  // transient failures before success
+	bodyCalls     map[string]int
+	bodyPrioCalls map[bodyCallKey]int
+	prioCalls     map[core.Priority]int
+	statCalls     int
 
 	latency  time.Duration
 	failAll  bool // every Body fails (to prove reads come from cache)
@@ -41,11 +47,12 @@ type fakeArticle struct {
 
 func newFakeFetcher() *fakeFetcher {
 	return &fakeFetcher{
-		articles:  map[string]fakeArticle{},
-		missing:   map[string]bool{},
-		failures:  map[string]int{},
-		bodyCalls: map[string]int{},
-		prioCalls: map[core.Priority]int{},
+		articles:      map[string]fakeArticle{},
+		missing:       map[string]bool{},
+		failures:      map[string]int{},
+		bodyCalls:     map[string]int{},
+		bodyPrioCalls: map[bodyCallKey]int{},
+		prioCalls:     map[core.Priority]int{},
 	}
 }
 
@@ -65,6 +72,7 @@ func (f *fakeFetcher) BodyPart(ctx context.Context, id string, _ []string, prio 
 	}
 	f.mu.Lock()
 	f.bodyCalls[id]++
+	f.bodyPrioCalls[bodyCallKey{id, prio}]++
 	f.prioCalls[prio]++
 	lat := f.latency
 	f.mu.Unlock()
@@ -117,6 +125,20 @@ func (f *fakeFetcher) calls(id string) int {
 	return f.bodyCalls[id]
 }
 
+// maxLaneCalls keeps coalescing assertions strict within each scheduling
+// lane, while allowing a foreground read to bypass queued speculative work.
+func (f *fakeFetcher) maxLaneCalls(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for key, calls := range f.bodyPrioCalls {
+		if key.id == id {
+			n = max(n, calls)
+		}
+	}
+	return n
+}
+
 func (f *fakeFetcher) totalCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -137,6 +159,7 @@ func (f *fakeFetcher) resetCounts() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bodyCalls = map[string]int{}
+	f.bodyPrioCalls = map[bodyCallKey]int{}
 	f.prioCalls = map[core.Priority]int{}
 	f.statCalls = 0
 }

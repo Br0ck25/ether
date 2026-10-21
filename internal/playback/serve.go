@@ -178,6 +178,9 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 	if length <= 0 {
 		return 0, nil, nil
 	}
+	if !background {
+		m.installDamageHandler(g)
+	}
 	if !g.acquire() {
 		return 0, errRetired, nil
 	}

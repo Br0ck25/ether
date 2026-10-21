@@ -60,15 +60,25 @@ func (r *release) notePartSize(pf *postedFile) {
 // playable file ...) are cached; transient errors are retried by the next
 // caller.
 func (r *release) ensurePlan(ctx context.Context, prio core.Priority, cacheID string) (*plan, error) {
+	return r.ensurePlanWithCandidate(ctx, prio, cacheID, nil)
+}
+
+// ensurePlanWithCandidate announces the first identified candidate before
+// reading its archive layout. Health checks can inspect its articles while
+// planning continues. The callback must not block or call back into planMu.
+func (r *release) ensurePlanWithCandidate(ctx context.Context, prio core.Priority, cacheID string, ready func([]*postedFile)) (*plan, error) {
 	r.planMu.Lock()
 	defer r.planMu.Unlock()
 	if r.plan != nil {
+		if ready != nil {
+			ready(r.plan.vols)
+		}
 		return r.plan, nil
 	}
 	if r.planErr != nil {
 		return nil, r.planErr
 	}
-	b := &builder{e: r.e, rel: r, prio: prio, fo: fetchOpts{cacheID: cacheID}}
+	b := &builder{e: r.e, rel: r, prio: prio, fo: fetchOpts{cacheID: cacheID}, candidateReady: ready}
 	p, err := b.build(ctx)
 	if err != nil {
 		if IsRejection(err) && ctx.Err() == nil {
@@ -82,10 +92,11 @@ func (r *release) ensurePlan(ctx context.Context, prio core.Priority, cacheID st
 
 // builder builds a plan: it picks the main video and maps it.
 type builder struct {
-	e    *Engine
-	rel  *release
-	prio core.Priority
-	fo   fetchOpts
+	e              *Engine
+	rel            *release
+	prio           core.Priority
+	fo             fetchOpts
+	candidateReady func([]*postedFile)
 }
 
 // candidate is something that may hold the main video.
@@ -106,6 +117,9 @@ func (b *builder) build(ctx context.Context) (*plan, error) {
 	}
 	if len(cands) == 0 {
 		return nil, fmt.Errorf("%w: nothing recognisable among %d files", ErrNoPlayableFile, len(b.rel.files))
+	}
+	if b.candidateReady != nil {
+		b.candidateReady(cands[0].files)
 	}
 	var firstErr error
 	for _, c := range cands {

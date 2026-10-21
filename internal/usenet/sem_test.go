@@ -236,3 +236,45 @@ func TestSemStress(t *testing.T) {
 		t.Fatalf("leak: %+v", st)
 	}
 }
+
+func TestSemReservedLiveCombinedBackgroundAndResize(t *testing.T) {
+	s := newPrioSem(4, 4)
+	s.reserveLive = true
+	if !s.TryAcquire(core.PriorityPrefetch) || !s.TryAcquire(core.PriorityReadahead) || !s.TryAcquire(core.PriorityReadahead) {
+		t.Fatal("background capacity unavailable")
+	}
+	if s.TryAcquire(core.PriorityReadahead) || s.TryAcquire(core.PriorityPrefetch) {
+		t.Fatal("background consumed live reservation")
+	}
+	if !s.TryAcquire(core.PriorityLive) {
+		t.Fatal("live reservation unavailable")
+	}
+	s.setSize(2, 1)
+	s.Release(core.PriorityReadahead)
+	s.Release(core.PriorityReadahead)
+	if s.TryAcquire(core.PriorityReadahead) {
+		t.Fatal("shrink ignored combined background limit")
+	}
+	s.Release(core.PriorityLive)
+	if !s.TryAcquire(core.PriorityLive) {
+		t.Fatal("shrink lost reserved slot")
+	}
+	s.Release(core.PriorityLive)
+	s.Release(core.PriorityPrefetch)
+	s.setSize(1, 1)
+	if !s.TryAcquire(core.PriorityReadahead) {
+		t.Fatal("single connection cannot make progress")
+	}
+	queued := acquireAsync(s, context.Background(), core.PriorityReadahead)
+	waitQueued(t, s, core.PriorityReadahead, 1)
+	s.setSize(3, 1)
+	if err := <-queued; err != nil {
+		t.Fatal(err)
+	}
+	if !s.TryAcquire(core.PriorityLive) {
+		t.Fatal("growth failed to retain reservation")
+	}
+	s.Release(core.PriorityLive)
+	s.Release(core.PriorityReadahead)
+	s.Release(core.PriorityReadahead)
+}

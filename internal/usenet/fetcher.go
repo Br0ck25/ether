@@ -28,25 +28,31 @@ import (
 
 // Defaults for Options.
 const (
-	DefaultConnections      = 8
-	DefaultMinIdle          = 2
-	DefaultPrefetchFraction = 0.25
-	DefaultIdleTimeout      = 90 * time.Second
-	DefaultKeepAlive        = 30 * time.Second
-	DefaultMissTTL          = 2 * time.Minute
-	DefaultMissCacheSize    = 100_000
-	DefaultRetries          = 2
-	DefaultBackoffMin       = time.Second
-	DefaultBackoffMax       = 2 * time.Minute
-	DefaultFailThreshold    = 2
-	DefaultLimitCooloff     = 5 * time.Minute
-	DefaultAuthRetryMin     = 15 * time.Minute
-	DefaultAuthRetryMax     = 6 * time.Hour
+	DefaultConnections       = 8
+	DefaultBodyPipelineDepth = 4
+	DefaultMinIdle           = 2
+	DefaultPrefetchFraction  = 0.25
+	DefaultIdleTimeout       = 90 * time.Second
+	DefaultKeepAlive         = 30 * time.Second
+	DefaultMissTTL           = 2 * time.Minute
+	DefaultMissCacheSize     = 100_000
+	DefaultRetries           = 2
+	DefaultBackoffMin        = time.Second
+	DefaultBackoffMax        = 2 * time.Minute
+	DefaultFailThreshold     = 2
+	DefaultLimitCooloff      = 5 * time.Minute
+	DefaultAuthRetryMin      = 15 * time.Minute
+	DefaultAuthRetryMax      = 6 * time.Hour
 )
 
 // Options tune the fetcher. Zero values take the defaults above.
 type Options struct {
-	Logger *slog.Logger
+	// BodyPipelineDepth bounds queued BODY commands per socket (default 4,
+	// maximum 16). One disables pipelining. Readahead uses at most two, with a reserved live
+	// connection; prefetch, recovery probes and single-connection readahead
+	// use one. Speculative batches stop growing when live work waits.
+	BodyPipelineDepth int
+	Logger            *slog.Logger
 	// PrefetchFraction is the share of each provider's connections that
 	// PriorityPrefetch requests may hold at once (at least one).
 	PrefetchFraction float64
@@ -102,6 +108,10 @@ type Options struct {
 }
 
 func (o *Options) withDefaults() {
+	if o.BodyPipelineDepth <= 0 {
+		o.BodyPipelineDepth = DefaultBodyPipelineDepth
+	}
+	o.BodyPipelineDepth = min(o.BodyPipelineDepth, 16)
 	if o.MinIdle == 0 {
 		o.MinIdle = DefaultMinIdle
 	}
@@ -168,10 +178,11 @@ type Fetcher struct {
 	o   Options
 	log *slog.Logger
 
-	mu     sync.RWMutex
-	pools  []*pool   // every enabled provider, in config order
-	tiers  [][]*pool // try order
-	closed bool
+	mu      sync.RWMutex
+	pools   []*pool   // every enabled provider, in config order
+	retired []*pool   // removed pools with article windows still finishing
+	tiers   [][]*pool // try order
+	closed  bool
 	// share maps a provider's configured connections to this node's part
 	// of them (clustered); nil uses every configured connection.
 	share func(configured int) int
@@ -257,13 +268,28 @@ func (f *Fetcher) Update(providers []config.UsenetProvider) {
 		reused[p] = true
 		next = append(next, p)
 	}
+	// Retain only draining pools so Close can cancel windows surviving an
+	// earlier provider reload. Completed generations need no retained state.
+	draining := f.retired[:0]
+	for _, p := range f.retired {
+		if p.hasBodyWork() {
+			draining = append(draining, p)
+		}
+	}
+	clear(f.retired[len(draining):])
+	f.retired = draining
+	for _, p := range old {
+		if !reused[p] {
+			f.retired = append(f.retired, p)
+		}
+	}
 	f.pools = next
 	f.tiers = buildTiers(next)
 	f.mu.Unlock()
 
 	for _, p := range old {
 		if !reused[p] {
-			p.close()
+			p.closeMode(false)
 		}
 	}
 	f.log.Debug("usenet: providers updated", "enabled", len(next))
@@ -315,6 +341,11 @@ func (f *Fetcher) order() []*pool {
 		for _, p := range t {
 			s := p.sem.stats()
 			w := s.Waiting[0] + s.Waiting[1] + s.Waiting[2]
+			p.bodyMu.Lock()
+			for _, q := range p.bodyQueue {
+				w += len(q)
+			}
+			p.bodyMu.Unlock()
 			loads[p] = float64(s.InUse+w) / float64(s.Size)
 		}
 		slices.SortStableFunc(t, func(a, b *pool) int { return cmp.Compare(loads[a], loads[b]) })
@@ -340,7 +371,7 @@ func (f *Fetcher) BodyPart(ctx context.Context, messageID string, groups []strin
 		return nil, ap, err
 	}
 	var part *yenc.Part
-	err = f.each(ctx, id, "body", func(p *pool) error {
+	err = f.each(ctx, id, "fetch-body", func(ctx context.Context, p *pool) error {
 		var e error
 		part, e = p.body(ctx, id, groups, prio)
 		return e
@@ -365,7 +396,7 @@ func (f *Fetcher) Stat(ctx context.Context, messageID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	err = f.each(ctx, id, "stat", func(p *pool) error {
+	err = f.each(ctx, id, "stat", func(ctx context.Context, p *pool) error {
 		ok, e := p.stat(ctx, id)
 		if e == nil && !ok {
 			return ErrNoSuchArticle
@@ -620,7 +651,7 @@ func (f *Fetcher) Warm(ctx context.Context, perProvider int) error {
 
 // each runs op against providers in order until one succeeds, and turns the
 // collected failures into the right error.
-func (f *Fetcher) each(ctx context.Context, id, kind string, op func(*pool) error) error {
+func (f *Fetcher) each(ctx context.Context, id, kind string, op func(context.Context, *pool) error) error {
 	var swapped bool
 	err := f.eachOnce(ctx, id, kind, op, &swapped)
 	if swapped && err != nil && !errors.Is(err, core.ErrArticleMissing) && ctxErr(ctx) == nil {
@@ -628,12 +659,45 @@ func (f *Fetcher) each(ctx context.Context, id, kind string, op func(*pool) erro
 		// over the current providers.
 		err = f.eachOnce(ctx, id, kind, op, &swapped)
 	}
+	// Only after every provider was tried may a BODY wait for recovery. Healthy
+	// backfill remains immediate; missing/corrupt/auth failures never enter this
+	// loop. One fixed budget spans all probes, so a broken provider cannot turn
+	// retries into an unbounded wave. STAT/health probes keep their fast failure.
+	if kind == "fetch-body" && errors.Is(err, ErrProviderBackoff) && ctxErr(ctx) == nil {
+		recovery, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		lastBackoff := err
+		for pass := 0; pass < 8 && errors.Is(err, ErrProviderBackoff) && recovery.Err() == nil; pass++ {
+			lastBackoff = err
+			knownMissing := f.misses.get(id)
+			var candidate *pool
+			var soonest time.Duration
+			for _, p := range f.order() {
+				if slices.Contains(knownMissing, p.key) {
+					continue
+				}
+				if delay, ok := p.brk.recoveryDelay(); ok && (candidate == nil || delay < soonest) {
+					candidate, soonest = p, delay
+				}
+			}
+			if candidate == nil || candidate.brk.waitReady(recovery) != nil {
+				break
+			}
+			err = f.eachOnce(recovery, id, kind, op, &swapped)
+		}
+		if ctxErr(ctx) != nil {
+			return ctxErr(ctx)
+		}
+		if recovery.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+			return lastBackoff
+		}
+	}
 	return err
 }
 
 // eachOnce is one pass over the providers. It sets *swapped when a pool
 // turned out to be closed by a concurrent Update.
-func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(*pool) error, swapped *bool) error {
+func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(context.Context, *pool) error, swapped *bool) error {
 	pools := f.order()
 	if len(pools) == 0 {
 		return ErrNoProviders
@@ -656,9 +720,9 @@ func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(*pool) 
 		answered++
 	attempts:
 		for attempt := 0; attempt <= f.o.Retries; attempt++ {
-			err := op(p)
+			err := op(ctx, p)
 			if err == nil {
-				if kind == "body" && p.cfg.Backfill && missing > 0 {
+				if (kind == "body" || kind == "fetch-body") && p.cfg.Backfill && missing > 0 {
 					p.backfillSaves.Add(1)
 				}
 				return nil
@@ -774,8 +838,8 @@ func (f *Fetcher) Close() error {
 		return nil
 	}
 	f.closed = true
-	pools := f.pools
-	f.pools, f.tiers = nil, nil
+	pools := append(slices.Clone(f.pools), f.retired...)
+	f.pools, f.tiers, f.retired = nil, nil, nil
 	f.mu.Unlock()
 	for _, p := range pools {
 		p.close()
@@ -812,12 +876,12 @@ func (f *Fetcher) CheckBodyPart(ctx context.Context, messageID string, groups []
 	if err != nil {
 		return err
 	}
-	return f.each(ctx, id, "body", func(p *pool) error {
+	return f.each(ctx, id, "body", func(ctx context.Context, p *pool) error {
 		c, err := p.get(ctx, prio)
 		if err != nil {
 			return err
 		}
-		reused := c.uses > 0
+		reused := c.uses > 0 || !c.idleSince.IsZero()
 		c.uses++
 		if p.o.UseGroup && len(groups) > 0 && !slices.Contains(groups, c.CurrentGroup()) {
 			if err = c.Group(ctx, groups[0]); err != nil && !errors.Is(err, ErrNoSuchGroup) {

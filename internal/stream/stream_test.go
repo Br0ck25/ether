@@ -98,8 +98,8 @@ func TestPlainRandomAccess(t *testing.T) {
 	}
 	// Each article fetched at most once thanks to the hot buffer.
 	for n := 1; n <= 31; n++ {
-		if c := f.calls(postID("Movie.2024.1080p.mkv", n)); c > 1 {
-			t.Fatalf("part %d fetched %d times", n, c)
+		if c := f.maxLaneCalls(postID("Movie.2024.1080p.mkv", n)); c > 1 {
+			t.Fatalf("part %d fetched %d times in one priority lane", n, c)
 		}
 	}
 }
@@ -283,8 +283,8 @@ func TestCoalescesConcurrentReads(t *testing.T) {
 		t.Fatal(err)
 	}
 	for n := 1; n <= 8; n++ {
-		if c := f.calls(postID("c.mkv", n)); c > 1 {
-			t.Fatalf("part %d fetched %d times", n, c)
+		if c := f.maxLaneCalls(postID("c.mkv", n)); c > 1 {
+			t.Fatalf("part %d fetched %d times in one priority lane", n, c)
 		}
 	}
 	if e.Stats().Coalesced == 0 {
@@ -327,8 +327,8 @@ func TestReadAheadSequential(t *testing.T) {
 		t.Fatal("mismatch")
 	}
 	for n := 1; n <= 60; n++ {
-		if c := f.calls(postID("ra.mkv", n)); c != 1 && n != 1 {
-			t.Fatalf("part %d fetched %d times", n, c)
+		if c := f.maxLaneCalls(postID("ra.mkv", n)); c != 1 && n != 1 {
+			t.Fatalf("part %d fetched %d times in one priority lane", n, c)
 		}
 	}
 	if live, ra := f.prio(core.PriorityLive), f.prio(core.PriorityReadahead); ra < live {

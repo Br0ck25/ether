@@ -10,8 +10,19 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// flight is one in-progress segment fetch that concurrent requests join.
+// flightKey isolates the three scheduling lanes for an article. A viewer must
+// never inherit a queued speculative fetch's lower connection-pool priority.
+// Completed bytes still share the ordinary hot/disk segment key.
+type flightKey struct {
+	segKey
+	priority core.Priority
+}
+
+// flight is one in-progress segment fetch that same-priority requests join.
 type flight struct {
+	decoded chan struct{} // validated bytes ready; independent of cache persistence
+	stored  chan struct{} // completed any cache persistence, for durable prefetch waiters
+	cacheID string        // cache namespace owned by this flight
 	done    chan struct{}
 	seg     *segData
 	err     error
@@ -29,6 +40,11 @@ type fetchOpts struct {
 // Usenet, coalescing concurrent requests. The slot's index entry is
 // updated from the article's yEnc header.
 func (e *Engine) segment(ctx context.Context, rel *release, pf *postedFile, i int, prio core.Priority, fo fetchOpts) (*segData, error) {
+	if prio == core.PriorityLive {
+		if seg, handled, err := e.hedgeSpeculative(ctx, rel, pf, i, fo); handled {
+			return seg, err
+		}
+	}
 	for attempt := 0; ; attempt++ {
 		seg, abandoned, err := e.segmentOnce(ctx, rel, pf, i, prio, fo)
 		if !abandoned || attempt >= 3 {
@@ -65,21 +81,51 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 		e.learnHot(rel, pf, i, seg)
 		return seg, false, nil
 	}
-	fl, joined := e.flights[key]
+	// Bound even malformed callers to the three supported priority lanes.
+	prio = min(max(prio, core.PriorityLive), core.PriorityPrefetch)
+	fkey := flightKey{segKey: key, priority: prio}
+	fl, joined := e.flights[fkey]
+	// Speculation can safely share more urgent work. Prefer Live, then
+	// Readahead; never launch a duplicate lower lane behind an active higher
+	// lane. A durable prefetch needs that flight to write its cache namespace.
+	for higher := core.PriorityLive; higher < prio; higher++ {
+		hkey := flightKey{segKey: key, priority: higher}
+		if candidate := e.flights[hkey]; candidate != nil && candidate.waiters > 0 &&
+			(!fo.noHot || e.cache == nil || candidate.cacheID == fo.cacheID) {
+			fkey, fl, joined = hkey, candidate, true
+			break
+		}
+	}
+	if joined && fl.waiters == 0 {
+		// The last waiter canceled this lane. Keep its tombstone until the
+		// worker exits: otherwise repeated cancels could spawn unbounded
+		// overlapping work for one article while cancellation propagates.
+		e.mu.Unlock()
+		select {
+		case <-fl.done:
+			return nil, true, context.Canceled
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
 	if joined {
 		fl.waiters++
 		e.coalesced.Add(1)
 	} else {
 		fctx, cancel := context.WithCancel(e.ctx)
-		fl = &flight{done: make(chan struct{}), waiters: 1, cancel: cancel}
-		e.flights[key] = fl
+		fl = &flight{decoded: make(chan struct{}), stored: make(chan struct{}), done: make(chan struct{}), cacheID: fo.cacheID, waiters: 1, cancel: cancel}
+		e.flights[fkey] = fl
 		e.wg.Add(1)
-		go e.run(fctx, fl, key, rel, pf, i, id, prio, fo)
+		go e.run(fctx, fl, fkey, rel, pf, i, id, prio, fo)
 	}
 	e.mu.Unlock()
 
+	ready := fl.done
+	if fo.noHot {
+		ready = fl.stored
+	}
 	select {
-	case <-fl.done:
+	case <-ready:
 		if fl.err != nil && errors.Is(fl.err, context.Canceled) && ctx.Err() == nil && e.ctx.Err() == nil {
 			return nil, true, fl.err
 		}
@@ -88,16 +134,91 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 		e.mu.Lock()
 		fl.waiters--
 		if fl.waiters == 0 {
-			// Nobody wants it any more; stop the fetch and let the next
-			// request start afresh.
+			// Independent priority lanes remain alive for their own waiters.
+			// run removes this canceled lane only after its worker exits.
 			fl.cancel()
-			if e.flights[key] == fl {
-				delete(e.flights, key)
-			}
 		}
 		e.mu.Unlock()
 		return nil, false, ctx.Err()
 	}
+}
+
+// liveHedgeDelay bounds the latency a live reader may inherit from an
+// already queued speculative read. Healthy reads often finish inside this
+// window, saving a duplicate article without sacrificing a reserved live lane.
+const liveHedgeDelay = 250 * time.Millisecond
+
+func (e *Engine) hedgeSpeculative(ctx context.Context, rel *release, pf *postedFile, i int, fo fetchOpts) (*segData, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	key := segKey{rel.digest, pf.segBase + i}
+	if seg, ok := e.hot.get(key); ok {
+		e.hotHits.Add(1)
+		e.learnHot(rel, pf, i, seg)
+		return seg, true, nil
+	}
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return nil, true, ErrClosed
+	}
+	// Existing live work and cached data take precedence over speculation.
+	if e.hot.has(key) || e.flights[flightKey{key, core.PriorityLive}] != nil {
+		e.mu.Unlock()
+		return nil, false, nil
+	}
+	var lower *flight
+	for p := core.PriorityReadahead; p <= core.PriorityPrefetch; p++ {
+		if fl := e.flights[flightKey{key, p}]; fl != nil && fl.waiters > 0 {
+			lower = fl
+			break
+		}
+	}
+	if lower == nil {
+		e.mu.Unlock()
+		return nil, false, nil
+	}
+	lower.waiters++
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		lower.waiters--
+		if lower.waiters == 0 {
+			lower.cancel()
+		}
+		e.mu.Unlock()
+	}()
+	timer := time.NewTimer(e.hedgeDelay)
+	defer timer.Stop()
+	select {
+	case <-lower.decoded:
+	case <-timer.C:
+		// Prefer decoded bytes if completion and the hedge deadline raced.
+		select {
+		case <-lower.decoded:
+		default:
+			return nil, false, nil
+		}
+	case <-ctx.Done():
+		return nil, true, ctx.Err()
+	case <-e.ctx.Done():
+		return nil, true, ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	if lower.err != nil {
+		return nil, false, nil
+	}
+	// The decoded channel publishes an immutable result; persistence never
+	// modifies it. noHot applies to the speculative owner, not a live consumer.
+	if !fo.noHot {
+		e.hot.put(key, lower.seg)
+	}
+	e.learnHot(rel, pf, i, lower.seg)
+	e.coalesced.Add(1)
+	return lower.seg, true, nil
 }
 
 // learnHot records a hot-buffer segment's exact range in pf. Usually the
@@ -113,17 +234,24 @@ func (e *Engine) learnHot(rel *release, pf *postedFile, i int, seg *segData) {
 	rel.notePartSize(pf)
 }
 
-func (e *Engine) run(ctx context.Context, fl *flight, key segKey, rel *release, pf *postedFile, i int, id string, prio core.Priority, fo fetchOpts) {
+func (e *Engine) run(ctx context.Context, fl *flight, key flightKey, rel *release, pf *postedFile, i int, id string, prio core.Priority, fo fetchOpts) {
 	defer e.wg.Done()
+	defer close(fl.stored)
 	defer fl.cancel()
 	seg, fromCache, err := e.load(ctx, pf, i, id, key.seg, prio, fo)
 	if err == nil {
 		pf.learn(i, seg.begin, seg.end(), seg.fileSize, seg.total)
 		rel.notePartSize(pf)
 		if !fo.noHot {
-			e.hot.put(key, seg)
+			e.hot.put(key.segKey, seg)
 		}
 	}
+	// Publish normalized data before any slow disk write. A live hedge may
+	// consume/promote these bytes while a noHot owner awaits durable storage.
+	e.mu.Lock()
+	fl.seg, fl.err = seg, err
+	e.mu.Unlock()
+	close(fl.decoded)
 	persist := func() {
 		if err == nil && !fromCache && fo.cacheID != "" && e.cache != nil {
 			if perr := e.cache.Put(fo.cacheID, key.seg, encodeSegment(seg)); perr != nil {
@@ -137,7 +265,6 @@ func (e *Engine) run(ctx context.Context, fl *flight, key segKey, rel *release, 
 		persist()
 	}
 	e.mu.Lock()
-	fl.seg, fl.err = seg, err
 	if e.flights[key] == fl {
 		delete(e.flights, key)
 	}
@@ -175,7 +302,8 @@ func (e *Engine) load(ctx context.Context, pf *postedFile, i int, id string, glo
 		if err == nil {
 			e.fetches.Add(1)
 			e.fetchedBytes.Add(int64(len(data)))
-			return e.normalize(pf, i, data, part), false, nil
+			seg, err := e.normalize(pf, i, data, part)
+			return seg, false, err
 		}
 		if errors.Is(err, core.ErrArticleMissing) {
 			e.missing.Add(1)
@@ -190,13 +318,13 @@ func (e *Engine) load(ctx context.Context, pf *postedFile, i int, id string, glo
 	return nil, false, fmt.Errorf("stream: %s part %d: %w", pf.Name(), i+1, lastErr)
 }
 
-// maxArticleBytes is the most a damaged (short) article is zero-filled to.
+// maxArticleBytes bounds plausible decoded article ranges.
 // Real Usenet articles are well under a few MiB.
 const maxArticleBytes = 32 << 20
 
 // normalize places decoded article bytes in the posted file using the yEnc
 // header, tolerating headers that are absent or inconsistent.
-func (e *Engine) normalize(pf *postedFile, i int, data []byte, part core.ArticlePart) *segData {
+func (e *Engine) normalize(pf *postedFile, i int, data []byte, part core.ArticlePart) (*segData, error) {
 	if part.Begin >= 1 && part.End >= part.Begin && part.End-part.Begin+1 > max(int64(len(data)), maxArticleBytes) {
 		// The header is untrusted: a part claiming far more bytes than any
 		// article carries would be zero-filled into a huge allocation.
@@ -209,18 +337,10 @@ func (e *Engine) normalize(pf *postedFile, i int, data []byte, part core.Article
 	if part.Begin >= 1 && part.End >= part.Begin {
 		seg.begin = part.Begin - 1
 		want := part.End - part.Begin + 1
-		switch {
-		case int64(len(data)) > want:
-			e.log.Warn("article longer than its yEnc part header; truncating", "file", pf.Name(), "part", i+1, "got", len(data), "want", want)
-			data = data[:want]
-		case int64(len(data)) < want:
-			// Keep offsets stable: a short (damaged) article is zero-filled so
-			// the rest of the file stays aligned.
-			e.log.Warn("article shorter than its yEnc part header; zero-filling", "file", pf.Name(), "part", i+1, "got", len(data), "want", want)
-			padded := make([]byte, want)
-			copy(padded, data)
-			data = padded
+		if int64(len(data)) != want {
+			return nil, fmt.Errorf("stream: %s part %d decoded length %d differs from yEnc range %d: %w", pf.Name(), i+1, len(data), want, ErrCorrupt)
 		}
+		seg.rangeExact = part.Part == i+1 && part.Total >= part.Part && part.FileSize >= part.End
 	} else {
 		// No part header: trust the index estimate.
 		seg.begin, _, _ = pf.rangeOf(i)
@@ -229,43 +349,46 @@ func (e *Engine) normalize(pf *postedFile, i int, data []byte, part core.Article
 		}
 	}
 	seg.data = data
-	return seg
+	return seg, nil
 }
 
 // Disk cache encoding: a small header so a cached segment restores its
 // position in the posted file without the article.
 //
-//	"ETS1" | begin u64 | fileSize u64 | total u32 | nameLen u16 | name | data
-const segMagic = "ETS1"
+//	"ETS2" | begin u64 | fileSize u64 | total u32 | nameLen u16 | exact u8 | name | data
+const segMagic = "ETS2"
 
 func encodeSegment(s *segData) []byte {
 	name := s.name
 	if len(name) > 1024 {
 		name = name[:1024]
 	}
-	b := make([]byte, 4+8+8+4+2+len(name)+len(s.data))
+	b := make([]byte, 4+8+8+4+2+1+len(name)+len(s.data))
 	copy(b, segMagic)
 	binary.LittleEndian.PutUint64(b[4:], uint64(s.begin))
 	binary.LittleEndian.PutUint64(b[12:], uint64(s.fileSize))
 	binary.LittleEndian.PutUint32(b[20:], uint32(s.total))
 	binary.LittleEndian.PutUint16(b[24:], uint16(len(name)))
-	copy(b[26:], name)
-	copy(b[26+len(name):], s.data)
+	if s.rangeExact {
+		b[26] = 1
+	}
+	copy(b[27:], name)
+	copy(b[27+len(name):], s.data)
 	return b
 }
 
 func decodeSegment(b []byte) (*segData, bool) {
-	if len(b) < 26 || string(b[:4]) != segMagic {
+	if len(b) < 27 || string(b[:4]) != segMagic {
 		return nil, false
 	}
 	begin := int64(binary.LittleEndian.Uint64(b[4:]))
 	size := int64(binary.LittleEndian.Uint64(b[12:]))
 	total := int(binary.LittleEndian.Uint32(b[20:]))
 	nl := int(binary.LittleEndian.Uint16(b[24:]))
-	if begin < 0 || size < 0 || 26+nl > len(b) {
+	if begin < 0 || size < 0 || 27+nl > len(b) {
 		return nil, false
 	}
-	return &segData{begin: begin, fileSize: size, total: total, name: string(b[26 : 26+nl]), data: b[26+nl:]}, true
+	return &segData{begin: begin, fileSize: size, total: total, name: string(b[27 : 27+nl]), data: b[27+nl:], rangeExact: b[26] == 1}, true
 }
 
 // readFile fills p from posted file pf at off, fetching the covering

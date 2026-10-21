@@ -265,3 +265,50 @@ func TestFaultsAndCorrupt(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// Real clients may enqueue another BODY while the preceding body's network
+// response is delayed. The stall fault must preserve that command byte-for-byte.
+func TestBodyDelayPreservesCommandSentMidBody(t *testing.T) {
+	s := Start(t, Options{})
+	if _, err := s.AddYenc("first@test", []byte("first"), yenc.EncodeOptions{Name: "one.bin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddYenc("second@test", []byte("second"), yenc.EncodeOptions{Name: "two.bin"}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetFault(func(cmd, id string) Fault {
+		if cmd == "BODY" && id == "first@test" {
+			return Fault{BodyDelay: 30 * time.Millisecond}
+		}
+		return Fault{}
+	})
+	c := dial(t, s)
+	defer c.Close()
+	if err := c.PrintfLine("BODY <first@test>"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.ReadResponse(222); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := c.ReadLine(); err != nil || !strings.HasPrefix(line, "=ybegin ") {
+		t.Fatalf("first header %q %v", line, err)
+	}
+	// This arrives after the fake server has entered its delay.
+	if err := c.PrintfLine("BODY <second@test>"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ReadDotBytes(); err != nil {
+		t.Fatalf("first remainder: %v", err)
+	}
+	if _, _, err := c.ReadResponse(222); err != nil {
+		t.Fatalf("queued BODY corrupted: %v", err)
+	}
+	body, err := c.ReadDotBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	part, err := yenc.Decode(body)
+	if err != nil || string(part.Data) != "second" {
+		t.Fatalf("second payload %v %v", part, err)
+	}
+}

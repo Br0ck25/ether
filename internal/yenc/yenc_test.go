@@ -315,15 +315,14 @@ func BenchmarkEncode(b *testing.B) {
 	}
 }
 
-func TestSubRunMatchesNaive(t *testing.T) {
+func TestDecodeLineLengthsMatchScalar(t *testing.T) {
 	src := randBytes(11, 1031)
-	for n := 0; n <= len(src); n += 13 {
+	for n := 0; n <= len(src); n++ {
+		want, wantEsc := decodeLineScalar(src[:n], false)
 		dst := make([]byte, n)
-		subRun(dst, src[:n])
-		for i := 0; i < n; i++ {
-			if dst[i] != src[i]-42 {
-				t.Fatalf("n=%d i=%d", n, i)
-			}
+		got, gotEsc := DecodeLine(dst, src[:n], false)
+		if !bytes.Equal(dst[:got], want) || gotEsc != wantEsc {
+			t.Fatalf("length %d", n)
 		}
 	}
 }
@@ -387,4 +386,21 @@ func FuzzDecodeLine(f *testing.F) {
 			t.Fatalf("got %x/%v want %x/%v", dst[:n], gotEsc, want, wantEsc)
 		}
 	})
+}
+
+func TestDecodeLineInPlace(t *testing.T) {
+	for _, length := range []int{0, 1, 7, 8, 9, 15, 16, 127, 128, 256, 1031} {
+		original := randBytes(23, length)
+		for offset := 0; offset < 9; offset++ {
+			for _, escaped := range []bool{false, true} {
+				want, wantEsc := decodeLineScalar(original, escaped)
+				backing := make([]byte, len(original)+offset)
+				copy(backing[offset:], original)
+				n, gotEsc := DecodeLine(backing[:len(original)], backing[offset:], escaped)
+				if !bytes.Equal(backing[:n], want) || gotEsc != wantEsc {
+					t.Fatalf("length %d offset %d escaped %v", length, offset, escaped)
+				}
+			}
+		}
+	}
 }

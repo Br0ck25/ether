@@ -147,11 +147,12 @@ type hasCache interface {
 
 // Engine implements core.Engine and core.HealthChecker.
 type Engine struct {
-	fetcher core.ArticleFetcher
-	cache   core.SegmentCache
-	opts    Options
-	log     *slog.Logger
-	hot     *hotBuffer
+	fetcher    core.ArticleFetcher
+	cache      core.SegmentCache
+	opts       Options
+	log        *slog.Logger
+	hot        *hotBuffer
+	hedgeDelay time.Duration // bounded live wait on an existing speculative flight
 
 	ctx    context.Context // cancelled by Close; parent of every fetch
 	cancel context.CancelFunc
@@ -161,7 +162,7 @@ type Engine struct {
 	healthTrace HealthTrace
 	releases    map[string]*list.Element // digest -> *release
 	relLRU      *list.List
-	flights     map[segKey]*flight
+	flights     map[flightKey]*flight
 	wg          sync.WaitGroup // fetch goroutines
 	closed      bool
 
@@ -210,16 +211,17 @@ func New(fetcher core.ArticleFetcher, cache core.SegmentCache, opts Options, log
 	opts = opts.withDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Engine{
-		fetcher:  fetcher,
-		cache:    cache,
-		opts:     opts,
-		log:      logger.With("component", "stream"),
-		hot:      newHotBuffer(opts.HotBufferBytes),
-		ctx:      ctx,
-		cancel:   cancel,
-		releases: map[string]*list.Element{},
-		relLRU:   list.New(),
-		flights:  map[segKey]*flight{},
+		fetcher:    fetcher,
+		cache:      cache,
+		opts:       opts,
+		log:        logger.With("component", "stream"),
+		hot:        newHotBuffer(opts.HotBufferBytes),
+		hedgeDelay: liveHedgeDelay,
+		ctx:        ctx,
+		cancel:     cancel,
+		releases:   map[string]*list.Element{},
+		relLRU:     list.New(),
+		flights:    map[flightKey]*flight{},
 	}
 }
 

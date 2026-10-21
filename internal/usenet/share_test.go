@@ -158,7 +158,7 @@ func startShareServer(t *testing.T) *nntptest.Server {
 // the new share; idle connections above it close at once.
 func TestConnectionShareShrinksGracefully(t *testing.T) {
 	s := startShareServer(t)
-	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 6)}, Options{MinIdle: -1})
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 6)}, Options{MinIdle: -1, BodyPipelineDepth: 1})
 	s.SetLatency(5 * time.Millisecond)
 	runBodies(t, f, 30) // opens up to 6 connections, all idle afterwards
 	if ps := statsFor(f, "p"); ps.LiveConnections < 3 {

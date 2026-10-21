@@ -113,6 +113,7 @@ type Server struct {
 	conns    map[net.Conn]struct{}
 	stats    Stats
 	closed   bool
+	stop     chan struct{}
 
 	wg sync.WaitGroup
 }
@@ -139,6 +140,7 @@ func NewServer(opts Options) (*Server, error) {
 	}
 	s := &Server{
 		opts:     opts,
+		stop:     make(chan struct{}),
 		log:      opts.Logger,
 		articles: make(map[string][]byte),
 		missing:  make(map[string]bool),
@@ -388,6 +390,7 @@ func (s *Server) Close() {
 		return
 	}
 	s.closed = true
+	close(s.stop)
 	s.ln.Close()
 	for c := range s.conns {
 		c.Close()
@@ -471,7 +474,7 @@ func (s *Server) handle(c net.Conn) {
 		verb, arg, _ := strings.Cut(line, " ")
 		verb = strings.ToUpper(verb)
 		arg = strings.TrimSpace(arg)
-		if !s.command(w, c, &sess, verb, arg) {
+		if !s.command(w, r, c, &sess, verb, arg) {
 			_ = w.Flush()
 			return
 		}
@@ -486,7 +489,7 @@ func (s *Server) reply(w *bufio.Writer, code int, text string) {
 }
 
 // command handles one command; false closes the connection.
-func (s *Server) command(w *bufio.Writer, c net.Conn, sess *session, verb, arg string) bool {
+func (s *Server) command(w *bufio.Writer, r *bufio.Reader, c net.Conn, sess *session, verb, arg string) bool {
 	faultArg := arg
 	switch verb {
 	case "BODY", "ARTICLE", "HEAD", "STAT":
@@ -624,7 +627,7 @@ func (s *Server) command(w *bufio.Writer, c net.Conn, sess *session, verb, arg s
 					cut += 2
 				}
 				w.Write(body[:cut])
-				if w.Flush() != nil || !waitBodyDelay(c, f.BodyDelay) {
+				if w.Flush() != nil || !waitBodyDelay(c, r, s.stop, f.BodyDelay) {
 					return false
 				}
 				w.Write(body[cut:])
@@ -645,24 +648,33 @@ func (s *Server) command(w *bufio.Writer, c net.Conn, sess *session, verb, arg s
 	return true
 }
 
-// waitBodyDelay blocks for d, returning false early if the client goes
-// away. A client waiting on a body never sends, so a short-deadline read
-// probe on the raw connection only ever observes a disconnect; buffered
-// pipelined input would be consumed by the probe, which NNTP clients do
-// not produce mid-body.
-func waitBodyDelay(c net.Conn, d time.Duration) bool {
+// waitBodyDelay preserves pipelined commands while probing disconnects. Once
+// input is buffered, waiting on the delay/shutdown signal avoids consuming it
+// or spinning; the next command is still read by handle in its original order.
+func waitBodyDelay(c net.Conn, r *bufio.Reader, stop <-chan struct{}, d time.Duration) bool {
 	defer c.SetReadDeadline(time.Time{})
 	end := time.Now().Add(d)
-	buf := make([]byte, 1)
 	for {
 		remain := time.Until(end)
 		if remain <= 0 {
 			return true
 		}
+		select {
+		case <-stop:
+			return false
+		default:
+		}
 		_ = c.SetReadDeadline(time.Now().Add(min(remain, 5*time.Millisecond)))
-		_, err := c.Read(buf)
+		_, err := r.Peek(1)
 		if err == nil {
-			return false // unexpected input mid-body: treat as gone
+			timer := time.NewTimer(max(0, time.Until(end)))
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				return true
+			case <-stop:
+				return false
+			}
 		}
 		var ne net.Error
 		if !errors.As(err, &ne) || !ne.Timeout() {

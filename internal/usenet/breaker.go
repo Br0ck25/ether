@@ -1,6 +1,7 @@
 package usenet
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -32,14 +33,16 @@ type breaker struct {
 
 	authMin, authMax time.Duration
 
-	failures  int
-	until     time.Time
-	authErr   error
-	authFails int       // consecutive failed logins (initial failure + probes)
-	authUntil time.Time // next auth probe is due
-	probing   bool      // an auth probe is in flight
-	lastErr   error
-	lastAt    time.Time
+	changed      chan struct{}
+	networkProbe bool // at most one command tests an expired network backoff
+	failures     int
+	until        time.Time
+	authErr      error
+	authFails    int       // consecutive failed logins (initial failure + probes)
+	authUntil    time.Time // next auth probe is due
+	probing      bool      // an auth probe is in flight
+	lastErr      error
+	lastAt       time.Time
 }
 
 func newBreaker(minB, maxB time.Duration, threshold int, now func() time.Time) *breaker {
@@ -47,7 +50,7 @@ func newBreaker(minB, maxB time.Duration, threshold int, now func() time.Time) *
 		threshold = 1
 	}
 	return &breaker{now: now, minBackoff: minB, maxBackoff: maxB, failThreshold: threshold,
-		authMin: DefaultAuthRetryMin, authMax: DefaultAuthRetryMax}
+		authMin: DefaultAuthRetryMin, authMax: DefaultAuthRetryMax, changed: make(chan struct{})}
 }
 
 // allow returns nil if the provider may be used now.
@@ -63,10 +66,36 @@ func (b *breaker) allow() error {
 	return nil
 }
 
+// admit reserves a single half-open recovery attempt after a network backoff.
+// allow remains a read-only check for health/status/warming paths.
+func (b *breaker) admit() (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.authErr != nil {
+		return false, fmt.Errorf("%w: %v", ErrProviderDisabled, b.authErr)
+	}
+	if b.now().Before(b.until) || b.networkProbe {
+		return false, ErrProviderBackoff
+	}
+	if b.failures >= b.failThreshold {
+		b.networkProbe = true
+		return true, nil
+	}
+	return false, nil
+}
+
+func (b *breaker) releaseProbe() {
+	b.mu.Lock()
+	b.networkProbe = false
+	b.signalLocked()
+	b.mu.Unlock()
+}
+
 func (b *breaker) success() {
 	b.mu.Lock()
 	b.failures = 0
 	b.until = time.Time{}
+	b.signalLocked()
 	b.mu.Unlock()
 }
 
@@ -87,6 +116,7 @@ func (b *breaker) connFailure(err error) time.Duration {
 		d = b.maxBackoff
 	}
 	b.until = b.now().Add(d)
+	b.signalLocked()
 	return d
 }
 
@@ -163,4 +193,50 @@ func (b *breaker) state() (state string, until time.Time, lastErr error, lastAt 
 		state = StateOK
 	}
 	return state, b.until, b.lastErr, b.lastAt
+}
+
+// signalLocked wakes requests whose last usable provider is recovering.
+func (b *breaker) signalLocked() {
+	close(b.changed)
+	b.changed = make(chan struct{})
+}
+
+func (b *breaker) recoveryDelay() (time.Duration, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.authErr != nil || (b.failures >= b.failThreshold && isTimeoutError(b.lastErr)) {
+		return 0, false
+	}
+	return max(0, b.until.Sub(b.now())), true
+}
+
+// waitReady does not claim a probe. The connection admission path still grants
+// exactly one half-open probe; peers sleep again until it completes.
+func (b *breaker) waitReady(ctx context.Context) error {
+	for {
+		b.mu.Lock()
+		if b.authErr != nil {
+			b.mu.Unlock()
+			return ErrProviderDisabled
+		}
+		delay := b.until.Sub(b.now())
+		if delay <= 0 && !b.networkProbe {
+			b.mu.Unlock()
+			return nil
+		}
+		changed := b.changed
+		if delay <= 0 {
+			delay = time.Minute
+		} // wake on probe completion, bounded by ctx
+		b.mu.Unlock()
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-changed:
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
 }
