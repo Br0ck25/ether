@@ -128,5 +128,104 @@ class TestOwnedArgvGate(unittest.TestCase):
         self.assertIn("isolation_preexisting", pf); self.assertIn("plan", pf)
         self.assertFalse(pf["fixture"]["exists"])
 
+SECRET = "[SECRET_ASSIGNMENT]"
+
+class FakePms:
+    """Injectable PMS double: no real server, no port."""
+    def __init__(self):
+        self.pid = 4242; self.pgid = 4242; self.proc = None; self.stopped = False
+    def start(self): return self.pid
+    def wait_identity(self): return {"claimed": "0", "version": "1.43.5-fake"}
+    def stop(self): self.stopped = True; return {"pgid": self.pgid, "signalled": True, "remaining_pids": []}
+
+class TestPrepareHold(unittest.TestCase):
+    def cfg(self, td):
+        return pm.MacConfig(lab_root=str(Path(td) / "lab"), base_url="http://127.0.0.1:9",
+                            duration_s=32.0, timeout_s=120.0, profile=pm.TokenProfile())
+    def test_token_file_and_profile_never_serialized(self):
+        with tempfile.TemporaryDirectory() as td:
+            tf = Path(td) / "tok"; tf.write_text(SECRET + "\n")
+            tok = pm.load_token_file(str(tf)); self.assertEqual(tok, SECRET)
+            prof = pm.TokenProfile(); prof._token = tok
+            self.assertEqual(prof.headers()["X-Plex-Token"], SECRET)
+            self.assertEqual(prof.decision_params("7", "s")["X-Plex-Token"], SECRET)
+            import dataclasses
+            self.assertNotIn(SECRET, json.dumps(dataclasses.asdict(prof)))
+            self.assertNotIn(SECRET, json.dumps({"auth": "token-file (content never logged)", "token_present": True}))
+            with self.assertRaises(pb.BenchError):
+                pm.load_token_file(str(Path(td) / "missing"))
+    def test_signal_rules(self):
+        with tempfile.TemporaryDirectory() as td:
+            sig = Path(td) / "continue.json"
+            self.assertIsNone(pm.read_signal(sig, "run1", 0.0))
+            sig.write_text(json.dumps({"action": "continue", "rating_key": "9", "run_id": "other"}))
+            with self.assertRaises(pb.BenchError):
+                pm.read_signal(sig, "run1", 0.0)
+            sig.write_text(json.dumps({"action": "bogus"}))
+            with self.assertRaises(pb.BenchError):
+                pm.read_signal(sig, "run1", 0.0)
+            sig.write_text(json.dumps({"action": "continue", "rating_key": "9"}))
+            self.assertEqual(pm.read_signal(sig, "run1", 0.0)["rating_key"], "9")
+            # stale: mtime far before readiness
+            import os; os.utime(sig, (1000, 1000))
+            self.assertIsNone(pm.read_signal(sig, "run1", 2000.0))
+    def test_session_timeout_protects_stop_reserve(self):
+        self.assertEqual(pm.session_timeout_for(100.0, 120.0, 30.0), 70.0)
+        self.assertEqual(pm.session_timeout_for(1000.0, 120.0, 30.0), 120.0)
+        with self.assertRaises(pb.BenchError):
+            pm.session_timeout_for(20.0, 120.0, 30.0)
+    def _hold(self, td, signal, deadline=30.0):
+        cfg = self.cfg(td); pms = FakePms()
+        ready, sigp = Path(td) / "ready.json", Path(td) / "continue.json"
+        def writer():
+            import time; time.sleep(0.4); sigp.write_text(json.dumps(signal))
+        threading.Thread(target=writer, daemon=True).start()
+        calls = {}
+        def bench():
+            calls["rating"] = cfg.rating_key; calls["duration"] = cfg.duration_s; calls["timeout"] = cfg.timeout_s
+            return {"sessions": [{"session_index": 0, "actual_media_s": 10.0}], "waves": [{"wave": 0, "wall_s": 1.0}]}
+        meta = pm.run_prepare_hold(cfg, Path(td), ready, sigp, window_deadline_s=deadline,
+                                   stop_reserve_s=2.0, token=SECRET, pms=pms, run_bench=bench)
+        return meta, pms, ready, calls
+    def test_hold_continue_runs_chosen_ratingkey_and_stops(self):
+        with tempfile.TemporaryDirectory() as td:
+            meta, pms, ready, calls = self._hold(td, {"action": "continue", "rating_key": "77", "duration_s": 10})
+            self.assertTrue(meta["ok"]); self.assertTrue(pms.stopped); self.assertTrue(meta["within_deadline"])
+            self.assertEqual(calls["rating"], "77"); self.assertEqual(calls["duration"], 10.0)
+            self.assertLessEqual(calls["timeout"], 28.0)
+            blob = ready.read_text() + json.dumps(meta)
+            self.assertNotIn(SECRET, blob)  # token never in readiness or result
+            r = json.loads(ready.read_text())
+            self.assertEqual(r["pid"], 4242); self.assertIn("run_id", r); self.assertEqual(r["final_state"], "done")
+    def test_hold_abort_stops_without_benchmark(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self.cfg(td); pms = FakePms()
+            ready, sigp = Path(td) / "ready.json", Path(td) / "continue.json"
+            def writer():
+                import time; time.sleep(0.3); sigp.write_text(json.dumps({"action": "abort"}))
+            threading.Thread(target=writer, daemon=True).start()
+            ran = []
+            meta = pm.run_prepare_hold(cfg, Path(td), ready, sigp, window_deadline_s=20.0, stop_reserve_s=2.0,
+                                       pms=pms, run_bench=lambda: ran.append(1) or {"sessions": [], "waves": []})
+            self.assertFalse(meta["ok"]); self.assertTrue(pms.stopped); self.assertEqual(ran, [])
+            self.assertIn("abort", meta["error"])
+    def test_hold_no_signal_times_out_inside_deadline_and_stops(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self.cfg(td); pms = FakePms()
+            import time; t0 = time.monotonic()
+            meta = pm.run_prepare_hold(cfg, Path(td), Path(td) / "ready.json", Path(td) / "continue.json",
+                                       window_deadline_s=3.0, stop_reserve_s=1.0, pms=pms,
+                                       run_bench=lambda: self.fail("benchmark must not run"))
+            self.assertFalse(meta["ok"]); self.assertTrue(pms.stopped)
+            self.assertLess(time.monotonic() - t0, 5.0); self.assertIn("no continue signal", meta["error"])
+    def test_prepare_hold_launch_still_requires_window_grant(self):
+        # run_prepare_hold with no injected pms builds the real PmsProcessMac,
+        # whose start() refuses without --window-granted (no PMS is launched).
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self.cfg(td); cfg.window_granted = False
+            meta = pm.run_prepare_hold(cfg, Path(td), Path(td) / "ready.json", Path(td) / "continue.json",
+                                       window_deadline_s=10.0, stop_reserve_s=2.0)
+            self.assertFalse(meta["ok"]); self.assertIn("window-granted", meta["error"])
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
