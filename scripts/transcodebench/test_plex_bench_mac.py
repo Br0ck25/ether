@@ -39,12 +39,31 @@ class TestPsParsing(unittest.TestCase):
         cpu, io, valid = pm.compute_tree_delta(start, end2)
         self.assertTrue(valid); self.assertEqual(cpu, 2.5); self.assertIsNone(io)  # io unavailable on mac
 
+def fake_defaults(home, calls=None):
+    """Simulates /usr/bin/defaults against the fake home: write creates the
+    plist, delete removes it. Never touches the real CFPreferences domain."""
+    import plistlib
+    plist = home / "Library" / "Preferences" / f"{pm.PREFS_DOMAIN}.plist"
+    def run(argv):
+        if calls is not None:
+            calls.append(list(argv))
+        class R: returncode = 0; stderr = ""
+        if "write" in argv:
+            plist.parent.mkdir(parents=True, exist_ok=True)
+            plist.write_bytes(plistlib.dumps({pm.RELOC_SUPPRESS_KEY: True}))
+        elif "delete" in argv and plist.is_file():
+            plist.unlink()
+        return R()
+    return run
+
 class TestIsolation(unittest.TestCase):
-    def make(self, td):
+    def make(self, td, calls=None):
         home = Path(td) / "home"; lab = Path(td) / "lab"
         (home / "Library" / "Application Support").mkdir(parents=True)
         (home / "Library" / "Preferences").mkdir(parents=True)
-        return pm.MacIsolation(lab, home=home), home
+        return pm.MacIsolation(lab, home=home,
+                               relocation_destinations=[home / "Applications" / "Plex Media Server.app"],
+                               defaults_runner=fake_defaults(home, calls)), home
     def test_symlink_create_and_restore_absence(self):
         with tempfile.TemporaryDirectory() as td:
             iso, home = self.make(td)
@@ -75,8 +94,37 @@ class TestIsolation(unittest.TestCase):
             # someone swaps our symlink for a foreign one before restore
             link = home / "Library" / "Application Support" / "Plex Media Server"
             link.unlink(); other = Path(td) / "other"; other.mkdir(); link.symlink_to(other)
-            iso.restore()
+            with self.assertRaises(pb.BenchError):  # truthful failure, not silent 'restored'
+                iso.restore()
             self.assertTrue(link.is_symlink())  # left alone
+    def test_prepare_writes_suppress_key_and_restore_removes_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            calls = []
+            iso, home = self.make(td, calls)
+            info = iso.prepare()
+            self.assertTrue(info["reloc_suppress_attempted"]); self.assertFalse(info["reloc_suppress_proven"])
+            write = [c for c in calls if "write" in c]
+            self.assertEqual(len(write), 1); self.assertIn(pm.RELOC_SUPPRESS_KEY, write[0])
+            self.assertIn(pm.PREFS_DOMAIN, write[0])
+            self.assertTrue((home / "Library" / "Preferences" / f"{pm.PREFS_DOMAIN}.plist").exists())
+            out = iso.restore()
+            self.assertTrue(out["restored_absent"])
+            self.assertEqual(out["after"]["prefs_plist"], "absent")
+    def test_refuses_preexisting_relocation_destination(self):
+        with tempfile.TemporaryDirectory() as td:
+            iso, home = self.make(td)
+            (home / "Applications" / "Plex Media Server.app").mkdir(parents=True)
+            with self.assertRaises(pb.BenchError) as cm:
+                iso.prepare()
+            self.assertIn("relocation destination", str(cm.exception))
+    def test_restore_raises_when_created_prefs_cannot_be_removed(self):
+        with tempfile.TemporaryDirectory() as td:
+            iso, home = self.make(td)
+            iso.prepare()
+            plist = home / "Library" / "Preferences" / f"{pm.PREFS_DOMAIN}.plist"
+            plist.unlink(); plist.mkdir()  # unlink() will fail on a directory
+            with self.assertRaises(pb.BenchError):
+                iso.restore()
 
 class TestLaunchGate(unittest.TestCase):
     def test_no_window_grant_refuses_start(self):
@@ -137,6 +185,97 @@ class FakePms:
     def start(self): return self.pid
     def wait_identity(self): return {"claimed": "0", "version": "1.43.5-fake"}
     def stop(self): self.stopped = True; return {"pgid": self.pgid, "signalled": True, "remaining_pids": []}
+
+class _ExitedProc:
+    """Leader already exited 0 (the self-relocation failure mode)."""
+    returncode = 0
+    def poll(self): return 0
+    def wait(self, timeout=None): return 0
+
+class TestStopReaping(unittest.TestCase):
+    def make_pms(self, td, snapshot, killpg, kill=None):
+        home = Path(td) / "home"; home.mkdir(parents=True, exist_ok=True)
+        dest = home / "Applications" / "Plex Media Server.app"
+        iso = pm.MacIsolation(Path(td) / "lab", home=home, relocation_destinations=[dest],
+                              defaults_runner=fake_defaults(home))
+        app = str(Path(td) / "labapp" / "Plex Media Server.app")
+        pms = pm.PmsProcessMac(pm.MacConfig(app=app, lab_root=str(Path(td) / "lab")), iso)
+        pms.proc = _ExitedProc(); pms.pid = 4242; pms.pgid = 4242
+        pms.term_timeout_s = 0.3; pms.kill_timeout_s = 0.3; pms.poll_interval_s = 0.01
+        pms.relocation_before = {str(dest): False}
+        pms._snapshot = snapshot; pms._killpg = killpg
+        pms._kill = kill or (lambda pid, sig: None)
+        return pms, dest, app
+    def row(self, pid, pgid, args):
+        return {"pid": pid, "ppid": 1, "pgid": pgid, "rss_bytes": 1, "cpu_seconds": 0.0, "args": args}
+    def test_parent_exited_surviving_group_still_reaped(self):
+        with tempfile.TemporaryDirectory() as td:
+            kills, calls = [], {"n": 0}
+            def snap():
+                calls["n"] += 1
+                return [self.row(11, 4242, "Plex Transcoder -codec h264")] if calls["n"] <= 5 else []
+            pms, _, _ = self.make_pms(td, snap, lambda pgid, sig: kills.append((pgid, sig)))
+            r = pms.stop()
+            self.assertIn((4242, pm.signal.SIGTERM), kills)  # sent despite leader exit 0
+            self.assertTrue(r["clean"]); self.assertEqual(r["remaining_pids"], [])
+    def test_surviving_group_escalates_to_sigkill(self):
+        with tempfile.TemporaryDirectory() as td:
+            kills = []
+            def snap():
+                return [] if any(s == pm.signal.SIGKILL for _, s in kills) else \
+                    [self.row(11, 4242, "Plex Transcoder -codec h264")]
+            pms, _, _ = self.make_pms(td, snap, lambda pgid, sig: kills.append((pgid, sig)))
+            r = pms.stop()
+            self.assertIn((4242, pm.signal.SIGKILL), kills); self.assertTrue(r["clean"])
+    def test_audit_failure_is_not_reported_as_gone(self):
+        with tempfile.TemporaryDirectory() as td:
+            def snap(): raise RuntimeError("ps boom")
+            pms, _, _ = self.make_pms(td, snap, lambda pgid, sig: None)
+            r = pms.stop()
+            self.assertFalse(r["clean"]); self.assertIn("ps boom", r["audit_error"])
+            self.assertFalse(pm.stop_is_clean(r))
+    def test_permission_error_is_not_swallowed(self):
+        with tempfile.TemporaryDirectory() as td:
+            def killpg(pgid, sig): raise PermissionError("denied")
+            pms, _, _ = self.make_pms(td, lambda: [], killpg)
+            r = pms.stop()
+            self.assertFalse(r["clean"]); self.assertIn("permission", r["error"].lower())
+    def test_escaped_relocated_relaunch_reaped_but_cleanup_not_clean(self):
+        with tempfile.TemporaryDirectory() as td:
+            kills = []
+            pms, dest, _ = self.make_pms(td, lambda: [], lambda pgid, sig: kills.append((pgid, sig)))
+            dest.mkdir(parents=True)  # copy appeared during the run (absent before)
+            exe = f"{dest}/Contents/MacOS/Plex Media Server"
+            pms._snapshot = lambda: [] if any(p == 777 for p, _ in kills) else [self.row(777, 777, exe)]
+            r = pms.stop()
+            self.assertIn((777, pm.signal.SIGTERM), kills)  # provably ours: dest was absent before
+            self.assertEqual(r["escaped_remaining"], [])
+            self.assertIn(str(dest), r["relocated_destinations"])
+            self.assertFalse(r["clean"])  # leftover relocated copy: root must clean it
+    def test_uncertain_foreign_pms_never_signalled_and_blocks_clean(self):
+        with tempfile.TemporaryDirectory() as td:
+            kills = []
+            foreign = "/elsewhere/Plex Media Server.app/Contents/MacOS/Plex Media Server"
+            pms, _, _ = self.make_pms(td, lambda: [self.row(888, 888, foreign)],
+                                      lambda pgid, sig: kills.append((pgid, sig)))
+            r = pms.stop()
+            self.assertNotIn(888, [pgid for pgid, _ in kills])
+            self.assertEqual(r["uncertain_pids"], [888]); self.assertFalse(r["clean"])
+    def test_dirty_stop_blocks_prepare_hold_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg = pm.MacConfig(lab_root=str(Path(td) / "lab"), base_url="http://127.0.0.1:9",
+                               profile=pm.TokenProfile())
+            pms = FakePms()
+            pms.stop = lambda: {"pgid": 4242, "signalled": True, "remaining_pids": [999], "clean": False}
+            sigp = Path(td) / "continue.json"
+            def writer():
+                import time; time.sleep(0.3); sigp.write_text(json.dumps({"action": "abort"}))
+            threading.Thread(target=writer, daemon=True).start()
+            meta = pm.run_prepare_hold(cfg, Path(td), Path(td) / "ready.json", sigp,
+                                       window_deadline_s=20.0, stop_reserve_s=2.0, pms=pms,
+                                       run_bench=lambda: self.fail("must not run"))
+            self.assertFalse(meta["ok"]); self.assertFalse(meta["cleanup_clean"])
+            self.assertIn("cleanup NOT clean", meta["error"])
 
 class TestPrepareHold(unittest.TestCase):
     def cfg(self, td):

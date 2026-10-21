@@ -28,9 +28,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 import plex_bench as pb
 
 BenchError = pb.BenchError
-DEFAULT_APP = "/Users/braedonsaunders/.bb/thread-storage/thr_dbguekh66b/transcode-lab/plex-macos/Plex Media Server.app"
+DEFAULT_APP = "/Users/braedonsaunders/.bb/thread-storage/thr_dbguekh66b/transcode-lab/plex-macos-relocated/Plex Media Server.app"
 DEFAULT_LAB = "/Users/braedonsaunders/.bb/thread-storage/thr_dbguekh66b/transcode-lab/plex-macos-lab"
 PREFS_DOMAIN = "com.plexapp.plexmediaserver"
+# LetsMove-style self-relocation guard key found (twice) in the PMS binary
+# strings. Upstream LetsMove returns early when this is true, but Plex's
+# vendored copy is NOT proven to behave identically: this is an unproven
+# mitigation only. The load-bearing protection is the relocation audit in
+# PmsProcessMac (new Applications copy + escaped process provenance), which
+# fails cleanup truthfully if relocation happens anyway.
+RELOC_SUPPRESS_KEY = "moveToApplicationsFolderAlertSuppress"
 HW_TOKENS = ("videotoolbox", "video_toolbox", "vaapi", "nvenc", "qsv")
 
 # ---------------------------------------------------------------- plan ----
@@ -41,13 +48,20 @@ START_PLAN = {
         "driver preflight passes: default Plex data path and prefs plist absent (or our own symlink), fixture present, port 32400 not connectable",
     ],
     "window_5min_timeline": [
-        "T+0:00  python3 plex_bench_mac.py --preflight-only  (read-only checks, no launch)",
-        "T+0:30  launch ONE command: --prepare-hold --window-granted --window-deadline-s 300 [--token-file <private>]; PMS starts in its own pgid, driver waits /identity then publishes <lab>/ready.json (pid/pgid/run_id/deadline) and HOLDS -- it does not encode yet",
+        "T+0:00  python3 plex_bench_mac.py --preflight-only  (read-only: data/prefs absent, ~/Applications+//Applications Plex absent, no PMS process, port 32400 free)",
+        "T+0:30  launch ONE command (native launch plan below): --prepare-hold --window-granted; prepare() first writes lab-owned CFPreferences moveToApplicationsFolderAlertSuppress=true via /usr/bin/defaults (domain was absent; UNPROVEN vs Plex's vendored relocation), then PMS starts in its own pgid from the relocated lab app; driver waits /identity only from the still-owned leader, audits for escaped/relocated PMS, then publishes <lab>/ready.json and HOLDS",
         "T+1:30  root privately claims server with Plex Pass account (credentials never enter driver except optional --token-file, whose content is never logged)",
         "T+2:30  root creates/scans 'Lab' library, then writes <lab>/continue.json {\"action\":\"continue\",\"rating_key\":\"<key>\",\"duration_s\":10} (or {\"action\":\"abort\"}); stale/wrong-run_id signals are rejected",
         "T+3:30  driver runs tiny smoke for that ratingKey only, timeout capped at deadline minus 30s stop reserve: source.mkv 60s 640x360, 10s, Android h264 640x360@2000k; require videotoolbox in captured argv (else software fallback)",
-        "T+4:30  driver stops session, SIGTERM owned pgid (SIGKILL after 10s), restores original absence of data path/prefs, verifies no owned processes and port 32400 free",
+        "T+4:30  driver stops session, SIGTERM owned pgid even if leader exited (SIGKILL after timeout), reaps provably-escaped relaunches by exact lab/relocated-app provenance, audits ps; ONLY if clean does it restore original absence of data path/prefs, then verifies port 32400 free",
         "T+5:00  window ends; result.json + PMS log path reported to root; Ether may be restarted by its owner only after this report",
+    ],
+    "native_launch_plan_for_root_validation": [
+        "precondition (outside driver): root grants window, Ether stopped, nothing on 32400, ~/Library Plex data+prefs absent, no Plex app in ~/Applications or /Applications, no PMS process running",
+        "exact app: /Users/braedonsaunders/.bb/thread-storage/thr_dbguekh66b/transcode-lab/plex-macos-relocated/Plex Media Server.app (DEFAULT_APP)",
+        "command: cd scripts/transcodebench && python3 plex_bench_mac.py --prepare-hold --window-granted --window-deadline-s 300 --stop-reserve-s 30 --app '<above app>' [--token-file <root-owned 0600 file>] --out <lab out dir>",
+        "proof root must collect in that window (suppression is not assumed): after identity, `ls ~/Applications '/Applications'` shows no new Plex Media Server.app, `ps -axo pid,ppid,pgid,args` shows PMS only under the lab app path in the driver pgid, and ready.json identity came from the owned leader",
+        "if a relocated copy or escaped process appears: driver fails the run, reaps only provably-owned pids/pgids, leaves symlink+prefs in place, and reports cleanup NOT clean; root manually removes the relocated copy and only then restores Ether",
     ],
     "later_windows": [
         "generate exact 32s fixture (concat 2x16s sdr1080, -t 32, ffprobe-verified) only inside a granted resource window",
@@ -158,7 +172,9 @@ class MacIsolation:
     Refuses to run if the default data path or the prefs plist pre-exists:
     pre-existing user files are never touched.
     """
-    def __init__(self, lab_root: Path, home: Path | None = None):
+    def __init__(self, lab_root: Path, home: Path | None = None,
+                 relocation_destinations: list[Path] | None = None,
+                 defaults_runner=None):
         self.lab = Path(lab_root)
         self.home = Path(home) if home else Path.home()
         self.default_support = self.home / "Library" / "Application Support" / "Plex Media Server"
@@ -168,6 +184,16 @@ class MacIsolation:
         self.lab_media = self.lab / "media"
         self.created_symlink = False
         self.prefs_existed_before = False
+        self.prefs_created_by_us = False
+        # Where a self-relocating PMS would copy itself. An escaped copy is
+        # only provably ours if the destination was absent before launch.
+        self.relocation_destinations = [Path(p) for p in relocation_destinations] if relocation_destinations is not None else [
+            self.home / "Applications" / "Plex Media Server.app",
+            Path("/Applications/Plex Media Server.app")]
+        # Injectable (list[str]) -> CompletedProcess-like; tests never touch
+        # the real CFPreferences domain.
+        self._defaults = defaults_runner or (
+            lambda argv: subprocess.run(argv, capture_output=True, text=True, timeout=15))
 
     def check_preexisting(self) -> dict:
         support_state = ("symlink->ours" if self.default_support.is_symlink()
@@ -175,7 +201,23 @@ class MacIsolation:
                          else "present" if os.path.lexists(self.default_support) else "absent")
         prefs_state = "present" if os.path.lexists(self.prefs_plist) else "absent"
         return {"default_support": support_state, "prefs_plist": prefs_state,
+                "relocation_destinations": {str(p): ("present" if os.path.lexists(p) else "absent")
+                                            for p in self.relocation_destinations},
                 "home": str(self.home)}
+
+    def _write_reloc_suppress(self) -> None:
+        """Lab-owned CFPreferences: exactly one key, domain absent before.
+
+        Written via /usr/bin/defaults so cfprefsd serves it to the PMS
+        process launched afterwards. Unproven against Plex's vendored
+        relocation code -- see RELOC_SUPPRESS_KEY note.
+        """
+        r = self._defaults(["/usr/bin/defaults", "write", PREFS_DOMAIN,
+                            RELOC_SUPPRESS_KEY, "-bool", "true"])
+        if getattr(r, "returncode", 1) != 0:
+            raise BenchError(f"defaults write {RELOC_SUPPRESS_KEY} failed rc={getattr(r, 'returncode', '?')}: "
+                             f"{pb.sanitize(str(getattr(r, 'stderr', '') or ''))[:200]}")
+        self.prefs_created_by_us = True
 
     def prepare(self) -> dict:
         state = self.check_preexisting()
@@ -183,6 +225,10 @@ class MacIsolation:
             raise BenchError(f"pre-existing Plex data at {self.default_support}; refusing to touch it")
         if state["prefs_plist"] == "present":
             raise BenchError(f"pre-existing prefs {self.prefs_plist}; refusing to touch it")
+        for dest, st in state["relocation_destinations"].items():
+            if st == "present":
+                raise BenchError(f"pre-existing Plex app at relocation destination {dest}; "
+                                 "an escaped copy there could not be proven ours, refusing to launch")
         self.prefs_existed_before = False
         for d in (self.lab_support, self.lab_tmp, self.lab_media):
             d.mkdir(parents=True, exist_ok=True)
@@ -190,24 +236,50 @@ class MacIsolation:
             self.default_support.parent.mkdir(parents=True, exist_ok=True)
             os.symlink(self.lab_support, self.default_support)
             self.created_symlink = True
+        try:
+            self._write_reloc_suppress()
+        except Exception:
+            # Do not leave a half-prepared isolation behind on failure.
+            if self.created_symlink and self.default_support.is_symlink():
+                self.default_support.unlink(); self.created_symlink = False
+            raise
         return {"strategy": "env PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR (primary, Mac honoring unverified) "
-                            "+ default-path symlink guard (load-bearing) + CFPreferences restore-absence",
+                            "+ default-path symlink guard (load-bearing) + lab-owned CFPreferences "
+                            f"({RELOC_SUPPRESS_KEY}=true, relocation suppression UNPROVEN) + restore-absence",
                 "env_support_dir": str(self.lab_support), "symlink_created": self.created_symlink,
+                "reloc_suppress_attempted": True, "reloc_suppress_proven": False,
                 "prefs_domain": PREFS_DOMAIN, "home_repurposed": False, **state}
 
     def restore(self) -> dict:
-        actions = []
-        if self.created_symlink and self.default_support.is_symlink() \
-                and self.default_support.resolve() == self.lab_support.resolve():
-            self.default_support.unlink(); actions.append("removed lab symlink (default path absent again)")
-        # CFPreferences: remove only what this run created (plist was absent before).
-        if not self.prefs_existed_before and os.path.lexists(self.prefs_plist):
-            subprocess.run(["/usr/bin/defaults", "delete", PREFS_DOMAIN],
-                           capture_output=True, timeout=15)
+        """Restore original absence. Raises BenchError if that cannot be
+        verified -- callers must never report cleanup on a silent failure."""
+        actions, errors = [], []
+        if self.created_symlink:
+            if self.default_support.is_symlink() \
+                    and self.default_support.resolve() == self.lab_support.resolve():
+                self.default_support.unlink(); actions.append("removed lab symlink (default path absent again)")
+            elif os.path.lexists(self.default_support):
+                errors.append(f"default support path is no longer our symlink ({self.default_support}); left untouched")
+        # CFPreferences: remove only the domain this run created (absent before).
+        if self.prefs_created_by_us and not self.prefs_existed_before:
+            r = self._defaults(["/usr/bin/defaults", "delete", PREFS_DOMAIN])
             if os.path.lexists(self.prefs_plist):
-                Path(self.prefs_plist).unlink()
-            actions.append("removed CFPreferences domain/plist created by this run")
-        return {"actions": actions, "after": self.check_preexisting()}
+                try:
+                    Path(self.prefs_plist).unlink()
+                except OSError as e:
+                    errors.append(f"could not remove created prefs plist: {e}")
+            elif getattr(r, "returncode", 0) not in (0,):
+                actions.append("defaults delete reported no domain; plist already absent")
+            if not os.path.lexists(self.prefs_plist):
+                actions.append("removed CFPreferences domain/plist created by this run")
+        after = self.check_preexisting()
+        if after["default_support"] != "absent":
+            errors.append(f"default support not absent after restore: {after['default_support']}")
+        if self.prefs_created_by_us and after["prefs_plist"] != "absent":
+            errors.append(f"prefs plist not absent after restore: {after['prefs_plist']}")
+        if errors:
+            raise BenchError("isolation restore incomplete: " + "; ".join(errors))
+        return {"actions": actions, "after": after, "restored_absent": True}
 
 # -------------------------------------------------------------- PMS proc --
 @dataclass
@@ -244,11 +316,82 @@ def port_connectable(base_url: str) -> bool:
     except OSError:
         return False
 
+# ---------------------------------------------------------- PMS audit ---
+def _exe_under(args: str, app: Path) -> bool:
+    """True if the ps args' executable lives inside `app` (paths contain
+    spaces, so prefix-match the known binary path, never whitespace-split)."""
+    exe = str(app / "Contents" / "MacOS" / "Plex Media Server")
+    return args == exe or args.startswith(exe + " ") or args.startswith(exe + "\t")
+
+def _is_pms_like(args: str) -> bool:
+    return "Plex Media Server" in args or "Plex Transcoder" in args
+
+def classify_processes(rows, lab_app, relocation_apps, absent_before: set,
+                       baseline_pids: set, owned_pgid) -> dict:
+    """Split PMS-like rows into provably-ours vs uncertain. Nothing in the
+    uncertain bucket is ever signalled.
+
+    Provably ours: in the owned pgid; or executable under the lab app and
+    not a pre-launch baseline pid; or executable under a relocation app
+    that was absent before launch (only our run could have created it).
+    """
+    owned, escaped, uncertain = [], [], []
+    for r in rows:
+        if not _is_pms_like(r["args"]) or r["pid"] in baseline_pids:
+            continue
+        if owned_pgid is not None and r["pgid"] == owned_pgid:
+            owned.append(r)
+        elif _exe_under(r["args"], Path(lab_app)):
+            escaped.append(r)  # relaunched from the lab app, new session/pgid
+        elif any(str(d) in absent_before and _exe_under(r["args"], Path(d)) for d in relocation_apps):
+            escaped.append(r)  # escaped self-relocated copy
+        else:
+            uncertain.append(r)
+    return {"owned": owned, "escaped": escaped, "uncertain": uncertain}
+
+def stop_is_clean(stop: dict | None) -> bool:
+    """A stop result only counts as clean when it proves it."""
+    if not isinstance(stop, dict) or stop.get("error"):
+        return False
+    if "clean" in stop:
+        return bool(stop["clean"]) and not stop.get("remaining_pids") \
+            and not stop.get("escaped_remaining") and not stop.get("uncertain_pids")
+    return not stop.get("remaining_pids") and not stop.get("audit_error")
+
 class PmsProcessMac:
-    """Owns exactly one PMS process group; stop() signals only that pgid."""
+    """Owns exactly one PMS process group, plus provably-escaped copies.
+
+    stop() signals the owned pgid even when the leader already exited 0
+    (the self-relocation failure mode: parent exits, children/relaunch
+    survive). It audits with ps before declaring clean: any audit or
+    permission error, any surviving owned/escaped pid, and any PMS-like
+    process whose provenance is uncertain makes clean=False. Uncertain
+    processes are never signalled.
+    """
     def __init__(self, cfg: MacConfig, isolation: MacIsolation):
         self.cfg = cfg; self.iso = isolation
         self.proc = None; self.pid = None; self.pgid = None; self.log_path = None
+        self.relocation_before: dict[str, bool] = {}
+        self.baseline_pms_pids: set = set()
+        self.term_timeout_s = 10.0; self.kill_timeout_s = 5.0; self.poll_interval_s = 0.1
+        # Injectable seams for offline tests (no real ps/signals there).
+        self._snapshot = ps_snapshot; self._killpg = os.killpg; self._kill = os.kill
+
+    def _classify(self, rows) -> dict:
+        absent = {p for p, existed in self.relocation_before.items() if not existed}
+        return classify_processes(rows, self.cfg.app, self.iso.relocation_destinations,
+                                  absent, self.baseline_pms_pids, self.pgid)
+
+    def audit_escape(self, rows=None) -> dict:
+        """Current relocation/escape state. Raises BenchError on ps failure
+        so callers cannot mistake an audit failure for 'all clear'."""
+        rows = rows if rows is not None else self._snapshot()
+        cls = self._classify(rows)
+        new_dests = [str(d) for d in self.iso.relocation_destinations
+                     if not self.relocation_before.get(str(d), True) and os.path.lexists(d)]
+        return {"escaped_pids": [r["pid"] for r in cls["escaped"]],
+                "uncertain_pids": [r["pid"] for r in cls["uncertain"]],
+                "relocated_destinations": new_dests}
 
     def start(self) -> int:
         if sys.platform != "darwin":
@@ -261,6 +404,18 @@ class PmsProcessMac:
             raise BenchError(f"PMS binary missing: {binary}")
         if port_connectable(self.cfg.base_url):
             raise BenchError(f"{self.cfg.base_url} already connectable; refusing to bind/compete for 32400")
+        # Provenance baseline BEFORE launch (audit failure = no launch).
+        try:
+            rows = self._snapshot()
+        except Exception as e:
+            raise BenchError(f"pre-launch process audit failed, refusing to launch: {e}")
+        foreign = [r for r in rows if _is_pms_like(r["args"])]
+        if foreign:
+            raise BenchError(f"PMS-like process already running before launch (pids "
+                             f"{[r['pid'] for r in foreign]}); cannot prove provenance, refusing to launch")
+        self.baseline_pms_pids = {r["pid"] for r in foreign}
+        pre = self.iso.check_preexisting()
+        self.relocation_before = {p: (s == "present") for p, s in pre["relocation_destinations"].items()}
         self.iso.prepare()
         env = dict(os.environ)  # HOME deliberately unchanged
         env.update({"PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR": str(self.iso.lab_support),
@@ -281,6 +436,17 @@ class PmsProcessMac:
             try:
                 s, _, b = pb.http_get(self.cfg.base_url + "/identity", timeout=5)
                 if s == 200:
+                    # An escaped relaunch can answer /identity too: identity
+                    # only counts from the still-owned leader, with no escape.
+                    if self.proc and self.proc.poll() is not None:
+                        raise BenchError(f"PMS leader exited rc={self.proc.returncode} but /identity answered "
+                                         f"(possible escaped relaunch); log={self.log_path}")
+                    try:
+                        esc = self.audit_escape()
+                    except Exception as e:
+                        raise BenchError(f"post-identity process audit failed: {e}")
+                    if esc["escaped_pids"] or esc["relocated_destinations"] or esc["uncertain_pids"]:
+                        raise BenchError(f"PMS self-relocation/escape detected at identity: {esc}; log={self.log_path}")
                     root = ET.fromstring(b)
                     return {"claimed": root.get("claimed"), "version": root.get("version"),
                             "machineIdentifier_present": bool(root.get("machineIdentifier"))}
@@ -289,24 +455,89 @@ class PmsProcessMac:
             time.sleep(0.5)
         raise BenchError(f"PMS identity not ready in {self.cfg.startup_timeout_s}s: {last}")
 
+    def _signal_group(self, pgid, sig, result, errors):
+        if pgid is None:
+            return
+        try:
+            self._killpg(pgid, sig); result["signalled"] = True
+            result.setdefault("signalled_pgids", []).append(pgid)
+        except ProcessLookupError:
+            pass  # group already gone: the desired end state
+        except PermissionError as e:
+            errors.append(f"permission denied signalling pgid {pgid} with {sig}: {e}")
+        except Exception as e:
+            errors.append(f"signalling pgid {pgid} with {sig} failed: {e}")
+
+    def _wait_until_gone(self, timeout_s):
+        """Poll until no owned/escaped rows remain. Returns (cls, rows) or
+        raises BenchError when the audit itself fails."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            rows = self._snapshot()
+            cls = self._classify(rows)
+            if not cls["owned"] and not cls["escaped"]:
+                return cls, rows
+            if time.monotonic() >= deadline:
+                return cls, rows
+            time.sleep(self.poll_interval_s)
+
     def stop(self) -> dict:
-        result = {"pgid": self.pgid, "signalled": False, "remaining_pids": []}
-        if not self.proc:
+        result = {"pgid": self.pgid, "signalled": False, "remaining_pids": [],
+                  "escaped_pids": [], "escaped_remaining": [], "uncertain_pids": [],
+                  "relocated_destinations": [], "audit_error": None,
+                  "errors": [], "clean": False}
+        if self.pid is None and self.pgid is None:
+            result["clean"] = True  # never started: nothing owned to reap
             return result
+        errors = result["errors"]
+        # 1) TERM the owned group even if the leader already exited 0.
+        self._signal_group(self.pgid, signal.SIGTERM, result, errors)
+        if self.proc is not None:
+            try:
+                self.proc.wait(timeout=self.term_timeout_s)
+            except Exception:
+                pass
+        # 2) Audit; escalate to KILL for the owned group AND any provably
+        #    escaped relaunch (new pgid under the lab/relocated app).
         try:
-            if self.proc.poll() is None:
-                os.killpg(self.pgid, signal.SIGTERM); result["signalled"] = True
-                try:
-                    self.proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(self.pgid, signal.SIGKILL); self.proc.wait(timeout=10)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            rows = ps_snapshot()
-            result["remaining_pids"] = [r["pid"] for r in rows if r["pgid"] == self.pgid]
-        except Exception:
+            cls0 = self._classify(self._snapshot())
+            for pgid in {r["pgid"] for r in cls0["escaped"] if r["pgid"] != self.pgid}:
+                self._signal_group(pgid, signal.SIGTERM, result, errors)
+            cls, _ = self._wait_until_gone(self.term_timeout_s)
+            targets = cls["owned"] + cls["escaped"]
+            if targets:
+                pgids = {r["pgid"] for r in targets}
+                for pgid in pgids:
+                    self._signal_group(pgid, signal.SIGKILL, result, errors)
+                cls, _ = self._wait_until_gone(self.kill_timeout_s)
+                targets = cls["owned"] + cls["escaped"]
+                # Last resort per-pid KILL for escapees whose group signal
+                # could not cover them (still only provably-ours pids).
+                for r in targets:
+                    try:
+                        self._kill(r["pid"], signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError as e:
+                        errors.append(f"permission denied killing escaped pid {r['pid']}: {e}")
+                cls, _ = self._wait_until_gone(self.kill_timeout_s)
+            result["remaining_pids"] = sorted({r["pid"] for r in cls["owned"]})
+            result["escaped_pids"] = sorted({r["pid"] for r in cls["escaped"]})
+            result["escaped_remaining"] = result["escaped_pids"]
+            result["uncertain_pids"] = sorted({r["pid"] for r in cls["uncertain"]})
+            result["relocated_destinations"] = [str(d) for d in self.iso.relocation_destinations
+                                                if not self.relocation_before.get(str(d), True)
+                                                and os.path.lexists(d)]
+        except Exception as e:
+            # Audit failure is NOT 'no remaining processes'.
+            result["audit_error"] = pb.sanitize(str(e))[:300]
             result["remaining_pids"] = []
+        result["clean"] = (not errors and result["audit_error"] is None
+                           and not result["remaining_pids"] and not result["escaped_remaining"]
+                           and not result["uncertain_pids"]
+                           and not result["relocated_destinations"])
+        if errors:
+            result["error"] = "; ".join(errors)
         return result
 
 # --------------------------------------------------------------- session --
@@ -506,6 +737,33 @@ def wait_for_signal(signal_path: Path, run_id: str, not_before_mtime: float,
             on_poll(remaining)
         time.sleep(min(poll_interval_s, max(0.05, remaining - stop_reserve_s)))
 
+def finalize_cleanup(pms, iso, own_pms: bool) -> dict:
+    """Stop, then restore isolation ONLY on a proven-clean stop.
+
+    On any uncertainty (survivors, escaped/relocated copies, audit or
+    permission errors, restore not verifying absence) the symlink and
+    lab-owned prefs are left in place for root's manual recovery and
+    clean=False -- cleanup is never declared successful when uncertain.
+    """
+    out = {"pms_stop": None, "isolation_restore": None, "clean": False, "errors": []}
+    try:
+        out["pms_stop"] = pms.stop()
+    except Exception as e:
+        out["pms_stop"] = {"error": pb.sanitize(str(e))}
+    if not stop_is_clean(out["pms_stop"]):
+        out["errors"].append(f"owned PMS not proven gone (stop={out['pms_stop']}); "
+                             "isolation left in place for root manual recovery")
+        return out
+    if own_pms:
+        try:
+            out["isolation_restore"] = iso.restore()
+        except Exception as e:
+            out["isolation_restore"] = {"error": pb.sanitize(str(e))}
+            out["errors"].append(f"isolation restore failed: {e}")
+            return out
+    out["clean"] = True
+    return out
+
 def run_prepare_hold(cfg: MacConfig, out_dir: Path, ready_path: Path, signal_path: Path,
                      window_deadline_s: float = 300.0, stop_reserve_s: float = 30.0,
                      token: str = "", token_file: str = "", pms=None, run_bench=None) -> dict:
@@ -616,17 +874,16 @@ def run_prepare_hold(cfg: MacConfig, out_dir: Path, ready_path: Path, signal_pat
         meta["ok"] = False; meta["error"] = pb.sanitize(str(e))
         ready["state"] = "failed"
     finally:
-        # Stop always: SIGTERM->SIGKILL only our pgid, inside the deadline reserve.
+        # Stop always, inside the deadline reserve. Isolation is restored
+        # only on a proven-clean stop; otherwise cleanup fails truthfully.
         ready["state"] = "stopping" if ready.get("state") not in ("aborted_by_signal",) else ready["state"]
-        try:
-            meta["pms_stop"] = pms.stop()
-        except Exception as e:
-            meta["pms_stop"] = {"error": pb.sanitize(str(e))}
-        if own_pms:
-            try:
-                meta["isolation_restore"] = iso.restore()
-            except Exception as e:
-                meta["isolation_restore"] = {"error": pb.sanitize(str(e))}
+        cleanup = finalize_cleanup(pms, iso, own_pms)
+        meta["pms_stop"] = cleanup["pms_stop"]; meta["isolation_restore"] = cleanup["isolation_restore"]
+        meta["cleanup_clean"] = cleanup["clean"]
+        if not cleanup["clean"]:
+            meta["ok"] = False
+            cerr = "cleanup NOT clean: " + "; ".join(cleanup["errors"])
+            meta["error"] = f"{meta['error']}; {cerr}" if meta.get("error") else cerr
         meta["elapsed_s"] = round(time.monotonic() - t0, 3)
         meta["within_deadline"] = meta["elapsed_s"] <= window_deadline_s
         meta["port_32400_connectable_after"] = port_connectable(cfg.base_url) if own_pms else None
@@ -680,11 +937,19 @@ def preflight(cfg: MacConfig) -> dict:
         r = subprocess.run(["/usr/bin/strings", str(binary)], capture_output=True, text=True, timeout=60)
         strings_note = {"env_var_in_binary": "PLEX_MEDIA_SERVER_APPLICATION_SUPPORT_DIR" in r.stdout,
                         "videotoolbox_in_binary": "videotoolbox" in r.stdout.lower(),
+                        "reloc_suppress_key_in_binary": RELOC_SUPPRESS_KEY in r.stdout,
                         "bundle_id_in_binary": PREFS_DOMAIN in r.stdout}
     except Exception as e:
         strings_note = {"error": str(e)}
+    try:
+        prows = ps_snapshot()
+        process_audit = {"pms_like_pids": [r["pid"] for r in prows if _is_pms_like(r["args"])],
+                         "error": None}
+    except Exception as e:
+        process_audit = {"pms_like_pids": None, "error": str(e)}  # None = audit failed, not 'none running'
     return {"platform": sys.platform, "app": cfg.app, "binary_exists": binary.exists(),
             "transcoder_exists": transcoder.exists(), "binary_strings": strings_note,
+            "process_audit": process_audit,
             "isolation_preexisting": iso.check_preexisting(),
             "port_32400_connectable": port_connectable(cfg.base_url),
             "fixture": fixture_info(cfg.fixture) if cfg.fixture else None,
@@ -797,7 +1062,13 @@ def main(argv=None):
         meta["ok"] = False; meta["error"] = pb.sanitize(str(e)); meta["sessions"] = sessions; meta["waves"] = waves
     finally:
         if pms:
-            meta["pms_stop"] = pms.stop(); meta["isolation_restore"] = iso.restore()
+            cleanup = finalize_cleanup(pms, iso, True)
+            meta["pms_stop"] = cleanup["pms_stop"]; meta["isolation_restore"] = cleanup["isolation_restore"]
+            meta["cleanup_clean"] = cleanup["clean"]
+            if not cleanup["clean"]:
+                meta["ok"] = False
+                cerr = "cleanup NOT clean: " + "; ".join(cleanup["errors"])
+                meta["error"] = f"{meta['error']}; {cerr}" if meta.get("error") else cerr
             meta["port_32400_connectable_after"] = port_connectable(cfg.base_url)
         restore_auth()
     (out_dir / "result.json").write_text(json.dumps(meta, indent=2))
