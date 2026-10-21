@@ -43,21 +43,21 @@ const (
 
 	// Movies → Recommended lenses (lenses.go): type-native rows that
 	// explore the viewer's film taste from one angle each.
-	KindTasteCluster = "taste-cluster"      // "Heist Thrillers", "Sci-Fi Thrillers"
-	KindEra          = "era-favourites"     // "Best of the '90s for You"
-	KindWorld        = "world-cinema"       // "Korean Cinema for You"
-	KindOccasion     = "occasion"           // "Date Night", "Family Night", "Under 100 Minutes"
-	KindAcclaimed    = "acclaimed-unseen"   // acclaimed titles by fit
-	KindTopGenre     = "top-rated-in-genre" // "Top-Rated Thrillers" in the viewer's genres
-	KindBridge       = "taste-bridge"       // "Where <Seed A> Meets <Seed B>"
-	KindStudio       = "more-from-studio"   // "More from A24"
-	KindNewSeasons   = "new-seasons"        // TV Shows → Recommended (lenses_tv.go)
-	KindFinishShow   = "finish-what-you-started"
-	KindStartNew     = "start-something-new"
-	KindBinge        = "complete-series"
-	KindLimited      = "limited-series"
-	KindAiringTaste  = "airing-for-you"
-	KindNetwork      = "more-from-network"
+	KindTasteCluster  = "taste-cluster"      // "Heist Thrillers", "Sci-Fi Thrillers"
+	KindEra           = "era-favourites"     // "Best of the '90s for You"
+	KindWorld         = "world-cinema"       // "Korean Cinema for You"
+	KindOccasion      = "occasion"           // "Date Night", "Family Night", "Under 100 Minutes"
+	KindAcclaimed     = "acclaimed-unseen"   // acclaimed titles by fit
+	KindTopGenre      = "top-rated-in-genre" // "Top-Rated Thrillers" in the viewer's genres
+	KindBridge        = "taste-bridge"       // "Where <Seed A> Meets <Seed B>"
+	KindStudio        = "more-from-studio"   // "More from A24"
+	KindNewSeasons    = "new-seasons"        // TV Shows → Recommended (lenses_tv.go)
+	KindFinishShow    = "finish-what-you-started"
+	KindStartNew      = "start-something-new"
+	KindBinge         = "complete-series"
+	KindLimited       = "limited-series"
+	KindAiringTaste   = "airing-for-you"
+	KindNetwork       = "more-from-network"
 	KindSticksLanding = "sticks-the-landing"
 	KindStandalone    = "standalone-episodes"
 	// KindCollectionPrefix + collection id is an owner collection row.
