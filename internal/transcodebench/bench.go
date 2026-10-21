@@ -188,8 +188,9 @@ type SessionResult struct {
 	OutputProbe  *OutputProbe `json:"outputProbe,omitempty"`
 	HWFallback   bool         `json:"hwFallback,omitempty"`
 
-	retainPath string `json:"-"`
-	retainDir  string `json:"-"` // temp dir to remove after verification (when -output unset)
+	deliveryFinished time.Time
+	retainPath       string `json:"-"`
+	retainDir        string `json:"-"` // temp dir to remove after verification (when -output unset)
 }
 
 // OutputProbe is ffprobe verification of the retained output.
@@ -536,7 +537,15 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) (*Result, error) {
 	// Measurement ends at last delivery. runSession has already closed
 	// each session (stopping its encoder) before returning, so no encode
 	// runs during verification below.
-	res.Timing.MeasurementMs = time.Since(measureStart).Milliseconds()
+	var lastDelivery time.Time
+	for _, result := range results {
+		if result.deliveryFinished.After(lastDelivery) {
+			lastDelivery = result.deliveryFinished
+		}
+	}
+	if !lastDelivery.IsZero() {
+		res.Timing.MeasurementMs = lastDelivery.Sub(measureStart).Milliseconds()
+	}
 	mgr.Close()
 	res.Sessions = results
 	// Snapshot now: PID/CPU/argv reflect the measured window only.
@@ -647,7 +656,11 @@ func runSession(ctx context.Context, mgr *transcode.Manager, cfg Config, info co
 		out.WallMs = time.Since(start).Milliseconds()
 		return out
 	}
-	defer func() { out.WallMs = time.Since(start).Milliseconds() }()
+	defer func() {
+		if !out.deliveryFinished.IsZero() {
+			out.WallMs = out.deliveryFinished.Sub(start).Milliseconds()
+		}
+	}()
 	// The encoder is stopped explicitly right after the last segment is
 	// delivered (below), before any verification runs. This deferred close
 	// is only a safety net for early returns; Session.Close is idempotent.
@@ -747,7 +760,6 @@ func runSession(ctx context.Context, mgr *transcode.Manager, cfg Config, info co
 			out.Error = "context: " + err.Error()
 			break
 		}
-		segStart := time.Now()
 		var segFile *os.File
 		sinks := []io.Writer{retained}
 		if cfg.OutputDir != "" {
@@ -776,14 +788,16 @@ func runSession(ctx context.Context, mgr *transcode.Manager, cfg Config, info co
 			out.Error = fmt.Sprintf("write segment %d: %v", n, sw.err)
 			break
 		}
+		out.deliveryFinished = time.Now()
 		if firstAt.IsZero() {
-			firstAt = time.Now()
+			firstAt = out.deliveryFinished
 			out.StartupMs = firstAt.Sub(start).Milliseconds()
 		}
 		out.Segments++
 		out.Bytes += sw.count
 		if cfg.Paced && n < segCount-1 {
-			if wait := cfg.SegmentDur - time.Since(segStart); wait > 0 {
+			delivered := deliveredSeconds(segDurs, out.Segments, cfg.SegmentDur.Seconds(), cfg.Duration.Seconds())
+			if wait := time.Duration(delivered*float64(time.Second)) - time.Since(start); wait > 0 {
 				select {
 				case <-ctx.Done():
 				case <-time.After(wait):

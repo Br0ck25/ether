@@ -494,6 +494,7 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
 
         t_enc = time.monotonic()
         first_latency = None
+        last_delivery = None
         downloaded, seen = {}, set()
         ordinals = {}  # uri -> stable playlist ordinal
         peak_rss = None
@@ -528,7 +529,7 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
                 argv_stop.wait(0.05)
 
         def fetch(item):
-            nonlocal first_latency
+            nonlocal first_latency, last_delivery
             uri, extinf = item
             # PMS lists segments before they are fully written; retry 404s briefly.
             seg_deadline = time.monotonic() + 15.0
@@ -547,10 +548,11 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
             if not data:
                 raise pb.BenchError(f"empty segment {pb.sanitize(uri)}")
             with lock:
+                last_delivery = time.monotonic()
                 downloaded[uri] = (len(data), extinf)
                 ordinal = ordinals.get(uri, 0)
                 if ordinal == 0 and first_latency is None:
-                    first_latency = time.monotonic() - t_enc
+                    first_latency = last_delivery - t_enc
             if cfg.preserve_media:
                 (out_dir / f"session-{idx}" / f"seg-{ordinals.get(uri, 0):05d}.ts").write_bytes(data)
             return len(data)
@@ -642,7 +644,7 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
                 raise pb.BenchError(f"session timeout after {cfg.timeout_s}s")
             # Measurement completes at last segment delivery, before any
             # poller join / final sampling instrumentation cleanup.
-            measurement_end = time.monotonic()
+            measurement_end = last_delivery
         finally:
             cleanup_t0 = time.monotonic()
             argv_stop.set()

@@ -324,6 +324,26 @@ class TestFakeServerSessions(unittest.TestCase):
         self.assertEqual(out["measurement_finished_monotonic_s"],
                          out["measurement_end_monotonic"])
 
+    def test_post_delivery_sampling_not_in_encode_s(self):
+        import tempfile, time
+        from pathlib import Path as P
+        from unittest import mock
+        calls = 0
+        def sample(pid):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                time.sleep(0.5)
+            return self._sample(100)
+        argv = [{"pid": 9, "process_creation_time": 1,
+                 "cmdline": "Plex Transcoder -nvenc"}]
+        with _fake_server() as (srv, base), tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(win, "sample_tree_win", side_effect=sample), \
+                mock.patch.object(win, "capture_transcoder_cmdlines_win", return_value=argv):
+            out = win.run_session_win(_fake_cfg(base), 123, P(d), 0)
+        self.assertLess(out["encode_s"], 0.45)
+        self.assertGreaterEqual(calls, 3)
+
     def test_exception_stops_and_reaps_poller(self):
         import tempfile, threading, time
         from pathlib import Path as P
