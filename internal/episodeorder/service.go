@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,6 +80,46 @@ func (s *Service) Preference(ctx context.Context, user int64, show core.RatingKe
 	}
 	p.Inherited = user != 0 && id == 0
 	return p, err
+}
+
+// Grouped reports which of the shows present an alternate episode group to
+// the viewer: their own preference, else the owner's default. A show without
+// one keeps the canonical season tree, so a list can render it from the
+// catalogue without loading its layout title by title.
+func (s *Service) Grouped(ctx context.Context, u *core.User, shows []core.RatingKey) (map[core.RatingKey]bool, error) {
+	grouped := map[core.RatingKey]bool{}
+	for len(shows) > 0 {
+		n := min(len(shows), 500)
+		args := []any{userID(u)}
+		for _, k := range shows[:n] {
+			args = append(args, int64(showKey(k)))
+		}
+		shows = shows[n:]
+		// Ascending, so the viewer's own row replaces the owner's default.
+		rows, e := s.db.QueryContext(ctx, `SELECT show_key,group_id FROM episodeorder_preferences WHERE user_id IN (0,?) AND show_key IN (?`+strings.Repeat(",?", n-1)+`) ORDER BY user_id ASC`, args...)
+		if e != nil {
+			return nil, e
+		}
+		for rows.Next() {
+			var show int64
+			var group string
+			if e = rows.Scan(&show, &group); e != nil {
+				rows.Close()
+				return nil, e
+			}
+			grouped[core.RatingKey(show)] = group != ""
+		}
+		rows.Close()
+		if e = rows.Err(); e != nil {
+			return nil, e
+		}
+	}
+	for k, ok := range grouped {
+		if !ok {
+			delete(grouped, k)
+		}
+	}
+	return grouped, nil
 }
 func (s *Service) Save(ctx context.Context, user int64, show core.RatingKey, p Preference) error {
 	if user < 0 || show.Kind() != core.KindShow || show.TMDB() <= 0 {

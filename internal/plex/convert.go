@@ -1074,10 +1074,11 @@ func (s *Server) renderTitles(ctx context.Context, pr *Request, ts []core.Title,
 		}
 		guids = s.d.PlexGUID.CachedMany(ctx, lookup)
 	}
+	order := s.episodeOrderList(ctx, pr, ts, o.detail)
 	out := make([]model.Metadata, 0, len(ts))
 	for i := range ts {
 		m := s.metadata(ctx, pr, &ts[i], o)
-		s.applyEpisodeOrder(ctx, pr, &ts[i], &m)
+		s.applyEpisodeOrder(ctx, pr, &ts[i], &m, order)
 		if s.d.PlexGUID != nil {
 			k := ts[i].Key
 			if guid := guids[k]; guid != "" {

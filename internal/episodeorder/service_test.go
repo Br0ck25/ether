@@ -147,3 +147,29 @@ func TestOwnerAPIRejectsForeignGroupAndPersists(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }
+func TestGroupedResolvesViewerOverOwnerDefault(t *testing.T) {
+	s := fixture(t)
+	ctx := context.Background()
+	ordered, plain, own := core.ShowKey(10), core.ShowKey(11), core.ShowKey(12)
+	for _, k := range []core.RatingKey{ordered, own} {
+		if e := s.Save(ctx, 0, k, Preference{GroupID: "dvd", Specials: "last"}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	// The viewer chose the canonical order for one show the owner grouped.
+	if e := s.Save(ctx, 42, own, Preference{Specials: "first"}); e != nil {
+		t.Fatal(e)
+	}
+	shows := []core.RatingKey{ordered, plain, own, core.EpisodeKey(10, 1, 1)}
+	got, e := s.Grouped(ctx, &core.User{ID: 42}, shows)
+	if e != nil || len(got) != 1 || !got[ordered] {
+		t.Fatalf("viewer: %v %v", got, e)
+	}
+	got, e = s.Grouped(ctx, &core.User{ID: 43}, shows)
+	if e != nil || len(got) != 2 || !got[ordered] || !got[own] {
+		t.Fatalf("inheriting viewer: %v %v", got, e)
+	}
+	if got, e = s.Grouped(ctx, nil, nil); e != nil || len(got) != 0 {
+		t.Fatalf("empty: %v %v", got, e)
+	}
+}
