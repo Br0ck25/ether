@@ -220,6 +220,74 @@ describe("Metadata artwork studio", () => {
     expect(screen.getByLabelText("Badge finish")).toHaveValue("solid");
   });
 
+  it("explains unavailable badges and keeps preset detail choices in the draft", async () => {
+    const { fake } = renderAppWith("/metadata/artwork", (_method, path, _body, query) => {
+      if (path === "/collections/preview") return { items: [ARTWORK_TITLES[0]], total: 1 };
+      if (path.startsWith("/discovery/overlays/explain/")) {
+        const settings = JSON.parse(query.get("settings")!);
+        return {
+          labels: ["TMDB 8.3/10"],
+          layers: [
+            {
+              key: "ratings",
+              state: settings.ratings ? "ready" : "off",
+              labels: ["TMDB 8.3/10"],
+              reason: "Catalogue score",
+            },
+            {
+              key: "quality",
+              state: settings.quality ? "unavailable" : "off",
+              labels: [],
+              reason: "No verified playback yet",
+            },
+            {
+              key: "details",
+              state: settings.details ? "ready" : "off",
+              labels: ["2024 · 120m"],
+              reason: "Catalogue details",
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    fireEvent.click(await screen.findByRole("button", { name: /Cinema/ }, { timeout: 4000 }));
+    expect(await screen.findByText("TMDB 8.3/10")).toBeInTheDocument();
+    expect(await screen.findByText("No verified playback yet")).toBeInTheDocument();
+    expect(await screen.findByText("2024 · 120m")).toBeInTheDocument();
+    expect(screen.getByLabelText("Title details")).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: /Essential/ }));
+    expect(screen.getByLabelText("Title details")).not.toBeChecked();
+    await waitFor(() => expect(screen.queryByText("2024 · 120m")).not.toBeInTheDocument());
+    expect(calls(fake, "PUT", "/discovery/overlays/settings")).toHaveLength(0);
+  });
+
+  it("clears the previous viewer's badge evidence when the next viewer lookup fails", async () => {
+    renderAppWith("/metadata/artwork", (_method, path, _body, query) => {
+      if (path === "/collections/preview") return { items: [ARTWORK_TITLES[0]], total: 1 };
+      if (path.startsWith("/discovery/overlays/explain/")) {
+        if (query.get("userId") === "2") return new Response("Unavailable", { status: 503 });
+        return {
+          labels: ["PLAYED 4K"],
+          layers: [
+            {
+              key: "quality",
+              state: "ready",
+              labels: ["PLAYED 4K"],
+              reason: "Owner's verified playback",
+            },
+          ],
+        };
+      }
+      return undefined;
+    });
+    expect(await screen.findByText("PLAYED 4K", {}, WAIT)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Preview as"), { target: { value: "2" } });
+    expect(screen.queryByText("PLAYED 4K")).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: "Retry title data" });
+    expect(screen.queryByText("PLAYED 4K")).not.toBeInTheDocument();
+  });
+
   it("keeps an unsuccessful save editable and supports retry", async () => {
     let failed = true;
     const { fake } = renderAppWith("/metadata/artwork", (method, path) => {

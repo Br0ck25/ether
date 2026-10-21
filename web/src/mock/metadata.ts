@@ -36,10 +36,34 @@ export function createMetadataMock() {
     }
     if (path.startsWith("/discovery/overlays/variants/"))
       return json({ posters: [], backdrops: [] });
+    if (path.startsWith("/discovery/overlays/explain/")) {
+      const s = normalizeOverlays(JSON.parse(query.get("settings") || "{}"));
+      const facts = {
+        status: ["NEW SEASON"],
+        quality: [],
+        ratings: ["TMDB 8.6/10"],
+        details: ["2025 · 120m"],
+      };
+      const layers = (Object.keys(facts) as (keyof typeof facts)[]).map((key) => ({
+        key,
+        state: !s.enabled || !s[key] ? "off" : facts[key].length ? "ready" : "unavailable",
+        labels: s.enabled && s[key] ? facts[key] : [],
+        reason:
+          key === "quality"
+            ? "No verified playback yet; release-name guesses are excluded"
+            : "Catalogue fixture data",
+      }));
+      return json({ labels: layers.flatMap((l) => l.labels), layers });
+    }
     if (path === "/discovery/overlays/sample" || path.startsWith("/discovery/overlays/preview/")) {
       const s = normalizeOverlays(JSON.parse(query.get("settings") || "{}"));
       const labels = s.enabled
-        ? [s.status && "NEW SEASON", s.quality && "4K HDR", s.ratings && "IMDb 8.6"].filter(Boolean)
+        ? [
+            s.status && "NEW SEASON",
+            s.quality && path === "/discovery/overlays/sample" && "4K HDR",
+            s.ratings && "TMDB 8.6/10",
+            s.details && "2025 · 120m",
+          ].filter(Boolean)
         : [];
       const color = /^#[0-9a-f]{6}$/i.test(s.accent) ? s.accent : "#d4a574";
       const fontSize = s.size === "small" ? 15 : s.size === "large" ? 22 : 18;

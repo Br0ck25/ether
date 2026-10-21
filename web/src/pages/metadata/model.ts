@@ -3,6 +3,7 @@ export type Overlays = {
   status: boolean;
   quality: boolean;
   ratings: boolean;
+  details: boolean;
   personalize: boolean;
   localize: boolean;
   style: "glass" | "solid" | "minimal";
@@ -15,6 +16,7 @@ export const normalizeOverlays = (s: Partial<Overlays>): Overlays => ({
   status: false,
   quality: false,
   ratings: false,
+  details: false,
   personalize: false,
   localize: false,
   ...s,
@@ -26,13 +28,14 @@ export const normalizeOverlays = (s: Partial<Overlays>): Overlays => ({
 export const PRESETS: { name: string; description: string; settings: Partial<Overlays> }[] = [
   {
     name: "Cinema",
-    description: "Glass · bottom · small",
+    description: "Glass · scores & details",
     settings: {
       enabled: true,
       style: "glass",
       position: "bottom",
       accent: "#d4a574",
-      size: "small",
+      size: "medium",
+      details: true,
       quality: true,
       ratings: true,
       status: false,
@@ -40,13 +43,14 @@ export const PRESETS: { name: string; description: string; settings: Partial<Ove
   },
   {
     name: "Spotlight",
-    description: "Solid · top · medium",
+    description: "Accent · all available facts",
     settings: {
       enabled: true,
       style: "solid",
       position: "top",
       accent: "#a7c4b5",
-      size: "medium",
+      size: "large",
+      details: true,
       quality: true,
       ratings: true,
       status: true,
@@ -62,6 +66,7 @@ export const PRESETS: { name: string; description: string; settings: Partial<Ove
       accent: "#e8e4dc",
       size: "small",
       quality: false,
+      details: false,
       ratings: true,
       status: false,
     },
@@ -81,4 +86,25 @@ export function previewURL(
   });
   if (user != null) params.set("userId", String(user));
   return `/ether/api/discovery/overlays/preview/${encodeURIComponent(key)}?${params}`;
+}
+
+export type ArtworkExplanation = {
+  labels: string[];
+  layers: {
+    key: "status" | "quality" | "ratings" | "details";
+    state: "ready" | "unavailable" | "off";
+    labels: string[];
+    reason: string;
+  }[];
+};
+export function explanationURL(
+  settings: Overlays,
+  key: string,
+  user: number | null,
+  lang: string,
+  nonce: number,
+) {
+  return previewURL(settings, key, user, lang, nonce)
+    .replace("/ether/api", "")
+    .replace("/preview/", "/explain/");
 }

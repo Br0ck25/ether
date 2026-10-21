@@ -509,3 +509,15 @@
     padding: 14px;
   }
 }
+
+.metadata-toggle .metadata-layer-state {
+  font-size: 10px;
+  margin-top: 5px;
+}
+.metadata-toggle .metadata-layer-state.is-ready {
+  color: rgb(var(--ch-primary));
+}
+.metadata-toggle .metadata-layer-state.is-unavailable {
+  color: rgb(var(--ch-fg-muted));
+  font-style: italic;
+}
