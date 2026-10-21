@@ -19,10 +19,35 @@ on:
     tags: ["v*"]
 
 permissions:
+  actions: read
   contents: write
   packages: write
 
 jobs:
+  ci:
+    name: Require successful CI for the release commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for exact-commit CI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          run=""
+          for attempt in $(seq 1 12); do
+            run=$(gh run list --repo "$REPO" --workflow ci.yml --commit "$SHA" --event push --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+            if [ -n "$run" ]; then break; fi
+            sleep 5
+          done
+          if [ -z "$run" ]; then
+            echo "::error::No main-branch CI run found for release commit $SHA"
+            exit 1
+          fi
+          gh run watch "$run" --repo "$REPO" --interval 30 --exit-status
+
   goreleaser:
     name: GoReleaser (binaries, packages, docker)
     runs-on: ubuntu-latest
@@ -177,7 +202,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HAS_UPDATE_KEY: ${{ secrets.ETHER_UPDATE_PRIVATE_KEY != '' }}
-    needs: [goreleaser, macos, windows]
+    needs: [ci, goreleaser, macos, windows]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
