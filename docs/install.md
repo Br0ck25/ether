@@ -174,10 +174,17 @@ and one-time join tokens. No terminal commands are required for setup.
 - **A port forward per node** for remote access: each node needs its own
   external port (for example 32400 to the first node, 32401 to the second),
   or UPnP. Set the public port on each node's *Connectivity* page.
-- **One public IP for debrid.** Debrid services may flag one account used
+- **One public IP for providers.** Debrid services may flag one account used
   from several addresses at once. Keep every node behind the same internet
   connection; the Cluster page warns you when nodes reach the internet from
-  different public addresses.
+  different public addresses. Some Usenet accounts also restrict simultaneous
+  source IPs. An HTTP(S) proxy does not route NNTP. If nodes use a common
+  gateway, set `ETHER_USENET_PROXY=socks5://host:port` in each remote node's
+  service environment as well as configuring its HTTP(S) proxy. This optional,
+  node-local setting routes NNTP through SOCKS5 while retaining end-to-end
+  provider TLS verification. An unavailable proxy fails the connection; Ether
+  never silently falls back to another public IP. Keep credentials, if needed,
+  in the protected service environment, not command-line arguments.
 
 ### Start a cluster from an existing server
 

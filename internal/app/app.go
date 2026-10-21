@@ -371,7 +371,11 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	})
 
 	// Usenet, cache, stream engine.
-	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet"), MinIdle: cfg.Usenet.MinIdle})
+	usenetDial, err := usenetProxyDialer(os.Getenv("ETHER_USENET_PROXY"))
+	if err != nil {
+		return err
+	}
+	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet"), MinIdle: cfg.Usenet.MinIdle, DialContext: usenetDial})
 	a.closers = append(a.closers, func() { a.fetcher.Close() })
 	if cfg.Cache.Storage == "shared" {
 		if cfg.SharedCache == nil {
