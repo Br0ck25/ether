@@ -16,10 +16,12 @@ export function MetadataWorkspace({
   aside,
   main,
   actions,
+  fitPreview = false,
 }: {
   aside: ReactNode;
   main: ReactNode;
   actions?: ReactNode;
+  fitPreview?: boolean;
 }) {
   const location = useLocation();
   return (
@@ -45,7 +47,7 @@ export function MetadataWorkspace({
       }
       asideLabel="Metadata controls"
       mainLabel="Metadata preview"
-      mainClassName="metadata-canvas"
+      mainClassName={`metadata-canvas ${fitPreview ? "metadata-canvas-fit" : ""}`}
       aside={
         <>
           <nav className="metadata-nav" aria-label="Metadata sections">

@@ -1,5 +1,5 @@
 import { Badge, Button, Input, Spinner, Switch, cn, toast } from "@braedonsaunders/appkit-ui";
-import { Check, ImageIcon, Pin, RotateCcw, SlidersHorizontal, X } from "lucide-react";
+import { Check, ImageIcon, Pin, RefreshCw, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Artwork } from "../../components/Artwork";
 import { Drawer } from "../../components/Drawer";
@@ -12,9 +12,10 @@ import { SaveBar, useDraft } from "../../components/SaveBar";
 import { api, apiFetch } from "../../lib/api";
 import type { TitleCard } from "../../lib/contract";
 import { useAsync, useDebouncedValue } from "../../lib/hooks";
+import { blankSpec } from "../../lib/rules";
 import { nativeSelect } from "./shared";
 import { MetadataWorkspace } from "./MetadataWorkspace";
-import { normalizeOverlays, PRESETS, previewURL, type Overlays } from "./model";
+import { normalizeOverlays, PRESETS, type Overlays } from "./model";
 import { PosterCanvas } from "./PosterCanvas";
 
 type Variant = { path: string; language?: string; tags?: string[] };
@@ -53,7 +54,33 @@ export function ArtworkSettings() {
   const { draft, setDraft, dirty, reset } = useDraft(doc.data);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [title, setTitle] = useState<TitleCard | null>(null);
+  // Use the same catalogue and image pipeline as the Collection Studio.
+  // A bounded pool keeps refresh instant and avoids refetching the catalogue.
+  const samples = useAsync(async (signal) => {
+    const result = await api.previewCollection(
+      { ...blankSpec("mixed"), name: "Artwork preview", limit: 60 },
+      signal,
+    );
+    const titles = [
+      ...new Map(
+        (result.items ?? [])
+          .filter((t) => t.poster && (t.type === "movie" || t.type === "show"))
+          .map((t) => [t.key, t]),
+      ).values(),
+    ];
+    for (let i = titles.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [titles[i], titles[j]] = [titles[j]!, titles[i]!];
+    }
+    return titles;
+  }, []);
+  const [pickedTitle, setTitle] = useState<TitleCard | null>(null);
+  const title = pickedTitle ?? samples.data?.[0] ?? null;
+  const alternatives = (samples.data ?? []).filter((t) => t.key !== title?.key);
+  const refreshTitle = () => {
+    if (alternatives.length)
+      setTitle(alternatives[Math.floor(Math.random() * alternatives.length)]!);
+  };
   const [lang, setLang] = useState("en");
   const [viewer, setViewer] = useState<number | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -95,11 +122,11 @@ export function ArtworkSettings() {
       setSaving(false);
     }
   };
-  const src = previewURL(preview, title?.key, previewUser, lang, nonce);
-  const original = previewURL({ ...preview, enabled: false }, title?.key, previewUser, lang, nonce);
+
   return (
     <>
       <MetadataWorkspace
+        fitPreview
         actions={
           <Badge variant={dirty ? "warning" : "secondary"}>
             {dirty ? "Unsaved design" : "Saved design"}
@@ -247,6 +274,47 @@ export function ArtworkSettings() {
               ))}
             </section>
             <Section
+              title="Preview title"
+              description="Try your design on artwork from your catalogue."
+            >
+              <TitleSearch placeholder="Search movies and shows…" onPick={setTitle} />
+              {title && (
+                <Button size="sm" variant="ghost" onClick={() => setPinning(title)}>
+                  <Pin size={13} /> Edit this title’s artwork
+                </Button>
+              )}
+              <div className="metadata-field-row">
+                <label className="metadata-field">
+                  Preview as
+                  <select
+                    className={nativeSelect}
+                    value={previewUser ?? ""}
+                    onChange={(e) => setViewer(Number(e.currentTarget.value))}
+                  >
+                    <option value="" disabled>
+                      Select a viewer
+                    </option>
+                    {users.data?.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.title || u.username}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="metadata-field">
+                  Preview language
+                  <Input
+                    value={lang}
+                    onChange={(e) => setLang(e.currentTarget.value)}
+                    placeholder="en, fr-CA, es"
+                  />
+                </label>
+              </div>
+              {users.error ? (
+                <ErrorPanel error={users.error} onRetry={() => void users.reload()} />
+              ) : null}
+            </Section>
+            <Section
               title="Title artwork"
               description="Give an individual title its own poster or backdrop."
             >
@@ -257,9 +325,20 @@ export function ArtworkSettings() {
         main={
           <>
             <div className="metadata-preview-toolbar">
-              <div>
-                <h2>{title ? title.title : "Artwork preview"}</h2>
+              <div className="metadata-preview-title" aria-live="polite">
+                <h2 title={title?.title}>{title?.title ?? "Artwork preview"}</h2>
+                <p>{title ? titleSubtitle(title) : "Catalogue artwork"}</p>
               </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="Try another artwork"
+                title="Try another artwork"
+                disabled={!alternatives.length || samples.loading}
+                onClick={refreshTitle}
+              >
+                <RefreshCw size={15} />
+              </Button>
               <div className="metadata-view-switch" aria-label="Preview view">
                 {(
                   [
@@ -279,89 +358,46 @@ export function ArtworkSettings() {
                 ))}
               </div>
             </div>
-            <PosterCanvas
-              src={src}
-              original={original}
-              title={title}
-              mode={mode}
-              enabled={preview.enabled}
-              settings={preview}
-            />
+            {title ? (
+              <PosterCanvas
+                title={title}
+                neighbours={alternatives.slice(0, 2)}
+                mode={mode}
+                settings={preview}
+                user={previewUser}
+                lang={lang}
+                nonce={nonce}
+              />
+            ) : (
+              <div className="metadata-stage metadata-artwork-empty">
+                {samples.loading ? (
+                  <Spinner size={22} label="Loading catalogue artwork" />
+                ) : samples.error ? (
+                  <ErrorPanel error={samples.error} onRetry={() => void samples.reload()} />
+                ) : (
+                  <>
+                    <ImageIcon size={28} />
+                    <h2>No catalogue artwork yet</h2>
+                    <p>
+                      Search for a movie or show in Preview title, or refresh after your catalogue
+                      has synced.
+                    </p>
+                    <Button size="sm" variant="outline" onClick={() => void samples.reload()}>
+                      Reload catalogue artwork
+                    </Button>
+                  </>
+                )}
+              </div>
+            )}
             <div className="metadata-preview-caption">
               <span className="metadata-live-dot" />
               <span>
-                {title
-                  ? "Live title preview · actual available badges"
-                  : "Sample artwork · illustrative scores and quality"}
+                {mode === "library"
+                  ? "Library preview · Plex layouts vary"
+                  : "Originals preserved · available badges only"}
               </span>
               <Badge variant="outline">{draft.enabled ? "Ether design" : "Original artwork"}</Badge>
             </div>
-            <div className="metadata-preview-context">
-              <div className="metadata-context-heading">
-                <ImageIcon size={17} />
-                <div>
-                  <h3>Preview title</h3>
-                  <p>Search your catalogue or use the sample poster.</p>
-                </div>
-                {title && (
-                  <Button size="sm" variant="ghost" onClick={() => setTitle(null)}>
-                    <X size={13} /> Use sample
-                  </Button>
-                )}
-              </div>
-              {title ? (
-                <div className="metadata-selected-title">
-                  <span>
-                    <strong>{title.title}</strong>
-                    <small>{titleSubtitle(title)}</small>
-                  </span>
-                  <Button size="sm" variant="outline" onClick={() => setPinning(title)}>
-                    <Pin size={13} /> Edit artwork
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setTitle(null)}>
-                    Change title
-                  </Button>
-                </div>
-              ) : (
-                <TitleSearch placeholder="Search movies and shows…" onPick={setTitle} />
-              )}
-              {title && (
-                <div className="metadata-field-row">
-                  <label className="metadata-field">
-                    Preview as
-                    <select
-                      className={nativeSelect}
-                      value={previewUser ?? ""}
-                      onChange={(e) => setViewer(Number(e.currentTarget.value))}
-                    >
-                      <option value="" disabled>
-                        Select a viewer
-                      </option>
-                      {users.data?.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.title || u.username}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="metadata-field">
-                    Preview language
-                    <Input
-                      value={lang}
-                      onChange={(e) => setLang(e.currentTarget.value)}
-                      placeholder="en, fr-CA, es"
-                    />
-                  </label>
-                </div>
-              )}
-              {title && users.error ? (
-                <ErrorPanel error={users.error} onRetry={() => void users.reload()} />
-              ) : null}
-            </div>
-            <p className="text-xs text-fg-muted">
-              Previews use unsaved settings. Original artwork is preserved; Plex receives cached
-              image variants.
-            </p>
           </>
         }
       />

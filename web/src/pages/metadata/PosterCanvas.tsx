@@ -1,129 +1,62 @@
-import { Film } from "lucide-react";
 import { Artwork } from "../../components/Artwork";
 import type { TitleCard } from "../../lib/contract";
-import type { Overlays } from "./model";
+import { previewURL, type Overlays } from "./model";
 
 export function PosterCanvas({
-  src,
-  original,
   title,
+  neighbours,
   mode,
-  enabled,
   settings,
+  user,
+  lang,
+  nonce,
 }: {
-  src: string;
-  original: string;
-  title: TitleCard | null;
+  title: TitleCard;
+  neighbours: TitleCard[];
   mode: "poster" | "library" | "compare";
-  enabled: boolean;
   settings: Overlays;
+  user: number | null;
+  lang: string;
+  nonce: number;
 }) {
-  const name = title?.title || "After the Tide";
-  const poster = (url: string, label: string) => (
-    <figure className="metadata-poster">
+  const poster = (item: TitleCard, label: string, original = false) => (
+    <figure className="metadata-poster" key={`${item.key}-${label}`}>
       <Artwork
-        src={url}
-        alt={`${name} ${label}`}
-        title="Preview unavailable"
+        src={previewURL(
+          original ? { ...settings, enabled: false } : settings,
+          item.key,
+          user,
+          lang,
+          nonce,
+        )}
+        alt={`${item.title} ${label}`}
+        title="Artwork unavailable. Try another title."
         eager
-        className="aspect-[2/3] w-full rounded-md"
+        className="metadata-poster-image rounded-md"
+        imgClassName="object-contain"
       />
-      <figcaption>{label}</figcaption>
+      <figcaption title={label}>{label}</figcaption>
     </figure>
   );
+  const library = neighbours.length > 0 ? [neighbours[0]!, title, ...neighbours.slice(1)] : [title];
+  const count = mode === "compare" ? 2 : mode === "library" ? library.length : 1;
   return (
     <div className={`metadata-stage metadata-stage-${mode}`}>
-      {mode === "compare" ? (
-        <div className="metadata-compare">
-          {poster(original, "Original")}
-          {poster(src, enabled ? "Your design" : "Overlays off")}
-        </div>
-      ) : mode === "library" ? (
-        <div className="metadata-library">
-          <div className="metadata-library-header">
-            <span>
-              <Film size={16} /> Library preview
-            </span>
-            <span>Sample layout</span>
-          </div>
-          <div className="metadata-library-row">
-            <div className="metadata-library-neighbour neighbour-one">
-              <span>
-                THE
-                <br />
-                QUIET
-                <br />
-                HOURS
-              </span>
-            </div>
-            {poster(src, name)}
-            <div className="metadata-library-neighbour neighbour-two">
-              <span>
-                INTO
-                <br />
-                THE
-                <br />
-                BLUE
-              </span>
-            </div>
-          </div>
-          <p className="metadata-library-disclaimer">
-            Illustrative layout. Plex layouts vary by app.
-          </p>
-        </div>
-      ) : (
-        <div className="metadata-poster-detail">
-          {poster(src, title ? "Your title, your design" : "Original sample artwork")}
-          <div className="metadata-inspector">
-            <h3>{name}</h3>
-            <p>
-              {title
-                ? [title.year, title.type === "show" ? "TV series" : "Movie"]
-                    .filter(Boolean)
-                    .join(" · ")
-                : "Sample poster · fictional title"}
-            </p>
-            <dl className="metadata-detail-list">
-              {[
-                ["Artwork", enabled ? "Ether design" : "Original"],
-                ["Finish", settings.style],
-                ["Position", settings.position],
-                ["Size", settings.size],
-                ["Accent", settings.accent],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd>{value}</dd>
-                </div>
-              ))}
-            </dl>
-            <h4>Layers</h4>
-            <dl className="metadata-detail-list">
-              {(
-                [
-                  ["Release status", settings.status],
-                  ["Quality", settings.quality],
-                  ["Ratings", settings.ratings],
-                  ["Taste matching", settings.personalize],
-                  ["Localization", settings.localize],
-                ] as const
-              ).map(([label, on]) => (
-                <div key={label}>
-                  <dt>{label}</dt>
-                  <dd className={enabled && on ? "text-primary" : "text-fg-muted"}>
-                    {enabled && on ? "On" : "Off"}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            <p className="metadata-inspector-note">
-              {title
-                ? "Badges only appear for verified quality and available ratings."
-                : "Sample badges demonstrate placement and style. Real titles use verified facts."}
-            </p>
-          </div>
-        </div>
-      )}
+      <div
+        className="metadata-poster-grid"
+        style={{ gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` }}
+      >
+        {mode === "compare" ? (
+          <>
+            {poster(title, "Original", true)}
+            {poster(title, settings.enabled ? "Your design" : "Overlays off")}
+          </>
+        ) : mode === "library" ? (
+          library.map((item) => poster(item, item.title))
+        ) : (
+          poster(title, settings.enabled ? "Your design" : "Original artwork")
+        )}
+      </div>
     </div>
   );
 }

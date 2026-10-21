@@ -69,7 +69,7 @@ export const PRESETS: { name: string; description: string; settings: Partial<Ove
 ];
 export function previewURL(
   settings: Overlays,
-  key?: string,
+  key: string,
   user?: number | null,
   lang = "en",
   nonce = 0,
@@ -80,5 +80,5 @@ export function previewURL(
     v: String(nonce),
   });
   if (user != null) params.set("userId", String(user));
-  return `/ether/api/discovery/overlays/${key ? `preview/${encodeURIComponent(key)}` : "sample"}?${params}`;
+  return `/ether/api/discovery/overlays/preview/${encodeURIComponent(key)}?${params}`;
 }
