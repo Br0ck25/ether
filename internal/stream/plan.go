@@ -322,6 +322,9 @@ func (p *plan) inspect(ctx context.Context, v verifier, k int) (volInfo, error) 
 		if f.Name != p.member || (k > 0 && !f.SplitBefore) {
 			return volInfo{}, fmt.Errorf("stream: rar volume %d (%s) starts with %q, not a continuation of %q: %w", k+1, pf.Name(), f.Name, p.member, ErrCorrupt)
 		}
+		if m := rarMember(vol.Format, &f); m.Streamable() != nil {
+			return volInfo{}, fmt.Errorf("stream: rar volume %d (%s): %w", k+1, pf.Name(), m.Streamable())
+		}
 		return volInfo{size: size, dataOff: f.DataOffset, dataSize: f.PackedSize}, nil
 	case kind7z:
 		return volInfo{size: size}, nil

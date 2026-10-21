@@ -127,6 +127,9 @@ func (b *builder) build(ctx context.Context) (*plan, error) {
 	if len(cands) == 0 {
 		return nil, fmt.Errorf("%w: nothing recognisable among %d files", ErrNoPlayableFile, len(b.rel.files))
 	}
+	if err := b.checkCachedRAR(ctx, cands[0]); err != nil {
+		return nil, err
+	}
 	if b.candidateReady != nil {
 		b.candidateReady(cands[0].files)
 	}

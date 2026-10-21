@@ -83,6 +83,11 @@ func ReadRARVolume(r io.ReaderAt, size int64, opts *RAROptions) (*RARVolume, err
 	}
 }
 
+// MethodName returns the human-readable compression method of a RAR file header.
+func (f *RARFile) MethodName(format Format) string {
+	return rarMethodName(format, f)
+}
+
 // rarMethodName returns the human-readable method of a RAR file header.
 func rarMethodName(f Format, file *RARFile) string {
 	if file.Stored {

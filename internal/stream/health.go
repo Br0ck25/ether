@@ -157,7 +157,9 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 			// Newly identified obfuscated candidates may still fall through
 			// to another archive if the first contains no video. Its sample
 			// must not reject the eventual candidate before planning settles.
-			if (earlySample || (gotPlan && sameFiles(res.files, ready.p.vols))) && (res.out.err != nil || res.out.missing > 0) {
+			// Likewise, a transient STAT error must not cancel planning before
+			// an archive header check can report a permanent rejection.
+			if (earlySample && res.out.missing > 0) || (gotPlan && sameFiles(res.files, ready.p.vols) && (res.out.err != nil || res.out.missing > 0)) {
 				cancelStats()
 				if res.out.err != nil {
 					return false, res.out.err

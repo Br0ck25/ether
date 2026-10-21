@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/archive/archivetest"
@@ -404,4 +405,128 @@ func TestObfuscatedRARSetSniffed(t *testing.T) {
 		t.Fatalf("name %q", src.Name())
 	}
 	checkRandomReads(t, src, video, 2, 100)
+}
+
+func TestRARCompressedFastFailAvoidsFullScan(t *testing.T) {
+	video := mkvBytes(34, 800_000)
+	for _, ver := range []int{4, 5} {
+		for method := 1; method <= 5; method++ {
+			wantMethod := fmt.Sprintf("rar%d:m%d", ver, method)
+			for _, tc := range []struct {
+				name  string
+				files []archivetest.RARFile
+				opts  archivetest.RAROptions
+			}{
+				{
+					name:  "standard",
+					files: []archivetest.RARFile{{Name: "m.mkv", Data: video, Method: method}},
+					opts:  archivetest.RAROptions{Version: ver, VolumeSize: 50_000},
+				},
+				{
+					name:  "unknown-size",
+					files: []archivetest.RARFile{{Name: "m.mkv", Data: video, Method: method, UnknownSize: true}},
+					opts:  archivetest.RAROptions{Version: ver, VolumeSize: 50_000},
+				},
+				{
+					name:  "obfuscated-inner-unknown-size",
+					files: []archivetest.RARFile{{Name: "a9f8e7d6c5b4", Data: video, Method: method, UnknownSize: true}},
+					opts:  archivetest.RAROptions{Version: ver, VolumeSize: 50_000},
+				},
+				{
+					name: "multi-episode-pack",
+					files: []archivetest.RARFile{
+						{Name: "Show.S01E01.mkv", Data: video[:200_000], Method: method},
+						{Name: "Show.S01E02.mkv", Data: video, Method: method},
+					},
+					opts: archivetest.RAROptions{Version: ver, VolumeSize: 50_000},
+				},
+			} {
+				t.Run(fmt.Sprintf("%s/%s", wantMethod, tc.name), func(t *testing.T) {
+					f := newFakeFetcher()
+					vols := buildRAR(t, tc.files, tc.opts)
+					if len(vols) < 10 {
+						t.Fatalf("expected >= 10 volumes, got %d", len(vols))
+					}
+					doc := postVolumes(t, f, 20_000, vols, newStyle("comp"))
+					e := newTestEngine(t, f, nil, Options{})
+					ok, err := e.CheckRelease(context.Background(), "comp", doc)
+					if ok || !errors.Is(err, ErrCompressed) || !errors.Is(err, core.ErrReleaseRejected) {
+						t.Fatalf("CheckRelease = %v, %v; want ErrCompressed + ErrReleaseRejected", ok, err)
+					}
+					if !strings.Contains(err.Error(), wantMethod) {
+						t.Fatalf("error %q does not report method %q", err, wantMethod)
+					}
+					// Fast-fail must reject from the probe volumes without scanning middle volumes.
+					for k := 2; k < len(vols)-1; k++ {
+						if c := f.calls(postID(newStyle("comp")(k), 1)); c != 0 {
+							t.Fatalf("middle volume %d head was fetched %d times", k+1, c)
+						}
+					}
+					f.resetCounts()
+					if _, err := e.Open(context.Background(), "comp", doc); !errors.Is(err, ErrCompressed) || !errors.Is(err, core.ErrReleaseRejected) {
+						t.Fatalf("Open = %v, want cached ErrCompressed rejection", err)
+					}
+					if f.totalCalls() != 0 {
+						t.Fatalf("Open after rejected CheckRelease fetched %d articles", f.totalCalls())
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestObfuscatedCompressedRARFastFail(t *testing.T) {
+	video := mkvBytes(35, 600_000)
+	for _, withPar2 := range []bool{false, true} {
+		name := "no-par2"
+		if withPar2 {
+			name = "with-par2"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFakeFetcher()
+			vols := buildRAR(t, []archivetest.RARFile{{Name: "Movie.2024.mkv", Data: video, Method: 3}},
+				archivetest.RAROptions{Version: 5, VolumeSize: 40_000})
+			if len(vols) < 12 {
+				t.Fatalf("expected >= 12 volumes, got %d", len(vols))
+			}
+			var files []postFile
+			for i, v := range vols {
+				files = append(files, postFile{name: obfName(100 + i), data: v})
+			}
+			if withPar2 {
+				files = append(files, postFile{name: "index.par2", data: par2Index(65_536, rarPar2Files(vols)...)})
+			}
+			doc := post(t, f, 20_000, files...)
+			// MaxProbes=4 is far below len(vols): fast-fail must reject as
+			// ErrCompressed from the first probe wave without running continuation
+			// probe rounds, returning errUnidentifiedVolumes, or starting STAT samples.
+			e := newTestEngine(t, f, nil, Options{MaxProbes: 4})
+			ok, err := e.CheckRelease(context.Background(), "obf-comp", doc)
+			if ok || !errors.Is(err, ErrCompressed) || !errors.Is(err, core.ErrReleaseRejected) {
+				t.Fatalf("CheckRelease = %v, %v; want ErrCompressed + ErrReleaseRejected", ok, err)
+			}
+			f.mu.Lock()
+			stats := f.statCalls
+			f.mu.Unlock()
+			if stats != 0 {
+				t.Fatalf("STAT calls = %d, want 0 for obfuscated compressed RAR rejected from cached head", stats)
+			}
+			// Only the first MaxProbes volumes (plus optional 1-part PAR2) may be fetched.
+			if got := f.totalCalls(); got > 5 {
+				t.Fatalf("fetched %d articles, want <= 5 (no continuation probe rounds)", got)
+			}
+		})
+	}
+}
+
+func TestCheckCompressedRARWinsOverTransientStatError(t *testing.T) {
+	f := newFakeFetcher()
+	vols := buildRAR(t, []archivetest.RARFile{{Name: "Movie.2024.mkv", Data: mkvBytes(36, 300_000), Method: 3}},
+		archivetest.RAROptions{Version: 5, VolumeSize: 100_000})
+	doc := postVolumes(t, f, 30_000, vols, newStyle("comp-stat-err"))
+	e := newTestEngine(t, statStreamErrorFetcher{fakeFetcher: f}, nil, Options{})
+	ok, err := e.CheckRelease(context.Background(), "comp-stat-err", doc)
+	if ok || !errors.Is(err, ErrCompressed) || !errors.Is(err, core.ErrReleaseRejected) {
+		t.Fatalf("CheckRelease = %v, %v; want ErrCompressed + ErrReleaseRejected", ok, err)
+	}
 }
