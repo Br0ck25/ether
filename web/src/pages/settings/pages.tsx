@@ -195,7 +195,7 @@ export function RemoteAccessPage() {
   const current = PLEX_TABS.find((t) => t.key === tab)!;
   return (
     <DomainPage
-      title="Plex & remote access"
+      title="Connectivity"
       description="Your Plex account, remote access and secure connections."
       base="/remote-access"
       tabs={PLEX_TABS}
@@ -205,7 +205,7 @@ export function RemoteAccessPage() {
         configKey="plex"
         endpoint="plex"
         groups={S.PLEX}
-        label="Plex & remote access"
+        label="Connectivity"
         show={(g) => "group" in current && g.title === current.group}
         showAdvanced={tab === "account"}
         onFieldErrors={reveal}
@@ -231,7 +231,7 @@ export function ServicesPage() {
   const tab = useRouteTab(SERVICE_TABS);
   return (
     <DomainPage
-      title="Connected services"
+      title="Integrations"
       description="Every integration Ether uses and how it's doing. Trakt, a language model and OpenSubtitles are set up here."
       base="/services"
       tabs={SERVICE_TABS}

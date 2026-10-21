@@ -131,7 +131,7 @@ describe("A viewer's watchlist (viewer profile › Watchlist)", () => {
   });
 });
 
-describe("Language model features (Connected services)", () => {
+describe("Language model features (Integrations)", () => {
   it("persists LLM feature toggles through the discovery settings API", async () => {
     const { fake } = renderAppWith("/services", discoveryRoutes());
     const search = await screen.findByLabelText("Natural-language search", {}, WAIT);

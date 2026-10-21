@@ -6,7 +6,7 @@ import { useDiscoverySettings } from "../viewers/sections/WatchlistDefaults";
 
 /**
  * Features that use the owner's language model, edited in place under
- * Settings › Connected services › Language model. Saved through the
+ * Settings › Integrations › Language model. Saved through the
  * discovery settings API alongside watchlist alerts.
  */
 export function LanguageFeatures() {

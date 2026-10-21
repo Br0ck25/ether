@@ -23,7 +23,7 @@ function FieldError({ error }: { error?: string }) {
 }
 
 /**
- * Settings › Connected services › Language model: pick a provider, give it
+ * Settings › Integrations › Language model: pick a provider, give it
  * a key (or a local endpoint), then choose from the models it offers.
  */
 export function LanguageModelSettings({

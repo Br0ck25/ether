@@ -149,8 +149,8 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
       items: [
         { href: "/cache", label: "Cache", icon: <HardDrive size={icon} /> },
         { href: "/server", label: "General", icon: <Server size={icon} /> },
-        { href: "/remote-access", label: "Plex & remote access", icon: <Globe size={icon} /> },
-        { href: "/services", label: "Connected services", icon: <Plug size={icon} /> },
+        { href: "/remote-access", label: "Connectivity", icon: <Globe size={icon} /> },
+        { href: "/services", label: "Integrations", icon: <Plug size={icon} /> },
         { href: "/cluster", label: "Cluster", icon: <Boxes size={icon} /> },
         { href: "/notifications", label: "Notifications", icon: <Bell size={icon} /> },
         { href: "/maintenance", label: "Maintenance", icon: <LifeBuoy size={icon} /> },

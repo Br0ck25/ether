@@ -16,7 +16,7 @@ describe("Settings", () => {
       };
     });
     expect(
-      await screen.findByRole("heading", { name: "Connected services" }, WAIT),
+      await screen.findByRole("heading", { name: "Integrations" }, WAIT),
     ).toBeInTheDocument();
     fireEvent.change(await screen.findByLabelText("Username", {}, WAIT), {
       target: { value: "sam.rivera" },
@@ -44,7 +44,7 @@ describe("Settings", () => {
       essentials.compareDocumentPosition(optional) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     for (const [name, href] of [
-      [/Plex & remote access/, "/remote-access"],
+      [/Connectivity/, "/remote-access"],
       [/Metadata › Catalogue/, "/metadata/catalogue"],
       [/Sources › Debrid/, "/sources/debrid"],
     ] as const)
@@ -242,7 +242,7 @@ describe("Settings", () => {
     expect(whole.server.friendlyName).toBe("Den Ether");
   });
 
-  it("opens Plex & remote access on status and connection checks", async () => {
+  it("opens Connectivity on status and connection checks", async () => {
     renderApp("/remote-access");
     expect(await screen.findByRole("heading", { name: "Connection checks" }, WAIT)).toBeVisible();
     expect(screen.getByText("Plex account")).toBeInTheDocument();
@@ -259,8 +259,8 @@ describe("Settings", () => {
     const sidebar = (name: string) => screen.queryAllByRole("link", { name });
     for (const name of [
       "General",
-      "Plex & remote access",
-      "Connected services",
+      "Connectivity",
+      "Integrations",
       "Notifications",
       "Maintenance",
     ])

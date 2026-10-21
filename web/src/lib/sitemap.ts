@@ -156,7 +156,7 @@ export const PAGES: PageDef[] = [
   },
   {
     href: "/remote-access",
-    title: "Plex & remote access",
+    title: "Connectivity",
     sections: [
       { key: "status", title: "Plex status", keywords: "claim connection checks reachability" },
       { key: "remote", title: "Remote access", keywords: "upnp port forward public" },
@@ -168,7 +168,7 @@ export const PAGES: PageDef[] = [
   },
   {
     href: "/services",
-    title: "Connected services",
+    title: "Integrations",
     sections: [
       { key: "overview", title: "Integrations", keywords: "status tmdb debrid prowlarr ratings" },
       { key: "trakt", title: "Trakt", keywords: "sync history" },

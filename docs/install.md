@@ -170,7 +170,7 @@ and one-time join tokens. No terminal commands are required for setup.
   through the firewall; use `sslmode=require` unless the network is trusted).
 - **A port forward per node** for remote access: each node needs its own
   external port (for example 32400 to the first node, 32401 to the second),
-  or UPnP. Set the public port on each node's *Plex & remote access* page.
+  or UPnP. Set the public port on each node's *Connectivity* page.
 - **One public IP for debrid.** Debrid services may flag one account used
   from several addresses at once. Keep every node behind the same internet
   connection; the Cluster page warns you when nodes reach the internet from
