@@ -34,3 +34,10 @@ func (c *Catalog) RecentEpisodes(ctx context.Context, show core.RatingKey, since
 	}
 	return out, rows.Err()
 }
+
+// CachedTitles returns released, non-adult mirrored titles in requested order,
+// without refreshing remote metadata. Batch consumers such as recommendation
+// builders use this to avoid one full hydration round trip per history entry.
+func (c *Catalog) CachedTitles(ctx context.Context, keys []core.RatingKey) ([]core.Title, error) {
+	return c.titlesByKeys(ctx, keys)
+}

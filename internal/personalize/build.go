@@ -472,14 +472,20 @@ func (e *Engine) gatherTaste(ctx context.Context, user core.User) (tasteInput, m
 	if len(ignored) > 60 {
 		ignored = ignored[:60]
 	}
-	for _, x := range append(order, ignored...) {
+	requested := append(order, ignored...)
+	keys := make([]core.RatingKey, 0, len(requested))
+	for _, x := range requested {
+		keys = append(keys, x.k)
+	}
+	cached := mirroredTitles(ctx, e.catalog, keys)
+	for _, x := range requested {
 		if ctx.Err() != nil {
 			return in, nil, ctx.Err()
 		}
 		if _, ok := in.titles[x.k]; ok {
 			continue
 		}
-		if t, err := e.catalog.Get(ctx, x.k); err == nil && t != nil {
+		if t, err := historyTitle(ctx, e.catalog, cached, x.k); err == nil && t != nil {
 			in.titles[x.k] = *t
 		}
 	}

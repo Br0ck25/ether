@@ -118,12 +118,24 @@ func (d *Discovery) YearInReview(ctx context.Context, u *core.User, year, limit 
 	if e != nil {
 		return hub, e
 	}
+	keys := make([]core.RatingKey, 0, len(entries)*2)
+	for _, h := range entries {
+		if h.Completed && !h.ViewedAt.Before(start) && h.ViewedAt.Before(end) {
+			keys = append(keys, h.Key, tasteKey(h.Key))
+		}
+	}
+	cached := mirroredTitles(ctx, d.catalog, keys)
 	seen := map[core.RatingKey]bool{}
 	for _, h := range entries {
 		if !h.Completed || h.ViewedAt.Before(start) || !h.ViewedAt.Before(end) {
 			continue
 		}
-		t, e := d.catalog.Get(ctx, h.Key)
+		// Episode keys already identify their show. Once that show is in the
+		// row, do not hydrate every remaining watched episode just to discard it.
+		if seen[tasteKey(h.Key)] {
+			continue
+		}
+		t, e := historyTitle(ctx, d.catalog, cached, h.Key)
 		if e != nil || !d.visible(u, t) {
 			continue
 		}
@@ -132,7 +144,7 @@ func (d *Discovery) YearInReview(ctx context.Context, u *core.User, year, limit 
 			continue
 		}
 		if k != t.Key {
-			t, e = d.catalog.Get(ctx, k)
+			t, e = historyTitle(ctx, d.catalog, cached, k)
 			if e != nil || !d.visible(u, t) {
 				continue
 			}
@@ -160,6 +172,9 @@ func (d *Discovery) Rediscover(ctx context.Context, u *core.User, limit int) (co
 	seen := map[core.RatingKey]bool{}
 	for _, st := range entries {
 		if st.LastViewedAt.IsZero() || d.now().Sub(st.LastViewedAt) < 30*24*time.Hour || st.ViewCount > 0 {
+			continue
+		}
+		if seen[tasteKey(st.Key)] {
 			continue
 		}
 		t, e := d.catalog.Get(ctx, st.Key)

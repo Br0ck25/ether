@@ -110,3 +110,67 @@ func TestDiscoveryVirtualReviewCollectionIsViewerScoped(t *testing.T) {
 		t.Fatal("virtual collection deletion accepted")
 	}
 }
+
+func TestYearInReviewSkipsAlreadyPresentedShowBeforeLookup(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cat := newFakeCatalog(testNow)
+	show := core.ShowKey(991)
+	cat.set(core.Title{Key: show, Type: core.TypeShow, Title: "Long running show"})
+	at := time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)
+	st := state.New(db, state.Options{Now: func() time.Time { return at }})
+	for i := 1; i <= 100; i++ {
+		key := core.EpisodeKey(991, 1, i)
+		cat.set(core.Title{Key: key, Type: core.TypeEpisode, ShowKey: show})
+		if err := st.Scrobble(ctx, 1, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := NewDiscovery(db, cat, st, nil)
+	d.now = func() time.Time { return testNow }
+	before := cat.callCount("get")
+	row, err := d.YearInReview(ctx, &core.User{ID: 1}, 2025, 25)
+	if err != nil || len(row.Items) != 1 || row.Items[0].Key != show {
+		t.Fatalf("row=%+v err=%v", row, err)
+	}
+	if calls := cat.callCount("get") - before; calls != 2 {
+		t.Fatalf("got %d title loads for one show, want first episode + show only", calls)
+	}
+}
+
+type batchedHistoryCatalog struct {
+	*fakeCatalog
+	batches int
+	keys    int
+}
+
+func (c *batchedHistoryCatalog) CachedTitles(_ context.Context, keys []core.RatingKey) ([]core.Title, error) {
+	c.batches++
+	c.keys = len(keys)
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
+	return c.resolve(keys), nil
+}
+func TestHistoryTitleBatchAvoidsPerTitleReads(t *testing.T) {
+	ctx := context.Background()
+	cat := &batchedHistoryCatalog{fakeCatalog: newFakeCatalog(testNow)}
+	a, b := movieKey(0, 1), movieKey(0, 2)
+	cache := mirroredTitles(ctx, cat, []core.RatingKey{a, b, a})
+	for _, key := range []core.RatingKey{a, b} {
+		title, err := historyTitle(ctx, cat, cache, key)
+		if err != nil || title.Key != key {
+			t.Fatalf("title=%+v err=%v", title, err)
+		}
+	}
+	if cat.batches != 1 || cat.keys != 2 || cat.callCount("get") != 0 {
+		t.Fatalf("batch=%d keys=%d gets=%d", cat.batches, cat.keys, cat.callCount("get"))
+	}
+	missing := core.MovieKey(999999)
+	if _, err := historyTitle(ctx, cat, cache, missing); err != core.ErrNotFound || cat.callCount("get") != 1 {
+		t.Fatal("missing mirror entry did not use ordinary lookup")
+	}
+}
