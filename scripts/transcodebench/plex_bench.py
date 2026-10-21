@@ -262,8 +262,16 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
         except ET.ParseError as e: raise BenchError(f"decision XML parse failed: {e}")
         result["setup_s"]=time.monotonic()-t_setup
 
-        # encode phase
+        # encode phase; capture authentic argv early/often (encoder can be short-lived)
         t_enc=time.monotonic(); first_latency=None
+        argv_by_key={}; argv_stop=threading.Event()
+        def argv_poller():
+            while not argv_stop.is_set():
+                if root_pid:
+                    for c in capture_transcoder_cmdlines(root_pid):
+                        argv_by_key[(c["pid"], c["cmdline"])] = c
+                argv_stop.wait(0.05)
+        argv_thread=threading.Thread(target=argv_poller, daemon=True); argv_thread.start()
         start_url=f"{cfg.base_url}/video/:/transcode/universal/start.m3u8?{qs}"
         s,_,body=http_get(start_url, timeout=min(30,cfg.timeout_s), headers=prof.headers())
         if s!=200: raise BenchError(f"start.m3u8 HTTP {s}")
@@ -276,14 +284,14 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
         else: playlist_url=start_url
 
         downloaded={}  # uri -> (bytes, extinf)
-        seen=set(); peak_rss=0; cpu_start=sample_tree(root_pid) if root_pid else None
-        samples=[]; cmdlines=[]; deadline=t_enc+cfg.timeout_s
-        media_dir=out_dir/f"session-{idx}"; 
+        seen=set(); order={}; peak_rss=None; cpu_start=sample_tree(root_pid) if root_pid else None
+        samples=[]; deadline=t_enc+cfg.timeout_s
+        media_dir=out_dir/f"session-{idx}"
         if cfg.preserve_media: media_dir.mkdir(parents=True, exist_ok=True)
-        seg_counter=[0]
         lock=threading.Lock()
         def fetch(item):
-            uri, extinf = item
+            nonlocal first_latency
+            uri, extinf = item; ordinal=order[uri]
             # PMS lists segments before they are fully written; retry 404s briefly.
             deadline_seg=time.monotonic()+15.0; data=None
             while True:
@@ -295,62 +303,76 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
                     raise
             if st!=200: raise BenchError(f"segment HTTP {st}")
             if not data: raise BenchError(f"empty segment {sanitize(uri)}")
-            with lock: downloaded[uri]=(len(data),extinf)
-            if cfg.preserve_media:
-                n=seg_counter[0]; seg_counter[0]+=1
-                (media_dir/f"seg-{n:05d}.ts").write_bytes(data)
+            with lock:
+                downloaded[uri]=(len(data),extinf)
+                if ordinal==0 and first_latency is None: first_latency=time.monotonic()-t_enc  # first segment body complete
+            if cfg.preserve_media:  # stable playlist-order name, not completion order
+                (media_dir/f"seg-{ordinal:05d}.ts").write_bytes(data)
             return len(data)
 
-        while time.monotonic()<deadline:
-            # poll playlist
-            try:
-                s,_,body=http_get(playlist_url, timeout=min(15,cfg.timeout_s))
-                if s!=200: raise BenchError(f"playlist HTTP {s}")
-                _,_,segs,total,end=parse_playlist(body.decode(errors="replace"), playlist_url)
-            except BenchError:
-                if downloaded: raise
-                time.sleep(cfg.poll_interval_s); continue
-            new=[x for x in segs if x[0] not in seen]
-            for x in new: seen.add(x[0])
-            if new:
-                if first_latency is None: first_latency=time.monotonic()-t_enc
-                if cfg.mode=="paced":
-                    for item in new: fetch(item); time.sleep(min(item[1],2.0))
-                else:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8,len(new))) as ex:
-                        list(ex.map(fetch,new))
-            if root_pid:
-                smp=sample_tree(root_pid); samples.append(smp); peak_rss=max(peak_rss,smp["rss_bytes"])
-                cl=capture_transcoder_cmdlines(root_pid)
-                if cl: cmdlines=cl
-            actual_media=sum(v[1] for v in downloaded.values())
-            if actual_media>=cfg.duration_s and (end or actual_media>=cfg.duration_s): break
-            if end and not new: break
-            if not cfg.preserve_media and end and len(downloaded)>=len(segs) and segs: break
-            time.sleep(cfg.poll_interval_s)
-        else:
-            raise BenchError(f"session timeout after {cfg.timeout_s}s")
+        try:
+            while time.monotonic()<deadline:
+                try:
+                    s,_,body=http_get(playlist_url, timeout=min(15,cfg.timeout_s))
+                    if s!=200: raise BenchError(f"playlist HTTP {s}")
+                    _,_,segs,total,end=parse_playlist(body.decode(errors="replace"), playlist_url)
+                except BenchError:
+                    if downloaded: raise
+                    time.sleep(cfg.poll_interval_s); continue
+                # assign stable ordinals in playlist order; cap queued media at requested duration
+                queued_media=sum(order_ext for order_ext in [downloaded[u][1] for u in downloaded]) if downloaded else 0.0
+                new=[]
+                for uri, extinf in segs:
+                    if uri not in order: order[uri]=len(order)
+                    if uri in seen: continue
+                    if queued_media>=cfg.duration_s: break
+                    seen.add(uri); new.append((uri,extinf)); queued_media+=extinf
+                if new:
+                    if cfg.mode=="paced":
+                        for item in new: fetch(item); time.sleep(min(item[1],2.0))
+                    else:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8,len(new))) as ex:
+                            list(ex.map(fetch,new))
+                if root_pid:
+                    smp=sample_tree(root_pid); samples.append(smp)
+                    peak_rss=smp["rss_bytes"] if peak_rss is None else max(peak_rss,smp["rss_bytes"])
+                actual_media=sum(v[1] for v in downloaded.values())
+                if actual_media>=cfg.duration_s: break
+                if end and not new: break
+                time.sleep(cfg.poll_interval_s)
+            else:
+                raise BenchError(f"session timeout after {cfg.timeout_s}s")
+        finally:
+            argv_stop.set(); argv_thread.join(timeout=2)
+        cmdlines=list(argv_by_key.values())
+        if root_pid and not cmdlines:
+            raise BenchError("authentic encode claimed but no Plex Transcoder argv captured from owned descendants")
 
         actual_media=sum(v[1] for v in downloaded.values())
         if not downloaded: raise BenchError("no segments downloaded")
         if actual_media<=0: raise BenchError("unknown media duration: EXTINF total is zero")
         result.update({"encode_s":time.monotonic()-t_enc,"first_segment_latency_s":first_latency,
+            "first_segment_latency_definition":"seconds from encode start until segment 0 body fully downloaded",
             "actual_media_s":round(actual_media,3),"segment_count":len(downloaded),
             "output_bytes":sum(v[0] for v in downloaded.values()),
             "peak_rss_bytes":peak_rss,"samples":samples[-20:],
+            "cpu_sampling":"available" if samples else "unavailable",
             "transcoder_cmdlines":cmdlines,"playlist_endlist":end})
-        if cpu_start and root_pid:
+        if cpu_start and root_pid and samples:
             cpu_end=sample_tree(root_pid)
             result["tree_cpu_delta_s"]=round(cpu_end["cpu_seconds"]-cpu_start["cpu_seconds"],3)
             result["tree_io_delta"]={"read_bytes":cpu_end["read_bytes"]-cpu_start["read_bytes"],
                                      "write_bytes":cpu_end["write_bytes"]-cpu_start["write_bytes"]}
+        else:
+            result["tree_cpu_delta_s"]=None; result["tree_io_delta"]=None
+            result["cpu_sampling"]="unavailable"
         # actual vs requested
         actual_codec=None
         for m in result.get("decision_media",[]):
             actual_codec=m.get("videoCodec") or actual_codec
         result["requested_vs_actual"]={"requested_video_codec":prof.video_codec,"actual_video_codec":actual_codec,
             "requested_resolution":prof.video_resolution,
-            "actual_resolution": (result["decision_media"][0].get("videoResolution") if result.get("decision_media") else None),
+            "actual_resolution": (f"{result['decision_media'][0].get('width')}x{result['decision_media'][0].get('height')}" if result.get("decision_media") and result["decision_media"][0].get("width") and result["decision_media"][0].get("height") else (result["decision_media"][0].get("videoResolution") if result.get("decision_media") else None)),
             "hw_note":"CPU-only host (no HW encode entrypoint); inspect transcoder cmdline for vaapi/nvenc tokens",
             "transcoder_used_hw": any(("vaapi" in c["cmdline"] or "nvenc" in c["cmdline"]) for c in cmdlines)}
         return result

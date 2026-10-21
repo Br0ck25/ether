@@ -27,7 +27,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send(200, DECISION, "text/xml")
         if "start.m3u8" in p: return self._send(200, MASTER.encode())
         if "media.m3u8" in p: return self._send(200, (MEDIA_SHORT if self.mode=="short" else MEDIA).encode())
-        if "seg" in p and p.endswith(".ts"): return self._send(200, b"\x47" + b"x"*188)
+        if "seg" in p and p.endswith(".ts"):
+            idx = int(p.split("seg")[1].split(".")[0])
+            if self.mode == "order" and idx == 0:
+                import time; time.sleep(0.4)
+            return self._send(200, bytes([65+idx]) * 189)
         if "/stop" in p: return self._send(200, b"ok")
         return self._send(404, b"nope")
     def _send(self, code, body, ct="application/vnd.apple.mpegurl"):
@@ -90,6 +94,26 @@ class TestFakeServer(unittest.TestCase):
         extra = p.client_profile_extra()
         self.assertIn("add-transcode-target", extra); self.assertIn("protocol=hls", extra)
         self.assertIn("videoCodec=h264", extra)
+    def test_latency_is_first_body_and_files_in_playlist_order(self):
+        Handler.mode = "order"
+        import tempfile
+        cfg = self.cfg(10.0); cfg.preserve_media = True
+        with tempfile.TemporaryDirectory() as d:
+            r = pb.run_session(cfg, None, Path(d), 0)
+            files = sorted((Path(d)/"session-0").glob("seg-*.ts"))
+            bodies = [f.read_bytes()[:1] for f in files]
+        self.assertEqual(bodies, [b"A", b"B", b"C"])  # playlist order despite seg0 finishing last
+        self.assertGreaterEqual(r["first_segment_latency_s"], 0.35)  # body-complete, not playlist arrival
+        self.assertIsNone(r["peak_rss_bytes"]); self.assertEqual(r["cpu_sampling"], "unavailable")
+        self.assertIsNone(r["tree_cpu_delta_s"])
+        Handler.mode = "ok"
+    def test_missing_transcoder_argv_rejected_when_owned(self):
+        Handler.mode = "ok"
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(pb.BenchError) as cm:
+                pb.run_session(self.cfg(), os.getpid(), Path(d), 0)  # owned tree has no Transcoder
+        self.assertIn("no Plex Transcoder argv", str(cm.exception))
     def test_non200_decision_rejected(self):
         Handler.mode = "decision500"
         import tempfile
