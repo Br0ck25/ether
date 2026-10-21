@@ -113,8 +113,19 @@ func TestStalledPrimaryLeavesBudgetForBackupAndUsesSelectedRelayInput(t *testing
 	}
 	u := &core.User{ID: 1}
 	info, err := s.Tune(context.Background(), u, c.ID, core.ClientCaps{})
-	if err != nil || info.ActiveSourceID != "backup" || len(tc.requests) != 1 || tc.requests[0].InputURL != "https://backup.invalid/live" {
+	if err != nil || info.ActiveSourceID != "backup" || len(tc.requests) != 1 || len(tc.requests[0].InputHeaders) != 0 {
 		t.Fatalf("backup relay input not selected: active=%q err=%v requests=%+v", info.ActiveSourceID, err, tc.requests)
+	}
+	// ffmpeg's loopback input is the backup, without its URL on the command line.
+	input := tc.requests[0].InputURL
+	res, err := http.Get(input)
+	if err != nil || strings.Contains(input, "backup.invalid") {
+		t.Fatalf("relay input %q: %v", input, err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if string(body) != "transport stream fixture" {
+		t.Fatalf("relay served %q", body)
 	}
 	s.Stop(context.Background(), info.ID, u)
 	if !tc.hls[0].closed || len(s.ViewingSessions()) != 0 {

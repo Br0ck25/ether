@@ -72,6 +72,7 @@ func (ss *session) close(s *Service) {
 	dash := ss.dash
 	reserved := ss.reserved
 	ss.mu.Unlock()
+	s.revokeInput(ss)
 	if relay != nil {
 		relay.Close()
 	}
@@ -628,7 +629,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if isHLS && !c.Transcode {
 		analyze := len(ss.caps.VideoCodecs) > 0 || len(ss.caps.AudioCodecs) > 0 || strings.Contains(strings.ToLower(ss.caps.Product), "apple") || strings.EqualFold(ss.caps.Platform, "tvos") || strings.EqualFold(ss.caps.Platform, "ios")
 		if s.o.Transcoder != nil && analyze {
-			info, err = s.probeLiveInputWithHeaders(ctx, c.StreamURL, ss.inputHeaders)
+			info, err = s.probeSessionInput(ctx, ss)
 			if err != nil {
 				return err
 			}
@@ -652,7 +653,7 @@ func (s *Service) startIPTVSource(ctx context.Context, ss *session) error {
 	if s.o.Transcoder == nil {
 		return core.ErrNotAvailable
 	}
-	info, err = s.probeLiveInputWithHeaders(ctx, c.StreamURL, ss.inputHeaders)
+	info, err = s.probeSessionInput(ctx, ss)
 	if err != nil {
 		return err
 	}

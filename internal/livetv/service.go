@@ -28,7 +28,8 @@ CREATE TABLE livetv_policies(user_id INTEGER PRIMARY KEY, data TEXT NOT NULL);`)
 }
 
 type Service struct {
-	authCache        authCache // provider credentials for the stream path (auth.go)
+	authCache        authCache  // provider credentials for the stream path (auth.go)
+	inputRelay       inputRelay // loopback ffmpeg input relay (input_relay.go)
 	probeMu          sync.Mutex
 	probeCache       map[string]liveProbeEntry
 	sourceMu         sync.Mutex

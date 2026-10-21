@@ -3,9 +3,6 @@ package livetv
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"net/http"
-	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -13,18 +10,6 @@ import (
 
 type liveProber interface {
 	ProbeLive(context.Context, string) (*core.MediaInfo, error)
-}
-
-type authenticatedLiveProber interface {
-	ProbeLiveWithHeaders(context.Context, string, map[string]string) (*core.MediaInfo, error)
-}
-
-func flattenInputHeaders(headers http.Header) map[string]string {
-	out := make(map[string]string, len(headers))
-	for key, values := range headers {
-		out[key] = strings.Join(values, ", ")
-	}
-	return out
 }
 
 type liveProbeEntry struct {
@@ -35,17 +20,27 @@ type liveProbeEntry struct {
 // A short cache reuses capability-independent codec analysis on channel switches.
 // Errors are never cached; URL changes naturally invalidate signed/rotated feeds.
 func (s *Service) probeLiveInput(ctx context.Context, input string) (*core.MediaInfo, error) {
-	return s.probeLiveInputWithHeaders(ctx, input, nil)
+	return s.probeLiveCached(ctx, input, input)
 }
 
-func (s *Service) probeLiveInputWithHeaders(ctx context.Context, input string, headers http.Header) (*core.MediaInfo, error) {
-	if err := ctx.Err(); err != nil {
+// probeSessionInput probes the session's input through its relay grant. The
+// cache stays keyed by the upstream URL and headers, not the per-tune token.
+func (s *Service) probeSessionInput(ctx context.Context, ss *session) (*core.MediaInfo, error) {
+	input, err := s.relayInput(ss)
+	if err != nil {
 		return nil, err
 	}
-	key := input
-	if len(headers) != 0 {
-		encoded, _ := json.Marshal(headers)
-		key = stableID(input, string(encoded))
+	key := ss.inputURL
+	if len(ss.inputHeaders) != 0 {
+		encoded, _ := json.Marshal(ss.inputHeaders)
+		key = stableID(ss.inputURL, string(encoded))
+	}
+	return s.probeLiveCached(ctx, key, input)
+}
+
+func (s *Service) probeLiveCached(ctx context.Context, key, input string) (*core.MediaInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	s.probeMu.Lock()
 	entry, found := s.probeCache[key]
@@ -56,13 +51,7 @@ func (s *Service) probeLiveInputWithHeaders(ctx context.Context, input string, h
 	}
 	var info *core.MediaInfo
 	var err error
-	if len(headers) != 0 {
-		p, ok := s.o.Transcoder.(authenticatedLiveProber)
-		if !ok {
-			return nil, fmt.Errorf("transcoder does not support authenticated live inputs")
-		}
-		info, err = p.ProbeLiveWithHeaders(ctx, input, flattenInputHeaders(headers))
-	} else if p, ok := s.o.Transcoder.(liveProber); ok {
+	if p, ok := s.o.Transcoder.(liveProber); ok {
 		info, err = p.ProbeLive(ctx, input)
 	} else {
 		info, err = s.o.Transcoder.Probe(ctx, input)

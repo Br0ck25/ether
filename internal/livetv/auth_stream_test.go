@@ -3,22 +3,31 @@ package livetv
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
+// authLiveProbeFixture reads its input the way ffprobe does: a bare URL,
+// with no provider headers.
 type authLiveProbeFixture struct {
 	fixtureLiveProber
-	headers map[string]string
+	input, body string
 }
 
-func (p *authLiveProbeFixture) ProbeLiveWithHeaders(ctx context.Context, input string, headers map[string]string) (*core.MediaInfo, error) {
-	p.headers = headers
-	return p.ProbeLive(ctx, input)
+func (p *authLiveProbeFixture) ProbeLive(ctx context.Context, input string) (*core.MediaInfo, error) {
+	p.input = input
+	if res, err := http.Get(input); err == nil {
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		p.body = string(b)
+	}
+	return p.fixtureLiveProber.ProbeLive(ctx, input)
 }
 
 func (p *authLiveProbeFixture) Decide(core.MediaInfo, core.ClientCaps, core.DecideOptions) core.Decision {
@@ -73,8 +82,11 @@ func TestProviderAuthReachesProbeKeyMediaButNotAnonymousBackup(t *testing.T) {
 	}
 	u := &core.User{ID: 1}
 	first, err := s.Tune(context.Background(), u, c.ID, core.ClientCaps{Product: "Plex for Apple TV"})
-	if err != nil || p.headers["Authorization"] != "Bearer fixture-secret" {
-		t.Fatalf("authenticated live probe failed: %v", err)
+	if err != nil || !strings.HasPrefix(p.input, "http://127.0.0.1:") || strings.Contains(p.input, up.URL) || strings.Contains(p.input, "fixture-secret") {
+		t.Fatalf("live probe did not read through the relay: %q %v", p.input, err)
+	}
+	if !strings.Contains(p.body, "#EXT-X-KEY") || strings.Contains(p.body, up.URL) || strings.Contains(p.body, "fixture-secret") {
+		t.Fatalf("relayed playlist was not authenticated and rewritten: %q", p.body)
 	}
 	req := httptest.NewRequest("GET", "/?X-Plex-Token=viewer-only", nil)
 	req.Header.Set("X-Plex-Token", "viewer-only")

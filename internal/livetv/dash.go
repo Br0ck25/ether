@@ -63,7 +63,7 @@ func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.
 	info := ss.info.MediaInfo
 	if info == nil {
 		var err error
-		if info, err = s.probeLiveInputWithHeaders(ctx, ss.inputURL, ss.inputHeaders); err != nil {
+		if info, err = s.probeSessionInput(ctx, ss); err != nil {
 			return nil, err
 		}
 		if info == nil {
@@ -80,7 +80,11 @@ func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.
 		dec.VideoCopy = true
 		dec.AudioCopy = true
 	}
-	hs, err := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: ss.inputURL, LiveInput: true, InputHeaders: flattenInputHeaders(ss.inputHeaders), Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
+	input, err := s.relayInput(ss)
+	if err != nil {
+		return nil, err
+	}
+	hs, err := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: input, LiveInput: true, Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
 	if err != nil {
 		return nil, err
 	}

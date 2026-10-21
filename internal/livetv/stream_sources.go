@@ -241,7 +241,12 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 		ss.inputHeaders = headers.Clone()
 		ss.info.MediaInfo, ss.relayInfo = nil, nil
 		ss.resources = map[string]string{}
-		err = s.startIPTVSource(attemptCtx, ss)
+		// ffmpeg and ffprobe read this input through a loopback grant, never
+		// with the provider URL or headers on their command line.
+		err = s.grantInput(ss, src, headers)
+		if err == nil {
+			err = s.startIPTVSource(attemptCtx, ss)
+		}
 		cancel()
 		if err == nil {
 			ss.info.ActiveSourceID = src.ID
@@ -252,6 +257,7 @@ func (s *Service) startIPTV(ctx context.Context, ss *session) error {
 			ss.relay.Close()
 			ss.relay = nil
 		}
+		s.revokeInput(ss)
 		last = err
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			s.recordSourceHealth(c.ID, src, err, false)
