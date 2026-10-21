@@ -189,15 +189,19 @@ func TestRTXSeekUsesIndexAndAbsoluteFrameClock(t *testing.T) {
 // The recorded command remains the real executable API, not FFmpeg flags.
 type rtxTestRunner struct {
 	Runner
-	fake        *fakeRunner
-	mu          sync.Mutex
-	calls       []Command
-	fail        bool
-	failRuntime bool
+	fake            *fakeRunner
+	mu              sync.Mutex
+	calls           []Command
+	fail            bool
+	failRuntime     bool
+	onOrdinaryStart func()
 }
 
 func (r *rtxTestRunner) Start(c Command) (Process, error) {
 	if c.Path != "NVEncC64.exe" {
+		if r.onOrdinaryStart != nil {
+			r.onOrdinaryStart()
+		}
 		return r.Runner.Start(c)
 	}
 	r.mu.Lock()
@@ -296,6 +300,10 @@ func TestRTXStartupFailureFallsBackOnce(t *testing.T) {
 			if s.rungs[0].height != 720 {
 				t.Fatal("stale enhanced manifest dimensions")
 			}
+			if !s.cur.spec.RTXTimeline {
+				t.Fatal("startup fallback lost native timeline")
+			}
+			mustContain(t, r.fake.lastStart(), "-muxdelay 0 -muxpreload 0")
 		})
 	}
 }

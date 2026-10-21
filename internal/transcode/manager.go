@@ -395,9 +395,9 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	rtxConfig, _ := normalizedRTX(m.cfg.RTXVideo)
 	adapt := adaptiveFromConfig(m.cfg)
 	if enhancementSelected(d) {
-		// Native VSR uses one steady output; adaptive ramp/ladder variants
-		// have not been validated with this backend.
-		adapt.FastStart, adapt.Ladder, adapt.Governor = false, false, false
+		// Native VSR keeps a steady clock. Lower rungs use ordinary FFmpeg
+		// on that same clock; never change the timeline on a VSR fallback.
+		adapt.FastStart = false
 	}
 	atCap := m.cfg.MaxTranscodes > 0 && m.encodingLocked(req.SessionID) >= m.cfg.MaxTranscodes
 	m.mu.Unlock()
@@ -528,6 +528,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
 	}
 	s := &Session{
+		rtxTimeline:  enhancementSelected(d),
 		rtxConfig:    rtxConfig,
 		liveInput:    req.LiveInput,
 		id:           id,

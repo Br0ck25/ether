@@ -34,6 +34,7 @@ import (
 // chunks that the session regroups into numbered segments by timestamp.
 type Session struct {
 	rtxConfig          config.RTXVideo
+	rtxTimeline        bool
 	rtxDiscontinuities map[int]bool
 
 	liveInput    bool
@@ -1165,8 +1166,10 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		accel = core.HWAccel{Name: AccelNone}
 	}
 	rp := s.runPlanLocked(seg)
+	s.prepareRTXRunLocked(&rp, seg)
 	s.seekRampSeg = -1
 	spec := runSpec{
+		RTXTimeline:  s.rtxTimeline,
 		LiveInput:    s.liveInput,
 		InputHeaders: s.inputHeaders,
 		Input:        s.input,

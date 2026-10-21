@@ -13,7 +13,10 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
-	LiveInput    bool
+	LiveInput bool
+	// RTXTimeline preserves the native session's clock and rendition-local
+	// initialization paths when ordinary FFmpeg takes over.
+	RTXTimeline  bool
 	InputHeaders map[string]string
 	Input        string
 	Info         core.MediaInfo
@@ -109,6 +112,16 @@ func buildArgs(s runSpec) []string {
 	args := buildCodecArgs(s)
 	if s.Protocol == core.ProtocolDASH {
 		return append(args, dashMuxArgs(s)...)
+	}
+	if s.RTXTimeline && s.Decision.Container == ContainerMPEGTS {
+		// Both HLS and its child TS muxer must preserve timestamps: the
+		// child otherwise shifts a zero-origin B-frame run to positive DTS.
+		args = append(args, "-muxdelay", "0", "-muxpreload", "0", "-hls_segment_options", "mpegts_copyts=1:avoid_negative_ts=disabled")
+	}
+	if s.RTXTimeline && s.Decision.Container == ContainerFMP4 && s.InitName != "" && !filepath.IsAbs(s.InitName) {
+		// Windows FFmpeg otherwise resolves this against the process's
+		// working directory, which is the session root even for lower rungs.
+		s.InitName = filepath.Join(s.Dir, s.InitName)
 	}
 	return append(args, hlsMuxArgs(s)...)
 }

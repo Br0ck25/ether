@@ -11,6 +11,25 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
+// prepareRTXRunLocked runs after the old process has been reaped. The base
+// retains its native plan while a lower ordinary rung is active, so a later
+// base request can retry only through the usual runtime/permit/seek checks.
+func (s *Session) prepareRTXRunLocked(rp *runPlan, seg int) {
+	if s.decision.Enhancement.Backend != rtxBackend {
+		return
+	}
+	if !enhancementSelected(rp.decision) {
+		if s.wantTrack != 0 && len(s.rungs) > 0 && enhancementSelected(s.rungs[0].decision) {
+			s.decision.Enhancement = core.VideoEnhancement{Backend: rtxBackend, State: "fallback", Reason: "ordinary ABR rendition active; enhancement reserved for base"}
+		}
+		return
+	}
+	if gp := s.goodput.Kbps(); gp > 0 && gp*9/10 < decisionTotalKbps(s.info, rp.decision) {
+		s.fallbackRTXLocked("measured bandwidth is below enhanced base; ordinary transcoder required", seg)
+		rp.decision = s.trackDecisionLocked(s.wantTrack)
+	}
+}
+
 // startRTXRunLocked either returns a native backend process or records an
 // explicit fallback and lets the caller start ordinary FFmpeg. The permit is
 // released only after the OS process is reaped, including start failures.
@@ -59,6 +78,7 @@ func (s *Session) startRTXRunLocked(spec runSpec, stdout, stderr *lineWriter) (P
 	}
 	held := &rtxPermitProcess{Process: p, done: make(chan struct{}), release: release}
 	go func() { <-p.Done(); held.once.Do(release); close(held.done) }()
+	s.decision.Enhancement = spec.Decision.Enhancement
 	s.decision.Enhancement.State = "starting"
 	s.decision.Enhancement.Reason = "waiting for enhanced segments from NVEncC/NGX"
 	return held, args, nil
@@ -87,15 +107,43 @@ func (s *Session) fallbackRTXLocked(reason string, seg int) {
 	if v != nil {
 		s.decision.MaxHeight = minPositive(s.decision.MaxHeight, v.Height)
 	}
+	oldWidth, oldHeight := 0, 0
+	if len(s.rungs) > 0 {
+		oldWidth, oldHeight = s.rungs[0].width, s.rungs[0].height
+	}
 	for i := range s.rungs {
 		d := s.rungs[i].decision
-		d.Enhancement = s.decision.Enhancement
+		if i == 0 {
+			d.Enhancement = s.decision.Enhancement
+		} else {
+			d.Enhancement = core.VideoEnhancement{}
+		}
 		if v != nil {
 			d.MaxHeight = minPositive(d.MaxHeight, v.Height)
 			s.rungs[i].width, s.rungs[i].height = decisionOutputSize(v, d)
 		}
 		s.rungs[i].decision = d
 		s.rungs[i].codecs = rungCodecs(s.info, d, s.rungs[i].height)
+	}
+	if len(s.rungs) > 0 && (oldWidth != s.rungs[0].width || oldHeight != s.rungs[0].height) {
+		// A new ordinary init cannot describe cached enhanced video. Keep
+		// the timeline and lower caches, but regenerate base on any revisit.
+		if len(s.done) > 0 {
+			for n := range s.done[0] {
+				_ = os.Remove(s.trackSegPath(0, n))
+				delete(s.done[0], n)
+			}
+		}
+		s.initFile = ""
+		if len(s.initFiles) > 0 {
+			s.initFiles[0] = ""
+		}
+		if s.dash != nil && len(s.dash.inits) > 0 {
+			s.dash.inits[0] = ""
+			if len(s.dash.codecs) > 0 {
+				s.dash.codecs[0] = ""
+			}
+		}
 	}
 	if seg > 0 {
 		if s.rtxDiscontinuities == nil {
@@ -108,8 +156,15 @@ func (s *Session) fallbackRTXLocked(reason string, seg int) {
 		// Transport shape/track selection is unchanged; only video dimensions
 		// change. collectDASH publishes this run's new initialization segment.
 		for i := range s.dash.reps {
-			if s.dash.reps[i].Kind == "video" && v != nil {
-				s.dash.reps[i].Width, s.dash.reps[i].Height = decisionOutputSize(v, s.decision)
+			rep := &s.dash.reps[i]
+			if rep.Kind != "video" {
+				continue
+			}
+			for _, next := range dashReps(s.info, s.trackDecisionLocked(rep.ID)) {
+				if next.Kind == "video" {
+					rep.Width, rep.Height, rep.Codecs, rep.Bandwidth = next.Width, next.Height, next.Codecs, next.Bandwidth
+					break
+				}
 			}
 		}
 		s.dash.mpd = nil

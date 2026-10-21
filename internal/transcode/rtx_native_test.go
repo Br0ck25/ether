@@ -38,18 +38,23 @@ func TestRTXNativeLifecycle(t *testing.T) {
 		}
 	})
 	input := filepath.Join(dir, "source.mp4")
+	adaptive := os.Getenv("ETHER_RTX_TEST_ADAPTIVE") == "1"
 	rate := "24"
 	if os.Getenv("ETHER_RTX_TEST_FRACTIONAL") == "1" {
 		rate = "24000/1001"
 	}
-	args := []string{"-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=" + rate, "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-map", "0:v", "-map", "1:a", "-map", "2:a", "-t", "20", "-c:v", "h264_nvenc", "-g", "72", "-bf", "0", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", input}
+	span := "20"
+	if adaptive {
+		span = "40"
+	}
+	args := []string{"-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=" + rate, "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-map", "0:v", "-map", "1:a", "-map", "2:a", "-t", span, "-c:v", "h264_nvenc", "-g", "72", "-bf", "0", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", input}
 	if out, err := exec.CommandContext(ctx, ff, args...).CombinedOutput(); err != nil {
 		t.Fatalf("fixture: %v %s", err, out)
 	}
 	srv := httptest.NewServer(http.FileServer(http.Dir(dir)))
 	defer srv.Close()
 	quality, _ := strconv.Atoi(os.Getenv("ETHER_RTX_TEST_QUALITY"))
-	m, err := New(config.Transcode{FFmpegPath: ff, FFprobePath: fp, TempDir: filepath.Join(dir, "sessions"), RTXVideo: config.RTXVideo{Mode: "on", ExecutablePath: nv, Quality: quality}}, testLogger(t), WithoutHWDetection(), WithBuffering(24*time.Second, 0, 0), WithSegmentTimeout(60*time.Second), withPollInterval(20*time.Millisecond))
+	m, err := New(config.Transcode{ABRLadder: adaptive, FFmpegPath: ff, FFprobePath: fp, TempDir: filepath.Join(dir, "sessions"), RTXVideo: config.RTXVideo{Mode: "on", ExecutablePath: nv, Quality: quality}}, testLogger(t), WithoutHWDetection(), WithBuffering(24*time.Second, 0, 0), WithSegmentTimeout(60*time.Second), withPollInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +147,141 @@ func TestRTXNativeLifecycle(t *testing.T) {
 			if proto == core.ProtocolHLS {
 				checkNativeAudio(t, ctx, ff, first)
 			}
+			if adaptive {
+				for seg := 0; seg < 2; seg++ {
+					rec := httptest.NewRecorder()
+					s.ServeRungSegment(rec, httptest.NewRequest("GET", "/base-segment", nil), "base", seg)
+					if rec.Code != 200 {
+						t.Fatalf("base delivery %d: %d", seg, rec.Code)
+					}
+				}
+				for i, id := range []string{"480p1500k", "360p800k", "base"} {
+					seg := i + 2
+					if id == "base" {
+						// The fast native fixture may already have filled this
+						// segment. Force a cache miss to prove a real recovery run.
+						s.mu.Lock()
+						delete(s.done[0], seg)
+						_ = os.Remove(s.trackSegPath(0, seg))
+						s.mu.Unlock()
+					}
+					rec := httptest.NewRecorder()
+					started := time.Now()
+					s.ServeRungSegment(rec, httptest.NewRequest("GET", "/segment", nil), id, seg)
+					elapsed := time.Since(started)
+					if rec.Code != 200 {
+						t.Fatalf("switch %s: %d %s", id, rec.Code, rec.Body.String())
+					}
+					s.mu.Lock()
+					track := s.rungTrack(id)
+					path := s.trackSegPath(track, seg)
+					init := ""
+					if !s.isDASH() {
+						init = s.initFileLocked(track)
+					}
+					rungIdx := track
+					if s.isDASH() {
+						rungIdx = rungForDashTrack(track)
+					}
+					rung := s.rungs[rungIdx]
+					cur := s.cur
+					audio := ""
+					if s.isDASH() {
+						audio = s.trackSegPath(s.audioTrackLocked(), seg)
+					}
+					s.mu.Unlock()
+					if s.container == ContainerFMP4 && !s.isDASH() && init == "" {
+						_ = filepath.WalkDir(s.dir, func(path string, _ os.DirEntry, err error) error {
+							if err == nil {
+								t.Logf("init diagnostic: %s", path)
+							}
+							return nil
+						})
+						t.Fatal("lower fMP4 init not published")
+					}
+					inspected := checkNativeSegmentSize(t, ctx, fp, dir, s.dir, path, init, float64(seg*4), rung.width, rung.height)
+					if audio == "" {
+						audio = inspected
+					}
+					checkNativeAudio(t, ctx, ff, audio)
+					checkNativeAudioStart(t, ctx, fp, audio, float64(seg*4))
+					if id != "base" {
+						if cur.rtx || m.EnhancementStatus().Active != 0 || s.Decision().Enhancement.State != "fallback" {
+							t.Fatalf("ordinary takeover: %+v", s.Decision())
+						}
+					} else if !cur.rtx || !cur.rtxConfirmed.Load() {
+						t.Fatal("recovery was not genuine NGX")
+					}
+					t.Logf("native adaptive %s %s: %dx%d at %ds; IDR/GOP/audio aligned; request=%v", proto, id, rung.width, rung.height, seg*4, elapsed)
+				}
+				// An unsupported native seek must keep the established clock
+				// and all ordinary representations while releasing VSR.
+				noIndex := *info
+				noIndex.Keyframes = nil
+				if err := s.SwapInput(ctx, req.InputURL, noIndex, 32*time.Second); err != nil {
+					t.Fatal(err)
+				}
+				checkOrdinary := func(s *Session, seg int, at float64) {
+					t.Helper()
+					rec := httptest.NewRecorder()
+					s.ServeRungSegment(rec, httptest.NewRequest("GET", "/fallback", nil), "base", seg)
+					if rec.Code != 200 {
+						t.Fatalf("fallback media %d %s", rec.Code, rec.Body.String())
+					}
+					s.mu.Lock()
+					path, init := s.trackSegPath(0, seg), ""
+					if !s.isDASH() {
+						init = s.initFileLocked(0)
+					}
+					audio := ""
+					if s.isDASH() {
+						audio = s.trackSegPath(s.audioTrackLocked(), seg)
+					}
+					for _, r := range s.rungs {
+						if r.id == "480p1500k" && r.height != 480 {
+							t.Errorf("fallback corrupted lower metadata: %+v", r)
+						}
+					}
+					s.mu.Unlock()
+					inspected := checkNativeSegmentSize(t, ctx, fp, dir, s.dir, path, init, at, 1280, 720)
+					if audio == "" {
+						audio = inspected
+					}
+					checkNativeAudio(t, ctx, ff, audio)
+					checkNativeAudioStart(t, ctx, fp, audio, at)
+					if s.Decision().Enhancement.State != "fallback" || m.EnhancementStatus().Active != 0 {
+						t.Fatalf("ordinary fallback state %+v", s.Decision())
+					}
+				}
+				checkOrdinary(s, 8, 32)
+				checkOrdinary(s, 0, 0) // cached enhanced bytes must not survive the shape change
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if m.EnhancementStatus().Active != 0 {
+					t.Fatal("native permit leaked")
+				}
+				startupReq := req
+				startupReq.SessionID += "-startup-fallback"
+				startupReq.Info = noIndex
+				startupReq.StartOffset = 4 * time.Second
+				hs, err := m.StartHLS(ctx, startupReq)
+				if err != nil {
+					t.Fatal(err)
+				}
+				startup := hs.(*Session)
+				defer startup.Close()
+				seg := 0
+				if startup.isDASH() {
+					seg = 1
+				}
+				checkOrdinary(startup, seg, 4)
+				if err := startup.Close(); err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("native adaptive %s: permanent32s and startup4s ordinary fallback clocks/audio/metadata verified; permits=0", proto)
+				return
+			}
 			if rate != "24" {
 				return
 			}
@@ -166,7 +306,34 @@ func TestRTXNativeLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func checkNativeAudioStart(t *testing.T, ctx context.Context, probe, path string, start float64) {
+	t.Helper()
+	out, err := exec.CommandContext(ctx, probe, "-v", "error", "-select_streams", "a:0", "-show_packets", "-show_entries", "packet=pts_time", "-of", "json", path).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p struct {
+		Packets []struct {
+			PTS string `json:"pts_time"`
+		}
+	}
+	if err := json.Unmarshal(out, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Packets) == 0 {
+		t.Fatal("missing audio packets")
+	}
+	pts, err := strconv.ParseFloat(p.Packets[0].PTS, 64)
+	if err != nil || math.Abs(pts-start) > 0.05 {
+		t.Fatalf("audio starts %s, want %.3f", p.Packets[0].PTS, start)
+	}
+}
 func checkNativeSegment(t *testing.T, ctx context.Context, probe, dir, sessionDir, path, init string, start float64) {
+	checkNativeSegmentSize(t, ctx, probe, dir, sessionDir, path, init, start, 1920, 1080)
+}
+
+func checkNativeSegmentSize(t *testing.T, ctx context.Context, probe, dir, sessionDir, path, init string, start float64, width, height int) string {
 	t.Helper()
 	if init != "" {
 		initPath := init
@@ -201,17 +368,25 @@ func checkNativeSegment(t *testing.T, ctx context.Context, probe, dir, sessionDi
 	if err := json.Unmarshal(out, &p); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Streams) != 1 || p.Streams[0].Width != 1920 || p.Streams[0].Height != 1080 || len(p.Packets) == 0 {
+	if len(p.Streams) != 1 || p.Streams[0].Width != width || p.Streams[0].Height != height || len(p.Packets) == 0 {
 		t.Fatalf("bad enhanced segment: %s", out)
 	}
 	pts, _ := strconv.ParseFloat(p.Packets[0].PTS, 64)
 	if math.Abs(pts-start) > 1.0/24+0.002 || !strings.Contains(p.Packets[0].Flags, "K") {
 		t.Fatalf("boundary pts=%f want=%f flags=%s", pts, start, p.Packets[0].Flags)
 	}
-	last, _ := strconv.ParseFloat(p.Packets[len(p.Packets)-1].PTS, 64)
+	last := pts
+	for _, packet := range p.Packets {
+		v, err := strconv.ParseFloat(packet.PTS, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = math.Max(last, v) // ordinary encoders may reorder B frames
+	}
 	if math.Abs(last+1.0/24-start-4) > 0.006 {
 		t.Fatalf("GOP duration mismatch start=%f last=%f", pts, last)
 	}
+	return path
 }
 
 // Two known fixture tones establish selected-track preservation through a seek.

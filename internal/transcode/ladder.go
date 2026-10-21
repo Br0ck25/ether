@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -66,6 +67,14 @@ func rungCodecs(info core.MediaInfo, d core.Decision, outHeight int) string {
 		}
 	}
 	c := estimateCodecs(codec, profile, outHeight, depth)
+	if enhancementSelected(d) {
+		// Match the native builder's explicit High 4.1/5.1 contract rather
+		// than the ordinary encoder's resolution-only level estimate.
+		c = "avc1.640029"
+		if d.Enhancement.Width*d.Enhancement.Height > 1920*1088 || v.FrameRate > 30 {
+			c = "avc1.640033"
+		}
+	}
 	if a := findStream(info, d.AudioStream, "audio"); a != nil {
 		ac := a.Codec
 		ap := a.Profile
@@ -162,9 +171,12 @@ func buildRungs(info core.MediaInfo, primary core.Decision, adapt adaptiveSettin
 			continue
 		}
 		d := primary
+		// Enhancement belongs only to the base. These are ordinary encodes
+		// of the source, including when the base upscales beyond the source.
+		d.Enhancement = core.VideoEnhancement{}
 		d.Kind = core.DecisionTranscode
 		d.VideoCopy = false
-		d.MaxHeight = step.height
+		d.MaxHeight = minPositive(step.height, v.Height)
 		d.BitrateKbps = total
 		// Keep HDR only when the primary keeps it in HEVC; otherwise the
 		// cheap, universally decoded SDR H.264 encode.
@@ -175,6 +187,9 @@ func buildRungs(info core.MediaInfo, primary core.Decision, adapt adaptiveSettin
 			d.ToneMap = false
 		}
 		d.Reason = primary.Reason + "; ABR rung " + step.id
+		if enhancementSelected(primary) {
+			d.Reason = "ordinary ABR rung " + step.id + " beneath RTX Video base"
+		}
 		w, h := outputSize(v.Width, v.Height, step.height)
 		rungs = append(rungs, rung{
 			id: step.id, decision: d, width: w, height: h,
@@ -304,6 +319,13 @@ func (s *Session) ServeRungSegment(w http.ResponseWriter, r *http.Request, rungI
 // rung, all $Number$-aligned on the session's segment duration.
 func dashRepsLadder(info core.MediaInfo, primary core.Decision, rungs []rung) []dashRep {
 	reps := dashReps(info, primary)
+	if enhancementSelected(primary) && len(rungs) > 0 {
+		for i := range reps {
+			if reps[i].Kind == "video" {
+				reps[i].Codecs = strings.SplitN(rungs[0].codecs, ",", 2)[0]
+			}
+		}
+	}
 	for i := 1; i < len(rungs); i++ {
 		sub := dashReps(info, rungs[i].decision)
 		for _, r := range sub {
