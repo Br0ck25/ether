@@ -360,9 +360,13 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
             "transcoder_cmdlines":cmdlines,"playlist_endlist":end})
         if cpu_start and root_pid and samples:
             cpu_end=sample_tree(root_pid)
-            result["tree_cpu_delta_s"]=round(cpu_end["cpu_seconds"]-cpu_start["cpu_seconds"],3)
-            result["tree_io_delta"]={"read_bytes":cpu_end["read_bytes"]-cpu_start["read_bytes"],
-                                     "write_bytes":cpu_end["write_bytes"]-cpu_start["write_bytes"]}
+            delta, io_delta, valid = compute_tree_delta(cpu_start, cpu_end)
+            if valid:
+                result["tree_cpu_delta_s"]=delta; result["tree_io_delta"]=io_delta
+            else:  # children exited -> cumulative /proc counters drop; never invent savings
+                result["tree_cpu_delta_s"]=None; result["tree_io_delta"]=None
+                result["cpu_sampling"]="unavailable"
+                result["cpu_sampling_reason"]="invalid/incomplete tree delta (negative; children likely exited)"
         else:
             result["tree_cpu_delta_s"]=None; result["tree_io_delta"]=None
             result["cpu_sampling"]="unavailable"
@@ -377,10 +381,26 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
             "transcoder_used_hw": any(("vaapi" in c["cmdline"] or "nvenc" in c["cmdline"]) for c in cmdlines)}
         return result
     finally:
-        # stop request each session in finally
-        try: http_get(stop_url, timeout=5)
-        except Exception: pass
-        result.setdefault("stopped_session", True)
+        # stop request each session in finally; reflect actual success
+        try:
+            stop_status,_,_ = http_get(stop_url, timeout=5)
+            result["stopped_session"] = stop_status in (200, 204)
+            result["stop_status"] = stop_status
+        except Exception:
+            result["stopped_session"] = False
+            result["stop_status"] = None
+
+def compute_tree_delta(start: dict, end: dict):
+    """(cpu_delta_s, io_delta, valid). Negative/incomplete -> invalid, caller labels unavailable."""
+    try:
+        cpu = round(end["cpu_seconds"]-start["cpu_seconds"], 3)
+        io = {"read_bytes": end["read_bytes"]-start["read_bytes"],
+              "write_bytes": end["write_bytes"]-start["write_bytes"]}
+    except Exception:
+        return None, None, False
+    if cpu < 0 or io["read_bytes"] < 0 or io["write_bytes"] < 0: return None, None, False
+    if not end.get("processes"): return None, None, False
+    return cpu, io, True
 
 def verify_output(cfg: Config, out_dir: Path, sessions: list) -> dict:
     """Separate quality phase (not counted in encode). Uses ffprobe if available."""
@@ -388,9 +408,13 @@ def verify_output(cfg: Config, out_dir: Path, sessions: list) -> dict:
     if not cfg.preserve_media: v["reason"]="preserve_media off"; return v
     ffprobe=cfg.ffprobe or str(Path(cfg.lab_root)/"ether/ffprobe")
     if not Path(ffprobe).exists(): v["reason"]=f"ffprobe not found: {ffprobe}"; return v
-    for idx in range(len(sessions)):
-        d=out_dir/f"session-{idx}"; segs=sorted(d.glob("seg-*.ts"))
-        if not segs: continue
+    per_session=[]
+    for idx, sess in enumerate(sessions):
+        sidx = sess.get("session_index", idx) if isinstance(sess, dict) else idx
+        d=out_dir/f"session-{sidx}"; segs=sorted(d.glob("seg-*.ts"))
+        if not segs:
+            per_session.append({"session_index":sidx,"checked":False,"matches_codec":False,
+                                "matches_resolution":False,"reason":"no preserved segments"}); continue
         concat=b"".join(p.read_bytes() for p in segs)
         tmp=d/"concat.ts"; tmp.write_bytes(concat)
         try:
@@ -398,13 +422,20 @@ def verify_output(cfg: Config, out_dir: Path, sessions: list) -> dict:
                 "stream=codec_name,width,height","-of","json",str(tmp)],capture_output=True,text=True,timeout=30)
             if r.returncode!=0: raise BenchError(f"ffprobe decode check failed: {sanitize(r.stderr[:500])}")
             info=json.loads(r.stdout); st=(info.get("streams") or [{}])[0]
-            return {"checked":True,"codec":st.get("codec_name"),"width":st.get("width"),"height":st.get("height"),
-                    "expected_codec":cfg.profile.video_codec,
-                    "matches_codec": st.get("codec_name")==cfg.profile.video_codec,
-                    "matches_resolution": f"{st.get('width')}x{st.get('height')}"==cfg.profile.video_resolution}
+            per_session.append({"session_index":sidx,"checked":True,"codec":st.get("codec_name"),
+                "width":st.get("width"),"height":st.get("height"),"expected_codec":cfg.profile.video_codec,
+                "matches_codec": st.get("codec_name")==cfg.profile.video_codec,
+                "matches_resolution": f"{st.get('width')}x{st.get('height')}"==cfg.profile.video_resolution})
         except BenchError: raise
         except Exception as e: raise BenchError(f"ffprobe failed: {e}")
-    v["reason"]="no preserved segments"; return v
+    if not per_session: v["reason"]="no sessions"; return v
+    first=per_session[0]
+    return {"checked": all(x["checked"] for x in per_session),
+            "codec": first.get("codec"), "width": first.get("width"), "height": first.get("height"),
+            "expected_codec": cfg.profile.video_codec,
+            "matches_codec": all(x.get("matches_codec") for x in per_session),
+            "matches_resolution": all(x.get("matches_resolution") for x in per_session),
+            "sessions": per_session}
 
 def main(argv=None):
     ap=argparse.ArgumentParser(description="Authentic Plex CPU transcode baseline")
@@ -432,34 +463,47 @@ def main(argv=None):
           "source":{"fixture":str(fixture),"sha256":sha256_file(fixture) if fixture.exists() else None,
                     "bytes":fixture.stat().st_size if fixture.exists() else None},
           "host_label":"CPU-only, AMD Ryzen 7 2700X, Radeon HD 7450 (decode-only VA), software encode"}
-    pms=None; root_pid=None; sessions=[]
+    pms=None; root_pid=None; sessions=[]; waves=[]
     try:
         if cfg.launch:
             pms=PmsProcess(cfg); meta["pms_pid"]=pms.start(); root_pid=pms.pid
             meta["identity"]=pms.wait_identity()
         else:
-            # external server: identity only, tree sampling unavailable unless --pms-pid given via env
             s,_,b=http_get(cfg.base_url+"/identity",timeout=10)
             root=ET.fromstring(b); meta["identity"]={"claimed":root.get("claimed"),"version":root.get("version")}
         meta["pms_version"]=meta.get("identity",{}).get("version")
-        total_runs=cfg.repeats*cfg.concurrency
-        # concurrency = simultaneous sessions per repeat wave; repeats = waves
+        # concurrency = simultaneous sessions per wave; repeats = waves.
+        # Wave wall is setup-inclusive and is the ONLY denominator for aggregate speed.
         for wave in range(cfg.repeats):
+            t_wave=time.monotonic(); wave_sessions=[]
             with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.concurrency) as ex:
                 futs=[ex.submit(run_session,cfg,root_pid,out_dir,wave*cfg.concurrency+i) for i in range(cfg.concurrency)]
-                for f in futs: sessions.append(f.result())
-        meta["sessions"]=sessions
+                for f in futs: wave_sessions.append(f.result())
+            wall=time.monotonic()-t_wave
+            media_total=round(sum(s.get("actual_media_s") or 0 for s in wave_sessions),3)
+            wall_r=round(wall,3)
+            waves.append({"wave":wave,"wall_s":wall_r,"concurrency":cfg.concurrency,
+                          "sessions":len(wave_sessions),"actual_media_total_s":media_total,
+                          "aggregate_media_per_wall_s": round(media_total/wall_r,3) if wall_r>0 else None})
+            sessions.extend(wave_sessions)
+        meta["sessions"]=sessions; meta["waves"]=waves
         meta["verify"]=verify_output(cfg,out_dir,sessions)  # separate phase
-        meta["ok"]=True
+        v=meta["verify"]
+        if v.get("checked") and not (v.get("matches_codec") and v.get("matches_resolution")):
+            meta["ok"]=False; meta["error"]="verify mismatch: codec/resolution does not match profile in at least one session"
+        elif cfg.preserve_media and sessions and not v.get("checked"):
+            meta["ok"]=False; meta["error"]=f"verify incomplete: {v.get('reason','not all sessions checked')}"
+        else:
+            meta["ok"]=True
     except Exception as e:
-        meta["ok"]=False; meta["error"]=sanitize(str(e)); meta["sessions"]=sessions
-        (out_dir/"result.json").write_text(json.dumps(meta,indent=2))
-        print(json.dumps({"ok":False,"error":meta["error"],"out":str(out_dir)})); return 1
+        meta["ok"]=False; meta["error"]=sanitize(str(e)); meta["sessions"]=sessions; meta["waves"]=waves
     finally:
         if pms: pms.stop(); meta["pms_stopped"]=True
     (out_dir/"result.json").write_text(json.dumps(meta,indent=2))
-    print(json.dumps({"ok":True,"out":str(out_dir),"sessions":len(sessions),
-                      "actual_media_s":[s.get("actual_media_s") for s in sessions]}))
-    return 0
+    print(json.dumps({"ok":meta["ok"],"out":str(out_dir),"sessions":len(sessions),
+                      **({"error":meta["error"]} if not meta["ok"] else {}),
+                      "actual_media_s":[s.get("actual_media_s") for s in sessions],
+                      "waves":waves}))
+    return 0 if meta["ok"] else 1
 
 if __name__=="__main__": sys.exit(main())

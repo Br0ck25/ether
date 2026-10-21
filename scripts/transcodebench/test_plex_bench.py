@@ -32,7 +32,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if self.mode == "order" and idx == 0:
                 import time; time.sleep(0.4)
             return self._send(200, bytes([65+idx]) * 189)
-        if "/stop" in p: return self._send(200, b"ok")
+        if "/stop" in p:
+            if self.mode == "stop404": return self._send(404, b"no session")
+            return self._send(200, b"ok")
         return self._send(404, b"nope")
     def _send(self, code, body, ct="application/vnd.apple.mpegurl"):
         self.send_response(code); self.send_header("Content-Type", ct)
@@ -114,6 +116,48 @@ class TestFakeServer(unittest.TestCase):
             with self.assertRaises(pb.BenchError) as cm:
                 pb.run_session(self.cfg(), os.getpid(), Path(d), 0)  # owned tree has no Transcoder
         self.assertIn("no Plex Transcoder argv", str(cm.exception))
+    def test_failed_stop_reflected_not_true(self):
+        Handler.mode = "stop404"
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            r = pb.run_session(self.cfg(), None, Path(d), 0)
+        self.assertFalse(r["stopped_session"])
+        Handler.mode = "ok"
+    def test_negative_tree_delta_invalid(self):
+        s = {"cpu_seconds": 10.0, "read_bytes": 100, "write_bytes": 100, "processes": [{"pid": 1}]}
+        e = {"cpu_seconds": 5.0, "read_bytes": 50, "write_bytes": 50, "processes": [{"pid": 1}]}
+        cpu, io, valid = pb.compute_tree_delta(s, e)
+        self.assertFalse(valid); self.assertIsNone(cpu)
+        cpu, io, valid = pb.compute_tree_delta(s, {"cpu_seconds": 12.0, "read_bytes": 150, "write_bytes": 150, "processes": [{"pid": 1}]})
+        self.assertTrue(valid); self.assertEqual(cpu, 2.0)
+    def test_verify_checks_all_sessions_and_fails_mismatch(self):
+        import tempfile, os
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d)/"fake-ffprobe"; 
+            fake.write_text('#!/usr/bin/env python3\nimport json,sys\np=sys.argv[-1]\ncodec="hevc" if "session-1" in p else "h264"\nprint(json.dumps({"streams":[{"codec_name":codec,"width":640,"height":360}]}))\n')
+            fake.chmod(0o755)
+            for i in range(2):
+                sd = Path(d)/f"session-{i}"; sd.mkdir(); (sd/"seg-00000.ts").write_bytes(b"x"*100)
+            cfg = self.cfg(); cfg.preserve_media = True; cfg.ffprobe = str(fake)
+            v = pb.verify_output(cfg, Path(d), [{"session_index": 0}, {"session_index": 1}])
+        self.assertTrue(v["checked"]); self.assertFalse(v["matches_codec"])  # 2nd session hevc must fail aggregate
+        self.assertEqual(len(v["sessions"]), 2)
+    def test_main_wave_wall_and_verify_mismatch_fails(self):
+        Handler.mode = "ok"
+        import tempfile, json
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d)/"fake-ffprobe"
+            fake.write_text('#!/usr/bin/env python3\nimport json\nprint(json.dumps({"streams":[{"codec_name":"hevc","width":640,"height":360}]}))\n')
+            fake.chmod(0o755)
+            rc = pb.main(["--no-launch", "--base-url", f"http://127.0.0.1:{self.port}", "--lab-root", d,
+                          "--duration", "4", "--concurrency", "2", "--repeats", "1", "--timeout", "20",
+                          "--preserve-media", "--ffprobe", str(fake), "--out", str(Path(d)/"out")])
+            meta = json.loads((Path(d)/"out"/"result.json").read_text())
+        self.assertEqual(rc, 1); self.assertFalse(meta["ok"])  # mismatch must not be ok=True
+        self.assertEqual(len(meta["waves"]), 1); self.assertGreater(meta["waves"][0]["wall_s"], 0)
+        self.assertEqual(meta["waves"][0]["actual_media_total_s"], 8.0)  # sum of 2x4s, not per-session time
+        self.assertAlmostEqual(meta["waves"][0]["aggregate_media_per_wall_s"],
+                                 meta["waves"][0]["actual_media_total_s"]/meta["waves"][0]["wall_s"], places=2)
     def test_non200_decision_rejected(self):
         Handler.mode = "decision500"
         import tempfile
