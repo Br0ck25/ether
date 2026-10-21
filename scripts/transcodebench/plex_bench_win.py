@@ -122,6 +122,8 @@ WIN32_SIGNATURES = {
     "WaitForSingleObject": ("DWORD", ["HANDLE", "DWORD"]),
     "GetExitCodeProcess": ("BOOL", ["HANDLE", "LPDWORD"]),
     "TerminateProcess": ("BOOL", ["HANDLE", "UINT"]),
+    "ReadProcessMemory": ("BOOL", ["HANDLE", "LPVOID", "LPVOID", "SIZE_T", "SIZE_T_PTR"]),
+    "NtQueryInformationProcess": ("NTSTATUS", ["HANDLE", "INT", "LPVOID", "ULONG", "PULONG"]),
 }
 _TYPE_MAP = None
 
@@ -134,19 +136,34 @@ def _win32_type_map():
             "INT": ctypes.c_int, "UINT": ctypes.c_uint, "LPVOID": ctypes.c_void_p,
             "LPCWSTR": ctypes.c_wchar_p, "LPWSTR": ctypes.c_wchar_p,
             "LPDWORD": ctypes.POINTER(ctypes.c_ulong),
+            "SIZE_T": ctypes.c_size_t, "SIZE_T_PTR": ctypes.POINTER(ctypes.c_size_t),
+            "NTSTATUS": ctypes.c_long, "ULONG": ctypes.c_ulong,
+            "PULONG": ctypes.POINTER(ctypes.c_ulong),
         }
     return _TYPE_MAP
 
 
-def configure_win32(kernel32=None, psapi=None):
+def configure_win32(kernel32=None, psapi=None, ntdll=None):
     """Apply WIN32_SIGNATURES to real DLLs (win32 only; no-op target in tests)."""
     if kernel32 is None:
         kernel32 = ctypes.windll.kernel32
     if psapi is None:
         psapi = ctypes.windll.psapi
+    if ntdll is None:
+        try:
+            ntdll = ctypes.windll.ntdll
+        except Exception:
+            ntdll = None
     types = _win32_type_map()
     for name, (restype, argtypes) in WIN32_SIGNATURES.items():
-        dll = psapi if name == "GetProcessMemoryInfo" else kernel32
+        if name == "GetProcessMemoryInfo":
+            dll = psapi
+        elif name == "NtQueryInformationProcess":
+            dll = ntdll
+        else:
+            dll = kernel32
+        if dll is None:
+            continue
         func = getattr(dll, name)
         func.restype = types[restype]
         func.argtypes = [types[a] for a in argtypes]
@@ -240,22 +257,126 @@ def sample_tree_win(root_pid: int) -> dict:
             "sampling_available": available, "inaccessible_pids": inaccessible}
 
 
-def capture_transcoder_cmdlines_win(root_pid: int) -> list:
+def _proc_creation_time(pid: int):
+    """FILETIME creation stamp for pid, or None. Guards against PID reuse."""
+    try:
+        k32 = _kernel32()
+        handle = k32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            class FT(ctypes.Structure):
+                _fields_ = [("lo", ctypes.c_ulong), ("hi", ctypes.c_ulong)]
+            c, e, kern, user = FT(), FT(), FT(), FT()
+            if not k32.GetProcessTimes(handle, ctypes.byref(c), ctypes.byref(e),
+                                       ctypes.byref(kern), ctypes.byref(user)):
+                return None
+            return (int(c.hi) << 32) | int(c.lo)
+        finally:
+            k32.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def _read_remote(handle, address, size):
+    if not address or not size:
+        return None
+    buf = ctypes.create_string_buffer(size)
+    read = ctypes.c_size_t(0)
+    if not _kernel32().ReadProcessMemory(handle, ctypes.c_void_p(address),
+                                         buf, size, ctypes.byref(read)):
+        return None
+    if read.value != size:
+        return None
+    return buf.raw
+
+
+def _read_process_cmdline(pid: int):
+    """Command line via NtQueryInformationProcess->PEB (no subprocess).
+
+    Returns the raw command-line string, or None when unavailable.
+    Pointer-safe: all handle/address values travel as c_void_p/c_size_t.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        k32 = _kernel32()
+        ntdll = ctypes.windll.ntdll
+        configure_win32()
+    except Exception:
+        return None
+    # PROCESS_QUERY_INFORMATION (0x0400) | PROCESS_VM_READ (0x0010)
+    handle = k32.OpenProcess(0x0410, False, pid)
+    if not handle:
+        return None
+    try:
+        class PBI(ctypes.Structure):
+            _fields_ = [("ExitStatus", ctypes.c_void_p), ("PebBaseAddress", ctypes.c_void_p),
+                        ("AffinityMask", ctypes.c_void_p), ("BasePriority", ctypes.c_long),
+                        ("UniqueProcessId", ctypes.c_void_p),
+                        ("InheritedFromUniqueProcessId", ctypes.c_void_p)]
+        pbi = PBI()
+        ret_len = ctypes.c_ulong(0)
+        status = ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(pbi),
+                                                 ctypes.sizeof(pbi), ctypes.byref(ret_len))
+        if status != 0 or not pbi.PebBaseAddress:
+            return None
+        is64 = ctypes.sizeof(ctypes.c_void_p) == 8
+        params_off = 0x20 if is64 else 0x10
+        cmdline_off = 0x70 if is64 else 0x40
+        raw = _read_remote(handle, int(pbi.PebBaseAddress) + params_off,
+                           ctypes.sizeof(ctypes.c_void_p))
+        if not raw:
+            return None
+        params_addr = int.from_bytes(raw, "little")
+        if not params_addr:
+            return None
+        # UNICODE_STRING: Length(u16), MaximumLength(u16), [pad], Buffer(ptr)
+        us_size = 16 if is64 else 8
+        raw = _read_remote(handle, params_addr + cmdline_off, us_size)
+        if not raw:
+            return None
+        length = int.from_bytes(raw[0:2], "little")
+        if length == 0 or length > 65534 or (length % 2):
+            return None
+        buffer_addr = int.from_bytes(raw[8:16] if is64 else raw[4:8], "little")
+        data = _read_remote(handle, buffer_addr, length)
+        if not data:
+            return None
+        return data.decode("utf-16-le", errors="replace")
+    except Exception:
+        return None
+    finally:
+        k32.CloseHandle(handle)
+
+
+def capture_transcoder_cmdlines_win(root_pid: int, cmdline_reader=None) -> list:
+    """Authentic argv from owned Transcoder descendants via native query.
+
+    Each entry is verified against the process creation stamp before and
+    after the read, so a reused PID never supplies a stale argv.
+    """
+    reader = cmdline_reader or _read_process_cmdline
+    identity = _proc_creation_time if sys.platform == "win32" else None
     ppid_map, name_map = _snapshot()
     pids = [p for p in build_process_tree(ppid_map, root_pid)
             if "Transcoder" in name_map.get(p, "")]
     out = []
     for pid in pids:
-        cmdline = ""
+        before = identity(pid) if identity else None
         try:
-            r = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
-                capture_output=True, text=True, timeout=15)
-            cmdline = r.stdout.strip()
+            cmdline = reader(pid) or ""
         except Exception:
-            pass
-        out.append({"pid": pid, "argv": cmdline.split() if cmdline else [],
+            cmdline = ""
+        cmdline = cmdline.strip() if isinstance(cmdline, str) else ""
+        if identity is not None:
+            after = identity(pid)
+            if before is None or after != before:
+                continue  # PID gone or reused between snapshot and read
+        if not cmdline:
+            continue
+        out.append({"pid": pid, "process_creation_time": before,
+                    "argv": [pb.sanitize(a) for a in cmdline.split()],
                     "cmdline": pb.sanitize(cmdline)})
     return out
 
@@ -373,49 +494,54 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
 
         t_enc = time.monotonic()
         first_latency = None
-        start_url = f"{cfg.base_url}/video/:/transcode/universal/start.m3u8?{qs}"
-        status, _, body = pb.http_get(start_url, timeout=min(30, cfg.timeout_s), headers=headers)
-        if status != 200:
-            raise pb.BenchError(f"start.m3u8 HTTP {status}")
-        is_master, media_url, segs, total, end = pb.parse_playlist(
-            body.decode(errors="replace"), start_url)
-        if is_master:
-            status, _, body = pb.http_get(media_url, timeout=min(30, cfg.timeout_s), headers=headers)
-            if status != 200:
-                raise pb.BenchError(f"media playlist HTTP {status}")
-            _, _, segs, total, end = pb.parse_playlist(body.decode(errors="replace"), media_url)
-            playlist_url = media_url
-        else:
-            playlist_url = start_url
-
         downloaded, seen = {}, set()
         ordinals = {}  # uri -> stable playlist ordinal
-        peak_rss = 0
-        cpu_start = sample_tree_win(root_pid) if root_pid else None
-        samples, cmdlines = [], []
-        deadline = t_enc + cfg.timeout_s
-        media_dir = out_dir / f"session-{idx}"
-        if cfg.preserve_media:
-            media_dir.mkdir(parents=True, exist_ok=True)
+        peak_rss = None
+        samples = []
+        argv_by_key = {}
         lock = threading.Lock()
         argv_stop = threading.Event()
+        poller = None
+        cpu_start = None
+        measurement_end = None
+        cleanup_s = 0.0
+        poller_alive = False
+        end = False
+        segs, total = [], 0.0
+        playlist_url = None
+        start_url = f"{cfg.base_url}/video/:/transcode/universal/start.m3u8?{qs}"
 
         def argv_poller():
             while not argv_stop.is_set():
                 if root_pid:
-                    found = capture_transcoder_cmdlines_win(root_pid)
+                    try:
+                        found = capture_transcoder_cmdlines_win(root_pid)
+                    except Exception:
+                        found = []
                     if found:
                         with lock:
-                            cmdlines[:] = found
-                argv_stop.wait(0.05)  # poll argv every 50ms from encode start
-
-        poller = threading.Thread(target=argv_poller, daemon=True)
-        poller.start()
+                            for entry in found:
+                                key = (entry.get("pid"),
+                                       entry.get("process_creation_time"),
+                                       entry.get("cmdline"))
+                                argv_by_key[key] = entry
+                argv_stop.wait(0.05)
 
         def fetch(item):
             nonlocal first_latency
             uri, extinf = item
-            st, _, data = pb.http_get(uri, timeout=min(30, cfg.timeout_s), headers=headers)
+            # PMS lists segments before they are fully written; retry 404s briefly.
+            seg_deadline = time.monotonic() + 15.0
+            while True:
+                try:
+                    st, _, data = pb.http_get(uri, timeout=min(30, cfg.timeout_s),
+                                              headers=headers)
+                    break
+                except pb.BenchError as exc:
+                    if "HTTP 404" in str(exc) and time.monotonic() < seg_deadline:
+                        time.sleep(0.5)
+                        continue
+                    raise
             if st != 200:
                 raise pb.BenchError(f"segment HTTP {st}")
             if not data:
@@ -424,57 +550,109 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
                 downloaded[uri] = (len(data), extinf)
                 ordinal = ordinals.get(uri, 0)
                 if ordinal == 0 and first_latency is None:
-                    first_latency = time.monotonic() - t_enc  # segment-0 body fully downloaded
+                    first_latency = time.monotonic() - t_enc
             if cfg.preserve_media:
-                (media_dir / f"seg-{ordinal:05d}.ts").write_bytes(data)
+                (out_dir / f"session-{idx}" / f"seg-{ordinals.get(uri, 0):05d}.ts").write_bytes(data)
             return len(data)
 
-        while time.monotonic() < deadline:
-            try:
-                status, _, body = pb.http_get(playlist_url, timeout=min(15, cfg.timeout_s),
+        try:
+            # CPU baseline and argv poller start BEFORE start/playlist so
+            # encoder startup is inside the measured window.
+            cpu_start = sample_tree_win(root_pid) if root_pid else None
+            poller = threading.Thread(target=argv_poller, daemon=True,
+                                      name=f"plex-bench-argv-{idx}")
+            poller.start()
+            status, _, body = pb.http_get(start_url, timeout=min(30, cfg.timeout_s),
+                                          headers=headers)
+            if status != 200:
+                raise pb.BenchError(f"start.m3u8 HTTP {status}")
+            is_master, media_url, segs, total, end = pb.parse_playlist(
+                body.decode(errors="replace"), start_url)
+            if is_master:
+                status, _, body = pb.http_get(media_url, timeout=min(30, cfg.timeout_s),
                                               headers=headers)
                 if status != 200:
-                    raise pb.BenchError(f"playlist HTTP {status}")
-                _, _, segs, total, end = pb.parse_playlist(body.decode(errors="replace"), playlist_url)
-            except pb.BenchError:
-                if downloaded:
-                    raise
-                time.sleep(cfg.poll_interval_s)
-                continue
-            for ordinal, (uri, _ext) in enumerate(segs):
-                ordinals.setdefault(uri, ordinal)
-            queued_s = sum(v[1] for v in downloaded.values())
-            new = []
-            for item in segs:  # queue capped at requested duration
-                if item[0] in seen:
+                    raise pb.BenchError(f"media playlist HTTP {status}")
+                _, _, segs, total, end = pb.parse_playlist(
+                    body.decode(errors="replace"), media_url)
+                playlist_url = media_url
+            else:
+                playlist_url = start_url
+            deadline = t_enc + cfg.timeout_s
+            media_dir = out_dir / f"session-{idx}"
+            if cfg.preserve_media:
+                media_dir.mkdir(parents=True, exist_ok=True)
+            while time.monotonic() < deadline:
+                try:
+                    status, _, body = pb.http_get(playlist_url,
+                                                  timeout=min(15, cfg.timeout_s),
+                                                  headers=headers)
+                    if status != 200:
+                        raise pb.BenchError(f"playlist HTTP {status}")
+                    _, _, segs, total, end = pb.parse_playlist(
+                        body.decode(errors="replace"), playlist_url)
+                except pb.BenchError:
+                    if downloaded:
+                        raise
+                    time.sleep(cfg.poll_interval_s)
                     continue
-                if queued_s >= cfg.duration_s:
+                for ordinal, (uri, _ext) in enumerate(segs):
+                    ordinals.setdefault(uri, ordinal)
+                queued_s = sum(v[1] for v in downloaded.values())
+                new = []
+                for item in segs:
+                    if item[0] in seen:
+                        continue
+                    if queued_s >= cfg.duration_s:
+                        break
+                    seen.add(item[0])
+                    new.append(item)
+                    queued_s += item[1]
+                if new:
+                    if cfg.mode == "paced":
+                        for item in new:
+                            fetch(item)
+                            delivered_s = sum(v[1] for v in downloaded.values())
+                            if delivered_s < cfg.duration_s:
+                                # Pace the next request at the cumulative
+                                # EXTINF boundary; never sleep after the
+                                # final delivered segment.
+                                wait_s = (t_enc + delivered_s) - time.monotonic()
+                                if wait_s > 0:
+                                    time.sleep(wait_s)
+                    else:
+                        with concurrent.futures.ThreadPoolExecutor(
+                                max_workers=min(8, len(new))) as ex:
+                            list(ex.map(fetch, new))
+                if root_pid:
+                    smp = sample_tree_win(root_pid)
+                    samples.append(smp)
+                    rss = smp.get("rss_bytes") if isinstance(smp, dict) else None
+                    if rss is not None:
+                        peak_rss = rss if peak_rss is None else max(peak_rss, rss)
+                actual_media = sum(v[1] for v in downloaded.values())
+                # Linux parity: requested duration alone ends the session;
+                # do not wait for ENDLIST / the whole source to finish.
+                if actual_media >= cfg.duration_s:
                     break
-                seen.add(item[0])
-                new.append(item)
-                queued_s += item[1]
-            if new:
-                if cfg.mode == "paced":
-                    for item in new:
-                        fetch(item)
-                        time.sleep(min(item[1], 2.0))
-                else:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(new))) as ex:
-                        list(ex.map(fetch, new))
-            if root_pid:
-                smp = sample_tree_win(root_pid)
-                samples.append(smp)
-                peak_rss = max(peak_rss, smp["rss_bytes"])
-            actual_media = sum(v[1] for v in downloaded.values())
-            if actual_media >= cfg.duration_s and end:
-                break
-            if end and not new and downloaded:
-                break
-            time.sleep(cfg.poll_interval_s)
-        else:
-            raise pb.BenchError(f"session timeout after {cfg.timeout_s}s")
-        argv_stop.set()
-        poller.join(timeout=2)
+                if end and not new and downloaded:
+                    break
+                time.sleep(cfg.poll_interval_s)
+            else:
+                raise pb.BenchError(f"session timeout after {cfg.timeout_s}s")
+            # Measurement completes at last segment delivery, before any
+            # poller join / final sampling instrumentation cleanup.
+            measurement_end = time.monotonic()
+        finally:
+            cleanup_t0 = time.monotonic()
+            argv_stop.set()
+            if poller is not None:
+                poller.join(timeout=5)
+                poller_alive = poller.is_alive()
+            cleanup_s = time.monotonic() - cleanup_t0
+        if poller_alive:
+            raise pb.BenchError("argv poller did not stop after session")
+        cmdlines = list(argv_by_key.values())
         if root_pid and not cmdlines:
             raise pb.BenchError("no transcoder argv captured from owned PMS tree; "
                                 "rejecting as non-authentic result")
@@ -483,14 +661,24 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
             raise pb.BenchError("no segments downloaded")
         if actual_media <= 0:
             raise pb.BenchError("unknown media duration: EXTINF total is zero")
-        result.update({"encode_s": time.monotonic() - t_enc,
+        encode_s = measurement_end - t_enc
+        cpu_t0 = time.monotonic()
+        cpu_end = sample_tree_win(root_pid) if root_pid else None
+        cleanup_s += time.monotonic() - cpu_t0
+        result.update({"encode_s": encode_s,
+                       "measurement_duration_s": encode_s,
+                       "measurement_finished_monotonic_s": measurement_end,
+                       "measurement_end_monotonic": measurement_end,
+                       "measurement_complete_s": encode_s,
+                       "cleanup_s": cleanup_s,
+                       "cleanup_overhead_s": cleanup_s,
+                       "instrumentation_cleanup_s": cleanup_s,
                        "first_segment_latency_s": first_latency,
                        "actual_media_s": round(actual_media, 3),
                        "segment_count": len(downloaded),
                        "output_bytes": sum(v[0] for v in downloaded.values()),
                        "peak_rss_bytes": peak_rss, "samples": samples[-20:],
                        "transcoder_cmdlines": cmdlines, "playlist_endlist": end})
-        cpu_end = sample_tree_win(root_pid) if root_pid else None
         result.update(compute_tree_delta(cpu_start, cpu_end))
         actual_codec = None
         for media in result.get("decision_media", []):
@@ -861,10 +1049,29 @@ def main(argv=None):
                 for fut in futs:
                     wave_sessions.append(fut.result())
             wall_s = round(time.monotonic() - wave_start, 3)
+            # Measurement wall: setup-inclusive, ends at last segment
+            # delivery (max measurement_end), excluding poller cleanup.
+            meas_ends = [s["measurement_finished_monotonic_s"] for s in wave_sessions
+                         if s.get("measurement_finished_monotonic_s")]
+            delivery_wall_s = (round(max(meas_ends) - wave_start, 3)
+                               if meas_ends else wall_s)
+            measurement_wall_s = delivery_wall_s
+            cleanup_overhead_s = round(max(0.0, wall_s - delivery_wall_s), 3)
             media_total = round(sum(s["actual_media_s"] for s in wave_sessions), 3)
-            waves.append({"wave": wave, "wall_s": wall_s, "concurrency": cfg.concurrency,
+            waves.append({"wave": wave, "wall_s": wall_s,
+                          "delivery_wall_s": delivery_wall_s,
+                          "measurement_wall_s": measurement_wall_s,
+                          "cleanup_s": cleanup_overhead_s,
+                          "cleanup_overhead_s": cleanup_overhead_s,
+                          "concurrency": cfg.concurrency,
                           "sessions": len(wave_sessions), "actual_media_total_s": media_total,
-                          "aggregate_media_per_wall_s": round(media_total / wall_s, 3) if wall_s else None})
+                          "aggregate_media_per_wall_s": round(media_total / wall_s, 3) if wall_s else None,
+                          "aggregate_media_per_delivery_wall_s": (
+                              round(media_total / delivery_wall_s, 3)
+                              if delivery_wall_s else None),
+                          "aggregate_media_per_measurement_wall_s": (
+                              round(media_total / measurement_wall_s, 3)
+                              if measurement_wall_s else None)})
             sessions.extend(wave_sessions)
         meta["waves"] = waves
         meta["sessions"] = sessions
