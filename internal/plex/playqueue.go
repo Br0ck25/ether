@@ -125,7 +125,8 @@ func (s *playQueueStore) createWith(userID int64, clientID string, keys []core.R
 func (s *playQueueStore) evictOldestLocked() {
 	var oldest *playQueue
 	for _, q := range s.queues {
-		if oldest == nil || q.updatedAt.Before(oldest.updatedAt) {
+		if oldest == nil || q.updatedAt.Before(oldest.updatedAt) ||
+			(q.updatedAt.Equal(oldest.updatedAt) && q.id < oldest.id) {
 			oldest = q
 		}
 	}

@@ -66,3 +66,30 @@ func TestQueueLongevityActiveTimelineSurvivesExpiry(t *testing.T) {
 		})
 	}
 }
+
+// Wall clocks can repeat a value (coarse resolution or a clock adjustment).
+// Queue capacity must not turn equal timestamps into random eviction of the
+// queue that a client has just created.
+func TestQueueCapacityKeepsNewestWhenTimestampsTie(t *testing.T) {
+	qs := newPlayQueueStore()
+	qs.now = func() time.Time { return fixedNow }
+	for i := 0; i < maxQueues+100; i++ {
+		q, err := qs.createWith(ownerUser.ID, "burst", []core.RatingKey{alien.Key}, fixedNow, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := qs.get(q.id, ownerUser.ID); !ok {
+			t.Fatal("new queue immediately lost")
+		}
+	}
+	for id := int64(1); id <= 100; id++ {
+		if _, ok := qs.get(id, ownerUser.ID); ok {
+			t.Fatalf("old queue %d kept ahead of newer equal-time queues", id)
+		}
+	}
+	for id := int64(101); id <= int64(maxQueues+100); id++ {
+		if _, ok := qs.get(id, ownerUser.ID); !ok {
+			t.Fatalf("newer queue %d evicted at equal timestamp", id)
+		}
+	}
+}

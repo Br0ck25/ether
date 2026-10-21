@@ -97,5 +97,7 @@ func TestResilienceMixedClientLifecycles(t *testing.T) {
 	if remaining != 0 {
 		t.Fatalf("%d abandoned queues leaked", remaining)
 	}
-	t.Logf("%d profiles, %d cycles each, %d HTTP requests; all sessions stopped and expired queues removed", len(profiles), cycles, requests.Load())
+	if !t.Failed() {
+		t.Logf("%d profiles, %d cycles each, %d HTTP requests; all sessions stopped and expired queues removed", len(profiles), cycles, requests.Load())
+	}
 }
