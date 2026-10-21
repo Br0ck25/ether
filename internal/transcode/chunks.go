@@ -569,7 +569,7 @@ func (s *Session) collectChunks(r *run, exited bool) {
 		return
 	}
 	var outs []slotOut
-	p, err := readFFmpegPlaylist(filepath.Join(r.spec.Dir, r.spec.Playlist))
+	p, err := readFFmpegPlaylist(filepath.Join(r.spec.Dir, r.spec.Playlist), exited)
 	if err == nil {
 		for ; cr.next < len(p.entries); cr.next++ {
 			e := p.entries[cr.next]

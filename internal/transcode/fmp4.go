@@ -496,7 +496,7 @@ const maxMoofSize = 16 << 20
 // its media data.
 func scanChunk(path string, ti trackInit) (fmp4Chunk, error) {
 	c := fmp4Chunk{path: path}
-	f, err := os.Open(path)
+	f, err := openMuxOutput(path)
 	if err != nil {
 		return c, err
 	}

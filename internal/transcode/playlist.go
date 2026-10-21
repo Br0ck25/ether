@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -208,12 +207,35 @@ type ffmpegEntry struct {
 // readFFmpegPlaylist parses ffmpeg's playlist. HLS temp_file entries are
 // published after rename. The ssegment muxer can list a Matroska chunk
 // before closing it; collectChunks checks its separate completion fence.
-func readFFmpegPlaylist(path string) (ffmpegPlaylist, error) {
-	b, err := os.ReadFile(path)
+func readFFmpegPlaylist(path string, exited bool) (ffmpegPlaylist, error) {
+	b, err := readMuxOutput(path)
+	p := parseFFmpegPlaylist(b)
+	if exited {
+		// FFmpeg can finish successfully after Windows refuses to rename
+		// its completed playlist over a reader-held destination. Only
+		// after process exit can the temporary file be safely inspected.
+		// Recover a complete EVENT playlist extending the published one;
+		// never trust a partial write left by cancellation or a crash.
+		if pending, readErr := readMuxOutput(path + ".tmp"); readErr == nil {
+			q := parseFFmpegPlaylist(pending)
+			valid := bytes.HasPrefix(pending, []byte("#EXTM3U")) &&
+				strings.HasSuffix(strings.TrimSpace(string(pending)), "#EXT-X-ENDLIST") &&
+				q.ended && len(q.entries) > 0 && len(q.entries) >= len(p.entries)
+			for i, e := range q.entries {
+				if e.dur <= 0 || (i > 0 && q.segments[i] <= q.segments[i-1]) ||
+					(i < len(p.entries) && e != p.entries[i]) {
+					valid = false
+				}
+			}
+			if valid {
+				return q, nil
+			}
+		}
+	}
 	if err != nil {
 		return ffmpegPlaylist{}, err
 	}
-	return parseFFmpegPlaylist(b), nil
+	return p, nil
 }
 
 func parseFFmpegPlaylist(b []byte) ffmpegPlaylist {

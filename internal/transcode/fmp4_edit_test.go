@@ -257,7 +257,7 @@ func TestPollHoldsFMP4RunsToRetainedClock(t *testing.T) {
 		seg := openGOPChunk(30000, 0, 3328)
 		writeFile(t, filepath.Join(s.dir, segmentFile(0, "m4s")), seg)
 		listSegments(t, pl, 1)
-		s.poll(r, pl)
+		s.poll(r, pl, false)
 		if !s.done[0][0] || s.initFileLocked(0) != "init.mp4" || s.fmp4Edits[clockScope{}]["vide"] != (trackEdit{id: 1, scale: 16000, shift: 1328}) {
 			t.Fatalf("done %v init %q clock %v", s.done[0], s.initFileLocked(0), s.fmp4Edits)
 		}
@@ -271,12 +271,12 @@ func TestPollHoldsFMP4RunsToRetainedClock(t *testing.T) {
 		writeFile(t, filepath.Join(s.dir, segmentFile(0, "m4s")), openGOPChunk(32000, 0, 3328))
 		listSegments(t, pl, 1)
 		for i := 0; i < 3; i++ {
-			s.poll(r, pl)
+			s.poll(r, pl, false)
 		}
 		writeFile(t, filepath.Join(s.dir, segmentFile(1, "m4s")), openGOPChunk(48000, 0, 3328))
 		listSegments(t, pl, 2)
 		for i := 0; i < 3; i++ {
-			s.poll(r, pl)
+			s.poll(r, pl, false)
 		}
 		for n, want := range []uint64{30000, 46000} {
 			if v, _ := videoTfdt(t, readFile(t, filepath.Join(s.dir, segmentFile(n, "m4s")))); v != want || !s.done[0][n] {
@@ -292,8 +292,8 @@ func TestPollHoldsFMP4RunsToRetainedClock(t *testing.T) {
 		s.fmp4Edits = map[clockScope]map[string]trackEdit{{}: retained1328()}
 		path := writeFile(t, filepath.Join(s.dir, segmentFile(0, "m4s")), openGOPChunk(1000, 0, 3328))
 		listSegments(t, pl, 1)
-		s.poll(r, pl)
-		s.poll(r, pl)
+		s.poll(r, pl, false)
+		s.poll(r, pl, false)
 		if s.done[0][0] || s.initFileLocked(0) != "" || p.stopped != 1 || r.proc.Err() == nil {
 			t.Errorf("done %v init %q stops %d err %v", s.done[0], s.initFileLocked(0), p.stopped, r.proc.Err())
 		}
@@ -313,7 +313,7 @@ func TestPollHoldsFMP4RunsToRetainedClock(t *testing.T) {
 		seg := openGOPChunk(450000, 0, 18720)
 		writeFile(t, filepath.Join(s.dir, segmentFile(4, "m4s")), seg)
 		listSegments(t, pl, 5)
-		s.poll(r, pl)
+		s.poll(r, pl, false)
 		if !s.done[0][4] || p.stopped != 0 || s.fmp4Edits[clockScope{0, 2}]["vide"] != (trackEdit{id: 1, scale: 90000, shift: 18720}) {
 			t.Errorf("done %v stops %d clocks %v", s.done[0], p.stopped, s.fmp4Edits)
 		}
@@ -328,7 +328,7 @@ func TestPollHoldsFMP4RunsToRetainedClock(t *testing.T) {
 		seg := openGOPChunk(1000, 0, 3328)
 		writeFile(t, filepath.Join(s.dir, segmentFile(0, "m4s")), seg)
 		listSegments(t, pl, 1)
-		s.poll(r, pl)
+		s.poll(r, pl, false)
 		if !s.done[0][0] || p.stopped != 0 || !bytes.Equal(seg, readFile(t, filepath.Join(s.dir, segmentFile(0, "m4s")))) {
 			t.Errorf("RTX run held: done %v stops %d", s.done[0], p.stopped)
 		}
@@ -342,7 +342,7 @@ func TestPollHoldsFMP4RunsToRetainedClock(t *testing.T) {
 		s.fmp4Edits = map[clockScope]map[string]trackEdit{{}: retained1328()}
 		writeFile(t, filepath.Join(s.dir, segmentFile(0, "m4s")), openGOPChunk(32000, 0, 3328))
 		listSegments(t, pl, 1)
-		s.poll(r, pl)
+		s.poll(r, pl, false)
 		if s.done[0][0] || s.initFileLocked(0) != "" || p.stopped != 1 {
 			t.Errorf("off-clock run published: done %v init %q stops %d", s.done[0], s.initFileLocked(0), p.stopped)
 		}

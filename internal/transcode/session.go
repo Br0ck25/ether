@@ -1405,7 +1405,7 @@ func (s *Session) watch(r *run) {
 		case r.chunks != nil:
 			s.collectChunks(r, exited)
 		default:
-			s.poll(r, playlist)
+			s.poll(r, playlist, exited)
 		}
 	}
 	for {
@@ -1427,8 +1427,8 @@ func (s *Session) watch(r *run) {
 	}
 }
 
-func (s *Session) poll(r *run, playlist string) {
-	p, err := readFFmpegPlaylist(playlist)
+func (s *Session) poll(r *run, playlist string, exited bool) {
+	p, err := readFFmpegPlaylist(playlist, exited)
 	if err != nil {
 		return
 	}

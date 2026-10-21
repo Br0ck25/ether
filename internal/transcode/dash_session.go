@@ -43,6 +43,7 @@ func newDASHState(reps []dashRep, urls DASHURLs, sessionID string) *dashState {
 type dashRun struct {
 	dir    string
 	tracks []*dashTrack
+	failed bool
 	// sessionTrack maps a muxer track (0=video, 1=audio in the run) to
 	// the session track its segments belong to (a ladder video rung may
 	// be a session track > 1).
@@ -249,6 +250,9 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		return
 	}
 	dr := r.dash
+	if dr.failed {
+		return
+	}
 	type initPub struct {
 		t    int
 		file string
@@ -281,7 +285,7 @@ func (s *Session) collectDASH(r *run, exited bool) {
 			}
 			if tr.init == nil {
 				// The muxer writes the init segment before the first chunk.
-				b, err := os.ReadFile(filepath.Join(dr.dir, dashInitFile(tr.rep)))
+				b, err := readMuxOutput(filepath.Join(dr.dir, dashInitFile(tr.rep)))
 				if err != nil {
 					break
 				}
@@ -301,11 +305,15 @@ func (s *Session) collectDASH(r *run, exited bool) {
 			}
 			c, err := scanChunk(chunk, tr.info)
 			if err != nil {
-				// Chunks are renamed into place once complete, so this is
-				// a muxer bug or a full disk; skip rather than stall.
-				s.log.Warn("unreadable DASH chunk", "run", r.seq, "rep", tr.rep, "chunk", tr.next, "err", err)
-				tr.next++
-				continue
+				// Never skip unreadable media: Windows sharing violations
+				// can be transient, and advancing next would create a hole.
+				// Retry on the next poll; a final failure uses normal run
+				// retry/failover rather than publishing a broken timeline.
+				if exited {
+					s.failDASHRun(r, fmt.Errorf("read DASH rep %d chunk %d: %w", tr.rep, tr.next, err))
+					return
+				}
+				break
 			}
 			tr.next++
 			for _, o := range tr.sl.add(c) {
@@ -407,6 +415,17 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		s.throttleLocked()
 		s.broadcastLocked()
 	}
+}
+
+func (s *Session) failDASHRun(r *run, err error) {
+	r.dash.failed = true
+	s.log.Warn("DASH run output unusable", "run", r.seq, "err", err)
+	r.stderr.add(err.Error())
+	s.mu.Lock()
+	r.proc = failedProc{Process: r.proc, err: err}
+	p := r.proc
+	s.mu.Unlock()
+	p.Stop()
 }
 
 // writeSegmentFile writes a self-initializing segment to path.
