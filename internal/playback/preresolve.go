@@ -62,7 +62,14 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 	if reason != core.PrewarmTrailer && reason != core.PrewarmPostPlay {
 		reason = core.PrewarmDetail
 	}
+	cfg := m.config().Cache
+	if cfg.DisableSpeculation || cfg.Mode == "off" || (reason == core.PrewarmDetail && cfg.DetailWarmup == "off") {
+		return false
+	}
 	prefetchBytes := opts.PrefetchBytes
+	if reason == core.PrewarmDetail && cfg.DetailBytes > 0 {
+		prefetchBytes = cfg.DetailBytes
+	}
 	if prefetchBytes <= 0 {
 		if reason == core.PrewarmDetail {
 			prefetchBytes = detailPrefetchBytes

@@ -50,7 +50,7 @@ func SetupStatus(cfg config.Config) (steps []SetupStep, complete bool) {
 			enabledIndexers++
 		}
 	}
-	cacheDone := strings.TrimSpace(cfg.Cache.Dir) != "" && cfg.Cache.BudgetBytes > 0
+	cacheDone := strings.TrimSpace(cfg.Cache.Dir) != "" && cfg.Cache.BudgetBytes >= 0
 	steps = []SetupStep{
 		{ID: "plex", Title: "Sign in to plex.tv and claim", Complete: plexDone, Required: true, Detail: plexDetail},
 		{ID: "usenet", Title: "Usenet providers", Complete: enabledProviders > 0, Required: true,
@@ -508,3 +508,6 @@ func (h *Handler) handleClearLogs(w http.ResponseWriter, r *http.Request) {
 	h.logs.Clear()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+// DiskFree reports available bytes on the filesystem containing path.
+func DiskFree(path string) (int64, error) { _, free, err := diskUsage(path); return free, err }

@@ -21,6 +21,12 @@ export interface PageDef {
 
 export const PAGES: PageDef[] = [
   {
+    href: "/cache",
+    title: "Cache",
+    sections: [],
+    keywords: "disk budget storage retention prefetch warming next episode",
+  },
+  {
     href: "/",
     title: "Overview",
     sections: [],
@@ -116,7 +122,6 @@ export const PAGES: PageDef[] = [
     sections: [
       { key: "transcoding", title: "Transcoding", keywords: "ffmpeg hardware gpu bitrate" },
       { key: "devices", title: "Device capabilities", keywords: "compatibility codecs" },
-      { key: "cache", title: "Cache & prefetch", keywords: "disk budget next episode" },
       { key: "markers", title: "Markers", keywords: "intro credits skip chapters" },
       { key: "subtitles", title: "Subtitles", keywords: "timing sync opensubtitles" },
     ],

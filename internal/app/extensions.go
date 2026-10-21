@@ -14,6 +14,7 @@ import (
 // and CSRF boundaries as the existing admin API.
 func (a *App) extensionHandlers() map[string]http.Handler {
 	m := map[string]http.Handler{"safety/policies": a.safety.Handler()}
+	m["cache"] = a.cacheHandler()
 	m["stats"] = a.stats.Handler()
 	m["notifications"] = a.notifications.Handler()
 	m["livetv"] = a.livetv.Handler()

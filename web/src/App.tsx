@@ -15,6 +15,7 @@ import {
 import {
   Activity as ActivityIcon,
   ArchiveRestore,
+  HardDrive,
   ArrowDownToLine,
   Boxes,
   Globe,
@@ -88,6 +89,7 @@ const LiveTV = lazy(() => import("./pages/livetv/LiveTV"));
 const Metadata = lazy(() => import("./pages/metadata/Metadata"));
 const Sources = lazy(() => import("./pages/sources/Sources"));
 const Releases = lazy(() => import("./pages/releases/Releases"));
+const Cache = lazy(() => import("./pages/cache/Cache"));
 const Playback = lazy(() => import("./pages/playback/Playback"));
 
 /** react-router links for every AppKit navigation primitive. */
@@ -150,6 +152,7 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
     {
       label: "Server",
       items: [
+        { href: "/cache", label: "Cache", icon: <HardDrive size={icon} /> },
         { href: "/server", label: "General", icon: <Server size={icon} /> },
         { href: "/remote-access", label: "Plex & remote access", icon: <Globe size={icon} /> },
         { href: "/services", label: "Connected services", icon: <Plug size={icon} /> },
@@ -333,6 +336,8 @@ function Shell() {
             <Route path="/metadata/:tab?" element={<Metadata />} />
             <Route path="/sources/:tab?" element={<Sources />} />
             <Route path="/releases/:tab?" element={<Releases />} />
+            <Route path="/cache" element={<Cache />} />
+            <Route path="/playback/cache" element={<Navigate to="/cache" replace />} />
             <Route path="/playback/:tab?" element={<Playback />} />
             <Route path="/notifications/:tab?" element={<Notifications />} />
             <Route path="/server/:tab?" element={<GeneralPage />} />

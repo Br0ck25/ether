@@ -52,6 +52,7 @@ import {
 import { createMaintenance } from "./maintenance";
 import { createReleaseConsoleMock } from "./releases";
 import { createSitesMock } from "./sites";
+import { createCacheMock } from "./cache";
 import { createLiveTVMock } from "./livetv";
 import { TEMPLATES } from "./templates";
 
@@ -364,6 +365,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const releaseConsole = createReleaseConsoleMock(catalog);
   const maintenance = createMaintenance();
   const sites = createSitesMock();
+  const cacheMock = createCacheMock();
   const liveTV = createLiveTVMock(catalog);
   const state = {
     boot: {
@@ -1712,6 +1714,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const q = url.searchParams;
     const seg = p.split("/").filter(Boolean);
     const route = `${method} /${seg.join("/")}`;
+
+    const cached = cacheMock(method, seg, body, state.config);
+    if (cached) return json(cached.body, cached.status);
 
     const site = sites.handle(method, seg, body, state.config);
     if (site) return json(site.body, site.status);

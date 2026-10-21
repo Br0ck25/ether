@@ -191,13 +191,13 @@ describe("Release traces", () => {
 });
 
 describe("Playback", () => {
-  it("edits the cache in place beside its usage", async () => {
+  it("redirects the legacy cache URL to the new management page", async () => {
     const { fake } = renderApp("/playback/cache");
-    expect(await screen.findByRole("heading", { name: "Playback" }, WAIT)).toBeInTheDocument();
-    expect(await screen.findByText(/budget in use/, {}, WAIT)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Cache" }, WAIT)).toBeInTheDocument();
+    expect(await screen.findByText("Your retained media", {}, WAIT)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Edit cache/i })).not.toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("switch")[0]!);
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
     await waitFor(() => expect(calls(fake, "PUT", "/config/cache")).toHaveLength(1));
   });
 

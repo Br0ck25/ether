@@ -24,6 +24,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/auth"
 	"github.com/braedonsaunders/ether/internal/backup"
+	"github.com/braedonsaunders/ether/internal/cachefill"
 	"github.com/braedonsaunders/ether/internal/cardigann"
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/cluster"
@@ -135,6 +136,7 @@ type App struct {
 	load       *sysload.Sampler // machine load for the Overview
 	playback   *playback.Manager
 	prefetch   *prefetch.Prefetcher
+	cachefill  *cachefill.Manager
 	plextv     *plextv.Client
 	users      *auth.Service
 	// usersLate publishes users to components started before auth is
@@ -360,6 +362,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("segment cache: %w", err)
 	}
 	a.closers = append(a.closers, func() { a.cache.Close() })
+	a.configureCache(cfg.Cache)
 	a.engine = stream.New(a.fetcher, a.cache, stream.OptionsFromConfig(cfg), log.With("component", "stream"))
 	a.closers = append(a.closers, func() { a.engine.Close() })
 
@@ -549,6 +552,16 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 	a.closers = append(a.closers, func() { a.prefetch.Close() })
 
+	a.cachefill, err = cachefill.New(a.cache.Directory(), cachefill.Deps{
+		Catalog: a.catalog, Resolver: a.resolver, Engine: a.media, Cache: a.cache,
+		Config: func() config.Cache { return a.cfg.Get().Cache }, Owner: a.users.Owner,
+		Active:    func() bool { return len(a.playback.Sessions()) > 0 },
+		FreeBytes: func() (int64, error) { return admin.DiskFree(a.cache.Directory()) },
+		Remember:  a.playback.Remember, Logger: a.log,
+	})
+	if err != nil {
+		return fmt.Errorf("managed cache: %w", err)
+	}
 	a.buildInsights()
 	a.buildDiscovery()
 	a.episodeorder = episodeorder.New(a.db, a.tmdb, a.catalog)
@@ -583,7 +596,10 @@ func (a *App) applyConfig(c config.Config) {
 	a.debrid.UpdateConfig(c.Debrid)
 	a.resolver.UpdateConfig(c)
 	a.catalog.UpdateConfig(c.Catalog)
-	a.cache.SetBudget(c.Cache.BudgetBytes)
+	a.configureCache(c.Cache)
+	if a.cachefill != nil {
+		a.cachefill.Wake()
+	}
 	a.playback.SetConfig(c)
 	a.prefetch.SetConfig(c.Cache)
 	if a.transcoder != nil {
@@ -639,6 +655,8 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run) })
 	background.start(func() { a.trakt.Start(ctx) })
 	background.start(func() { a.load.Run(ctx) })
+	background.start(func() { a.cache.Run(ctx) })
+	background.start(func() { a.cachefill.Run(ctx) })
 	if a.clustered() {
 		background.start(func() { a.runRegistrarAsLeader(ctx) })
 		background.start(func() { a.registrar.RunPortMapping(ctx) })

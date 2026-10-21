@@ -747,6 +747,13 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	}
 	m.reg.poke()
 	m.saveResume(ctx, s, g)
+	if c, ok := m.deps.Cache.(interface{ RecordPlay(string, string, int64) }); ok {
+		title := s.title.Title
+		if s.title.ShowTitle != "" {
+			title = s.title.ShowTitle + " · " + title
+		}
+		c.RecordPlay(g.releaseID(), title, g.src.Size())
+	}
 	ginfo := g.infoSnapshot()
 	log.Info("playback session started", "session", s.id, "release", g.res.Release.Name,
 		"container", ginfo.Container, "size", g.src.Size(), "duration", ginfo.Duration, "estimated", ginfo.Estimated)

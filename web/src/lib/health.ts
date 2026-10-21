@@ -122,11 +122,19 @@ export function indexersHealth(v: unknown): HealthItem {
 }
 
 export function cacheHealth(v: unknown): HealthItem {
-  const base = { id: "cache" as const, label: "Cache", href: "/playback/cache" };
+  const base = { id: "cache" as const, label: "Cache", href: "/cache" };
   if (!isPlainObject(v)) return { ...base, level: "unknown", summary: "Not reported", details: [] };
   const used = num(v.used ?? v.usedBytes);
   const budget = num(v.budget ?? v.budgetBytes);
-  if (budget <= 0) return { ...base, level: "warn", summary: "No disk budget set", details: [] };
+  if (v.mode === "off")
+    return { ...base, level: "off", summary: "Persistent media bypassed", details: [] };
+  if (budget <= 0)
+    return {
+      ...base,
+      level: "ok",
+      summary: `${formatBytes(used)} · unlimited budget`,
+      details: [],
+    };
   const fill = Math.min(1, used / budget);
   return {
     ...base,

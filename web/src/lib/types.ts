@@ -229,6 +229,21 @@ export interface EtherConfig {
   /** Absent on servers without debrid support. */
   debrid?: DebridConfig;
   cache: {
+    preloadEnabled?: boolean;
+    preloadBudgetBytes?: number;
+    preloadMaxTitles?: number;
+    preloadRateMiB?: number;
+    preloadDuringPlayback?: boolean;
+    preloadMinFreeBytes?: number;
+    preloadSource?: string;
+    mode?: string;
+    retentionDays?: number;
+    replayBoostHours?: number;
+    disableSpeculation?: boolean;
+    detailWarmup?: string;
+    detailBytes?: number;
+    inProgressPinPercent?: number;
+    inProgressPinMaxAge?: string;
     dir: string;
     budgetBytes: number;
     prefetchNextEpisode: boolean;

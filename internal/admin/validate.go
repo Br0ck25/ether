@@ -162,6 +162,47 @@ func ValidateConfig(cfg config.Config) []FieldError {
 		v.add("debrid.readAheadChunks", "must be at most 32")
 	}
 
+	if cfg.Cache.PreloadBudgetBytes < 0 || (cfg.Cache.BudgetBytes > 0 && cfg.Cache.PreloadBudgetBytes > cfg.Cache.BudgetBytes) {
+		v.add("cache.preloadBudgetBytes", "must fit inside the total cache budget")
+	}
+	if cfg.Cache.PreloadEnabled && (cfg.Cache.Mode == "off" || cfg.Cache.PreloadBudgetBytes <= 0) {
+		v.add("cache.preloadEnabled", "requires persistent storage and a positive preload allocation")
+	}
+	if cfg.Cache.PreloadMaxTitles < 0 || cfg.Cache.PreloadMaxTitles > 5000 {
+		v.add("cache.preloadMaxTitles", "must be between 0 and 5000")
+	}
+	if cfg.Cache.PreloadRateMiB < 0 || cfg.Cache.PreloadRateMiB > 10000 {
+		v.add("cache.preloadRateMiB", "must be between 0 and 10000")
+	}
+	if cfg.Cache.PreloadMinFreeBytes < 0 {
+		v.add("cache.preloadMinFreeBytes", "must not be negative")
+	}
+	if cfg.Cache.PreloadSource != "" && cfg.Cache.PreloadSource != "popular" && cfg.Cache.PreloadSource != "recent" {
+		v.add("cache.preloadSource", "must be popular or recent")
+	}
+	switch cfg.Cache.Mode {
+	case "", "demand", "adaptive", "off":
+	default:
+		v.add("cache.mode", "must be demand, adaptive or off")
+	}
+	if cfg.Cache.RetentionDays < 0 || cfg.Cache.RetentionDays > 3650 {
+		v.add("cache.retentionDays", "must be between 0 and 3650")
+	}
+	if cfg.Cache.ReplayBoostHours < 0 || cfg.Cache.ReplayBoostHours > 720 {
+		v.add("cache.replayBoostHours", "must be between 0 and 720")
+	}
+	if cfg.Cache.DetailWarmup != "" && cfg.Cache.DetailWarmup != "on" && cfg.Cache.DetailWarmup != "off" {
+		v.add("cache.detailWarmup", "must be on or off")
+	}
+	if cfg.Cache.DetailBytes < 0 || cfg.Cache.DetailBytes > 64<<20 {
+		v.add("cache.detailBytes", "must be between 0 and 64 MiB")
+	}
+	if cfg.Cache.InProgressPinPercent < 0 || cfg.Cache.InProgressPinPercent > 100 {
+		v.add("cache.inProgressPinPercent", "must be between 0 and 100")
+	}
+	if cfg.Cache.InProgressPinMaxAge.D() < 0 {
+		v.add("cache.inProgressPinMaxAge", "must not be negative")
+	}
 	if strings.TrimSpace(cfg.Cache.Dir) == "" {
 		v.add("cache.dir", "is required")
 	}

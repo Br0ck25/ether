@@ -67,6 +67,8 @@ type Cache struct {
 	parked      lruList // entries found pinned/protected during eviction
 	parkDirty   bool    // protection may have shrunk; merge parked back into lru
 	lastOverLog time.Time
+	policy      Policy
+	metrics     Metrics
 
 	saveMu sync.Mutex // serialises pins.json writes
 
@@ -88,25 +90,31 @@ var _ core.SegmentCache = (*Cache)(nil)
 // immutable; the rest is guarded by Cache.mu. Records are never deleted while
 // the cache is open (an emptied release keeps its directory and metadata).
 type release struct {
-	id       string
-	dir      string
-	segs     map[int]*entry
-	bytes    int64
-	lastUsed int64
-	metaOK   bool // directory and release.json exist on disk
+	id         string
+	dir        string
+	segs       map[int]*entry
+	head, tail *entry
+	bytes      int64
+	lastUsed   int64
+	metaOK     bool // directory and release.json exist on disk
 	// metaMu serializes writing release.json: concurrent Puts for a new
 	// release would otherwise race their atomic renames onto the same
 	// file, which Windows refuses ("Access is denied").
-	metaMu sync.Mutex
+	metaMu     sync.Mutex
+	experience experience
 }
 
 // ReleaseUsage describes one release in the cache, for the admin UI.
 type ReleaseUsage struct {
-	ReleaseID string
-	Bytes     int64
-	Segments  int
-	LastUsed  time.Time
-	Pins      []string
+	ReleaseID  string
+	Bytes      int64
+	Segments   int
+	LastUsed   time.Time
+	Pins       []string
+	Title      string
+	Size       int64
+	Plays      int
+	LastPlayed time.Time
 }
 
 // Open opens (creating) a cache rooted at dir with a byte budget (<=0 means
@@ -167,11 +175,13 @@ func (c *Cache) Get(releaseID string, segment int) ([]byte, bool) {
 	}
 	r := c.rels[releaseID]
 	if r == nil {
+		c.metrics.Misses++
 		c.mu.Unlock()
 		return nil, false
 	}
 	e := r.segs[segment]
 	if e == nil {
+		c.metrics.Misses++
 		c.mu.Unlock()
 		return nil, false
 	}
@@ -184,6 +194,7 @@ func (c *Cache) Get(releaseID string, segment int) ([]byte, bool) {
 		// Holding the stripe read lock excludes our own renames/unlinks of this
 		// key, so the file genuinely vanished or was damaged externally.
 		c.mu.Lock()
+		c.metrics.Misses++
 		if r.segs[segment] == e {
 			c.dropLocked(e)
 		}
@@ -204,10 +215,14 @@ func (c *Cache) Get(releaseID string, segment int) ([]byte, bool) {
 	nowNs := now.UnixNano()
 	touch := false
 	c.mu.Lock()
+	c.metrics.Hits++
+	c.metrics.ServedBytes += int64(len(data))
 	if r.segs[segment] == e { // may have been evicted while we read; data is still valid
 		c.listOf(e).remove(e)
 		e.parked = false
 		c.lru.pushFront(e)
+		r.removeEntry(e)
+		r.pushEntry(e)
 		e.lastUsed = nowNs
 		r.lastUsed = max(r.lastUsed, nowNs)
 		if time.Duration(nowNs-e.touched) >= c.touchEvery {
@@ -247,6 +262,10 @@ func (c *Cache) Put(releaseID string, segment int, data []byte) error {
 	if c.closed {
 		c.mu.Unlock()
 		return ErrClosed
+	}
+	if c.policy.Mode == "off" {
+		c.mu.Unlock()
+		return nil
 	}
 	if c.budget > 0 && int64(len(data)) > c.budget {
 		b := c.budget
@@ -429,7 +448,7 @@ func (c *Cache) Releases() []ReleaseUsage {
 			continue
 		}
 		seen[id] = true
-		u := ReleaseUsage{ReleaseID: id, Bytes: r.bytes, Segments: len(r.segs), Pins: sortedReasons(c.pins[id])}
+		u := ReleaseUsage{Title: r.experience.Title, Size: r.experience.Size, Plays: r.experience.Plays, LastPlayed: r.experience.LastPlayed, ReleaseID: id, Bytes: r.bytes, Segments: len(r.segs), Pins: sortedReasons(c.pins[id])}
 		if r.lastUsed > 0 {
 			u.LastUsed = time.Unix(0, r.lastUsed)
 		}
@@ -524,6 +543,7 @@ func (c *Cache) insertLocked(r *release, seg int, size, nowNs int64) {
 		c.used -= e.size
 		r.bytes -= e.size
 		c.listOf(e).remove(e)
+		r.removeEntry(e)
 	} else {
 		e = &entry{rel: r, seg: seg}
 		r.segs[seg] = e
@@ -537,12 +557,14 @@ func (c *Cache) insertLocked(r *release, seg int, size, nowNs int64) {
 	r.bytes += size
 	r.lastUsed = max(r.lastUsed, nowNs)
 	c.lru.pushFront(e)
+	r.pushEntry(e)
 }
 
 // dropLocked removes e from the index and accounting (not from disk).
 func (c *Cache) dropLocked(e *entry) {
 	c.listOf(e).remove(e)
 	e.parked = false
+	e.rel.removeEntry(e)
 	delete(e.rel.segs, e.seg)
 	c.used -= e.size
 	e.rel.bytes -= e.size
@@ -576,7 +598,7 @@ func (c *Cache) evict() {
 	}
 	var victims []*entry
 	for c.overBudgetLocked() {
-		e := c.lru.tail
+		e := c.victimLocked(prot)
 		if e == nil {
 			break
 		}
@@ -586,6 +608,7 @@ func (c *Cache) evict() {
 			c.parked.pushFront(e)
 			continue
 		}
+		c.metrics.EvictedBytes += e.size
 		c.dropLocked(e)
 		victims = append(victims, e)
 	}
@@ -799,6 +822,7 @@ func (c *Cache) rebuild() error {
 	sort.Slice(all, func(i, j int) bool { return all[i].lastUsed < all[j].lastUsed })
 	c.mu.Lock()
 	for _, e := range all {
+		e.rel.pushEntry(e)
 		c.lru.pushFront(e) // oldest first, so the newest ends up at the head
 	}
 	c.mu.Unlock()
@@ -818,6 +842,9 @@ func (c *Cache) loadReleaseDir(dir, rel string, all []*entry) []*entry {
 		return all
 	}
 	r := &release{id: id, dir: dir, segs: make(map[int]*entry), metaOK: true}
+	if b, err := os.ReadFile(filepath.Join(dir, "experience.json")); err == nil {
+		_ = json.Unmarshal(b, &r.experience)
+	}
 	for _, de := range des {
 		name := de.Name()
 		p := filepath.Join(dir, name)

@@ -283,3 +283,11 @@ have stricter replacement limits because the player retains the original file's
 headers. Provider outages and timeouts are retriable and do not permanently mark
 a release bad. Different cuts of a title can still skip or repeat a short section
 when Ether maps the playback timestamp.
+
+## Cache management
+
+**Server → Cache** controls media retention, opening and resume warming, and an
+optional managed local movie shelf. Presets range from no persistent media
+through small caches to multi-terabyte preloading. Every budget is adjustable;
+selecting a preset only changes the draft until you save. See [Cache management](cache.md)
+for retention, preload limits, pause behaviour, and storage accounting.

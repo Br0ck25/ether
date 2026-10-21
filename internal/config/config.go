@@ -157,6 +157,23 @@ func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
 func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
 
 type Cache struct {
+	PreloadEnabled        bool   `json:"preloadEnabled,omitempty"`
+	PreloadBudgetBytes    int64  `json:"preloadBudgetBytes,omitempty"`
+	PreloadMaxTitles      int    `json:"preloadMaxTitles,omitempty"`
+	PreloadRateMiB        int    `json:"preloadRateMiB,omitempty"`
+	PreloadDuringPlayback bool   `json:"preloadDuringPlayback,omitempty"`
+	PreloadMinFreeBytes   int64  `json:"preloadMinFreeBytes,omitempty"`
+	PreloadSource         string `json:"preloadSource,omitempty"`
+
+	// Mode: empty/demand retains fetched bytes; adaptive favours replayed titles;
+	// off bypasses persistent media writes. Zero budget remains unlimited.
+	Mode               string `json:"mode,omitempty"`
+	RetentionDays      int    `json:"retentionDays,omitempty"`
+	ReplayBoostHours   int    `json:"replayBoostHours,omitempty"`
+	DisableSpeculation bool   `json:"disableSpeculation,omitempty"`
+	DetailWarmup       string `json:"detailWarmup,omitempty"` // empty/on or off
+	DetailBytes        int64  `json:"detailBytes,omitempty"`  // zero preserves the 2 MiB default
+
 	Dir         string `json:"dir"`
 	BudgetBytes int64  `json:"budgetBytes"`
 	// Prefetch

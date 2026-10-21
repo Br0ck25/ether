@@ -4,13 +4,14 @@ package segcache
 // (Cache.lru or Cache.parked) while it is in the index. All fields are guarded
 // by Cache.mu.
 type entry struct {
-	prev, next *entry
-	rel        *release
-	seg        int
-	size       int64 // payload bytes (file size minus header)
-	lastUsed   int64 // unix nanos; drives LRU order
-	touched    int64 // unix nanos of the last mtime update on disk
-	parked     bool  // true while in Cache.parked instead of Cache.lru
+	prev, next       *entry
+	relPrev, relNext *entry
+	rel              *release
+	seg              int
+	size             int64 // payload bytes (file size minus header)
+	lastUsed         int64 // unix nanos; drives LRU order
+	touched          int64 // unix nanos of the last mtime update on disk
+	parked           bool  // true while in Cache.parked instead of Cache.lru
 }
 
 // lruList is a nil-terminated intrusive doubly linked list. head is the most

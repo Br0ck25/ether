@@ -56,3 +56,29 @@ func TestPreResolveReusedWithoutLiveSessionOrHistory(t *testing.T) {
 		t.Fatalf("resolved again: %d calls", calls)
 	}
 }
+
+func TestCachePolicyCanDisableSpeculation(t *testing.T) {
+	for _, mode := range []string{"off", "detail", "all"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newHarness(t, []*fakeRelease{mkv("r1", 2<<30, 90*time.Minute)}, []string{"r1"})
+			cfg := h.m.config()
+			switch mode {
+			case "off":
+				cfg.Cache.Mode = "off"
+			case "detail":
+				cfg.Cache.DetailWarmup = "off"
+			case "all":
+				cfg.Cache.DisableSpeculation = true
+			}
+			h.m.SetConfig(cfg)
+			if h.m.PreResolve(context.Background(), owner, movieKey, defaultCaps("client")) {
+				t.Fatal("disabled warm was admitted")
+			}
+			h.resolver.mu.Lock()
+			defer h.resolver.mu.Unlock()
+			if h.resolver.calls != 0 {
+				t.Fatal("disabled warming reached resolver")
+			}
+		})
+	}
+}

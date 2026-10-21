@@ -264,6 +264,9 @@ func (p *Prefetcher) Stats() Stats {
 // never blocks: past Cache.NextEpisodeAt of an episode it queues the next
 // episode's prefetch (once per user and episode).
 func (p *Prefetcher) OnTimeline(user *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
+	if cfg := p.config(); cfg.DisableSpeculation || cfg.Mode == "off" {
+		return
+	}
 	// Post-play hook queue (#30): movies and finales pre-buffer their
 	// #1 pick near the end. Runs before the episode-only path below.
 	p.onTimelinePostPlay(user, key, offset, duration, state)
@@ -354,7 +357,10 @@ func (p *Prefetcher) runJob(j job) {
 	p.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(p.ctx, p.opts.JobTimeout)
-	err := j.run(ctx)
+	var err error
+	if cfg := p.config(); !cfg.DisableSpeculation && cfg.Mode != "off" {
+		err = j.run(ctx)
+	}
 	cancel()
 
 	p.mu.Lock()
@@ -491,7 +497,7 @@ func (p *Prefetcher) warmLoop() {
 // title of every user that has a stored release and no live session.
 func (p *Prefetcher) warmPass(ctx context.Context) error {
 	cfg := p.config()
-	if !cfg.KeepInProgressWarm || p.deps.State == nil || p.deps.Auth == nil || p.deps.Hints == nil {
+	if cfg.DisableSpeculation || cfg.Mode == "off" || !cfg.KeepInProgressWarm || p.deps.State == nil || p.deps.Auth == nil || p.deps.Hints == nil {
 		return nil
 	}
 	users, err := p.deps.Auth.Users(ctx)
