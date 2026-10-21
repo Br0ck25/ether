@@ -13,21 +13,22 @@ import (
 // receives. It is pure: same inputs, same rows. Everything time-dependent
 // (rotation, exploration) is seeded by the local date.
 type assembly struct {
-	model   *userModel
-	owner   []*candRow // owner collection rows for this context
-	cw      []candItem // live Continue Watching items (Home only)
-	user    core.User  // the requesting viewer
-	hc      core.HubContext
-	section core.MediaType // "" = Home
-	limit   int            // items per row
-	layout  *core.HomeLayout
-	global  map[string]arm // server-wide evidence by prior kind
-	arms    map[string]arm // this viewer's evidence by kind
-	allowed func(core.MediaType) bool
-	maxRows int
-	explore float64
-	day     int
-	intent  *intentSnapshot // live session intent (#32); nil = none
+	previous []presentedRow // currently browsed positions; never bypass eligibility
+	model    *userModel
+	owner    []*candRow // owner collection rows for this context
+	cw       []candItem // live Continue Watching items (Home only)
+	user     core.User  // the requesting viewer
+	hc       core.HubContext
+	section  core.MediaType // "" = Home
+	limit    int            // items per row
+	layout   *core.HomeLayout
+	global   map[string]arm // server-wide evidence by prior kind
+	arms     map[string]arm // this viewer's evidence by kind
+	allowed  func(core.MediaType) bool
+	maxRows  int
+	explore  float64
+	day      int
+	intent   *intentSnapshot // live session intent (#32); nil = none
 
 	// Surfaces, dials and cross-surface dedupe (surfaces.go, tuning.go,
 	// homelead.go).
@@ -135,6 +136,7 @@ func (a *assembly) run() []core.HomeRow {
 		return visible[i].hubID < visible[j].hubID
 	})
 	a.spreadRows(visible) // Variety dial: page-level genre spread
+	a.retainRowOrder(visible)
 	// Per-kind caps (pinned rows count but are never dropped).
 	perKind := map[string]int{}
 	groups := map[string]bool{}
@@ -205,7 +207,8 @@ func anchored(c *candRow) bool { return c.keepOrder && c.kind != KindContinue }
 
 // draftsFirst reports rows that take their titles before the round-robin:
 // anchored rows, and the top picks that open the page (toppicks.go), so the
-// page's best titles are never traded away to rows below.
+// page's best titles lead a fresh draft. An active presentation first keeps
+// still-eligible cards in the shelves where the viewer already saw them.
 func draftsFirst(c *candRow) bool {
 	return anchored(c) || c.kind == KindTop10 || c.kind == KindTop10Today
 }
@@ -264,6 +267,24 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 		}
 		for _, phase := range []bool{true, false} {
 			inPhase := func(r *rankedRow) bool { return head == nil || head[r] == phase }
+			// Ordered utility/collection rows retain their live order and priority.
+			if len(a.previous) > 0 {
+				for _, r := range sel {
+					if r.c.source == core.RowSourcePlex || (r.c.source == core.RowSourceEngine && !r.c.keepOrder) || !draftsFirst(r.c) || !inPhase(r) {
+						continue
+					}
+					for _, it := range r.items {
+						if len(picked[r]) >= a.rowCap(r.c) {
+							break
+						}
+						if !claimed[it.t.Key] {
+							claimed[it.t.Key] = true
+							picked[r] = append(picked[r], it)
+						}
+					}
+				}
+				a.retainItems(sel, picked, claimed, inPhase)
+			}
 			for _, r := range sel {
 				if r.c.source == core.RowSourcePlex || !draftsFirst(r.c) || !inPhase(r) {
 					continue
@@ -473,11 +494,15 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 	// without those titles keeps them, after its own.
 	out, held, demoted := a.holdBackHomeLead(c, out)
 	// Diversify the head; the tail is slack for cross-row dedupe.
+	eligible := append([]candItem(nil), out...)
+	if demoted {
+		eligible = append(eligible, held...)
+	}
 	out = mmr(out, min(len(out), 3*n+6), a.dials().lambda())
 	if demoted {
 		out = append(out, mmr(held, len(held), a.dials().lambda())...)
 	}
-	return out
+	return a.keepPreviouslyShown(c, eligible, out)
 }
 
 // adjust is the context-dependent part of an item's score.

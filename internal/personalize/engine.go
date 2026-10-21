@@ -217,6 +217,9 @@ type Engine struct {
 	memoMu sync.Mutex
 	memo   map[memoKey]*memoEntry
 
+	presentationMu sync.Mutex
+	presentations  map[memoKey]presentation
+
 	// Netflix-style hooks state (hooks.go), created on first use.
 	hookOnce sync.Once
 	hook     *hookState
@@ -469,7 +472,7 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 	// but only the rows that survive the page length claim titles (fill).
 	a.maxRows = 100
 	a.rk = e.newRankPass(u, hc, section, draft) // learned ranker (ranker.go)
-	p.Rows = a.run()
+	p.Rows = e.assemblePage(a, key, draft)
 	p.HomeDeduped = a.homeDeduped
 	a.rk.publishRows(p.Rows) // feature snapshots for the serve log (ranker.go)
 	for _, r := range p.Rows {

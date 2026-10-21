@@ -218,7 +218,11 @@ func (e *Engine) Refresh(ctx context.Context, user *core.User) error {
 	e.mu.Unlock()
 	e.rec.flush(ctx)
 	e.invalidateStats()
-	return e.Rebuild(ctx, user)
+	if err := e.Rebuild(ctx, user); err != nil {
+		return err
+	}
+	e.clearPresentation(user.ID)
+	return nil
 }
 
 // Taste returns the viewer's taste profile (from the cached model when

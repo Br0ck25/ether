@@ -72,7 +72,7 @@ func TestIntentAssemblyBoost(t *testing.T) {
 }
 
 // Opens are recorded, converted opens are dropped, and /hubs assembly
-// sees the change immediately (new memo version, boosted genre share).
+// keeps the browsed page stable; the next fresh presentation uses the boost.
 func TestIntentRecordConvertAndHubs(t *testing.T) {
 	h := newHarness(t, nil)
 	u := core.User{ID: 31, Username: "browser"}
@@ -117,8 +117,8 @@ func TestIntentRecordConvertAndHubs(t *testing.T) {
 		t.Errorf("intent did not decay: fresh %v stale %v", fresh.genre["Horror"], stale.genre["Horror"])
 	}
 
-	// /hubs reflects the open on the very next request: the memo key
-	// carries the intent version, so no stale rows are served.
+	// Detail opens update scores without reshuffling the page being browsed.
+	// A fresh presentation must still use the newly learned intent.
 	rows1 := h.e.home(ctx, &u, hc, "", 12, false).Rows
 	share1 := genreShare(rows1, "Horror", KindContinue)
 	comedyTitle := h.cat.titles[movieKey(2, 41)]
@@ -127,6 +127,18 @@ func TestIntentRecordConvertAndHubs(t *testing.T) {
 		h.e.RecordDetailOpen(ctx, &u, &tt)
 	}
 	_ = comedyTitle
+	stable := h.e.home(ctx, &u, hc, "", 12, false).Rows
+	for i, r := range rows1 {
+		if i >= len(stable) || stable[i].HubID != r.HubID {
+			t.Fatal("detail open moved a shelf")
+		}
+		for j, title := range r.Items {
+			if j >= len(stable[i].Items) || stable[i].Items[j].Key != title.Key {
+				t.Fatal("detail open moved a card")
+			}
+		}
+	}
+	h.e.clearPresentation(u.ID)
 	rows2 := h.e.home(ctx, &u, hc, "", 12, false).Rows
 	if genreShare(rows2, "Comedy", KindContinue) <= genreShare(rows1, "Comedy", KindContinue) {
 		t.Errorf("hubs did not adapt to session intent: comedy share %v -> %v (horror %v)",
