@@ -16,19 +16,20 @@ import (
 // interface{ PID() int } / interface{ CPUTime() (time.Duration, time.Duration) };
 // they are never invented when the API does not expose them.
 type Launch struct {
-	ID          int       `json:"id"`
-	Kind        string    `json:"kind"` // "start" (long-running) or "run" (to completion)
-	Path        string    `json:"path"`
-	Args        []string  `json:"args"` // redacted
-	StartedAt   time.Time `json:"startedAt"`
-	DurationMs  int64     `json:"durationMs,omitempty"`
-	ExitError   string    `json:"exitError,omitempty"`
-	PID         int       `json:"pid,omitempty"`
-	CPUUserMs   *int64    `json:"cpuUserMs,omitempty"`
-	CPUSystemMs *int64    `json:"cpuSystemMs,omitempty"`
-	Encoder     string    `json:"encoder,omitempty"` // -c:v value, when present
-	HWEncoder   bool      `json:"hwEncoder,omitempty"`
-	LogTail     string    `json:"logTail,omitempty"`
+	ID           int       `json:"id"`
+	Kind         string    `json:"kind"` // "start" (long-running) or "run" (to completion)
+	Path         string    `json:"path"`
+	Args         []string  `json:"args"` // redacted
+	StartedAt    time.Time `json:"startedAt"`
+	DurationMs   int64     `json:"durationMs,omitempty"`
+	ExitError    string    `json:"exitError,omitempty"`
+	PID          int       `json:"pid,omitempty"`
+	CPUUserMs    *int64    `json:"cpuUserMs,omitempty"`
+	CPUSystemMs  *int64    `json:"cpuSystemMs,omitempty"`
+	PeakRSSBytes *uint64   `json:"peakRssBytes,omitempty"` // individual encoder peak, not aggregate tree RSS
+	Encoder      string    `json:"encoder,omitempty"`      // -c:v value, when present
+	HWEncoder    bool      `json:"hwEncoder,omitempty"`
+	LogTail      string    `json:"logTail,omitempty"`
 }
 
 const maxLaunchLog = 64 << 10
@@ -187,6 +188,11 @@ func (rec *launchRec) finalize() {
 		u, s := user.Milliseconds(), sys.Milliseconds()
 		rec.launch.CPUUserMs = &u
 		rec.launch.CPUSystemMs = &s
+	}
+	if p, ok := rec.proc.(interface{ PeakRSSBytes() (uint64, bool) }); ok {
+		if peak, available := p.PeakRSSBytes(); available {
+			rec.launch.PeakRSSBytes = &peak
+		}
 	}
 	rec.launch.LogTail = rec.buf.tail()
 }

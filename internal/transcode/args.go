@@ -3,6 +3,7 @@ package transcode
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -129,6 +130,12 @@ func buildCodecArgs(s runSpec) []string {
 	transcodeVideo := v != nil && !d.VideoCopy
 
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "warning", "-nostats", "-progress", "pipe:1", "-y"}
+	if transcodeVideo {
+		if _, hw := videoEncoder(d.VideoCodec, s.Accel, s.Features); !hw {
+			w, h := outputSize(v.Width, v.Height, d.MaxHeight)
+			args = append(args, "-filter_complex_threads", strconv.Itoa(min(4, softwareThreadBudget(w, h, runtime.GOMAXPROCS(0)))))
+		}
+	}
 
 	// ---- input
 	args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
@@ -446,6 +453,9 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		codec = "h264"
 	}
 	enc, hw := videoEncoder(codec, s.Accel, s.Features)
+	if !hw {
+		p.inputArgs = append(p.inputArgs, "-threads", strconv.Itoa(softwareThreadBudget(v.Width, v.Height, runtime.GOMAXPROCS(0))))
+	}
 	accel := AccelNone
 	if hw {
 		accel = s.Accel.Name
@@ -601,10 +611,11 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	switch enc {
 	case "libx264":
 		crf := "21"
+		threads := strconv.Itoa(softwareThreadBudget(w, h, runtime.GOMAXPROCS(0)))
 		if s.Rate.Quality {
-			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", threads)
 		} else {
-			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", "0")
+			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", b, "-bufsize", buf, "-profile:v", "high", "-threads", threads)
 		}
 		if s.FastStart {
 			e = append(e, "-tune", "zerolatency")
