@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"sync"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/tmdb"
@@ -250,7 +251,9 @@ func (c *Catalog) getEpisode(ctx context.Context, key core.RatingKey) (*core.Tit
 // has passed and at least one episode has aired (queryTitles drops
 // unreleased rows and applies aired counts).
 func (c *Catalog) seasonsOfShow(ctx context.Context, showID int64) ([]core.Title, error) {
-	all, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='season' AND show_tmdb=? ORDER BY season ASC`, showID)
+	// show_key, not show_tmdb: only show_key is indexed, and a show's
+	// pages read its seasons and episodes many times.
+	all, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='season' AND show_key=? ORDER BY season ASC`, int64(core.ShowKey(showID)))
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +269,7 @@ func (c *Catalog) seasonsOfShow(ctx context.Context, showID int64) ([]core.Title
 // episodesOfSeason lists a season's aired episodes; queryTitles drops those
 // with unknown or future air dates.
 func (c *Catalog) episodesOfSeason(ctx context.Context, showID int64, season int) ([]core.Title, error) {
-	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='episode' AND show_tmdb=? AND season=? ORDER BY episode ASC`, showID, season)
+	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='episode' AND show_key=? AND season=? ORDER BY episode ASC`, int64(core.ShowKey(showID)), season)
 }
 
 // seasonMirrored reports whether any of a season's episodes, aired or not,
@@ -320,27 +323,126 @@ func (c *Catalog) Grandchildren(ctx context.Context, key core.RatingKey) ([]core
 	if err != nil {
 		return nil, err
 	}
-	var out []core.Title
-	for _, s := range seasons {
-		if _, err := c.fetchSeason(ctx, key.TMDB(), s.Season); err != nil {
-			return nil, err
-		}
-		eps, err := c.episodesOfSeason(ctx, key.TMDB(), s.Season)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, eps...)
+	if len(seasons) == 0 {
+		return []core.Title{}, nil
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Season != out[j].Season {
-			return out[i].Season < out[j].Season
-		}
-		return out[i].Episode < out[j].Episode
-	})
-	if out == nil {
+	if err := c.loadSeasons(ctx, key.TMDB(), seasons); err != nil {
+		return nil, err
+	}
+	numbers := make([]any, 0, len(seasons)+1)
+	numbers = append(numbers, int64(key))
+	for _, s := range seasons {
+		numbers = append(numbers, s.Season)
+	}
+	out, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='episode' AND show_key=? AND season IN (`+placeholders(len(seasons))+`) ORDER BY season ASC, episode ASC`, numbers...)
+	if out == nil && err == nil {
 		out = []core.Title{}
 	}
-	return out, nil
+	return out, err
+}
+
+// seasonLoads bounds a show's concurrent season fetches.
+const seasonLoads = 6
+
+// loadSeasons brings a show's listed seasons into the mirror for a whole-show
+// read. A season is fetched unless a season fetch has mirrored it: its season
+// record is detailed and it has episodes. A mirrored season is refetched when
+// stale only if it can still change: it is the latest season, it has episodes
+// yet to air, or the show's refreshed summary counts more episodes than the
+// mirror holds (a former latest season's final episodes). Otherwise it stays
+// as mirrored until its own page or episodes are opened (fetchSeason), so a
+// long-running show does not refetch every past season once its details go
+// stale. Fetches run concurrently.
+func (c *Catalog) loadSeasons(ctx context.Context, showID int64, seasons []core.Title) error {
+	type mirrored struct{ episodes, pending int }
+	have := map[int]mirrored{}
+	rows, err := c.db.QueryContext(ctx, `SELECT season,COUNT(*),COUNT(CASE WHEN released_ts<=0 OR released_ts>? THEN 1 END)
+		FROM catalog_titles WHERE type='episode' AND show_key=? GROUP BY season`, c.now().Unix(), int64(core.ShowKey(showID)))
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var season int
+		var m mirrored
+		if err := rows.Scan(&season, &m.episodes, &m.pending); err != nil {
+			rows.Close()
+			return err
+		}
+		have[season] = m
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	type record struct {
+		detailed, fresh bool
+		episodes        int // the latest season summary's or fetch's count
+	}
+	records := map[int]record{}
+	rows, err = c.db.QueryContext(ctx, `SELECT season,detail,detail_at,child_count FROM catalog_titles WHERE type='season' AND show_key=?`, int64(core.ShowKey(showID)))
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var season, detail, child int
+		var detailAt int64
+		if err := rows.Scan(&season, &detail, &detailAt, &child); err != nil {
+			rows.Close()
+			return err
+		}
+		st := storedTitle{detail: detail != 0}
+		if detailAt != 0 {
+			st.detailAt = time.Unix(detailAt, 0).UTC()
+		}
+		records[season] = record{detailed: st.detail && detailAt != 0, fresh: c.fresh(&st), episodes: child}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	latest := 0
+	for _, s := range seasons {
+		latest = max(latest, s.Season)
+	}
+	var load []int
+	for _, s := range seasons {
+		m, ok := have[s.Season]
+		r := records[s.Season]
+		switch {
+		case !ok || !r.detailed:
+		case r.fresh:
+			continue
+		case s.Season != latest && m.pending == 0 && r.episodes <= m.episodes:
+			continue
+		}
+		load = append(load, s.Season)
+	}
+	if len(load) == 0 {
+		return nil
+	}
+	// Each fetch loads the show; make sure it is mirrored once, first.
+	if _, err := c.ensureShow(ctx, showID); err != nil {
+		return err
+	}
+	errs := make([]error, len(load))
+	sem := make(chan struct{}, seasonLoads)
+	var wg sync.WaitGroup
+	for i, season := range load {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				errs[i] = ctx.Err()
+				return
+			}
+			defer func() { <-sem }()
+			_, errs[i] = c.fetchSeason(ctx, showID, season)
+		}()
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 // NextEpisode returns the next regular episode (specials, season 0, are skipped

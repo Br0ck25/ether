@@ -27,6 +27,51 @@ func (s *Server) metadataGrandchildren(ctx context.Context, pr *Request, k core.
 	return s.d.Catalog.Grandchildren(ctx, k)
 }
 
+// showEpisodes memoises shows' episodes for one response, so a show page
+// counts its leaves, groups its seasons and picks On Deck from one load
+// rather than one per feature and per season.
+type showEpisodes map[core.RatingKey]showEpisodeList
+
+type showEpisodeList struct {
+	eps []core.Title
+	err error
+}
+
+// episodesOfShow is metadataGrandchildren through memo (nil: not memoised).
+func (s *Server) episodesOfShow(ctx context.Context, pr *Request, memo showEpisodes, show core.RatingKey) ([]core.Title, error) {
+	if l, ok := memo[show]; ok {
+		return l.eps, l.err
+	}
+	eps, err := s.metadataGrandchildren(ctx, pr, show)
+	if memo != nil {
+		memo[show] = showEpisodeList{eps, err}
+	}
+	return eps, err
+}
+
+// presentedSeasons groups a show's episodes by the season the viewer sees
+// them in: their episode-order group, else their own season. Each group is
+// what metadataChildren returns for that season.
+func (s *Server) presentedSeasons(ctx context.Context, pr *Request, show core.RatingKey, eps []core.Title) map[int][]core.Title {
+	grouped := false
+	if s.d.EpisodeOrder != nil {
+		g, err := s.d.EpisodeOrder.Grouped(ctx, pr.User, []core.RatingKey{show})
+		// If preferences cannot be read, ask for each episode's position.
+		grouped = err != nil || g[show]
+	}
+	out := map[int][]core.Title{}
+	for _, e := range eps {
+		n := e.Season
+		if grouped {
+			if season, _, _, ok := s.d.EpisodeOrder.Position(ctx, pr.User, e.Key); ok {
+				n = season
+			}
+		}
+		out[n] = append(out[n], e)
+	}
+	return out
+}
+
 // episodeOrderView is a list's episode-order presentation, resolved before
 // its items render. grouped is nil on detail pages (and if preferences cannot
 // be read), where every title consults the service itself.

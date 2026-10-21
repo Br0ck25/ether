@@ -157,9 +157,10 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 // detail renders a full item page.
 func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, children, onDeck, related, extras bool, extraTypes string) model.Metadata {
 	s.rememberTitle(t)
+	memo := showEpisodes{}
 	ts := []core.Title{*t}
 	items := s.renderTitles(ctx, pr, ts, renderOpts{detail: true, media: true})
-	s.applyLeafCounts(ctx, pr, items, ts)
+	s.applyLeafCounts(ctx, pr, items, ts, memo)
 	md := items[0]
 	// Per-viewer decision header (#31); detail pages only, never lists.
 	s.decorateDetail(ctx, pr, t, &md)
@@ -167,13 +168,13 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 		if kids, err := s.metadataChildren(ctx, pr, t.Key); err == nil {
 			rendered := s.renderTitles(ctx, pr, kids, renderOpts{media: true})
 			if t.Type == core.TypeShow {
-				s.applyLeafCounts(ctx, pr, rendered, kids)
+				s.applyLeafCounts(ctx, pr, rendered, kids, memo)
 			}
 			md.Children = &model.Children{Size: len(rendered), Metadata: rendered}
 		}
 	}
 	if onDeck && t.Type == core.TypeShow {
-		if ep, st := s.showOnDeck(ctx, pr, t.Key); ep != nil {
+		if ep, st := s.showOnDeck(ctx, pr, t.Key, memo); ep != nil {
 			md.OnDeck = &model.OnDeck{Metadata: s.renderTitles(ctx, pr, []core.Title{*ep}, renderOpts{media: true, state: st})}
 			// The show page's Play button plays this episode: resolve,
 			// open and probe it while the viewer reads the page.
@@ -206,8 +207,8 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 }
 
 // showOnDeck picks the episode to resume or start next.
-func (s *Server) showOnDeck(ctx context.Context, pr *Request, show core.RatingKey) (*core.Title, map[core.RatingKey]core.WatchStatus) {
-	eps, err := s.metadataGrandchildren(ctx, pr, show)
+func (s *Server) showOnDeck(ctx context.Context, pr *Request, show core.RatingKey, memo showEpisodes) (*core.Title, map[core.RatingKey]core.WatchStatus) {
+	eps, err := s.episodesOfShow(ctx, pr, memo, show)
 	if err != nil || len(eps) == 0 {
 		return nil, nil
 	}
@@ -323,7 +324,7 @@ func (s *Server) handleChildren(w http.ResponseWriter, r *http.Request) {
 	page := kids[lo:hi]
 	mc.Metadata = s.renderTitles(ctx, pr, page, renderOpts{media: true, inSection: true})
 	if parent.Type == core.TypeShow {
-		s.applyLeafCounts(ctx, pr, mc.Metadata, page)
+		s.applyLeafCounts(ctx, pr, mc.Metadata, page, nil)
 		if allLeaves != nil {
 			viewed, leaves := 0, 0
 			for _, m := range mc.Metadata {
@@ -480,7 +481,7 @@ func (s *Server) handleItemOnDeck(w http.ResponseWriter, r *http.Request) {
 			s.writeErr(w, r, err)
 			return
 		}
-		if ep, st := s.showOnDeck(ctx, pr, k); ep != nil {
+		if ep, st := s.showOnDeck(ctx, pr, k, nil); ep != nil {
 			mc.Metadata = s.renderTitles(ctx, pr, []core.Title{*ep}, renderOpts{media: true, state: st})
 		}
 	}

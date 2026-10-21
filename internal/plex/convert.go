@@ -1131,8 +1131,9 @@ func (s *Server) stateFor(ctx context.Context, pr *Request, ts []core.Title) map
 }
 
 // applyLeafCounts fills viewedLeafCount for shows and seasons by loading
-// their episodes' watch state. Used on detail and children pages only.
-func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model.Metadata, ts []core.Title) {
+// their episodes' watch state. Used on detail and children pages only. memo
+// (may be nil) shares show episodes with the rest of the response.
+func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model.Metadata, ts []core.Title, memo showEpisodes) {
 	if s.d.State == nil || pr.User == nil {
 		return
 	}
@@ -1140,6 +1141,15 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 	for i := range items {
 		byKey[items[i].RatingKey] = i
 	}
+	// Seasons listed together (a show's children) are counted from their
+	// show's episodes, loaded once, rather than by loading every season.
+	together := map[core.RatingKey]int{}
+	for i := range ts {
+		if ts[i].Type == core.TypeSeason {
+			together[core.ShowKey(ts[i].Key.TMDB())]++
+		}
+	}
+	bySeason := map[core.RatingKey]map[int][]core.Title{}
 	for sourceIndex := range ts {
 		i, ok := byKey[ts[sourceIndex].Key.String()]
 		if !ok {
@@ -1150,9 +1160,22 @@ func (s *Server) applyLeafCounts(ctx context.Context, pr *Request, items []model
 		var err error
 		switch title.Type {
 		case core.TypeShow:
-			eps, err = s.metadataGrandchildren(ctx, pr, title.Key)
+			eps, err = s.episodesOfShow(ctx, pr, memo, title.Key)
 		case core.TypeSeason:
-			eps, err = s.metadataChildren(ctx, pr, title.Key)
+			show := core.ShowKey(title.Key.TMDB())
+			seasons, loaded := bySeason[show]
+			if !loaded && together[show] > 1 {
+				if all, e := s.episodesOfShow(ctx, pr, memo, show); e == nil {
+					seasons = s.presentedSeasons(ctx, pr, show, all)
+				}
+				bySeason[show] = seasons
+			}
+			if seasons != nil {
+				eps = seasons[title.Key.Season()]
+			} else {
+				// A lone season, or its show's episodes failed to load.
+				eps, err = s.metadataChildren(ctx, pr, title.Key)
+			}
 		default:
 			continue
 		}

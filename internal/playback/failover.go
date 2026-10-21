@@ -516,6 +516,10 @@ type failoverOpts struct {
 	markBad       bool
 	down          bool
 	stopOnFailure bool
+	// followPlayer: at was mapped from a failed source read, which may be
+	// a container tail/index read or predate a seek; resume at the
+	// player's latest segment request when the HLS session reports it.
+	followPlayer bool
 }
 
 func (m *Manager) failover(ctx context.Context, s *session, observed *generation, at time.Duration, reason string) (*generation, error) {
@@ -726,6 +730,13 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 
 	newInfo := g.infoSnapshot()
 	if hasHLS {
+		if position, ok := hls.(interface{ RequestedPosition() time.Duration }); ok && fo.followPlayer {
+			// Read only now: the player may have sought while candidates
+			// were being opened.
+			requested := position.RequestedPosition()
+			log.Info("failover follows player", "requested", requested)
+			at = requested
+		}
 		target := m.alignForFailover(ctx, s, cur, g, at)
 		if err := hls.SwapInput(ctx, m.urlFor(g), newInfo, target); err != nil {
 			log.Error("hls input swap failed", "err", err)

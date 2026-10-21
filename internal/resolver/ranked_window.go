@@ -15,7 +15,13 @@ import (
 // the lead is still being checked, after rankedSourceGrace when the two are
 // equivalent under the owner's existing quality and score policy.
 // A failed lead hands leadership to the next candidate, whose own grace
-// starts when its check started.
+// starts when its check started. A lead still unanswered after its grace
+// stops holding a window slot for one equivalent backup: a slow-failing
+// lead must not delay the only checks that could overtake it.
+// After two confirmed failures (missing articles or an unhealthy sample;
+// never a timeout or other transient error) the window widens to four for
+// candidates equivalent to the lead, still launched strictly in rank order:
+// a run of dead posts must not hold the release that plays behind them.
 func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Trace) (int, []byte, error) {
 	ctx, cancelBudget := context.WithTimeout(ctx, validationBudget)
 	defer cancelBudget()
@@ -29,12 +35,12 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 	if margin <= 0 {
 		margin = defaultSourceScoreMargin
 	}
-	const width = 2
+	const width, wideWidth = 2, 4
 	limit := min(len(cands), maxHealthAttempts)
 	results := make(chan validation, limit)
 	startedAt := make([]time.Time, limit)
 	done := make([]*validation, limit)
-	next, inflight := 0, 0
+	next, inflight, confirmed := 0, 0, 0
 	launch := func() {
 		i := next
 		next++
@@ -65,6 +71,26 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 			results <- v
 		}()
 	}
+	// stalled reports whether the lead is still checking past its grace,
+	// so that a healthy equivalent backup would already be allowed to win.
+	stalled := func(lead int) bool {
+		return lead < next && done[lead] == nil && time.Since(startedAt[lead]) >= rankedSourceGrace
+	}
+	// capacity is how many checks may run before cands[next] starts. Extra
+	// slots only ever go to a candidate that could overtake the lead
+	// (equivalentHedge): one while the lead is stalled, up to wideWidth in
+	// all once confirmed failures show the leading releases are dying.
+	capacity := func(lead int) int {
+		switch {
+		case !equivalentHedge(cands[lead], cands[next], margin):
+			return width
+		case confirmed >= 2:
+			return wideWidth
+		case stalled(lead):
+			return width + 1
+		}
+		return width
+	}
 	// fill keeps width checks running, but a verified lead runs alone:
 	// reusing a known working release must not start speculative downloads.
 	fill := func(lead int) {
@@ -75,8 +101,13 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 				return
 			}
 		}
-		for inflight < width && next < limit {
+		for next < limit {
 			if next > lead && lead < limit && cands[lead].verified && done[lead] == nil {
+				return
+			}
+			// A candidate that cannot overtake the lead waits for a free
+			// slot, and nothing ranked below it starts first.
+			if inflight >= capacity(lead) {
 				return
 			}
 			launch()
@@ -104,6 +135,7 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 		if v.err != nil && !permanentFailure(v.err) {
 			transient = errors.Join(transient, v.err)
 		} else {
+			confirmed++
 			s.noteFailedHealth(cands[v.index].rel.ID)
 			s.recordReputation(ctx, cands[v.index].rel.Indexer, false)
 		}
@@ -169,6 +201,13 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 				if left := rankedSourceGrace - age; wait < 0 || left < wait {
 					wait = left
 				}
+			}
+		}
+		// Wake when the lead's grace ends if an equivalent backup could then
+		// take its slot.
+		if lead < next && done[lead] == nil && next < limit && inflight == width && equivalentHedge(cands[lead], cands[next], margin) {
+			if left := rankedSourceGrace - age; left > 0 && (wait < 0 || left < wait) {
+				wait = left
 			}
 		}
 		var tick <-chan time.Time
