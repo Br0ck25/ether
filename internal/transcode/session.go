@@ -849,18 +849,24 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 		// lazy video representation must start it here; waiting for its
 		// first media request otherwise deadlocks startup. Audio shares the
 		// current video run and must never select another video rung.
-		if r.Method != http.MethodGet || r.Header.Get("Range") != "" {
+		// Native FFmpeg-based players open init resources with Range: bytes=0-.
+		// These requests must wait for the running encoder just like a normal
+		// GET; rejecting them while the header is being written breaks cold
+		// playback. They may observe the active run, but never select or start
+		// another rendition merely to answer a probe.
+		probe := r.Method != http.MethodGet || r.Header.Get("Range") != ""
+		selectTrack := !s.isDASH() || t != s.audioTrackLocked()
+		if probe && (s.cur == nil || s.cur.finished || s.cur.stopped || (selectTrack && s.cur.track != t)) {
 			s.mu.Unlock()
 			http.Error(w, "initialization not ready", http.StatusServiceUnavailable)
 			return
 		}
 		previousTrack := s.wantTrack
-		selectTrack := !s.isDASH() || t != s.audioTrackLocked()
-		if selectTrack && !restarted {
+		if selectTrack && !restarted && !probe {
 			s.wantTrack = t
 		}
 		var dwell *time.Timer
-		if (s.cur == nil || s.cur.finished || s.cur.stopped || (selectTrack && s.cur.track != t)) && !restarted {
+		if (s.cur == nil || s.cur.finished || s.cur.stopped || (selectTrack && s.cur.track != t)) && !restarted && !probe {
 			left := s.rungDwellLocked(false, s.lastReq)
 			if s.isDASH() && selectTrack && !s.videoRequested && s.runSeq <= 1 {
 				// No video was requested yet: the initial quality choice
