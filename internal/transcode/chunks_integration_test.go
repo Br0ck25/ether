@@ -590,6 +590,18 @@ func TestIntegrationCopyWithoutKeyframeIndex(t *testing.T) {
 					t.Errorf("%s holds video %.3f-%.3f, playlist says %.3f-%.3f", name, first, end, starts[n], starts[n+1])
 				}
 			}
+			if container == ContainerMatroska {
+				_ = fetch(t, hs, 14)
+				head := httptest.NewRecorder()
+				hs.ServeSegment(head, httptest.NewRequest(http.MethodHead, "/0.mkv", nil), 0)
+				if head.Code != http.StatusOK || head.Body.Len() != 0 {
+					t.Fatalf("HEAD segment: %d bytes=%d", head.Code, head.Body.Len())
+				}
+				e.decodesAlone(t, container, init0, fetch(t, hs, 1), "after-head")
+				_ = fetch(t, hs, 0)
+				init1 := fetch(t, hs, InitSegment)
+				e.decodesAlone(t, container, init1, fetch(t, hs, 1), "after-new-init")
+			}
 			s.mu.Lock()
 			for n := range s.done[0] {
 				if n >= total {

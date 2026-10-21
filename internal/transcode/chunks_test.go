@@ -393,6 +393,15 @@ func TestChunkedMatroskaAliasServedForSeeks(t *testing.T) {
 		}
 		return r.Body.Bytes()
 	}
+	// A probe requests metadata only: the next GET still needs its GOP.
+	head := httptest.NewRecorder()
+	s.ServeSegment(head, httptest.NewRequest(http.MethodHead, "/0.mkv", nil), 0)
+	if head.Code != http.StatusOK || head.Body.Len() != 0 {
+		t.Fatalf("HEAD segment 0: %d %q", head.Code, head.Body.Bytes())
+	}
+	if b := body(1); !bytes.Contains(b, []byte("t=0.000")) {
+		t.Errorf("first GET after HEAD: %q", b)
+	}
 	for n := 0; n < 4; n++ {
 		b := body(n)
 		if empty := len(b) <= emptyClusterSize; empty != (n == 1 || n == 3) {
@@ -423,5 +432,14 @@ func TestChunkedMatroskaAliasServedForSeeks(t *testing.T) {
 	}
 	if b := body(4); len(b) > emptyClusterSize {
 		t.Errorf("retry of sequential segment 4 is %d bytes, want the empty Cluster", len(b))
+	}
+	_ = body(0)
+	// Fetching the init starts a new decoder, even if its first segment
+	// happens to follow the previous decoder's last request.
+	if init := get(t, s, InitSegment); init.Code != http.StatusOK {
+		t.Fatalf("init: %d", init.Code)
+	}
+	if b := body(1); !bytes.Contains(b, []byte("t=0.000")) {
+		t.Errorf("first GET after init: %q", b)
 	}
 }
