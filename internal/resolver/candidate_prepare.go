@@ -7,6 +7,8 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
+type observationTitleKey struct{}
+
 func (s *Service) validateOne(ctx context.Context, rel core.Release) validation {
 	v := validation{}
 	at := time.Now()
@@ -18,6 +20,11 @@ func (s *Service) validateOne(ctx context.Context, rel core.Release) validation 
 			v.healthChecked = true
 			at = time.Now()
 			v.healthy, v.healthCached, v.err = s.checkHealthCached(ctx, rel.ID, v.nzb)
+			if v.healthy && v.err == nil && !v.healthCached && s.observed != nil {
+				if title, ok := ctx.Value(observationTitleKey{}).(*core.Title); ok {
+					s.observed(ctx, title, rel)
+				}
+			}
 			v.healthDuration = time.Since(at)
 		}
 	}

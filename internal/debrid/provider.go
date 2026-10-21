@@ -207,6 +207,9 @@ type apiRequest struct {
 // never include the request URL: several providers take the key as a
 // query parameter.
 func call(ctx context.Context, hc *http.Client, base string, r apiRequest, auth func(*http.Request)) (int, []byte, error) {
+	if err := core.SpendBackground(ctx, "debrid", base, 1); err != nil {
+		return 0, nil, err
+	}
 	u := base + r.path
 	if len(r.query) > 0 {
 		u += "?" + r.query.Encode()

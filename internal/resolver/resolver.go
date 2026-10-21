@@ -34,6 +34,9 @@ const (
 
 // Options tunes a Service. Zero values get sensible defaults.
 type Options struct {
+	Discovered    func(context.Context, *core.Title) []core.Release
+	Observed      func(context.Context, *core.Title, core.Release)
+	Invalidated   func(context.Context, string)
 	Logger        *slog.Logger
 	Now           func() time.Time
 	MaxTraces     int
@@ -107,11 +110,14 @@ type inflight struct {
 
 // Service implements core.Resolver.
 type Service struct {
-	indexer core.Indexer
-	health  core.HealthChecker
-	db      *sql.DB
-	log     *slog.Logger
-	now     func() time.Time
+	discovered  func(context.Context, *core.Title) []core.Release
+	observed    func(context.Context, *core.Title, core.Release)
+	invalidated func(context.Context, string)
+	indexer     core.Indexer
+	health      core.HealthChecker
+	db          *sql.DB
+	log         *slog.Logger
+	now         func() time.Time
 
 	cfgMu     sync.RWMutex
 	rcfg      config.Resolver
@@ -156,7 +162,7 @@ var _ core.Resolver = (*Service)(nil)
 // (typically *newznab.Manager); health may be nil (health checks are
 // then skipped); db may be nil (state then lives in memory).
 func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config.Config, opts Options) *Service {
-	s := &Service{
+	s := &Service{discovered: opts.Discovered, observed: opts.Observed, invalidated: opts.Invalidated,
 		indexer: indexer, health: health, db: db,
 		bad: map[string]badMark{}, reps: map[string]reputation{},
 		avail: map[int64]availEntry{}, searchCache: map[string]searchCacheEntry{},
@@ -396,6 +402,7 @@ func (s *Service) Resolve(ctx context.Context, req core.ResolveRequest) (*core.R
 		s.flights[key] = f
 		s.flightMu.Unlock()
 
+		ctx = context.WithValue(ctx, observationTitleKey{}, req.Title)
 		res, err := s.resolve(ctx, req, profile)
 		f.res, f.err, f.abandoned = res, err, err != nil && ctx.Err() != nil
 		s.flightMu.Lock()
@@ -426,10 +433,31 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		trace.Pinned = pinID
 	}
 
+	var discovered []core.Release
+	if s.discovered != nil && pin == nil && req.Prefer == "" && len(req.Exclude) == 0 {
+		discovered = s.discovered(ctx, t)
+		candidates, _, rankErr := s.rankCandidates(ctx, req, searchRequestFor(t), profile, discovered, &trace, "")
+		if rankErr == nil && len(candidates) > 0 {
+			// Only a small shortlist is tried ahead of normal search. A stale
+			// feed must never consume the full interactive resolution budget.
+			candidates = candidates[:min(2, len(candidates))]
+			checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			idx, payload, checkErr := s.validateCandidates(checkCtx, candidates, &trace, 0)
+			cancel()
+			if checkErr == nil && idx >= 0 {
+				trace.Winner = candidates[idx].rel.ID
+				s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
+				return s.resolution(t.Key, candidates, idx, payload, &trace), nil
+			}
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+		}
+	}
 	// Fast path: cached unavailable answer, unless this is a failover
 	// request that already knows about specific releases, the viewer
 	// picked a specific version, or the owner pinned a release.
-	if len(req.Exclude) == 0 && req.Prefer == "" && pin == nil {
+	if len(req.Exclude) == 0 && req.Prefer == "" && pin == nil && len(discovered) == 0 {
 		if e, ok := s.getAvailability(ctx, int64(t.Key)); ok && !e.available {
 			trace.Err = "cached unavailable (cooloff)"
 			return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)

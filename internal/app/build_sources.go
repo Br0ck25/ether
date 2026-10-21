@@ -61,7 +61,7 @@ func (a *App) buildSources(ctx context.Context, cfg config.Config) error {
 	a.media = debrid.NewEngine(a.debrid, debrid.EngineOptions{Inner: a.engine, Health: a.engine, Cache: a.cache, Logger: log.With("component", "debrid")})
 	a.closers = append(a.closers, func() { a.media.Close() })
 	a.sources = debrid.NewIndexer(a.indexers, a.debrid)
-	a.resolver = resolver.New(a.sources, a.media, a.db, cfg, resolver.Options{Logger: log.With("component", "resolver")})
+	a.resolver = resolver.New(a.sources, a.media, a.db, cfg, resolver.Options{Discovered: a.discoveredReleases, Observed: a.observeRelease, Invalidated: a.invalidateRelease, Logger: log.With("component", "resolver")})
 	a.resolver.SetSourceSignals(a.debrid)
 	a.closers = append(a.closers, func() { a.resolver.Close() })
 

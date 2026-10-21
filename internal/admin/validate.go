@@ -68,6 +68,25 @@ func (v *validator) clock(field, s string) {
 // strict about structurally broken values.
 func ValidateConfig(cfg config.Config) []FieldError {
 	v := &validator{}
+	a := cfg.Availability
+	if a.PollMinutes < 5 || a.PollMinutes > 1440 {
+		v.add("availability.pollMinutes", "must be between 5 and 1440 minutes")
+	}
+	if a.MaxPages < 1 || a.MaxPages > 20 {
+		v.add("availability.maxPages", "must be between 1 and 20")
+	}
+	for key, n := range map[string]int{"feedRequests": a.FeedRequests, "checkRequests": a.CheckRequests, "grabs": a.Grabs, "checks": a.Checks} {
+		if n < 0 || n > 100000 {
+			v.add("availability."+key, "must be between 0 and 100000 (0 disables this work)")
+		}
+	}
+	if a.CheckBytes < 0 || a.CheckBytes > 100<<30 {
+		v.add("availability.checkBytes", "must be between 0 and 100 GiB")
+	}
+	if a.ReservePercent < 0 || a.ReservePercent > 99 {
+		v.add("availability.reservePercent", "must be between 0 and 99")
+	}
+
 	if cfg.SharedCache != nil {
 		shared := cfg
 		shared.Cache, shared.SharedCache = *cfg.SharedCache, nil

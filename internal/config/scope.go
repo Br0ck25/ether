@@ -33,6 +33,7 @@ func (s Scope) String() string {
 // shares one scope.
 var sectionScopes = map[string]Scope{
 	"sharedCache":   Shared,
+	"availability":  Shared,
 	"usenet":        Shared,
 	"indexers":      Shared,
 	"catalog":       Shared,

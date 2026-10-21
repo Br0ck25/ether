@@ -113,6 +113,9 @@ func (s *Service) recentlyVerified(ctx context.Context, releaseID string) bool {
 }
 
 func (s *Service) forgetVerified(ctx context.Context, releaseID string) {
+	if s.invalidated != nil {
+		s.invalidated(ctx, releaseID)
+	}
 	s.mu.Lock()
 	delete(s.verified, releaseID)
 	s.mu.Unlock()

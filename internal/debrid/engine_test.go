@@ -340,3 +340,28 @@ func TestEngineSeekStartsFreshRequest(t *testing.T) {
 		t.Fatalf("no request at the seek target: %v", r.media.ranges)
 	}
 }
+
+func TestBackgroundHealthPreservesBudgetContext(t *testing.T) {
+	r := newEngineRig(t, 256<<10, -1)
+	before := r.media.requests.Load()
+	denied := core.WithBackgroundBudget(t.Context(), func(context.Context, string, string, int64) error { return core.ErrBudgetExhausted })
+	if ok, err := r.eng.Check(denied, r.pl); ok || !errors.Is(err, core.ErrBudgetExhausted) {
+		t.Fatalf("denied check: %v %v", ok, err)
+	}
+	if r.media.requests.Load() != before {
+		t.Fatal("background request escaped its allowance")
+	}
+	var reserved int64
+	allowed := core.WithBackgroundBudget(t.Context(), func(_ context.Context, kind, _ string, n int64) error {
+		if kind == "bytes" {
+			reserved += n
+		}
+		return nil
+	})
+	if ok, err := r.eng.Check(allowed, r.pl); !ok || err != nil {
+		t.Fatalf("allowed check: %v %v", ok, err)
+	}
+	if reserved != 65536 {
+		t.Fatalf("range not accounted: %d", reserved)
+	}
+}

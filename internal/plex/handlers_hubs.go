@@ -60,6 +60,9 @@ func hubItemsKey(h core.Hub, hc hubCtx) string {
 func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
 	h := hs.Hub
 	items := s.filterAllowed(pr.User, h.Items)
+	if s.d.PrioritizeAvailable != nil && h.Type == core.TypeMovie && (strings.Contains(h.ID, "recommend") || strings.Contains(h.ID, "trending") || strings.Contains(h.ID, "popular")) {
+		items = s.d.PrioritizeAvailable(ctx, items)
+	}
 	if strings.HasSuffix(h.ID, ".ondeck") || h.ID == "tv.upnext" {
 		kept := items[:0:0]
 		for i := range items {

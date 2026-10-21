@@ -40,6 +40,9 @@ type fetchOpts struct {
 // Usenet, coalescing concurrent requests. The slot's index entry is
 // updated from the article's yEnc header.
 func (e *Engine) segment(ctx context.Context, rel *release, pf *postedFile, i int, prio core.Priority, fo fetchOpts) (*segData, error) {
+	if core.IsBackgroundCheck(ctx) {
+		prio = core.PriorityPrefetch
+	}
 	if prio == core.PriorityLive {
 		if seg, handled, err := e.hedgeSpeculative(ctx, rel, pf, i, fo); handled {
 			return seg, err
@@ -112,7 +115,7 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 		fl.waiters++
 		e.coalesced.Add(1)
 	} else {
-		fctx, cancel := context.WithCancel(e.ctx)
+		fctx, cancel := context.WithCancel(core.InheritBackground(e.ctx, ctx))
 		fl = &flight{decoded: make(chan struct{}), stored: make(chan struct{}), done: make(chan struct{}), cacheID: fo.cacheID, waiters: 1, cancel: cancel}
 		e.flights[fkey] = fl
 		e.wg.Add(1)
@@ -133,12 +136,19 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 	case <-ctx.Done():
 		e.mu.Lock()
 		fl.waiters--
-		if fl.waiters == 0 {
+		last := fl.waiters == 0
+		if last {
 			// Independent priority lanes remain alive for their own waiters.
 			// run removes this canceled lane only after its worker exits.
 			fl.cancel()
 		}
 		e.mu.Unlock()
+		// A health call owns its canceled work through termination, so it
+		// cannot spend bytes after reporting completion. Shared live work
+		// and ordinary readers retain independent, prompt cancellation.
+		if last && ctx.Value(healthWorkKey{}) == true {
+			<-fl.done
+		}
 		return nil, false, ctx.Err()
 	}
 }
@@ -305,6 +315,9 @@ func (e *Engine) load(ctx context.Context, pf *postedFile, i int, id string, glo
 			seg, err := e.normalize(pf, i, data, part)
 			return seg, false, err
 		}
+		if errors.Is(err, core.ErrBudgetExhausted) {
+			return nil, false, err
+		}
 		if errors.Is(err, core.ErrArticleMissing) {
 			e.missing.Add(1)
 			return nil, false, fmt.Errorf("stream: %s part %d <%s>: %w", pf.Name(), i+1, id, err)
@@ -404,6 +417,18 @@ func (e *Engine) readFile(ctx context.Context, rel *release, pf *postedFile, p [
 		err error
 	}
 	results := make(map[int]chan res, len(slots))
+	var cancel context.CancelFunc
+	if ctx.Value(healthWorkKey{}) == true {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	if cancel != nil {
+		defer func() {
+			cancel()
+			for _, ch := range results {
+				<-ch
+			}
+		}()
+	}
 	if len(slots) > 1 {
 		sem := make(chan struct{}, e.opts.ReadParallel)
 		for _, i := range slots {

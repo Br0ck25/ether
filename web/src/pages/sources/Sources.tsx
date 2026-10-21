@@ -8,12 +8,14 @@ import { DebridSources } from "./Debrid";
 import { HealthStrip } from "./form";
 import { IndexerList } from "./Indexers";
 import { UsenetProviders } from "./Usenet";
+import { Availability } from "./Availability";
 import { SourceUsage } from "./Usage";
 
 const TABS = [
   { key: "usenet", label: "Usenet providers" },
   { key: "indexers", label: "Indexers" },
   { key: "debrid", label: "Debrid" },
+  { key: "availability", label: "Availability" },
   { key: "usage", label: "Usage & costs" },
 ] as const;
 
@@ -41,6 +43,7 @@ export default function Sources() {
       {tab === "usenet" ? <UsenetProviders /> : null}
       {tab === "indexers" ? <IndexerList version={version} /> : null}
       {tab === "debrid" ? <DebridSources /> : null}
+      {tab === "availability" ? <Availability /> : null}
       {tab === "usage" ? <SourceUsage /> : null}
       <Drawer
         open={importing}

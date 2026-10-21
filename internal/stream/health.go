@@ -37,7 +37,10 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 // archive heads it reads are kept in the segment cache under that ID, so
 // the Open that follows a passed check finds them there as well as in the
 // hot buffer. Implements core.ReleaseHealthChecker.
+type healthWorkKey struct{}
+
 func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []byte) (healthy bool, err error) {
+	ctx = context.WithValue(ctx, healthWorkKey{}, true)
 	fo := fetchOpts{cacheID: releaseID}
 	defer func() {
 		if err != nil && IsRejection(err) {

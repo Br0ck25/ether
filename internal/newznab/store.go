@@ -103,6 +103,17 @@ func (c *Client) reserve(ctx context.Context, kind string) error {
 	} else {
 		limit = cfg.DailyGrabs
 	}
+	if core.IsBackgroundCheck(ctx) {
+		if limit > 0 {
+			limit = limit * (100 - core.ForegroundReserve(ctx)) / 100
+			if limit == 0 {
+				return core.ErrBudgetExhausted
+			}
+		}
+		if err := core.SpendBackground(ctx, kind, c.indexerID(), 1); err != nil {
+			return err
+		}
+	}
 	day := c.today()
 	if c.db == nil {
 		c.budgetMu.Lock()

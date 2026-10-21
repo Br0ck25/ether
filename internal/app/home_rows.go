@@ -7,6 +7,9 @@ import (
 
 func (a *App) extraHomeRows(ctx context.Context, u *core.User, hc core.HubContext, section string, limit int) []core.Hub {
 	var out []core.Hub
+	if a.availability != nil {
+		out = append(out, a.availability.Hubs(ctx, limit)...)
+	}
 	if a.watchlist != nil {
 		rows, _ := a.watchlist.Hubs(ctx, u, limit)
 		out = append(out, rows...)

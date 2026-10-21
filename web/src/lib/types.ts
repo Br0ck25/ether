@@ -196,6 +196,7 @@ export interface DebridProviderStatus {
 }
 
 export interface EtherConfig {
+  availability?: AvailabilityConfig;
   server: {
     port: number;
     bindAddress: string;
@@ -645,4 +646,21 @@ export interface ClusterSetupStatus {
   available: boolean;
   state: "idle" | "checking" | "restarting" | "applying" | "complete" | "failed";
   message?: string;
+}
+
+export interface AvailabilityConfig {
+  monitor: boolean;
+  verify: boolean;
+  preferVerified: boolean;
+  newlyAvailable: boolean;
+  indexerIds: string[] | null;
+  debrid: boolean;
+  pollMinutes: number;
+  maxPages: number;
+  feedRequests: number;
+  checkRequests: number;
+  grabs: number;
+  checks: number;
+  checkBytes: number;
+  reservePercent: number;
 }
