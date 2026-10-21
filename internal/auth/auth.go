@@ -138,8 +138,11 @@ type Options struct {
 	StaleTTL time.Duration
 	// MaxCacheEntries bounds the token caches (10000).
 	MaxCacheEntries int
-	Logger          *slog.Logger
-	Now             func() time.Time
+	// MaxConcurrentValidations bounds distinct unknown tokens being checked
+	// with plex.tv (16). Excess requests fail fast; cached tokens still work.
+	MaxConcurrentValidations int
+	Logger                   *slog.Logger
+	Now                      func() time.Time
 }
 
 type cacheEntry struct {
@@ -207,6 +210,9 @@ func New(ctx context.Context, db *sql.DB, o Options) (*Service, error) {
 	}
 	if o.MaxCacheEntries <= 0 {
 		o.MaxCacheEntries = 10000
+	}
+	if o.MaxConcurrentValidations <= 0 {
+		o.MaxConcurrentValidations = 16
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
@@ -422,6 +428,9 @@ func (s *Service) activeUser(id int64) *core.User {
 
 // validate asks plex.tv, collapsing concurrent requests for one token.
 func (s *Service) validate(ctx context.Context, token, h string) (*core.User, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	if c, ok := s.inflight[h]; ok {
 		s.mu.Unlock()
@@ -431,6 +440,10 @@ func (s *Service) validate(ctx context.Context, token, h string) (*core.User, er
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
+	}
+	if len(s.inflight) >= s.o.MaxConcurrentValidations {
+		s.mu.Unlock()
+		return s.stale(h, errors.New("auth: token validation capacity reached"))
 	}
 	c := &call{done: make(chan struct{})}
 	s.inflight[h] = c
@@ -450,8 +463,6 @@ func (s *Service) validate(ctx context.Context, token, h string) (*core.User, er
 }
 
 func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User, error) {
-	s.membershipMu.Lock()
-	defer s.membershipMu.Unlock()
 	acct, err := s.o.Validator.Account(ctx, token)
 	if err != nil {
 		if errors.Is(err, core.ErrUnauthorized) {
@@ -460,6 +471,10 @@ func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User
 		}
 		return s.stale(h, err)
 	}
+	// Membership changes must remain available while plex.tv is slow. Only
+	// local membership decisions and writes hold this lock, never network I/O.
+	s.membershipMu.Lock()
+	defer s.membershipMu.Unlock()
 	s.mu.RLock()
 	owner := s.ownerPlexID
 	localID, known := s.byPlex[acct.ID]
@@ -480,7 +495,9 @@ func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User
 	case knownFriend:
 		// A friend from the last sync, using a personal token.
 	default:
+		s.membershipMu.Unlock()
 		ok, err := s.o.Validator.HasServer(ctx, token)
+		s.membershipMu.Lock()
 		if err != nil {
 			if errors.Is(err, core.ErrUnauthorized) {
 				s.reject(h)
@@ -502,6 +519,8 @@ func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User
 			s.reject(h)
 			return nil, core.ErrUnauthorized
 		}
+		// A sync may have revoked this account during HasServer. The upsert
+		// preserves active=0 on existing rows; activeUser below then refuses it.
 		id, err := s.upsertValidated(ctx, acct)
 		if err != nil {
 			return nil, err

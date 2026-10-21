@@ -80,9 +80,8 @@ func plexParam(r *http.Request, name string) string {
 	return ""
 }
 
-// ParseRequest builds the request context from an HTTP request.
-// trustProxy controls whether X-Forwarded-For / X-Real-IP are honoured when
-// the direct peer is loopback (a local reverse proxy).
+// ParseRequest builds the request context from an HTTP request. Forwarded
+// addresses are considered only for a loopback peer (a local reverse proxy).
 func ParseRequest(r *http.Request) *Request {
 	pr := &Request{
 		Token:              plexParam(r, "X-Plex-Token"),
@@ -148,8 +147,10 @@ func wantsJSON(r *http.Request) bool {
 	return false
 }
 
-// clientIP is the peer address, or the first forwarded address when the
-// peer is a loopback reverse proxy.
+// clientIP is the peer address, or a forwarded address for a loopback proxy.
+// Scan from the proxy end for a public hop: a client-controlled local prefix
+// must not hide the public address appended by a proxy. Entirely local chains
+// use the nearest hop. This is conservative LAN classification, not identity.
 func clientIP(r *http.Request) netip.Addr {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -161,16 +162,29 @@ func clientIP(r *http.Request) netip.Addr {
 	}
 	ip = ip.Unmap()
 	if ip.IsLoopback() {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			first, _, _ := strings.Cut(xff, ",")
-			if fip, err := netip.ParseAddr(strings.TrimSpace(first)); err == nil {
-				return fip.Unmap()
+		if values := r.Header.Values("X-Forwarded-For"); len(values) > 0 {
+			hops := strings.Split(strings.Join(values, ","), ",")
+			var nearest netip.Addr
+			for i := len(hops) - 1; i >= 0; i-- {
+				fip, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+				if err != nil {
+					return netip.Addr{} // malformed forwarding is never local
+				}
+				fip = fip.Unmap()
+				if !isLocalAddr(fip) {
+					return fip
+				}
+				if !nearest.IsValid() {
+					nearest = fip
+				}
 			}
+			return nearest
 		}
 		if xr := r.Header.Get("X-Real-IP"); xr != "" {
 			if fip, err := netip.ParseAddr(strings.TrimSpace(xr)); err == nil {
 				return fip.Unmap()
 			}
+			return netip.Addr{}
 		}
 	}
 	return ip
