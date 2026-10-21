@@ -80,7 +80,7 @@ func dashDecision(info core.MediaInfo, d core.Decision) core.Decision {
 		if d.MaxHeight <= 0 || d.MaxHeight > 1080 {
 			d.MaxHeight = min(max(v.Height, 0), 1080)
 		}
-		d.ToneMap = isHDR(v)
+		d.ToneMap = encodedRange(v) != rangeSDR
 		d.BitrateKbps = 0
 		d.Reason += fmt.Sprintf("; DASH: video %s re-encoded to h264", v.Codec)
 	}
@@ -337,7 +337,9 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		s.dash.inits[in.t] = in.file
 		s.dash.codecs[in.t] = in.info.Codecs
 		if old != "" && old != in.file {
-			_ = os.Remove(filepath.Join(s.dir, old))
+			// A request may still hold it open (Windows refuses the
+			// delete then): retry later rather than leak it.
+			s.removals.remove(filepath.Join(s.dir, old))
 		}
 		changed = true
 	}
@@ -345,7 +347,12 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		done := s.done[sp.t]
 		n := sp.out.n
 		if done[n] {
-			continue // an earlier run's copy is as good
+			// An earlier run's copy is as good; don't keep this one on
+			// disk until the run exits.
+			if sp.file != "" {
+				s.removals.remove(sp.file)
+			}
+			continue
 		}
 		dst := s.trackSegPath(sp.t, n)
 		if sp.out.alias >= 0 {
@@ -353,6 +360,9 @@ func (s *Session) collectDASH(r *run, exited bool) {
 				continue
 			}
 		} else if sp.file == "" || os.Rename(sp.file, dst) != nil {
+			if sp.file != "" {
+				s.removals.remove(sp.file)
+			}
 			continue
 		}
 		done[n] = true

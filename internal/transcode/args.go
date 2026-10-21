@@ -39,6 +39,15 @@ type runSpec struct {
 	// Rate is the quality-targeted VBV rate control for this run; the zero
 	// value keeps the historic bitrate-target encoding.
 	Rate rateControl
+	// ChunkDir, when set, makes an HLS run cut at (nearly) every keyframe
+	// into this directory, numbered from 0, for the session to regroup by
+	// timestamp (chunks.go). ChunkCut is the muxer's segment length then.
+	ChunkDir string
+	ChunkCut time.Duration
+	// KeyTimes, when set, are the output timestamps a video encode forces
+	// keyframes at (a chunked run's plan boundaries) instead of every
+	// SegDur.
+	KeyTimes []time.Duration
 }
 
 // segmentExt is the segment file extension for a decision's container.
@@ -179,7 +188,17 @@ func buildCodecArgs(s runSpec) []string {
 		} else {
 			args = append(args, vp.encodeArgs...)
 			args = append(args, videotoolboxCaptionArgs(v, vp.encodeArgs)...)
-			args = append(args, "-force_key_frames", "expr:gte(t,n_forced*"+secs(segDur)+")")
+			if len(s.KeyTimes) > 0 {
+				keys := make([]string, len(s.KeyTimes))
+				for i, k := range s.KeyTimes {
+					keys[i] = secs(k)
+				}
+				// Absolute output times (unlike the expression's t, which
+				// counts from the run's first frame).
+				args = append(args, "-force_key_frames", strings.Join(keys, ","))
+			} else {
+				args = append(args, "-force_key_frames", "expr:gte(t,n_forced*"+secs(segDur)+")")
+			}
 		}
 	}
 
@@ -238,6 +257,10 @@ func hlsMuxArgs(s runSpec) []string {
 		container = ContainerMPEGTS
 	}
 	ext := segmentExt(container)
+	start, segDir := s.StartSeg, s.Dir
+	if s.ChunkDir != "" {
+		segDur, start, segDir = s.chunkCut(), 0, s.ChunkDir
+	}
 	args := []string{
 		"-avoid_negative_ts", "disabled",
 		"-max_muxing_queue_size", "4096",
@@ -246,18 +269,34 @@ func hlsMuxArgs(s runSpec) []string {
 		"-hls_list_size", "0",
 		"-hls_playlist_type", "event",
 		"-hls_flags", "temp_file",
-		"-start_number", strconv.Itoa(s.StartSeg),
+		"-start_number", strconv.Itoa(start),
 	}
 	if container == ContainerFMP4 {
-		args = append(args, "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", s.InitName)
+		// frag_discont: every fragment's decode time is the media time
+		// (with -copyts) rather than counted from the run's first packet,
+		// so segments of a run restarted mid-playlist line up with the
+		// init segment the player already holds.
+		args = append(args, "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", s.InitName,
+			"-hls_segment_options", "movflags=+frag_discont")
 	} else {
 		args = append(args, "-hls_segment_type", "mpegts")
 	}
 	args = append(args,
-		"-hls_segment_filename", filepath.Join(s.Dir, "%05d."+ext),
+		"-hls_segment_filename", filepath.Join(segDir, "%05d."+ext),
 		filepath.Join(s.Dir, s.Playlist),
 	)
 	return args
+}
+
+// chunkCut is a chunked run's muxer segment length: short enough that the
+// muxer cuts at every keyframe (it cuts at the first keyframe past
+// start+k*length, k counting cuts), long enough that all-intra sources do
+// not produce a file per frame.
+func (s runSpec) chunkCut() time.Duration {
+	if s.ChunkCut > 0 {
+		return s.ChunkCut
+	}
+	return chunkCutFor(s.SegDur)
 }
 
 // dashMuxArgs is the DASH muxer part of a run's command line: fMP4 chunks
@@ -399,8 +438,11 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	w, h := outputSize(v.Width, v.Height, d.MaxHeight)
 	scaling := v.Height > 0 && h < v.Height
-	keepHDR := isHDR(v) && !d.ToneMap && codec == "hevc"
-	tonemap := d.ToneMap && isHDR(v)
+	// Keep HDR only where HEVC can carry the decoded picture's HDR10/HLG;
+	// any other HDR picture is tone mapped (8-bit SDR output), and an SDR
+	// picture (a Dolby Vision SDR base layer) never is.
+	keepHDR := keepsHDR(v) && !d.ToneMap && codec == "hevc"
+	tonemap := encodedRange(v) != rangeSDR && !keepHDR
 	sub := findStream(s.Info, d.SubtitleStream, "subtitle")
 	burn := d.BurnSubtitles && sub != nil
 

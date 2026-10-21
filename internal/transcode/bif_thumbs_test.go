@@ -118,6 +118,14 @@ func (t *Thumbnails) frameCount(releaseID string) int {
 	return -1
 }
 
+// isIdle reports that no extraction runs for a release.
+func (t *Thumbnails) isIdle(releaseID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.entries[releaseID]
+	return ok && t.running[releaseID] == nil
+}
+
 func (t *Thumbnails) isComplete(releaseID string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -194,8 +202,12 @@ func TestThumbnailsGenerateAndServe(t *testing.T) {
 	if !th.TrickplayAvailable("rel-1") {
 		t.Fatal("not available while generating")
 	}
-	waitThumbFor(t, "generation complete", func() bool { return th.isComplete("rel-1") })
-	// The bounded look-behind keeps only frames near the current playhead.
+	waitThumbFor(t, "generation stopped", func() bool { return th.isIdle("rel-1") && th.frameCount("rel-1") == 3 })
+	// The bounded look-behind keeps only frames near the current playhead;
+	// the earlier ones are still missing, so the release is not complete.
+	if th.isComplete("rel-1") {
+		t.Error("complete with frames 0-30s never made")
+	}
 	if got := th.frameCount("rel-1"); got != 3 {
 		t.Fatalf("frames = %d", got)
 	}
@@ -252,7 +264,7 @@ func TestThumbnailsKeyframeSeeks(t *testing.T) {
 		ReleaseID: "rel-kf", InputURL: "http://x/",
 		Info: core.MediaInfo{Duration: 55 * time.Second, Keyframes: kfs}, AvailableUntil: 55 * time.Second,
 	})
-	waitThumbFor(t, "complete", func() bool { return th.isComplete("rel-kf") })
+	waitThumbFor(t, "stopped", func() bool { return th.isIdle("rel-kf") && th.frameCount("rel-kf") > 0 })
 	for _, s := range tf.seekList() {
 		if int(s)%4 != 0 {
 			t.Errorf("seek %v not on a keyframe", s)
@@ -360,7 +372,7 @@ func TestThumbnailsFallbackAndEviction(t *testing.T) {
 		t.Fatal("fallback without duration should not make a BIF yet")
 	}
 	th.EnsureTrickplay(ctx, core.TrickplaySource{
-		ReleaseID: "fb", InputURL: "http://x/", Info: core.MediaInfo{Duration: 35 * time.Second}, AvailableUntil: 35 * time.Second,
+		ReleaseID: "fb", InputURL: "http://x/", Info: core.MediaInfo{Duration: 35 * time.Second}, AvailableUntil: 30 * time.Second,
 	})
 	waitThumbFor(t, "fb complete", func() bool { return th.isComplete("fb") })
 	data, ok := th.TrickplayBIF("fb")
@@ -455,4 +467,28 @@ func TestThumbnailsCancelReleaseStopsActiveExtraction(t *testing.T) {
 		defer th.mu.Unlock()
 		return th.running["stop-me"] == nil
 	})
+}
+
+// A seek back (or a resume late in the title) leaves frames before the
+// read-behind window unmade: they are made when playback reads there, and
+// only then is the release complete.
+func TestThumbnailsFillAfterSeekBack(t *testing.T) {
+	tf := &thumbFake{endAt: -1}
+	th := newTestThumbs(t, tf, nil)
+	src := core.TrickplaySource{ReleaseID: "resume", InputURL: "http://x/",
+		Info: core.MediaInfo{Duration: 65 * time.Second}, AvailableUntil: 65 * time.Second}
+	th.EnsureTrickplay(context.Background(), src)
+	waitThumbFor(t, "late frames", func() bool { return th.isIdle("resume") && th.frameCount("resume") == 3 })
+	src.AvailableUntil = 25 * time.Second // rewatch from the start
+	th.EnsureTrickplay(context.Background(), src)
+	waitThumbFor(t, "early frames", func() bool { return th.isIdle("resume") && th.frameCount("resume") == 6 })
+	if th.isComplete("resume") {
+		t.Fatal("complete with the 30s frame missing")
+	}
+	src.AvailableUntil = 35 * time.Second
+	th.EnsureTrickplay(context.Background(), src)
+	waitThumbFor(t, "complete", func() bool { return th.isComplete("resume") })
+	if got := th.frameCount("resume"); got != 7 {
+		t.Errorf("frames = %d", got)
+	}
 }

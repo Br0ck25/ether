@@ -13,28 +13,35 @@ func HLSVariantAttributes(info core.MediaInfo, d core.Decision) string {
 	var codecs []string
 	videoRange, supplemental := "", ""
 	if v := info.Video(); v != nil {
-		codec, profile, depth := v.Codec, v.Profile, v.BitDepth
+		codec, profile, depth, height := v.Codec, v.Profile, v.BitDepth, v.Height
+		videoRange = "SDR"
 		if !d.VideoCopy {
 			codec, profile, depth = d.VideoCodec, "", 8
 			if codec == "" {
 				codec = "h264"
 			}
-			if codec == "hevc" && isHDR(v) && !d.ToneMap {
+			// The level follows the encoded size, not the source's.
+			_, height = outputSize(v.Width, v.Height, d.MaxHeight)
+			// What planVideo encodes: HDR kept only in HEVC, from the
+			// decoded picture (a Dolby Vision stream's base layer).
+			if codec == "hevc" && keepsHDR(v) && !d.ToneMap {
 				depth = 10
-			}
-		}
-		c := estimateCodecs(codec, profile, v.Height, depth)
-		if d.VideoCopy && v.CodecString != "" {
-			c = v.CodecString
-		}
-		videoRange = "SDR"
-		if !d.ToneMap {
-			if v.ColorTransfer == "smpte2084" {
 				videoRange = "PQ"
+				if encodedRange(v) == rangeHLG {
+					videoRange = "HLG"
+				}
 			}
-			if v.ColorTransfer == "arib-std-b67" {
+		} else if !d.ToneMap {
+			switch encodedRange(v) {
+			case rangeHDR10:
+				videoRange = "PQ"
+			case rangeHLG:
 				videoRange = "HLG"
 			}
+		}
+		c := estimateCodecs(codec, profile, height, depth)
+		if d.VideoCopy && v.CodecString != "" {
+			c = v.CodecString
 		}
 		if d.VideoCopy && v.DolbyVision && !d.StripDolbyVision {
 			if v.DolbyVisionProfile == 5 && v.DolbyVisionLevel > 0 {

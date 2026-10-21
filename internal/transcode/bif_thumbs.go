@@ -78,7 +78,7 @@ type thumbEntry struct {
 	frames         map[time.Duration][]byte
 	fallback       []byte
 	duration       time.Duration
-	availableUntil time.Duration
+	availableUntil time.Duration // latest playback position reported (it moves back on a seek)
 	interval       time.Duration
 	complete       bool
 	dead           bool // generation failed with nothing to show; don't advertise
@@ -166,7 +166,9 @@ func (t *Thumbnails) EnsureTrickplay(_ context.Context, src core.TrickplaySource
 	if src.Info.Duration > 0 {
 		e.duration = src.Info.Duration
 	}
-	if src.AvailableUntil > e.availableUntil {
+	// Follow the latest position, backwards too: after a seek back the
+	// frames there are read again, and those it skipped are still missing.
+	if src.AvailableUntil > 0 {
 		e.availableUntil = src.AvailableUntil
 	}
 	if t.running[src.ReleaseID] != nil || e.complete || time.Now().Before(e.retryAt) {
@@ -479,9 +481,12 @@ func (t *Thumbnails) generate(ctx context.Context, src core.TrickplaySource) {
 		}
 		t.mu.Unlock()
 		if len(batch) == 0 {
+			// Complete only when every planned frame exists: frames skipped
+			// outside the read-behind window (a resume, a seek, a wait for a
+			// job slot) are made when playback reads there again.
 			t.mu.Lock()
 			e, ok := t.entries[src.ReleaseID]
-			complete := ok && e.duration > 0 && e.availableUntil >= e.duration-t.interval
+			complete := ok && e.duration > 0 && missingFrames(e, plan, e.duration) == 0
 			t.mu.Unlock()
 			t.finish(src.ReleaseID, complete, "")
 			return
@@ -504,8 +509,13 @@ func (t *Thumbnails) generate(ctx context.Context, src core.TrickplaySource) {
 				}
 				continue
 			case len(jpeg) == 0:
-				// End of input: everything before this slot is done.
-				t.finish(src.ReleaseID, true, "")
+				// End of input: nothing at or after this slot exists. The
+				// release is complete if every earlier frame was made.
+				t.mu.Lock()
+				e, ok := t.entries[src.ReleaseID]
+				complete := ok && missingFrames(e, plan, slot) == 0
+				t.mu.Unlock()
+				t.finish(src.ReleaseID, complete, "")
 				return
 			}
 			failures = 0
@@ -527,6 +537,20 @@ func (t *Thumbnails) generate(ctx context.Context, src core.TrickplaySource) {
 		case <-time.After(t.batchPause):
 		}
 	}
+}
+
+// missingFrames counts planned slots before end that have no frame.
+func missingFrames(e *thumbEntry, plan []time.Duration, end time.Duration) int {
+	n := 0
+	for _, slot := range plan {
+		if slot >= end {
+			break
+		}
+		if _, ok := e.frames[slot]; !ok {
+			n++
+		}
+	}
+	return n
 }
 
 // backgroundReadURL selects the loopback handler's prefetch-priority path;

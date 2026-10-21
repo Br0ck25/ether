@@ -59,7 +59,8 @@ type Session struct {
 	cur         *run
 	runSeq      int
 	lastReq     int
-	endSeg      int // last segment of the input once a run hit EOF; -1 unknown
+	mkvDelivery map[int]mkvDelivery // last response per track, including retries of a seek
+	endSeg      int                 // last segment of the input once a run hit EOF; -1 unknown
 	initFile    string
 	failures    int // consecutive runs that failed without output
 	failErr     error
@@ -86,6 +87,14 @@ type Session struct {
 	seekRampSeg    int           // segment a seek restarted at (preset ramp); -1 none
 }
 
+// mkvDelivery keeps a retried segment on the same representation: a seek
+// may serve the GOP covering an empty cluster, while sequential playback
+// needs the empty cluster to avoid repeating that GOP.
+type mkvDelivery struct {
+	segment int
+	seek    bool
+}
+
 // run is one ffmpeg process producing segments from startSeg on.
 type run struct {
 	seq      int
@@ -108,7 +117,8 @@ type run struct {
 	progressMu sync.Mutex
 	progress   Progress
 
-	dash *dashRun // DASH runs only; owned by the run's watch goroutine
+	dash   *dashRun  // DASH runs only; owned by the run's watch goroutine
+	chunks *chunkRun // chunked HLS runs only (chunks.go); likewise
 }
 
 func (r *run) next() int {
@@ -553,6 +563,25 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			waitTail = true
 		} else if done[n] {
 			paths := []string{s.trackSegPath(t, n)}
+			if s.container == ContainerMatroska {
+				prev, served := s.mkvDelivery[t]
+				seek := !served || (prev.segment != n-1 && prev.segment != n) || (prev.segment == n && prev.seek)
+				if seek {
+					// A fresh decoder needs the GOP covering n. Retrying
+					// that request (including a Range) must keep its bytes.
+					p, ok := s.decodableMKVLocked(t, n)
+					if !ok {
+						delete(done, n) // its GOP is gone: produce n again
+						s.mu.Unlock()
+						continue
+					}
+					paths[0] = p
+				}
+				if s.mkvDelivery == nil {
+					s.mkvDelivery = make(map[int]mkvDelivery)
+				}
+				s.mkvDelivery[t] = mkvDelivery{segment: n, seek: seek}
+			}
 			if last {
 				// ffmpeg may cut a short final segment past the playlist's
 				// last one; TS and fMP4 fragments concatenate cleanly.
@@ -637,6 +666,24 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 	}
 }
 
+// decodableMKVLocked is the file to serve for Matroska segment n of track
+// t to a fresh decoder: n itself, or for an empty Cluster (a segment
+// inside a GOP longer than a segment, chunks.go) the earlier segment
+// holding that GOP; false when it is no longer on disk.
+func (s *Session) decodableMKVLocked(t, n int) (string, bool) {
+	for k := n; k >= 0 && s.done[t][k]; k-- {
+		p := s.trackSegPath(t, k)
+		st, err := os.Stat(p)
+		if err != nil {
+			return "", false
+		}
+		if st.Size() > emptyClusterSize {
+			return p, true
+		}
+	}
+	return "", false
+}
+
 func stopTimer(t *time.Timer) {
 	if t != nil {
 		t.Stop()
@@ -710,10 +757,16 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			return
 		}
 		if name := s.initFileLocked(t); name != "" {
-			path := filepath.Join(s.dir, name)
+			// Open under the lock: a newer run's init may replace (and
+			// delete) this one as soon as the lock is released, and the
+			// open handle keeps serving the bytes the lookup chose.
+			f, err := os.Open(filepath.Join(s.dir, name))
 			s.mu.Unlock()
-			if s.serveFile(w, r, path, InitSegment) {
-				return
+			if err == nil {
+				defer f.Close()
+				if s.serveOpened(w, r, f, InitSegment) {
+					return
+				}
 			}
 			http.Error(w, "init segment missing", http.StatusInternalServerError)
 			return
@@ -859,12 +912,17 @@ func (s *Session) serveFile(w http.ResponseWriter, r *http.Request, path string,
 		return false
 	}
 	defer f.Close()
+	return s.serveOpened(w, r, f, n)
+}
+
+// serveOpened writes segment n (or the init segment) from an open file.
+func (s *Session) serveOpened(w http.ResponseWriter, r *http.Request, f *os.File, n int) bool {
 	st, err := f.Stat()
 	if err != nil {
 		return false
 	}
 	s.setSegmentHeaders(w)
-	name := filepath.Base(path)
+	name := filepath.Base(f.Name())
 	if n == InitSegment {
 		name = initSegmentName(s.container)
 	}
@@ -1045,7 +1103,40 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		}
 		dr = newDASHRun(spec.Dir, mapping, s.base, s.segDur, s.total, seg)
 	}
+	var cr *chunkRun
+	if s.chunkedLocked(spec.Decision) {
+		spec.ChunkDir = filepath.Join(spec.Dir, fmt.Sprintf("c-%d", s.runSeq))
+		spec.ChunkCut = chunkCutFor(s.segDur)
+		if err := os.MkdirAll(spec.ChunkDir, 0o755); err != nil {
+			return fmt.Errorf("transcode: chunk dir: %w", err)
+		}
+		if !spec.Decision.VideoCopy {
+			// Force keyframes at the plan's boundaries (through the one
+			// the run stops at), in the run's output clock.
+			end := rp.planEnd
+			if end < 0 || end > s.total {
+				end = s.total
+			}
+			if end-seg > maxForcedKeySegments {
+				end = seg + maxForcedKeySegments
+				rp.planEnd = end
+			}
+			origin := time.Duration(0)
+			if len(inputTimestampArgs(spec)) == 0 {
+				origin = spec.Start // output timestamps count from -ss
+			}
+			for k := seg + 1; k <= end && k < s.total; k++ {
+				spec.KeyTimes = append(spec.KeyTimes, s.segStart(k)-origin)
+			}
+		}
+		sl := newSlotter(s.base, s.segDur, s.total, seg)
+		plan, base := s.plan, s.base // boundaries never change after StartHLS
+		sl.index = func(t time.Duration) int { return plan.IndexAt(t - base) }
+		cr = &chunkRun{dir: spec.ChunkDir, container: s.container,
+			initPath: filepath.Join(spec.Dir, spec.InitName), startAt: spec.Start, sl: sl}
+	}
 	r := &run{
+		chunks:   cr,
 		seq:      s.runSeq,
 		startSeg: seg,
 		spec:     spec,
@@ -1086,6 +1177,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		if dr != nil {
 			_ = os.RemoveAll(dr.dir)
 		}
+		if cr != nil {
+			_ = os.RemoveAll(cr.dir)
+		}
 		return fmt.Errorf("transcode: start ffmpeg: %w", err)
 	}
 	r.proc = proc
@@ -1097,6 +1191,25 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	go s.watch(r)
 	s.broadcastLocked()
 	return nil
+}
+
+// chunkedLocked reports whether an HLS run producing decision d must cut
+// at every keyframe into chunks the session regroups onto the plan
+// (chunks.go), because ffmpeg's segmenters cannot be told where to cut:
+//   - the plan's boundaries are source keyframes (encodes force keyframes
+//     at them);
+//   - a copy without a keyframe index: wherever a GOP is longer than a
+//     segment, ffmpeg would make fewer segments than the playlist lists.
+//     Regrouped, every segment starts on a keyframe (or, inside a GOP
+//     longer than a segment, repeats the GOP covering it).
+//
+// Encodes on a nominal plan force keyframes at its uniform boundaries,
+// where ffmpeg cuts exactly.
+func (s *Session) chunkedLocked(d core.Decision) bool {
+	if s.isDASH() || s.plan == nil || s.info.Video() == nil {
+		return false
+	}
+	return s.plan.Keyframed() || d.VideoCopy
 }
 
 // stopRunLocked kills the current run. ffmpeg exits in milliseconds after a
@@ -1120,11 +1233,14 @@ func (s *Session) watch(r *run) {
 	defer t.Stop()
 	playlist := filepath.Join(r.spec.Dir, r.spec.Playlist)
 	collect := func(exited bool) {
-		if r.dash != nil {
+		switch {
+		case r.dash != nil:
 			s.collectDASH(r, exited)
-			return
+		case r.chunks != nil:
+			s.collectChunks(r, exited)
+		default:
+			s.poll(r, playlist)
 		}
-		s.poll(r, playlist)
 	}
 	for {
 		select {
@@ -1133,6 +1249,9 @@ func (s *Session) watch(r *run) {
 			s.finish(r)
 			if r.dash != nil {
 				_ = os.RemoveAll(r.dash.dir)
+			}
+			if r.chunks != nil {
+				_ = os.RemoveAll(r.chunks.dir)
 			}
 			return
 		case <-t.C:
@@ -1173,51 +1292,72 @@ func (s *Session) poll(r *run, playlist string) {
 			_ = os.Remove(s.trackSegPath(t, n))
 			continue
 		}
-		if hasInitSegment(s.container) {
-			if _, err := os.Stat(filepath.Join(r.spec.Dir, r.spec.InitName)); err == nil {
-				if rel, err := filepath.Rel(s.dir, filepath.Join(r.spec.Dir, r.spec.InitName)); err == nil {
-					for len(s.initFiles) <= t {
-						s.initFiles = append(s.initFiles, "")
-					}
-					s.initFiles[t] = rel
-					if t == 0 {
-						s.initFile = rel
-					}
-				}
-			}
-		}
+		s.noteInitLocked(r, t)
 		r.produced++
 		r.maxDone = n
 		s.done[t][n] = true
 		if t == 0 {
-			if s.segSizes == nil {
-				s.segSizes = map[int]int64{}
-			}
-			if st, err := os.Stat(s.trackSegPath(t, n)); err == nil {
-				s.segSizes[n] = st.Size()
-			}
+			s.noteSegSizeLocked(n, s.trackSegPath(t, n))
 		}
 		changed = true
 	}
 	if changed {
-		if r.produced > 0 && s.cur == r {
-			s.failures = 0
-			s.failErr = nil
-		}
-		s.maybeGovernLocked()
-		// A run that reached its plan's mode boundary (fast-start ramp ->
-		// steady, copy -> clamp, ...) stops there and the next mode's run
-		// starts immediately, so the switch segment has no startup gap.
-		if s.cur == r && r.planEnd > 0 && r.maxDone >= r.planEnd-1 && (s.total == 0 || r.planEnd < s.total) && s.endSeg < 0 {
-			next := r.planEnd
-			s.log.Debug("plan mode boundary; chaining run", "segment", next, "fromMode", r.mode)
-			if err := s.startRunLocked(next, false); err != nil {
-				s.log.Warn("chain run at mode boundary", "segment", next, "err", err)
-			}
-		}
-		s.throttleLocked()
-		s.broadcastLocked()
+		s.progressedLocked(r)
 	}
+}
+
+// noteInitLocked publishes run r's init segment (fMP4 init or Matroska
+// header) as track t's once ffmpeg has written it.
+func (s *Session) noteInitLocked(r *run, t int) {
+	if !hasInitSegment(s.container) {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(r.spec.Dir, r.spec.InitName)); err != nil {
+		return
+	}
+	rel, err := filepath.Rel(s.dir, filepath.Join(r.spec.Dir, r.spec.InitName))
+	if err != nil {
+		return
+	}
+	for len(s.initFiles) <= t {
+		s.initFiles = append(s.initFiles, "")
+	}
+	s.initFiles[t] = rel
+	if t == 0 {
+		s.initFile = rel
+	}
+}
+
+// noteSegSizeLocked records a primary-track segment's size (governor).
+func (s *Session) noteSegSizeLocked(n int, path string) {
+	if s.segSizes == nil {
+		s.segSizes = map[int]int64{}
+	}
+	if st, err := os.Stat(path); err == nil {
+		s.segSizes[n] = st.Size()
+	}
+}
+
+// progressedLocked reacts to run r finishing segments: failure counters,
+// the governor, chaining at a plan mode boundary, throttling, waiters.
+func (s *Session) progressedLocked(r *run) {
+	if r.produced > 0 && s.cur == r {
+		s.failures = 0
+		s.failErr = nil
+	}
+	s.maybeGovernLocked()
+	// A run that reached its plan's mode boundary (fast-start ramp ->
+	// steady, copy -> clamp, ...) stops there and the next mode's run
+	// starts immediately, so the switch segment has no startup gap.
+	if s.cur == r && r.planEnd > 0 && r.maxDone >= r.planEnd-1 && (s.total == 0 || r.planEnd < s.total) && s.endSeg < 0 {
+		next := r.planEnd
+		s.log.Debug("plan mode boundary; chaining run", "segment", next, "fromMode", r.mode)
+		if err := s.startRunLocked(next, false); err != nil {
+			s.log.Warn("chain run at mode boundary", "segment", next, "err", err)
+		}
+	}
+	s.throttleLocked()
+	s.broadcastLocked()
 }
 
 // finish records a run's exit and reacts to failures: a hardware encoder
@@ -1441,12 +1581,12 @@ func adaptDecision(old core.Decision, oldInfo, newInfo core.MediaInfo, container
 				if d.BitrateKbps <= 0 {
 					d.BitrateKbps = bitrateCeiling(d.MaxHeight, d.VideoCodec)
 				}
-				d.ToneMap = isHDR(newV) && !isHDR(oldV)
+				d.ToneMap = encodedRange(newV) != rangeSDR && !isHDR(oldV)
 				notes = append(notes, fmt.Sprintf("video %s %dp re-encoded to match the stream", newV.Codec, newV.Height))
 			}
 		} else {
 			keptHDR := isHDR(oldV) && !old.ToneMap
-			d.ToneMap = isHDR(newV) && !keptHDR
+			d.ToneMap = encodedRange(newV) != rangeSDR && !keptHDR
 		}
 		d.StripDolbyVision = d.VideoCopy && oldRange == rangeHDR10 && newV.DolbyVision && rangeOfDVBase(newV) == rangeHDR10
 	}

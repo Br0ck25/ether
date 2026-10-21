@@ -195,7 +195,14 @@ func ParseSegmentName(name string) (int, bool) {
 // ffmpegPlaylist is what an ffmpeg run's own (EVENT) playlist says.
 type ffmpegPlaylist struct {
 	segments []int // completed segment numbers, in order
+	entries  []ffmpegEntry
 	ended    bool
+}
+
+// ffmpegEntry is one listed file with its #EXTINF duration.
+type ffmpegEntry struct {
+	name string // base name
+	dur  time.Duration
 }
 
 // readFFmpegPlaylist parses ffmpeg's playlist. Only segments listed there
@@ -211,6 +218,7 @@ func readFFmpegPlaylist(path string) (ffmpegPlaylist, error) {
 
 func parseFFmpegPlaylist(b []byte) ffmpegPlaylist {
 	var p ffmpegPlaylist
+	var dur time.Duration
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -218,11 +226,22 @@ func parseFFmpegPlaylist(b []byte) ffmpegPlaylist {
 		case line == "":
 		case line == "#EXT-X-ENDLIST":
 			p.ended = true
+		case strings.HasPrefix(line, "#EXTINF:"):
+			v, _, _ := strings.Cut(strings.TrimPrefix(line, "#EXTINF:"), ",")
+			if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f >= 0 && f < 1e6 {
+				dur = time.Duration(f * float64(time.Second))
+			}
 		case strings.HasPrefix(line, "#"):
 		default:
 			if n, ok := ParseSegmentName(line); ok && n >= 0 {
 				p.segments = append(p.segments, n)
+				name := line
+				if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+					name = name[i+1:]
+				}
+				p.entries = append(p.entries, ffmpegEntry{name: name, dur: dur})
 			}
+			dur = 0
 		}
 	}
 	return p

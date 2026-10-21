@@ -76,6 +76,27 @@ func dvBaseLayer(v *core.StreamInfo) (string, bool) {
 // isHDR reports whether the stream needs an HDR display (or tone mapping).
 func isHDR(v *core.StreamInfo) bool { return dynamicRange(v) != rangeSDR }
 
+// encodedRange is the dynamic range of the picture ffmpeg decodes for an
+// encode: a Dolby Vision stream decodes to its base layer (SDR, HDR10 or
+// HLG); profile 5, which has none, stays rangeDV. Tone mapping an SDR base
+// layer, or tagging it HDR10, would wreck its colours.
+func encodedRange(v *core.StreamInfo) string {
+	r := dynamicRange(v)
+	if r == rangeDV {
+		if base, ok := dvBaseLayer(v); ok {
+			return base
+		}
+	}
+	return r
+}
+
+// keepsHDR reports whether an encode can keep the decoded picture's HDR
+// (HEVC with HDR10/HLG metadata) rather than tone map it.
+func keepsHDR(v *core.StreamInfo) bool {
+	r := encodedRange(v)
+	return r == rangeHDR10 || r == rangeHLG
+}
+
 // rangeOK checks the video's dynamic range against the client. It returns
 // "" when it can be shown as is, else the reason it cannot.
 func rangeOK(v *core.StreamInfo, caps core.ClientCaps) string {
@@ -556,7 +577,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 			}
 		}
 	}
-	d.ToneMap = v != nil && isHDR(v) && !keepHDR
+	d.ToneMap = v != nil && encodedRange(v) != rangeSDR && !keepHDR
 	// A re-encode drops DV RPUs and enhancement layers: kept HDR is the base
 	// layer's HDR10/HLG.
 

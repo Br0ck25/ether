@@ -204,7 +204,7 @@ func dashReps(info core.MediaInfo, d core.Decision) []dashRep {
 		profile, depth := v.Profile, v.BitDepth
 		if !d.VideoCopy {
 			profile, depth = "", 8 // libx264 high / x265 main
-			if codec == "hevc" && isHDR(v) && !d.ToneMap {
+			if codec == "hevc" && keepsHDR(v) && !d.ToneMap {
 				depth = 10
 			}
 		}
@@ -323,6 +323,10 @@ type slotter struct {
 	total    int // segments in the MPD; 0 = unknown
 	tol      time.Duration
 	startSeg int
+	// index, when set, maps a media time to its segment for plans whose
+	// boundaries are not uniform (keyframe-planned HLS sessions) instead
+	// of base+n*segDur.
+	index func(t time.Duration) int
 
 	started  bool
 	slot     int // segment being filled; -1 none
@@ -343,7 +347,12 @@ func newSlotter(base, segDur time.Duration, total, startSeg int) *slotter {
 }
 
 func (sl *slotter) slotOf(t time.Duration) int {
-	n := int(math.Floor(float64(t-sl.base+sl.tol) / float64(sl.segDur)))
+	var n int
+	if sl.index != nil {
+		n = sl.index(t + sl.tol)
+	} else {
+		n = int(math.Floor(float64(t-sl.base+sl.tol) / float64(sl.segDur)))
+	}
 	if n < 0 {
 		n = 0
 	}

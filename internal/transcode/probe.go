@@ -441,9 +441,14 @@ func IsTextSubtitle(codec string) bool {
 	return false
 }
 
+// maxMediaSeconds bounds a probed duration: anything longer is a corrupt
+// header, and as a Duration it would overflow (or, saturated, plan billions
+// of segments).
+const maxMediaSeconds = 30 * 24 * 3600
+
 func parseSeconds(s string) time.Duration {
 	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || f <= 0 || math.IsNaN(f) || math.IsInf(f, 0) {
+	if err != nil || f <= 0 || math.IsNaN(f) || math.IsInf(f, 0) || f > maxMediaSeconds {
 		return 0
 	}
 	return time.Duration(f * float64(time.Second))
