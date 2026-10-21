@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -261,15 +262,16 @@ func TestV2RejectsLegacyReplayAndMalformedValues(t *testing.T) {
 		},
 		"bad base64": func(_ *testing.T, doc map[string]any, _ []byte) { obj(doc, "plex")["token"] = sealedPrefixV2 + "!!!" },
 		"truncated":  func(_ *testing.T, doc map[string]any, _ []byte) { obj(doc, "plex")["token"] = sealedPrefixV2 + "AAAA" },
-		"bit flip": func(_ *testing.T, doc map[string]any, _ []byte) {
+		"bit flip": func(t *testing.T, doc map[string]any, _ []byte) {
 			v := obj(doc, "plex")["token"].(string)
-			last := v[len(v)-1]
-			if last == 'A' {
-				last = 'B'
-			} else {
-				last = 'A'
+			payload, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(v, sealedPrefixV2))
+			if err != nil || len(payload) == 0 {
+				t.Fatalf("invalid sealed fixture: %v", err)
 			}
-			obj(doc, "plex")["token"] = v[:len(v)-1] + string(last)
+			// Change an authenticated byte, not unused bits in the final
+			// base64 character, which can decode to the same payload.
+			payload[len(payload)-1] ^= 1
+			obj(doc, "plex")["token"] = sealedPrefixV2 + base64.RawStdEncoding.EncodeToString(payload)
 		},
 		"future prefix": func(_ *testing.T, doc map[string]any, _ []byte) { obj(doc, "plex")["token"] = "ether-sealed:v3:abc" },
 		"future format": func(_ *testing.T, doc map[string]any, _ []byte) { doc[credentialFormatKey] = 3 },
