@@ -81,4 +81,46 @@ func TestIntegrationDASHShortLadderLongGOPAndSeeks(t *testing.T) {
 	defer srv.Close()
 	e.playMPD(t, srv.URL+"/start.mpd", 24)
 
+	// Start cold inside a long GOP: no earlier run can hide copied-audio
+	// preroll with already cached segments. Video keeps its decode keyframe,
+	// but audio must begin at the requested media time on either rendition.
+	cold := startDASH(t, e.m, core.HLSRequest{SessionID: "cold-seek", InputURL: e.url("ladder.mkv"), Info: *info, Decision: d, StartOffset: 18 * time.Second})
+	_, afirst := e.probeDASH(t, "cold-audio.mp4", dashGet(t, cold, 1, 9))
+	if math.Abs(afirst-18) > 0.1 {
+		t.Fatalf("cold seek audio starts %v, want 18", afirst)
+	}
+	_, vfirst := e.probeDASH(t, "cold-video.mp4", dashGet(t, cold, 0, 9))
+	if vfirst > 18 || vfirst < 9.9 {
+		t.Fatalf("cold copy seek lost its decode keyframe: %v", vfirst)
+	}
+	_, lower := e.probeDASH(t, "cold-lower.mp4", dashGet(t, cold, 2, 9))
+	if math.Abs(lower-afirst) > 0.1 {
+		t.Fatalf("cold lower rendition starts video=%v audio=%v", lower, afirst)
+	}
+}
+
+func TestDASHSeekDropsOnlyCopiedAudioPreroll(t *testing.T) {
+	info := mustParse(t, "mp4_h264_aac.json")
+	s := baseSpec(info, Decide(info, plexWeb, allow(), Policy{}))
+	s.Protocol, s.Start = core.ProtocolDASH, 18*time.Second
+	s.Decision.AudioCopy = true
+	if args := strings.Join(buildArgs(s), " "); !strings.Contains(args, "-bsf:a noise=amount=0:drop='lt(pts*tb,18.000)'") || !strings.Contains(args, "-c:v copy") {
+		t.Fatalf("copy seek must retain video keyframe and trim only audio: %s", args)
+	}
+	for _, kind := range []string{"initial", "encoded-audio", "hls"} {
+		t.Run(kind, func(t *testing.T) {
+			other := s
+			switch kind {
+			case "initial":
+				other.Start = 0
+			case "encoded-audio":
+				other.Decision.AudioCopy = false
+			case "hls":
+				other.Protocol = core.ProtocolHLS
+			}
+			if strings.Contains(strings.Join(buildArgs(other), " "), "noise=amount=0") {
+				t.Fatal("unneeded audio preroll filter")
+			}
+		})
+	}
 }
