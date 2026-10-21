@@ -70,6 +70,33 @@ func TestRemoteDetection(t *testing.T) {
 	}
 }
 
+func TestForwardedLocalPrefixCannotHideRemoteClient(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []string
+		remote bool
+	}{
+		{"spoofed loopback", []string{"127.0.0.1, 198.51.100.7"}, true},
+		{"spoofed private through proxies", []string{"10.0.0.7, 198.51.100.7, 10.0.0.2"}, true},
+		{"separate header lines", []string{"127.0.0.1", "198.51.100.7"}, true},
+		{"mapped IPv4", []string{"::1, ::ffff:198.51.100.7"}, true},
+		{"malformed", []string{"not-an-ip"}, true},
+		{"empty", []string{""}, true},
+		{"local chain", []string{"192.168.1.7, 127.0.0.1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/", nil)
+			r.RemoteAddr = "127.0.0.1:32400"
+			for _, value := range tc.values {
+				r.Header.Add("X-Forwarded-For", value)
+			}
+			if got := ParseRequest(r).Remote; got != tc.remote {
+				t.Fatalf("remote=%v, want %v", got, tc.remote)
+			}
+		})
+	}
+}
+
 func TestClientCapsByProduct(t *testing.T) {
 	cases := []struct {
 		product, platform, device string
