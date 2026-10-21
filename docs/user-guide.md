@@ -202,8 +202,25 @@ titles a detail page has already prepared.
 
 Use **Libraries & backups** to add existing media or preview a Plex import. Map
 each source viewer to the correct Ether viewer and review unmatched titles
-before importing. Keep backups private: they contain credentials needed to
-restore your server.
+before importing.
+
+To download a snapshot, sign in as the owner and open **Backups & import ›
+Snapshots** after setup is complete. Enter a backup password of at least 12
+characters, then choose **Download**. The downloaded `.etherbackup` file is
+encrypted. Ether does not keep this password; save it somewhere safe because
+it is needed to restore the file.
+
+To restore, enter the same password and select the `.etherbackup` file. Ether
+validates it and stages a new data folder; uploading a backup does not replace
+the running server. Follow the displayed instructions to stop Ether and start
+it with that folder. An older, unencrypted `.tar.gz` backup requires an owner
+sign-in and explicit confirmation. See [installation and restoration](install.md#backups)
+for service and database considerations.
+
+Keep server-side snapshots and shared backup folders private: scheduled and
+internal snapshots remain unencrypted on disk and include the credentials and
+key needed to restore your server. Password protection applies to downloaded
+`.etherbackup` files, not existing snapshots or older downloads.
 
 ## Live TV
 

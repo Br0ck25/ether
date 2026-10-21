@@ -288,6 +288,30 @@ each one; download a backup from the node that holds it. To keep them in one
 place, set a **Shared backup folder** on *Backups & import*: a folder every
 node reaches at the same path, such as a network share.
 
+Creating snapshots, changing their schedule, and downloading them require the
+owner account after setup is complete. In **Backups & import › Snapshots**, enter
+a password of at least 12 characters before downloading. Downloads use the
+encrypted `.etherbackup` format. Ether does not store the password.
+
+Restore by uploading the file with the same password. A validated upload is
+staged in `<data directory>/restored-<timestamp>`; the running configuration is
+not replaced. Stop the Ether service, set `ETHER_DATA_DIR` to the staged folder
+in its service environment, then start it again. For a PostgreSQL backup, also
+point `ETHER_DATABASE_URL` at an empty PostgreSQL database, or leave it unset to
+restore as a standalone server. The logical database dump is imported on first
+start. Preserve the original data directory until the restored server has been
+verified.
+
+Encrypted backups can also be uploaded during initial setup through the local
+setup interface. Restoring an older unencrypted `.tar.gz` requires an owner
+sign-in and explicit plaintext confirmation. Backups containing sealed secrets
+must include their credential key.
+
+Scheduled and internal snapshots remain plaintext on disk with restrictive
+file permissions; they contain both credentials and the credential key. Protect
+the backup directory and any network share accordingly. Encrypting a download
+does not encrypt existing snapshots or older downloads.
+
 ### When a node fails
 
 Plex apps know every node's address. When a node stops or loses its network,
