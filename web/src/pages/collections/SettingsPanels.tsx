@@ -8,6 +8,7 @@ import {
   SearchSelect,
   Switch,
   cn,
+  toast,
 } from "@braedonsaunders/appkit-ui";
 import {
   Check,
@@ -22,12 +23,12 @@ import {
 import { useMemo, type ReactNode } from "react";
 import { Artwork } from "../../components/Artwork";
 import { ChipGroup, Field, NumberInput, Segmented } from "../../components/fields";
-import { useViewers, viewerName } from "../../components/pickers";
-import { api } from "../../lib/api";
+import { TitleSearch, useViewers, viewerName } from "../../components/pickers";
 import type { ArtworkMode, CollectionSpec, DeviceClass, TitleCard } from "../../lib/contract";
 import { WEEKDAYS, formatDateTime, formatHour, relativeTime } from "../../lib/format";
 import { REFRESH_OPTIONS } from "../../lib/rules";
 import type { SpecUpdate } from "./BuildPanel";
+import { artworkPreviewURL, artworkSource } from "./artwork";
 
 // ---- Schedule ---------------------------------------------------------------------
 
@@ -174,7 +175,7 @@ const MODES: { value: ArtworkMode; label: string; hint: string; icon: ReactNode 
   {
     value: "collage",
     label: "Poster collage",
-    hint: "A grid of the top posters with the name.",
+    hint: "Four or six member posters, with the collection name.",
     icon: <Grid2x2 size={16} />,
   },
   {
@@ -185,8 +186,8 @@ const MODES: { value: ArtworkMode; label: string; hint: string; icon: ReactNode 
   },
   {
     value: "tmdb",
-    label: "TMDB artwork",
-    hint: "The official poster of the TMDB collection or lead title.",
+    label: "TMDB collection",
+    hint: "Official franchise artwork when the source is a TMDB collection.",
     icon: <ImageIcon size={16} />,
   },
   {
@@ -247,60 +248,121 @@ export function ArtworkPanel({
   const accent = spec.artwork.accent ?? "";
   return (
     <div className="space-y-6">
-      <div className="grid gap-5 sm:grid-cols-[1fr_11rem]">
-        <div role="radiogroup" aria-label="Artwork style" className="space-y-1.5">
-          {MODES.map((m) => {
-            const on = spec.artwork.mode === m.value;
-            return (
-              <button
-                key={m.value}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => update({ artwork: { ...spec.artwork, mode: m.value } })}
-                className={cn(
-                  "flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
-                  on
-                    ? "border-primary/50 bg-primary-subtle"
-                    : "border-border bg-surface hover:border-border-strong",
-                )}
-              >
-                <span className={cn("mt-0.5", on ? "text-primary" : "text-fg-subtle")}>
-                  {m.icon}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-fg">{m.label}</span>
-                  <span className="block text-xs text-fg-muted">{m.hint}</span>
-                </span>
-                {on ? <Check size={16} className="text-primary" /> : null}
-              </button>
-            );
-          })}
-        </div>
-        <div className="space-y-3">
-          <p className="text-xs font-medium text-fg-muted">Live preview</p>
-          <ArtworkPreview spec={spec} items={preview} />
-          {spec.id ? (
-            <div>
-              <p className="mb-1.5 text-xs font-medium text-fg-muted">Published artwork</p>
-              <Artwork
-                src={api.artworkUrl(spec.id, 300, spec.updatedAt)}
-                alt={`${spec.name} artwork`}
-                title={spec.name}
-                className="aspect-[2/3] w-full rounded-md ring-1 ring-border"
-              />
-            </div>
-          ) : null}
-        </div>
+      <div>
+        <h3 className="text-sm font-semibold text-fg">Collection poster</h3>
+        <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+          Saved artwork is served to Plex apps as the collection’s native poster. Collages follow
+          the collection’s title order.
+        </p>
       </div>
+      <div role="radiogroup" aria-label="Artwork style" className="grid grid-cols-2 gap-2">
+        {MODES.map((m) => {
+          const on = spec.artwork.mode === m.value;
+          return (
+            <button
+              key={m.value}
+              type="button"
+              role="radio"
+              aria-label={m.label}
+              aria-checked={on}
+              onClick={() => update({ artwork: { ...spec.artwork, mode: m.value } })}
+              className={cn(
+                "min-w-0 rounded-lg border p-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                on
+                  ? "border-primary/50 bg-primary-subtle"
+                  : "border-border bg-surface hover:border-border-strong",
+              )}
+            >
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <ArtworkPreview
+                  spec={{ ...spec, artwork: { ...spec.artwork, mode: m.value } }}
+                  items={preview}
+                  size="sm"
+                  className="max-w-14"
+                />
+                {on ? (
+                  <Check size={14} className="text-primary" />
+                ) : (
+                  <span className="text-fg-subtle">{m.icon}</span>
+                )}
+              </div>
+              <span className="block text-xs font-semibold text-fg">{m.label}</span>
+              <span className="mt-1 block text-[11px] leading-relaxed text-fg-muted">{m.hint}</span>
+            </button>
+          );
+        })}
+      </div>
+      {spec.artwork.mode === "collage" || spec.artwork.mode === "auto" ? (
+        <p className="text-xs leading-relaxed text-fg-muted">
+          Uses up to six available member posters. To choose the films and their order, use
+          hand-picked titles in Build and sort by Source order. Artwork falls back to a single image
+          when fewer than four posters are available.
+        </p>
+      ) : null}
+      {spec.artwork.mode === "tmdb" ? (
+        <p className="text-xs leading-relaxed text-fg-muted">
+          The official franchise poster is fetched when you save. Collections without a TMDB
+          franchise source use automatic artwork.
+        </p>
+      ) : null}
+      <section aria-label="Choose a title poster" className="space-y-3 border-t border-border pt-4">
+        <div>
+          <h3 className="text-sm font-semibold text-fg">Use a title’s poster</h3>
+          <p className="mt-1 text-xs text-fg-muted">
+            Choose an existing poster without changing the collection’s members.
+          </p>
+        </div>
+        <TitleSearch
+          placeholder="Find a film or show for its poster…"
+          onPick={(t) => {
+            const source = artworkSource(t.poster);
+            if (source) update({ artwork: { ...spec.artwork, mode: "custom", url: source } });
+            else toast.error("This title has no usable poster");
+          }}
+        />
+        {preview.some((t) => artworkSource(t.poster)) ? (
+          <div className="grid grid-cols-4 gap-2">
+            {preview
+              .filter((t) => artworkSource(t.poster))
+              .slice(0, 8)
+              .map((t) => {
+                const source = artworkSource(t.poster)!;
+                const on = spec.artwork.mode === "custom" && spec.artwork.url === source;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    aria-label={`Use ${t.title} poster`}
+                    aria-pressed={on}
+                    onClick={() =>
+                      update({ artwork: { ...spec.artwork, mode: "custom", url: source } })
+                    }
+                    className={cn(
+                      "min-w-0 rounded-md p-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                      on ? "bg-primary-subtle ring-1 ring-primary" : "hover:bg-surface-hover",
+                    )}
+                  >
+                    <Artwork
+                      src={t.poster}
+                      alt=""
+                      title={t.title}
+                      className="aspect-[2/3] w-full rounded"
+                    />
+                    <span className="mt-1 block truncate text-[10px] text-fg-muted">{t.title}</span>
+                  </button>
+                );
+              })}
+          </div>
+        ) : null}
+      </section>
 
       {spec.artwork.mode === "custom" ? (
         <Field
-          label="Image URL"
-          hint="A 2:3 poster works best. It's fetched by the server, so it must be reachable from it."
+          label="Image URL or TMDB path"
+          hint="A 2:3 poster works best. You can paste an image URL or pick a title above."
         >
           <Input
-            type="url"
+            type="text"
             value={spec.artwork.url ?? ""}
             placeholder="https://…"
             onChange={(e) =>
@@ -311,59 +373,64 @@ export function ArtworkPanel({
         </Field>
       ) : null}
 
-      <Field label="Accent" hint="Tints generated artwork. Automatic matches the lead poster.">
-        <div
-          className="flex flex-wrap items-center gap-2"
-          role="radiogroup"
-          aria-label="Accent colour"
-        >
-          <button
-            type="button"
-            role="radio"
-            aria-checked={!accent}
-            onClick={() => update({ artwork: { ...spec.artwork, accent: undefined } })}
-            className={cn(
-              "h-8 rounded-full border px-3 text-xs font-medium",
-              !accent
-                ? "border-primary bg-primary-subtle text-primary"
-                : "border-border text-fg-muted hover:text-fg",
-            )}
+      {spec.artwork.mode !== "custom" && spec.artwork.mode !== "tmdb" ? (
+        <Field label="Accent" hint="Tints generated artwork. Automatic matches the lead poster.">
+          <div
+            className="flex flex-wrap items-center gap-2"
+            role="radiogroup"
+            aria-label="Accent colour"
           >
-            <Sparkles size={12} className="mr-1 inline" />
-            Automatic
-          </button>
-          {swatches.map((s) => (
             <button
-              key={s.name}
               type="button"
               role="radio"
-              aria-checked={accent.toLowerCase() === s.hex}
-              aria-label={s.name}
-              title={s.name}
-              onClick={() => update({ artwork: { ...spec.artwork, accent: s.hex } })}
+              aria-checked={!accent}
+              onClick={() => update({ artwork: { ...spec.artwork, accent: undefined } })}
               className={cn(
-                "size-8 rounded-full ring-offset-2 ring-offset-bg transition",
-                ACCENT_BG[s.name],
-                accent.toLowerCase() === s.hex ? "ring-2 ring-fg" : "hover:scale-110",
+                "h-8 rounded-full border px-3 text-xs font-medium",
+                !accent
+                  ? "border-primary bg-primary-subtle text-primary"
+                  : "border-border text-fg-muted hover:text-fg",
               )}
-            />
-          ))}
-          {swatches.length ? (
-            <label className="flex items-center gap-1.5 text-xs text-fg-muted">
-              <input
-                type="color"
-                value={/^#[0-9a-f]{6}$/i.test(accent) ? accent : swatches[0]!.hex}
-                onChange={(e) =>
-                  update({ artwork: { ...spec.artwork, accent: e.currentTarget.value } }, "accent")
-                }
-                className="size-8 cursor-pointer rounded-full border border-border bg-transparent p-0"
-                aria-label="Custom accent colour"
+            >
+              <Sparkles size={12} className="mr-1 inline" />
+              Automatic
+            </button>
+            {swatches.map((s) => (
+              <button
+                key={s.name}
+                type="button"
+                role="radio"
+                aria-checked={accent.toLowerCase() === s.hex}
+                aria-label={s.name}
+                title={s.name}
+                onClick={() => update({ artwork: { ...spec.artwork, accent: s.hex } })}
+                className={cn(
+                  "size-8 rounded-full ring-offset-2 ring-offset-bg transition",
+                  ACCENT_BG[s.name],
+                  accent.toLowerCase() === s.hex ? "ring-2 ring-fg" : "hover:scale-110",
+                )}
               />
-              Custom
-            </label>
-          ) : null}
-        </div>
-      </Field>
+            ))}
+            {swatches.length ? (
+              <label className="flex items-center gap-1.5 text-xs text-fg-muted">
+                <input
+                  type="color"
+                  value={/^#[0-9a-f]{6}$/i.test(accent) ? accent : swatches[0]!.hex}
+                  onChange={(e) =>
+                    update(
+                      { artwork: { ...spec.artwork, accent: e.currentTarget.value } },
+                      "accent",
+                    )
+                  }
+                  className="size-8 cursor-pointer rounded-full border border-border bg-transparent p-0"
+                  aria-label="Custom accent colour"
+                />
+                Custom
+              </label>
+            ) : null}
+          </div>
+        </Field>
+      ) : null}
     </div>
   );
 }
@@ -382,7 +449,7 @@ export function ArtworkPreview({
 }) {
   const posters = items.filter((i) => i.poster);
   const mode =
-    spec.artwork.mode === "auto"
+    spec.artwork.mode === "auto" || (spec.artwork.mode === "collage" && posters.length < 4)
       ? posters.length >= 4
         ? "collage"
         : "backdrop"
@@ -399,8 +466,13 @@ export function ArtworkPreview({
       role="img"
     >
       {mode === "collage" ? (
-        <div className="grid size-full grid-cols-2 grid-rows-2 gap-px bg-border">
-          {posters.slice(0, 4).map((p) => (
+        <div
+          className={cn(
+            "grid size-full grid-rows-2 gap-px bg-border",
+            posters.length >= 6 ? "grid-cols-3" : "grid-cols-2",
+          )}
+        >
+          {posters.slice(0, posters.length >= 6 ? 6 : 4).map((p) => (
             <Artwork key={p.key} src={p.poster} alt="" title="" className="size-full" eager />
           ))}
         </div>
@@ -414,10 +486,13 @@ export function ArtworkPreview({
           eager
         />
       ) : mode === "tmdb" ? (
-        <Artwork src={items[0]?.poster} alt="" title={name} className="size-full" eager />
+        <div className="grid size-full place-items-center p-2 text-center text-fg-subtle">
+          <ImageIcon size={size === "sm" ? 16 : 28} aria-hidden />
+          <span className="sr-only">Official TMDB collection artwork appears after saving</span>
+        </div>
       ) : (
         <Artwork
-          src={spec.artwork.url || undefined}
+          src={artworkPreviewURL(spec.artwork.url)}
           alt=""
           title="Add an image URL"
           className="size-full"
