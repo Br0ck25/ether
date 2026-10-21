@@ -215,7 +215,7 @@ func buildCodecArgs(s runSpec) []string {
 	if a != nil {
 		if d.AudioCopy {
 			args = append(args, "-c:a", "copy")
-			if s.Protocol == core.ProtocolDASH && s.Start > 0 {
+			if s.Start > 0 {
 				// Input seeking retains copied packets from the preceding
 				// video keyframe. Drop audio preroll without re-encoding or
 				// discarding the video keyframe required to decode a copy

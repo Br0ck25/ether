@@ -365,7 +365,7 @@ func (tl *Timeline) NextChange(n int) int {
 		limit = total
 	}
 	for j := n + 1; j < limit; j++ {
-		if tl.ModeAt(j) != m {
+		if tl.ModeAt(j) != m || (m == ModeClamp && tl.ClampKbps(j) != tl.ClampKbps(n)) {
 			return j
 		}
 	}

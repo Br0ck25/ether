@@ -90,6 +90,9 @@ type Session struct {
 	initFiles      []string // per HLS track: init path relative to dir
 	wantTrack      int      // track the encoder should be producing (rung/rep)
 	videoRequested bool     // a client has requested video media, not just initialization
+	deliveredTrack int
+	deliveredSeg   int
+	deliveredCount int // sequential complete media deliveries on the active run
 	goodput        goodputEstimator
 	segSizes       map[int]int64 // primary-track segment sizes (spike governor)
 	governorOn     bool          // plan may change ahead of the player
@@ -565,6 +568,9 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 	seq := s.reqSeq
 	s.mu.Unlock()
 	for {
+		if r.Context().Err() != nil {
+			return
+		}
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
@@ -572,7 +578,7 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			return
 		}
 		stale := seq < s.movedBy
-		if !stale {
+		if !stale && r.Method == http.MethodGet {
 			s.lastReq = n
 		}
 		s.throttleLocked()
@@ -619,7 +625,7 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 			}
 			s.pruneLocked()
 			s.mu.Unlock()
-			if s.serveFiles(w, r, paths, n) {
+			if s.serveFiles(w, r, paths, t, n) {
 				return
 			}
 			s.mu.Lock()
@@ -640,13 +646,20 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 		// Cached media requires no encoder work. A delayed request for an
 		// old representation must not switch the current video encoder.
 		// Audio shares the active video run and never chooses its rung.
-		if !waitTail {
+		previousTrack := s.wantTrack
+		if !waitTail && !stale && r.Context().Err() == nil && r.Method == http.MethodGet {
 			if !s.isDASH() || t != s.audioTrackLocked() {
 				s.wantTrack = t
 				if s.isDASH() {
 					s.videoRequested = true
 				}
 			}
+		}
+		if r.Method != http.MethodGet &&
+			(s.cur == nil || s.cur.track != t) {
+			s.mu.Unlock()
+			http.Error(w, "rendition not active", http.StatusServiceUnavailable)
+			return
 		}
 		var dwell *time.Timer
 		if !waitTail && s.needsRestartLocked(n) {
@@ -659,9 +672,10 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 				http.Error(w, "superseded by a newer request", http.StatusServiceUnavailable)
 				return
 			}
-			if left := s.rungDwellLocked(); left > 0 {
+			if left := s.rungDwellLocked(r.Method == http.MethodGet && r.Header.Get("Range") == "", n); left > 0 {
 				// Another rung's run is inside its dwell: wait it out
 				// instead of restarting the encoder now.
+				s.wantTrack = previousTrack // pending/canceled probes must not steer chaining
 				dwell = time.NewTimer(left)
 			} else {
 				if restarts >= 2 {
@@ -756,21 +770,29 @@ func (s *Session) needsRestartLocked(n int) bool {
 // so a player that probes every rendition's opening segments would stop
 // the run on each probe and never let it get ahead. Waiting out the dwell
 // bounds that to one restart per dwell; a real quality switch still
-// happens, a dwell later at most.
-func (s *Session) rungDwellLocked() time.Duration {
+// retains the dwell for probes and recovery; progressing media downshifts
+// can bypass it using completed delivery evidence.
+func (s *Session) rungDwellLocked(media bool, n int) time.Duration {
 	r := s.cur
 	if r == nil || r.finished || r.stopped || r.err != nil || r.track == s.wantTrack || s.m.opts.rungDwell <= 0 {
 		return 0
 	}
-	// DASH players use measured segment delivery to change quality very
-	// early. Once the active run has produced two complete video+audio
-	// segments, it has a startup buffer to protect: withholding a real
-	// switch for the rest of a fixed dwell only drains that buffer. Keep
-	// the dwell for initialization probes and runs that made no progress.
-	if s.isDASH() && r.produced >= 2 {
-		return 0
+	// Encoder production is not client buffer. Only a progressing media GET
+	// on a lower rung can bypass probe protection, after actual delivery.
+	// A slow completed delivery can justify downshifting after the first
+	// segment; otherwise require two sequential deliveries. Recovery retains
+	// the normal dwell. The client still chooses which rung to request.
+	if media && s.deliveredTrack == r.track && s.deliveredCount > 0 &&
+		n == s.deliveredSeg+1 {
+		current, next := s.trackDecisionLocked(r.track), s.trackDecisionLocked(s.wantTrack)
+		currentRate, nextRate := decisionTotalKbps(s.info, current), decisionTotalKbps(s.info, next)
+		gp := s.goodput.Kbps()
+		pressure := gp > 0 && gp < currentRate
+		if nextRate > 0 && nextRate < currentRate && (pressure || s.deliveredCount >= 2) {
+			return 0
+		}
 	}
-	if left := s.m.opts.rungDwell - time.Since(r.started); left > 0 {
+	if left := s.m.opts.rungDwell - s.goodput.now().Sub(r.started); left > 0 {
 		return left
 	}
 	return 0
@@ -788,6 +810,9 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 	defer timeout.Stop()
 	restarted := false
 	for {
+		if r.Context().Err() != nil {
+			return
+		}
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
@@ -808,7 +833,7 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			s.mu.Unlock()
 			if err == nil {
 				defer f.Close()
-				if s.serveOpened(w, r, f, InitSegment) {
+				if s.serveOpened(w, r, f, t, InitSegment) {
 					return
 				}
 			}
@@ -824,14 +849,20 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 		// lazy video representation must start it here; waiting for its
 		// first media request otherwise deadlocks startup. Audio shares the
 		// current video run and must never select another video rung.
+		if r.Method != http.MethodGet || r.Header.Get("Range") != "" {
+			s.mu.Unlock()
+			http.Error(w, "initialization not ready", http.StatusServiceUnavailable)
+			return
+		}
+		previousTrack := s.wantTrack
 		selectTrack := !s.isDASH() || t != s.audioTrackLocked()
-		if selectTrack {
+		if selectTrack && !restarted {
 			s.wantTrack = t
 		}
 		var dwell *time.Timer
 		if (s.cur == nil || s.cur.finished || s.cur.stopped || (selectTrack && s.cur.track != t)) && !restarted {
-			left := s.rungDwellLocked()
-			if s.isDASH() && selectTrack && !s.videoRequested {
+			left := s.rungDwellLocked(false, s.lastReq)
+			if s.isDASH() && selectTrack && !s.videoRequested && s.runSeq <= 1 {
 				// No video was requested yet: the initial quality choice
 				// has no active rendition to protect with a dwell.
 				left = 0
@@ -839,6 +870,7 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			if left > 0 {
 				// A rendition probe for another rung's init segment waits
 				// out the running rung's dwell (see rungDwellLocked).
+				s.wantTrack = previousTrack // pending/canceled probes must not steer chaining
 				dwell = time.NewTimer(left)
 			} else {
 				restarted = true
@@ -892,9 +924,9 @@ func (s *Session) tailSettledLocked(n int) bool {
 }
 
 // serveFiles writes one segment made of one or more files.
-func (s *Session) serveFiles(w http.ResponseWriter, r *http.Request, paths []string, n int) bool {
+func (s *Session) serveFiles(w http.ResponseWriter, r *http.Request, paths []string, t, n int) bool {
 	if len(paths) == 1 {
-		return s.serveFile(w, r, paths[0], n)
+		return s.serveFile(w, r, paths[0], t, n)
 	}
 	var buf bytes.Buffer
 	var mod time.Time
@@ -910,21 +942,51 @@ func (s *Session) serveFiles(w http.ResponseWriter, r *http.Request, paths []str
 	}
 	s.setSegmentHeaders(w)
 	armSegmentDeadline(w)
-	s.serveCounted(w, r, filepath.Base(paths[0]), mod, bytes.NewReader(buf.Bytes()), n)
+	s.serveCounted(w, r, filepath.Base(paths[0]), mod, bytes.NewReader(buf.Bytes()), t, n)
 	return true
 }
 
 // serveCounted is http.ServeContent with delivery goodput measured over
 // the write phase only (the wait for ffmpeg already happened).
-func (s *Session) serveCounted(w http.ResponseWriter, r *http.Request, name string, mod time.Time, content io.ReadSeeker, n int) {
-	if r.Method == http.MethodHead || n == InitSegment {
+func (s *Session) serveCounted(w http.ResponseWriter, r *http.Request, name string, mod time.Time, content io.ReadSeeker, t, n int) {
+	if r.Method != http.MethodGet || n == InitSegment || r.Header.Get("Range") != "" {
 		http.ServeContent(w, r, name, mod, content)
 		return
 	}
+	size, err := content.Seek(0, io.SeekEnd)
+	if err != nil {
+		http.ServeContent(w, r, name, mod, content)
+		return
+	}
+	if _, err = content.Seek(0, io.SeekStart); err != nil {
+		return
+	}
 	cw := &countingWriter{ResponseWriter: w}
-	start := time.Now()
+	start := s.goodput.now()
 	http.ServeContent(cw, r, name, mod, content)
-	s.goodput.add(cw.bytes, time.Since(start))
+	dur := s.goodput.now().Sub(start)
+	if cw.status != http.StatusOK || cw.err != nil || cw.bytes != size || size == 0 || r.Context().Err() != nil {
+		return
+	}
+	if remoteDelivery(r) {
+		s.goodput.add(cw.bytes, dur)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Audio, retries, stale representations and overlapping requests cannot
+	// manufacture sequential video progress or drain another rung's buffer.
+	if s.cur != nil && s.cur.track == t && (!s.isDASH() || t != s.audioTrackLocked()) {
+		if s.deliveredCount == 0 || s.deliveredTrack != t || n != s.deliveredSeg+1 {
+			if s.deliveredCount > 0 && s.deliveredTrack == t && n <= s.deliveredSeg {
+				return
+			}
+			s.deliveredCount = 0
+		}
+		s.deliveredTrack, s.deliveredSeg = t, n
+		s.deliveredCount++
+	}
+	// React to delivery evidence now, even when encoding is paused ahead.
+	s.maybeGovernLocked()
 }
 
 // initFileLocked is the current init segment file of track t, relative
@@ -957,17 +1019,17 @@ func (s *Session) setSegmentHeaders(w http.ResponseWriter) {
 }
 
 // serveFile writes a finished segment; false when the file is gone.
-func (s *Session) serveFile(w http.ResponseWriter, r *http.Request, path string, n int) bool {
+func (s *Session) serveFile(w http.ResponseWriter, r *http.Request, path string, t, n int) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
 	}
 	defer f.Close()
-	return s.serveOpened(w, r, f, n)
+	return s.serveOpened(w, r, f, t, n)
 }
 
 // serveOpened writes segment n (or the init segment) from an open file.
-func (s *Session) serveOpened(w http.ResponseWriter, r *http.Request, f *os.File, n int) bool {
+func (s *Session) serveOpened(w http.ResponseWriter, r *http.Request, f *os.File, t, n int) bool {
 	st, err := f.Stat()
 	if err != nil {
 		return false
@@ -978,7 +1040,7 @@ func (s *Session) serveOpened(w http.ResponseWriter, r *http.Request, f *os.File
 		name = initSegmentName(s.container)
 	}
 	armSegmentDeadline(w)
-	s.serveCounted(w, r, name, st.ModTime(), f, n)
+	s.serveCounted(w, r, name, st.ModTime(), f, t, n)
 	return true
 }
 
@@ -1260,6 +1322,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}
 	r.proc = proc
 	s.cur = r
+	s.deliveredCount = 0
 	runLog.Info("ffmpeg started", "segment", seg, "at", spec.Start, "kind", s.decision.Kind,
 		"videoCopy", s.decision.VideoCopy, "audioCopy", s.decision.AudioCopy, "hw", r.hw)
 	runLog.Debug("ffmpeg args", "args", strings.Join(redactedRTXArgs(args), " "))

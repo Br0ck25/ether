@@ -10,23 +10,12 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-func TestDASHHandoffProtectsStartupUntilTwoSegmentsAreReady(t *testing.T) {
+// Encoder output alone must never imply that the client has a buffer.
+func TestDASHHandoffRequiresDeliveredMedia(t *testing.T) {
 	s := &Session{proto: core.ProtocolDASH, m: &Manager{opts: options{rungDwell: 8 * time.Second}}, wantTrack: 2,
-		cur: &run{track: 0, started: time.Now()}}
-	if s.rungDwellLocked() <= 0 {
-		t.Fatal("an init probe can interrupt a run before it produces video")
-	}
-	s.cur.produced = 1
-	if s.rungDwellLocked() <= 0 {
-		t.Fatal("a single opening segment must retain startup protection")
-	}
-	s.cur.produced = 2
-	if left := s.rungDwellLocked(); left != 0 {
-		t.Fatalf("ready startup buffer still held quality change for %v", left)
-	}
-	s.proto = core.ProtocolHLS
-	if s.rungDwellLocked() <= 0 {
-		t.Fatal("DASH handoff changed native HLS probe protection")
+		cur: &run{track: 0, started: time.Now(), produced: 100}}
+	if s.rungDwellLocked(false, 1) <= 0 || s.rungDwellLocked(true, 1) <= 0 {
+		t.Fatal("encoder output bypassed probe protection without completed delivery")
 	}
 }
 

@@ -99,7 +99,7 @@ func TestIntegrationDASHShortLadderLongGOPAndSeeks(t *testing.T) {
 	}
 }
 
-func TestDASHSeekDropsOnlyCopiedAudioPreroll(t *testing.T) {
+func TestSegmentedSeekDropsOnlyCopiedAudioPreroll(t *testing.T) {
 	info := mustParse(t, "mp4_h264_aac.json")
 	s := baseSpec(info, Decide(info, plexWeb, allow(), Policy{}))
 	s.Protocol, s.Start = core.ProtocolDASH, 18*time.Second
@@ -107,7 +107,14 @@ func TestDASHSeekDropsOnlyCopiedAudioPreroll(t *testing.T) {
 	if args := strings.Join(buildArgs(s), " "); !strings.Contains(args, "-bsf:a noise=amount=0:drop='lt(pts*tb,18.000)'") || !strings.Contains(args, "-c:v copy") {
 		t.Fatalf("copy seek must retain video keyframe and trim only audio: %s", args)
 	}
-	for _, kind := range []string{"initial", "encoded-audio", "hls"} {
+	for _, container := range []string{ContainerMPEGTS, ContainerFMP4} {
+		hls := s
+		hls.Protocol, hls.Decision.Container = core.ProtocolHLS, container
+		if !strings.Contains(strings.Join(buildArgs(hls), " "), "noise=amount=0:drop='lt(pts*tb,18.000)'") {
+			t.Fatalf("%s HLS seek retained copied audio preroll", container)
+		}
+	}
+	for _, kind := range []string{"initial", "encoded-audio"} {
 		t.Run(kind, func(t *testing.T) {
 			other := s
 			switch kind {
@@ -115,8 +122,6 @@ func TestDASHSeekDropsOnlyCopiedAudioPreroll(t *testing.T) {
 				other.Start = 0
 			case "encoded-audio":
 				other.Decision.AudioCopy = false
-			case "hls":
-				other.Protocol = core.ProtocolHLS
 			}
 			if strings.Contains(strings.Join(buildArgs(other), " "), "noise=amount=0") {
 				t.Fatal("unneeded audio preroll filter")

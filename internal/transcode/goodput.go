@@ -2,30 +2,39 @@ package transcode
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 )
 
-// goodputEstimator is a per-session rolling estimate of segment delivery
-// throughput: bytes written to the client divided by the wall time spent
-// writing them (never the time spent waiting for ffmpeg). An EWMA over
-// segment-sized samples keeps it robust to one slow write while still
-// tracking a degrading link within a few segments.
+// goodputEstimator tracks conservative completed delivery evidence, not a
+// measurement of the client's playback buffer or end-to-end link capacity.
+// Decreases apply immediately; recovery needs sustained backpressured samples.
 type goodputEstimator struct {
-	mu      sync.Mutex
-	ewmaBps float64 // bytes per second
-	samples int
-	last    time.Time
+	mu       sync.Mutex
+	ewmaBps  float64
+	samples  int
+	last     time.Time
+	recovery int
+	clock    func() time.Time // fixed before use; nil uses the real clock
 }
 
 const (
-	goodputMinBytes = 32 << 10 // ignore tiny writes (init segments, ranges)
-	goodputMinDur   = 2 * time.Millisecond
-	goodputAlpha    = 0.35
+	goodputMinBytes = 32 << 10
+	// Sub-100ms writes commonly measure kernel/proxy buffering, not delivery.
+	goodputMinDur        = 100 * time.Millisecond
+	goodputRecoveryAlpha = 0.10
+	goodputMaxAge        = 30 * time.Second
 )
 
-// add records one completed segment write.
+func (g *goodputEstimator) now() time.Time {
+	if g.clock != nil {
+		return g.clock()
+	}
+	return time.Now()
+}
+
 func (g *goodputEstimator) add(bytes int64, dur time.Duration) {
 	if bytes < goodputMinBytes || dur < goodputMinDur {
 		return
@@ -33,30 +42,46 @@ func (g *goodputEstimator) add(bytes int64, dur time.Duration) {
 	bps := float64(bytes) / dur.Seconds()
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.samples == 0 {
-		g.ewmaBps = bps
+	now := g.now()
+	if g.samples == 0 || now.Sub(g.last) > goodputMaxAge {
+		g.ewmaBps, g.recovery, g.samples = bps, 0, 0
+	} else if bps < g.ewmaBps {
+		g.ewmaBps, g.recovery = bps, 0
 	} else {
-		g.ewmaBps = goodputAlpha*bps + (1-goodputAlpha)*g.ewmaBps
+		g.recovery++
+		if g.recovery >= 3 {
+			g.ewmaBps += goodputRecoveryAlpha * (bps - g.ewmaBps)
+		}
 	}
 	g.samples++
-	g.last = time.Now()
+	g.last = now
 }
 
-// Kbps is the current estimate in kbit/s; 0 until a usable sample exists.
+// Kbps expires stale evidence rather than steering a new run with old data.
 func (g *goodputEstimator) Kbps() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.samples == 0 {
+	if g.samples == 0 || g.now().Sub(g.last) > goodputMaxAge {
 		return 0
 	}
 	return int(g.ewmaBps * 8 / 1000)
 }
 
-// Samples is how many writes fed the estimate.
 func (g *goodputEstimator) Samples() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.samples
+}
+
+// Local writes cannot establish internet goodput. Forwarded headers are not
+// trusted here: reverse-proxy buffering also hides actual client delivery.
+func remoteDelivery(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && !ip.IsLoopback() && !ip.IsUnspecified()
 }
 
 // GoodputKbps is the session's measured client delivery goodput.
@@ -66,38 +91,49 @@ func (s *Session) GoodputKbps() int { return s.goodput.Kbps() }
 // can time the write phase of a segment delivery.
 type countingWriter struct {
 	http.ResponseWriter
-	bytes int64
+	bytes  int64
+	status int
+	err    error
+}
+
+func (w *countingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *countingWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *countingWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += int64(n)
+	if err != nil {
+		w.err = err
+	}
 	return n, err
 }
 
 // ReadFrom keeps sendfile-style fast paths where the underlying writer
-// has one, counting through a wrapping reader.
+// has one, counting bytes actually accepted by the writer.
 func (w *countingWriter) ReadFrom(r io.Reader) (int64, error) {
-	cr := &countingReader{r: r}
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
 	var n int64
 	var err error
 	if rf, ok := w.ResponseWriter.(io.ReaderFrom); ok {
-		n, err = rf.ReadFrom(cr)
+		n, err = rf.ReadFrom(r)
 	} else {
-		n, err = io.Copy(struct{ io.Writer }{w.ResponseWriter}, cr)
+		n, err = io.Copy(struct{ io.Writer }{w.ResponseWriter}, r)
 	}
-	w.bytes += cr.n
-	return n, err
-}
-
-type countingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *countingReader) Read(b []byte) (int, error) {
-	n, err := c.r.Read(b)
-	c.n += int64(n)
+	w.bytes += n // bytes accepted by Write, not bytes read before a failed write
+	if err != nil {
+		w.err = err
+	}
 	return n, err
 }
 

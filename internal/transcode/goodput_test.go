@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestGoodputEstimatorIgnoresTinyWritesAndTracksEWMA(t *testing.T) {
+func TestGoodputEstimatorIgnoresTinyWritesAndDropsImmediately(t *testing.T) {
 	var g goodputEstimator
 	g.add(1024, time.Second)
 	if g.Kbps() != 0 || g.Samples() != 0 {
@@ -16,7 +16,7 @@ func TestGoodputEstimatorIgnoresTinyWritesAndTracksEWMA(t *testing.T) {
 		t.Fatalf("initial goodput = %d kbps, want 8000", got)
 	}
 	g.add(500_000, time.Second)
-	if got := g.Kbps(); got <= 4000 || got >= 8000 {
-		t.Fatalf("EWMA goodput = %d kbps, want between samples", got)
+	if got := g.Kbps(); got != 4000 {
+		t.Fatalf("goodput = %d kbps, want immediate 4000", got)
 	}
 }
