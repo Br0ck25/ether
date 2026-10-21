@@ -97,6 +97,25 @@ type execProcess struct {
 
 func (p *execProcess) Done() <-chan struct{} { return p.done }
 
+// PID identifies the encoder for optional process-tree resource sampling.
+// It is deliberately not part of Process, so fake and alternate runners do
+// not need to expose an operating-system process.
+func (p *execProcess) PID() int { return p.cmd.Process.Pid }
+
+// CPUTime reports completed process CPU usage, excluding wall-clock waits.
+// While the process is running the values are zero; callers should sample
+// only after Done closes. The channel synchronizes access to ProcessState.
+func (p *execProcess) CPUTime() (user, system time.Duration) {
+	select {
+	case <-p.done:
+		if state := p.cmd.ProcessState; state != nil {
+			return state.UserTime(), state.SystemTime()
+		}
+	default:
+	}
+	return 0, 0
+}
+
 func (p *execProcess) Err() error {
 	<-p.done
 	return p.err

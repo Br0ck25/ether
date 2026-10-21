@@ -32,6 +32,9 @@ type features struct {
 	encoders map[string]bool
 	hwaccels map[string]bool
 	filters  map[string]bool
+	// scaleVTFormat is a build capability, not an FFmpeg version guess:
+	// upstream builds can expose scale_vt without its format option.
+	scaleVTFormat bool
 }
 
 func (f features) hasEncoder(n string) bool { return f.encoders[n] }
@@ -94,13 +97,13 @@ func parseFilters(out []byte) map[string]bool {
 }
 
 func probeFeatures(ctx context.Context, r Runner, ffmpeg string) (features, error) {
-	run := func(arg string) ([]byte, error) {
+	run := func(args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		var out bytes.Buffer
-		err := r.Run(ctx, Command{Path: ffmpeg, Args: []string{"-hide_banner", arg}, Stdout: &out, Stderr: &out})
+		err := r.Run(ctx, Command{Path: ffmpeg, Args: append([]string{"-hide_banner"}, args...), Stdout: &out, Stderr: &out})
 		if err != nil {
-			return nil, fmt.Errorf("transcode: ffmpeg %s: %w", arg, err)
+			return nil, fmt.Errorf("transcode: ffmpeg %v: %w", args, err)
 		}
 		return out.Bytes(), nil
 	}
@@ -118,7 +121,23 @@ func probeFeatures(ctx context.Context, r Runner, ffmpeg string) (features, erro
 		return f, err
 	}
 	f.filters = parseFilters(b)
+	if f.hasFilter("scale_vt") {
+		// Optional probing cannot make a formerly usable build fail startup.
+		if help, helpErr := run("-h", "filter=scale_vt"); helpErr == nil {
+			f.scaleVTFormat = filterHasOption(help, "format")
+		}
+	}
 	return f, nil
+}
+
+func filterHasOption(help []byte, option string) bool {
+	for _, line := range strings.Split(string(help), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 1 && fields[0] == option && strings.HasPrefix(fields[1], "<") {
+			return true
+		}
+	}
+	return false
 }
 
 // accelCandidate is one hardware encoder family.

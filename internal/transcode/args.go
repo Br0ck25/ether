@@ -462,7 +462,12 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	in := fmt.Sprintf("[0:%d]", v.Index)
 	var chain []string
 	hwFrames := false
+	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, w, h, tonemap, keepHDR, burn)
 	switch {
+	case gpuOK:
+		p.inputArgs = append(p.inputArgs, gpuInput...)
+		chain = append(chain, gpuFilters...)
+		hwFrames = true
 	case accel == AccelVideoToolbox && tonemap && !burn && s.Features.hasFilter("scale_vt"):
 		// Decode, tone-map and scale on the GPU.
 		p.inputArgs = append(p.inputArgs, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
@@ -604,9 +609,9 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		e = append(e, "-preset", xPreset, "-crf", "23", "-maxrate", peak, "-bufsize", buf, "-x265-params", params)
 	case "h264_videotoolbox", "hevc_videotoolbox":
 		if s.Rate.Quality {
-			e = append(e, "-q:v", "65", "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+			e = append(e, "-q:v", "65", "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "0")
 		} else {
-			e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "1")
+			e = append(e, "-b:v", b, "-maxrate", maxr, "-bufsize", buf, "-allow_sw", "0")
 		}
 		if s.FastStart {
 			e = append(e, "-realtime", "1")

@@ -163,6 +163,9 @@ func (f *fakeRunner) Run(ctx context.Context, cmd Command) error {
 	case hasArg(args, "-filters"):
 		w(cmd.Stdout, f.filters)
 		return nil
+	case argValue(args, "-h") == "filter=scale_vt":
+		w(cmd.Stdout, "  format <pix_fmt> Output pixel format (default none)\n")
+		return nil
 	case argValue(args, "-f") == "lavfi":
 		enc := argValue(args, "-c:v")
 		f.mu.Lock()

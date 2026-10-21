@@ -137,7 +137,7 @@ func TestLadderSessionLazyRungStart(t *testing.T) {
 		t.Error("primary encoder not stopped when the rung took over")
 	}
 	last := fr.lastStart()
-	mustContain(t, last, "-start_number 10", "scale=1280:720")
+	mustContain(t, last, "-start_number 10", "scale_vt=w=1280:h=720")
 	mustNotContain(t, last, "-c:v copy")
 	if !strings.Contains(argValue(last, "-hls_segment_filename"), "rung-720p4m") {
 		t.Errorf("rung segment dir: %v", last)
@@ -220,5 +220,5 @@ func TestRungSwitchWaitsOutDwell(t *testing.T) {
 	if fr.startCount() != 2 || !primary.wasKilled() {
 		t.Errorf("encoder not switched to the rung after the dwell: starts=%d", fr.startCount())
 	}
-	mustContain(t, fr.lastStart(), "scale=1280:720", "-start_number 1")
+	mustContain(t, fr.lastStart(), "scale_vt=w=1280:h=720", "-start_number 1")
 }

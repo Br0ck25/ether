@@ -130,7 +130,7 @@ func TestFastStartCopySessionSwitchesToCopy(t *testing.T) {
 	}
 	// First run: quick low-latency transcode of the two ramp segments.
 	first := fr.starts[0]
-	mustContain(t, first, "-hls_time 2.000", "-force_key_frames expr:gte(t,n_forced*2.000)", "scale=1280:720")
+	mustContain(t, first, "-hls_time 2.000", "-force_key_frames expr:gte(t,n_forced*2.000)", "scale_vt=w=1280:h=720")
 	mustNotContain(t, first, "-c:v copy")
 	if j := joined(first); !strings.Contains(j, "ultrafast") && !strings.Contains(j, "-realtime 1") {
 		t.Errorf("first run is not a low-latency encode: %s", j)

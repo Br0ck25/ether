@@ -11,9 +11,10 @@ import (
 
 func testFeatures() features {
 	return features{
-		encoders: parseEncoders([]byte(sampleEncoders)),
-		filters:  parseFilters([]byte(sampleFilters)),
-		hwaccels: map[string]bool{"videotoolbox": true},
+		scaleVTFormat: true,
+		encoders:      parseEncoders([]byte(sampleEncoders)),
+		filters:       parseFilters([]byte(sampleFilters)),
+		hwaccels:      map[string]bool{"videotoolbox": true},
 	}
 }
 
@@ -192,7 +193,7 @@ func TestBuildArgsVideoToolbox(t *testing.T) {
 	mustContain(t, args, "-hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld", "-c:v h264_videotoolbox", "-b:v",
 		"scale_vt=w=1920:h=1080:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709")
 	mustNotContain(t, args, "zscale", "libx264", "-color_trc")
-	// No tone-map needed: plain hw decode, software frames.
+	// SDR scaling also keeps frames on the device.
 	mp4 := mustParse(t, "mp4_h264_aac.json")
 	o := allow()
 	o.MaxHeight = 720
@@ -200,7 +201,7 @@ func TestBuildArgsVideoToolbox(t *testing.T) {
 	s = baseSpec(mp4, d)
 	s.Accel = core.HWAccel{Name: AccelVideoToolbox, Encoders: []string{"h264_videotoolbox"}}
 	args = buildArgs(s)
-	mustContain(t, args, "-hwaccel videotoolbox -start_at_zero", "scale=1280:720,format=yuv420p", "-c:v h264_videotoolbox")
+	mustContain(t, args, "-hwaccel videotoolbox -hwaccel_output_format videotoolbox_vld", "scale_vt=w=1280:h=720:format=nv12", "-c:v h264_videotoolbox")
 }
 
 func TestBuildArgsVAAPI(t *testing.T) {
