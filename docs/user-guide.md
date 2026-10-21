@@ -291,7 +291,7 @@ when Ether maps the playback timestamp.
 ## Cache management
 
 **Server → Cache** controls media retention, opening and resume warming, and an
-optional managed local movie shelf. Presets range from no persistent media
+optional managed shelf of movies and TV episodes. Presets range from no persistent media
 through small caches to multi-terabyte preloading. Every budget is adjustable;
 selecting a preset only changes the draft until you save. See [Cache management](cache.md)
 for retention, preload limits, pause behaviour, and storage accounting.

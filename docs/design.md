@@ -79,13 +79,20 @@ cap does not imply that the upstream account has an unlimited allowance.
 Cache management spans no persistent media storage, small rolling caches,
 adaptive retention of replayed titles, and multi-terabyte managed shelves.
 Detail-page opening windows and background warming are configurable. Opt-in
-complete-movie preloading has an allocation inside the total cache budget,
+complete-movie and episode preloading has an allocation inside the total cache budget,
 a title limit, bandwidth cap, free-space reserve, and persistent pause. It
 uses the local released catalogue and owner quality/source rules, verifies
 retention of each fetched span, and never writes watch history. Preloads stay
 pinned within their allocation; higher-ranked candidates can replace
 lower-ranked reservations. Cached sources may still require provider link
 renewal and are not an independent offline library. See `docs/cache.md`.
+
+Managed cache selection blends normalized catalogue popularity with decaying,
+per-viewer-capped household watch frequency and weaker genre affinity. Household
+membership defaults to active Plex Home users and the owner. TV preloading keeps
+a bounded rolling window around household viewing positions, interleaving viewers
+and admitting only aired regular episodes. Owners can tune the blend, household
+scope and episode window, and inspect aggregate selection explanations.
 
 ## Accounts and access
 
@@ -211,7 +218,7 @@ produce a timestamp discontinuity.
 Torrent releases from Torznab indexers and built-in torrent sites stream
 through owner-configured debrid services over HTTPS range requests; Ether never
 joins a swarm. Only torrents a service already holds are used. Ordinary streaming
-fetches requested ranges; owners can separately opt into full-source movie
+fetches requested ranges; owners can separately opt into full-source movie and episode
 preloading in Cache management. "Not cached" skips a release without marking it bad.
 Torrents a service holds stay on the owner's account and are reused, and
 detail-page preparation obtains the link and reads the file's head and tail, so

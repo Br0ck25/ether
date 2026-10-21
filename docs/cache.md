@@ -13,7 +13,7 @@ job. Existing settings retain their previous behaviour until you change them.
 - **Encore / Deep shelf:** 250 or 750 GiB, retaining fetched media and favouring
   repeat watches. These presets do not download entire movies automatically.
 - **Cinema node / Edge library:** 2 or 20 TiB total, with 1.5 or 18 TiB dedicated
-  to proactive full-movie preloading. Saving these presets enables downloads.
+  to proactive movie and TV preloading. Saving these presets enables downloads.
 
 All sizes are editable, including GiB/TiB entry. A zero budget means unlimited;
 use Pass-through to disable persistent media. Budgets count segment payloads,
@@ -47,18 +47,60 @@ promise that every source and device starts instantly.
 
 ## Managed local library
 
-Full-movie preloading is opt-in and has its own allocation **inside** the total
-cache budget. It browses the locally mirrored released-movie catalogue, choosing
-by popularity or release date, with a limit of up to 5,000 retained movies.
-Shows and episodes still benefit from ordinary retention and next-episode/resume
-warming; the managed full-source selection currently targets movies.
+Full-title preloading is opt-in and has its own allocation **inside** the total
+cache budget. Choose movies, TV episodes, or both. The title limit counts each
+movie and individual episode, up to 5,000. Cinema node and Edge library use the
+smart household blend by default; explicit popularity and newest-release modes
+remain available.
 
-One movie fills at a time, using the owner's normal quality rules and configured
+### Household-aware selection
+
+The default smart blend gives household demand 65% of the score and catalogue
+popularity 35%. The slider supports 0–100% household influence. With no usable
+history, selection falls back to catalogue popularity. Popularity is logarithmically
+normalized separately for movies and shows so their different scales do not
+force one format out.
+
+Completed watches (including reviewed imports) contribute repeat frequency.
+Start events are not counted again; current resume points contribute a smaller
+signal. Recent viewing decays with a half-life of up to 30 days within the
+configurable history window (90 days by default). Per-viewer influence saturates,
+and daily per-title/show counts are capped, so a bulk season scrobble or one
+prolific viewer cannot dominate the household. Independent viewers add support.
+Genre affinity gives unseen titles a smaller discovery boost than direct viewing.
+These are transparent heuristics, not predicted viewing probabilities.
+
+By default learning uses the owner and active Plex Home members. **All active
+shared viewers** is an explicit alternative. Learning reads at most 2,000 recent
+history entries and 200 resume points per viewer, for up to 64 active viewers.
+No history is sent to a model or external recommendation service. Normal catalogue
+and source requests still use the configured services. The owner-only **Why these
+titles?** panel shows the top candidates, separate catalogue and household scores,
+and selection reasons without identifying individual viewers. It reflects the last
+completed selection pass, not unsaved settings or guaranteed downloads.
+
+### Rolling TV shelves
+
+TV selection expands ranked shows into complete episode sources. Shows already
+being watched begin at each viewer's in-progress episode or after their latest
+completed episode. Different viewers' continuation windows are interleaved under
+one per-show limit (3 episodes by default, configurable up to 24). Unstarted shows
+begin with the first regular aired episode. Future episodes, unknown air dates,
+and specials are excluded; seasons can be crossed in order.
+
+As viewing advances, old episode reservations are released back to ordinary cache
+retention and the window moves forward. This does not delete retained bytes.
+Movie-only or TV-only changes also release reservations for the excluded type.
+Show metadata is expanded only as needed, at most 500 shows and 12 season metadata
+reads per show per pass; metadata requests follow the normal TMDB client limits.
+A metadata failure preserves that show's existing reservations for the next pass.
+
+One movie or episode fills at a time, using the owner's normal quality rules and configured
 Usenet/debrid sources. Every 16 MiB window uses background-priority fetching and
 verifies that its covering segments are retained. A reservation includes 5%
 overhead, with at least 32 MiB reserved for container and neighbouring segments.
 Oversized or unavailable sources are skipped. A failed durable write never marks
-a movie complete. Successful fills are pinned within the preload allocation and
+a title complete. Successful fills are pinned within the preload allocation and
 remembered for the owner's playback. Different viewer/client quality profiles can
 still select a different release.
 

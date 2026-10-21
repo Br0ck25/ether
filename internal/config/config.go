@@ -157,13 +157,18 @@ func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
 func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
 
 type Cache struct {
-	PreloadEnabled        bool   `json:"preloadEnabled,omitempty"`
-	PreloadBudgetBytes    int64  `json:"preloadBudgetBytes,omitempty"`
-	PreloadMaxTitles      int    `json:"preloadMaxTitles,omitempty"`
-	PreloadRateMiB        int    `json:"preloadRateMiB,omitempty"`
-	PreloadDuringPlayback bool   `json:"preloadDuringPlayback,omitempty"`
-	PreloadMinFreeBytes   int64  `json:"preloadMinFreeBytes,omitempty"`
-	PreloadSource         string `json:"preloadSource,omitempty"`
+	PreloadEnabled         bool   `json:"preloadEnabled,omitempty"`
+	PreloadBudgetBytes     int64  `json:"preloadBudgetBytes,omitempty"`
+	PreloadMaxTitles       int    `json:"preloadMaxTitles,omitempty"`
+	PreloadRateMiB         int    `json:"preloadRateMiB,omitempty"`
+	PreloadDuringPlayback  bool   `json:"preloadDuringPlayback,omitempty"`
+	PreloadMinFreeBytes    int64  `json:"preloadMinFreeBytes,omitempty"`
+	PreloadSource          string `json:"preloadSource,omitempty"`
+	PreloadContent         string `json:"preloadContent,omitempty"`         // mixed (default), movies, tv
+	PreloadHouseholdWeight *int   `json:"preloadHouseholdWeight,omitempty"` // 0–100; nil = 65
+	PreloadHouseholdScope  string `json:"preloadHouseholdScope,omitempty"`  // home (default), all
+	PreloadEpisodesAhead   int    `json:"preloadEpisodesAhead,omitempty"`   // per-show shelf window; 0 = 3
+	PreloadHistoryDays     int    `json:"preloadHistoryDays,omitempty"`     // 0 = 90
 
 	// Mode: empty/demand retains fetched bytes; adaptive favours replayed titles;
 	// off bypasses persistent media writes. Zero budget remains unlimited.

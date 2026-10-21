@@ -554,6 +554,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 
 	a.cachefill, err = cachefill.New(a.cache.Directory(), cachefill.Deps{
 		Catalog: a.catalog, Resolver: a.resolver, Engine: a.media, Cache: a.cache,
+		State: a.state, Household: a.cacheHousehold,
 		Config: func() config.Cache { return a.cfg.Get().Cache }, Owner: a.users.Owner,
 		Active:    func() bool { return len(a.playback.Sessions()) > 0 },
 		FreeBytes: func() (int64, error) { return admin.DiskFree(a.cache.Directory()) },

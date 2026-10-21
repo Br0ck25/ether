@@ -38,4 +38,22 @@ describe("Cache management", () => {
     await waitFor(() => expect(calls(fake, "POST", "/cache/pin")).toHaveLength(1));
     expect(await screen.findByText("Kept by you")).toBeInTheDocument();
   });
+  it("saves a household blend and rolling TV window with explanations", async () => {
+    const { fake } = renderApp("/cache");
+    fireEvent.click(await screen.findByRole("button", { name: /Cinema node/ }, WAIT));
+    expect(screen.getByLabelText("Selection strategy")).toHaveValue("smart");
+    expect(screen.getByLabelText("Include in your shelf")).toHaveValue("mixed");
+    fireEvent.change(screen.getByLabelText("Include in your shelf"), { target: { value: "tv" } });
+    fireEvent.change(screen.getByLabelText("Household influence"), { target: { value: "80" } });
+    fireEvent.change(screen.getByLabelText("Episode window per show"), { target: { value: "6" } });
+    fireEvent.change(screen.getByLabelText("Learn from"), { target: { value: "all" } });
+    expect(calls(fake, "PUT", "/config/cache")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+    await waitFor(() => expect(fake.state.config.cache.preloadEpisodesAhead).toBe(6));
+    expect(fake.state.config.cache.preloadContent).toBe("tv");
+    expect(fake.state.config.cache.preloadHouseholdWeight).toBe(80);
+    expect(fake.state.config.cache.preloadHouseholdScope).toBe("all");
+    expect(await screen.findByText(/Severance · S02E04/)).toBeInTheDocument();
+    expect(screen.getByText(/next in a household viewing sequence/)).toBeInTheDocument();
+  });
 });

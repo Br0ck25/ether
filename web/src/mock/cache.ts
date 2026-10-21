@@ -74,6 +74,39 @@ export function createCacheMock() {
             failed: 0,
             paused: false,
             items: [],
+            viewers: cfg.cache.preloadEnabled ? 3 : 0,
+            selection: cfg.cache.preloadEnabled
+              ? [
+                  {
+                    key: 400001,
+                    title: "Severance · S02E04 · Woe's Hollow",
+                    type: "episode",
+                    score: 91,
+                    catalogue: 88,
+                    household: 96,
+                    reason:
+                      "Recent viewing from 3 household viewers · next in a household viewing sequence",
+                  },
+                  {
+                    key: 100001,
+                    title: "The Wild Robot",
+                    type: "movie",
+                    score: 85,
+                    catalogue: 80,
+                    household: 88,
+                    reason: "Recent viewing from 2 household viewers",
+                  },
+                  {
+                    key: 100002,
+                    title: "Dune: Part Two",
+                    type: "movie",
+                    score: 72,
+                    catalogue: 94,
+                    household: 60,
+                    reason: "Matches household genre interests",
+                  },
+                ]
+              : [],
           },
           metrics: { hits: 824, misses: 96, servedBytes: 42 * GiB, evictedBytes: 18 * GiB },
           prefetch: { queued: 0, running: 0, completed: 18, failed: 1, dropped: 0 },

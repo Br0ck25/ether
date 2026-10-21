@@ -46,6 +46,16 @@ type PreloadStatus = {
   ready: number;
   failed: number;
   paused: boolean;
+  viewers?: number;
+  selection?: {
+    key: number;
+    title: string;
+    type: string;
+    score: number;
+    catalogue: number;
+    household: number;
+    reason: string;
+  }[];
   items: { key: number; title: string; releaseId: string; size: number; complete: boolean }[];
 };
 export type CacheSnapshot = {
@@ -145,7 +155,7 @@ export const PRESETS: {
   {
     name: "Cinema node",
     space: "2 TiB",
-    description: "A managed shelf of complete movie sources.",
+    description: "A managed shelf of complete movies and TV episodes.",
     values: {
       mode: "adaptive",
       budgetBytes: 2048 * GiB,
@@ -161,7 +171,12 @@ export const PRESETS: {
       preloadBudgetBytes: 1536 * GiB,
       preloadMaxTitles: 400,
       preloadRateMiB: 20,
-      preloadSource: "popular",
+      preloadSource: "smart",
+      preloadContent: "mixed",
+      preloadHouseholdWeight: 65,
+      preloadHouseholdScope: "home",
+      preloadEpisodesAhead: 3,
+      preloadHistoryDays: 90,
     },
   },
   {
@@ -183,7 +198,12 @@ export const PRESETS: {
       preloadBudgetBytes: 18432 * GiB,
       preloadMaxTitles: 2500,
       preloadRateMiB: 50,
-      preloadSource: "popular",
+      preloadSource: "smart",
+      preloadContent: "mixed",
+      preloadHouseholdWeight: 65,
+      preloadHouseholdScope: "home",
+      preloadEpisodesAhead: 3,
+      preloadHistoryDays: 90,
     },
   },
 ];
@@ -343,7 +363,7 @@ export default function Cache() {
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-fg-muted">
               From almost no storage to a managed local library. The two largest presets enable
-              full-movie preloading when you save; every budget is yours to change.
+              full-title preloading when you save; every budget is yours to change.
             </p>
           </div>
           <button
@@ -527,8 +547,8 @@ export default function Cache() {
               04 / Your local library
             </p>
             <Toggle
-              title="Preload complete movies"
-              description="Proactively fill a dedicated part of your cache from the local catalogue using your sources and quality rules. This downloads full movie sources."
+              title="Preload movies & TV"
+              description="Proactively fill a dedicated part of your cache from the local catalogue using your sources and quality rules. This downloads complete movie and episode sources."
               checked={draft.preloadEnabled ?? false}
               disabled={!enabled}
               onChange={(v) =>
@@ -554,20 +574,93 @@ export default function Cache() {
                     onChange={(n) => patch({ preloadBudgetBytes: Math.round(n * GiB) })}
                   />
                 </Field>
-                <Field label="Choose movies by" htmlFor="preload-source">
+                <Field label="Include in your shelf" htmlFor="preload-content">
+                  <select
+                    id="preload-content"
+                    className="w-full rounded border border-border bg-surface p-2 text-sm"
+                    value={draft.preloadContent || "mixed"}
+                    onChange={(e) => patch({ preloadContent: e.target.value })}
+                  >
+                    <option value="mixed">Movies & TV episodes</option>
+                    <option value="movies">Movies only</option>
+                    <option value="tv">TV episodes only</option>
+                  </select>
+                </Field>
+                <Field label="Selection strategy" htmlFor="preload-source">
                   <select
                     id="preload-source"
                     className="w-full rounded border border-border bg-surface p-2 text-sm"
-                    value={draft.preloadSource || "popular"}
+                    value={draft.preloadSource || "smart"}
                     onChange={(e) => patch({ preloadSource: e.target.value })}
                   >
-                    <option value="popular">Most popular</option>
+                    <option value="smart">Smart household blend</option>
+                    <option value="popular">Catalogue popularity</option>
                     <option value="recent">Newest releases</option>
                   </select>
                 </Field>
+                {(!draft.preloadSource || draft.preloadSource === "smart") && (
+                  <div className="space-y-3 rounded-lg border border-primary/20 bg-surface p-3">
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <label htmlFor="household-weight" className="font-medium">
+                        Household influence
+                      </label>
+                      <span className="font-mono text-primary">
+                        {draft.preloadHouseholdWeight ?? 65}%
+                      </span>
+                    </div>
+                    <input
+                      id="household-weight"
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      className="w-full accent-primary"
+                      value={draft.preloadHouseholdWeight ?? 65}
+                      onChange={(e) => patch({ preloadHouseholdWeight: Number(e.target.value) })}
+                    />
+                    <div className="flex justify-between text-[10px] text-fg-subtle">
+                      <span>Catalogue discovery</span>
+                      <span>Your household</span>
+                    </div>
+                    <p className="text-[11px] leading-relaxed text-fg-muted">
+                      Recent repeat viewing, shared favourites and genre interests guide the shelf.
+                      Older viewing fades; no history falls back to catalogue popularity.
+                    </p>
+                  </div>
+                )}
+                <Field
+                  label="Learn from"
+                  htmlFor="household-scope"
+                  hint="Also determines whose TV progress guides episode selection."
+                >
+                  <select
+                    id="household-scope"
+                    className="w-full rounded border border-border bg-surface p-2 text-sm"
+                    value={draft.preloadHouseholdScope || "home"}
+                    onChange={(e) => patch({ preloadHouseholdScope: e.target.value })}
+                  >
+                    <option value="home">Owner & Plex Home members</option>
+                    <option value="all">All active shared viewers</option>
+                  </select>
+                </Field>
+                {draft.preloadContent !== "movies" && (
+                  <Field
+                    label="Episode window per show"
+                    htmlFor="episode-window"
+                    hint="A rolling shelf around current viewing positions. New shows start at episode one; different viewers share this limit."
+                  >
+                    <NumberInput
+                      id="episode-window"
+                      min={1}
+                      max={24}
+                      value={draft.preloadEpisodesAhead || 3}
+                      onChange={(n) => patch({ preloadEpisodesAhead: n })}
+                    />
+                  </Field>
+                )}
                 <p className="text-[11px] text-fg-muted">
-                  About {Math.floor((draft.preloadBudgetBytes ?? 0) / (8 * GiB))} movies at 8 GiB
-                  each, before overhead. Actual sizes and source availability vary.
+                  Room for roughly {Math.floor((draft.preloadBudgetBytes ?? 0) / (8 * GiB))}{" "}
+                  movie-sized sources at 8 GiB each. Episode sizes vary; both share this allocation.
                 </p>
               </div>
             )}
@@ -732,7 +825,7 @@ export default function Cache() {
                 </p>
                 <p className="mt-1 text-xs text-fg-muted">
                   {snap?.preload.message ||
-                    "Enable complete-movie preloading to build a local shelf."}
+                    "Enable movie and TV preloading to build a local shelf."}
                 </p>
                 {snap?.preload.state === "filling" && (
                   <>
@@ -768,6 +861,60 @@ export default function Cache() {
                 </p>
               )}
             </div>
+          </section>
+          <section className="overflow-hidden rounded-xl border border-border bg-surface">
+            <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-semibold">
+                  <Sparkles size={16} className="text-primary" /> Why these titles?
+                </h2>
+                <p className="mt-1 text-xs text-fg-muted">
+                  Highest-ranked selections from the last pass · {snap?.preload.viewers ?? 0} active
+                  viewers considered
+                </p>
+              </div>
+              <Badge>Explainable selection</Badge>
+            </div>
+            {snap?.preload.selection?.length ? (
+              <div className="divide-y divide-border">
+                {snap.preload.selection.slice(0, 6).map((item, i) => (
+                  <div key={item.key} className="flex items-start gap-3 p-4">
+                    <span className="mt-0.5 w-5 shrink-0 font-mono text-xs text-fg-subtle">
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium">{item.title}</span>
+                        <span className="shrink-0 text-[10px] uppercase text-fg-subtle">
+                          {item.type === "episode" ? "TV" : "Film"}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-fg-muted">{item.reason}</p>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-fg-subtle">
+                        <span>Catalogue {Math.round(item.catalogue)}/100</span>
+                        <span>Household {Math.round(item.household)}/100</span>
+                      </div>
+                    </div>
+                    <span
+                      className="shrink-0 rounded-md bg-primary/10 px-2 py-1 font-mono text-xs text-primary"
+                      aria-label={`Selection score ${Math.round(item.score)} out of 100`}
+                    >
+                      {Math.round(item.score)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="p-4 text-sm leading-relaxed text-fg-muted">
+                Enable preloading and save to build your first selection. Movies blend discovery
+                with household favourites; TV keeps a rolling window of episodes ready. Scores
+                appear after the next selection pass.
+              </p>
+            )}
+            <p className="border-t border-border px-4 py-3 text-[10px] text-fg-subtle">
+              Scores rank cache candidates, not predicted viewing probabilities. TV windows taper by
+              episode distance. Selection does not guarantee source availability.
+            </p>
           </section>
           <section className="rounded-xl border border-border bg-surface">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
@@ -949,7 +1096,20 @@ export default function Cache() {
                 Changes join your draft. Save the policy when you’re ready.
               </p>
               <Field
-                label="Maximum preloaded movies"
+                label="Household history window (days)"
+                htmlFor="history-window"
+                hint="Recent views count more; frequency is capped per viewer. Completed watches and reviewed imports contribute, never preload activity."
+              >
+                <NumberInput
+                  id="history-window"
+                  min={1}
+                  max={730}
+                  value={draft.preloadHistoryDays || 90}
+                  onChange={(n) => patch({ preloadHistoryDays: n })}
+                />
+              </Field>
+              <Field
+                label="Maximum preloaded titles"
                 hint="Up to 5,000. The allocation still limits how many fit."
                 htmlFor="preload-count"
               >

@@ -236,6 +236,11 @@ export interface EtherConfig {
     preloadDuringPlayback?: boolean;
     preloadMinFreeBytes?: number;
     preloadSource?: string;
+    preloadContent?: string;
+    preloadHouseholdWeight?: number;
+    preloadHouseholdScope?: string;
+    preloadEpisodesAhead?: number;
+    preloadHistoryDays?: number;
     mode?: string;
     retentionDays?: number;
     replayBoostHours?: number;

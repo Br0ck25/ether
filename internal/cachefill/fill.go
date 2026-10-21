@@ -29,6 +29,8 @@ type Cache interface {
 }
 type Catalog interface {
 	Browse(context.Context, core.BrowseQuery) (core.Page, error)
+	CachedTitle(context.Context, core.RatingKey) (*core.Title, error)
+	Children(context.Context, core.RatingKey) ([]core.Title, error)
 }
 type Engine interface {
 	core.Engine
@@ -36,6 +38,10 @@ type Engine interface {
 }
 
 type Deps struct {
+	// Household returns active members of the configured household scope.
+	Household func(context.Context, string) ([]core.User, error)
+	State     WatchReader
+	Now       func() time.Time
 	Catalog   Catalog
 	Resolver  core.Resolver
 	Engine    Engine
@@ -53,20 +59,24 @@ type Item struct {
 	ReleaseID   string         `json:"releaseId"`
 	Size        int64          `json:"size"`
 	Complete    bool           `json:"complete"`
+	Reason      string         `json:"reason,omitempty"`
+	Score       float64        `json:"score,omitempty"`
 	StoredBytes int64          `json:"storedBytes"`
 	Updated     time.Time      `json:"updated"`
 }
 type Status struct {
-	State     string `json:"state"`
-	Message   string `json:"message"`
-	Title     string `json:"title"`
-	Fetched   int64  `json:"fetched"`
-	Size      int64  `json:"size"`
-	Allocated int64  `json:"allocated"`
-	Ready     int    `json:"ready"`
-	Failed    int    `json:"failed"`
-	Paused    bool   `json:"paused"`
-	Items     []Item `json:"items"`
+	State     string      `json:"state"`
+	Message   string      `json:"message"`
+	Title     string      `json:"title"`
+	Fetched   int64       `json:"fetched"`
+	Size      int64       `json:"size"`
+	Allocated int64       `json:"allocated"`
+	Ready     int         `json:"ready"`
+	Failed    int         `json:"failed"`
+	Paused    bool        `json:"paused"`
+	Selection []Selection `json:"selection"`
+	Viewers   int         `json:"viewers"`
+	Items     []Item      `json:"items"`
 }
 type Manager struct {
 	deps   Deps
@@ -82,6 +92,9 @@ type Manager struct {
 func New(dir string, d Deps) (*Manager, error) {
 	if d.Catalog == nil || d.Resolver == nil || d.Engine == nil || d.Cache == nil || d.Config == nil || d.Owner == nil || d.FreeBytes == nil {
 		return nil, errors.New("cachefill: missing dependency")
+	}
+	if d.Now == nil {
+		d.Now = time.Now
 	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()
@@ -113,6 +126,7 @@ func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.status
+	s.Selection = append([]Selection(nil), s.Selection...)
 	s.Items = make([]Item, 0, len(m.items))
 	s.Ready = 0
 	s.Allocated = 0
@@ -269,7 +283,7 @@ func (m *Manager) pass(ctx context.Context) error {
 	sort.Slice(snapshot.Items, func(i, j int) bool { return snapshot.Items[i].Updated.Before(snapshot.Items[j].Updated) })
 	allocated, count := snapshot.Allocated, len(snapshot.Items)
 	for _, it := range snapshot.Items {
-		if !enabled(cfg) || allocated > limit || count > maxTitles || m.deps.Cache.ReleaseBytes(it.ReleaseID) == 0 {
+		if !enabled(cfg) || !contentAllowed(cfg, it.Key) || allocated > limit || count > maxTitles || m.deps.Cache.ReleaseBytes(it.ReleaseID) == 0 {
 			allocated -= max(it.Size, m.deps.Cache.ReleaseBytes(it.ReleaseID))
 			count--
 			if err := m.forget(it.Key); err != nil {
@@ -302,36 +316,37 @@ func (m *Manager) pass(ctx context.Context) error {
 	if err != nil || owner == nil {
 		return errors.New("Waiting for a signed-in server owner")
 	}
-	order := core.SortPopularity
-	if cfg.PreloadSource == "recent" {
-		order = core.SortReleased
+	m.state("selecting", "Blending catalogue demand with household viewing")
+	plan, err := m.selectCandidates(ctx, cfg, maxTitles)
+	if err != nil {
+		return err
 	}
-	// Browse only the local, released catalogue. Never crawl all of TMDB.
-	m.state("selecting", "Choosing from the local catalogue")
-	var candidates []core.Title
-	for offset := 0; offset < maxTitles*3; offset += 50 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		page, err := m.deps.Catalog.Browse(ctx, core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie}, Sort: order, Desc: true, Offset: offset, Limit: min(50, maxTitles*3-offset)})
-		if err != nil {
-			return errors.New("Could not browse the local catalogue")
-		}
-		for _, title := range page.Items {
-			if title.Type == core.TypeMovie && !title.Released.IsZero() && !title.Released.After(time.Now()) {
-				candidates = append(candidates, title)
+	candidates := plan.Candidates
+	wantedKeys := map[core.RatingKey]bool{}
+	for _, c := range candidates {
+		wantedKeys[c.Title.Key] = true
+	}
+	// Slide each successfully planned show's shelf forward. Old episodes
+	// return to ordinary retention; transient metadata failures preserve pins.
+	for _, it := range m.Status().Items {
+		if it.Key.Kind() == core.KindEpisode && plan.Shows[rootKey(it.Key)] && !wantedKeys[it.Key] {
+			if err := m.forget(it.Key); err != nil {
+				return err
 			}
-		}
-		if len(page.Items) == 0 || offset+len(page.Items) >= page.Total {
-			break
 		}
 	}
 	ranks := map[core.RatingKey]int{}
 	for i, title := range candidates {
-		ranks[title.Key] = i
+		ranks[title.Title.Key] = i
+	}
+	for _, it := range m.Status().Items {
+		if plan.UnavailableShows[rootKey(it.Key)] {
+			ranks[it.Key] = -1
+		}
 	}
 	attempts := 0
-	for _, title := range candidates {
+	for _, candidate := range candidates {
+		title := candidate.Title
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -350,6 +365,15 @@ func (m *Manager) pass(ctx context.Context) error {
 		}
 		job, cancel := context.WithTimeout(ctx, 6*time.Hour)
 		err = m.fill(job, owner, &title, limit, maxTitles, ranks)
+		if err == nil {
+			m.mu.Lock()
+			it := m.items[title.Key]
+			it.Reason = candidate.Reason
+			it.Score = candidate.Score
+			m.items[title.Key] = it
+			m.mu.Unlock()
+			err = m.save()
+		}
 		cancel()
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -370,7 +394,7 @@ func (m *Manager) pass(ctx context.Context) error {
 func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title, limit int64, maxTitles int, ranks map[core.RatingKey]int) error {
 	m.mu.Lock()
 	previous := m.items[title.Key]
-	m.status.Title = title.Title
+	m.status.Title = displayTitle(*title)
 	m.status.Fetched = 0
 	m.status.Size = 0
 	m.mu.Unlock()
@@ -412,7 +436,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	if err := m.deps.Cache.Pin(res.Release.ID, pinReason); err != nil {
 		return err
 	}
-	it := Item{Key: title.Key, Title: title.Title, ReleaseID: res.Release.ID, Size: reservation, Updated: time.Now()}
+	it := Item{Key: title.Key, Title: displayTitle(*title), ReleaseID: res.Release.ID, Size: reservation, Updated: time.Now()}
 	m.mu.Lock()
 	m.items[title.Key] = it
 	m.status.Size = size
@@ -421,7 +445,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 		_ = m.deps.Cache.Unpin(res.Release.ID, pinReason)
 		return err
 	}
-	m.deps.Cache.Describe(res.Release.ID, title.Title, size)
+	m.deps.Cache.Describe(res.Release.ID, displayTitle(*title), size)
 	m.state("filling", "Fetching complete source at background priority")
 	for off := int64(0); off < size; {
 		if err := ctx.Err(); err != nil {

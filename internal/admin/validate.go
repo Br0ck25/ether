@@ -177,8 +177,23 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	if cfg.Cache.PreloadMinFreeBytes < 0 {
 		v.add("cache.preloadMinFreeBytes", "must not be negative")
 	}
-	if cfg.Cache.PreloadSource != "" && cfg.Cache.PreloadSource != "popular" && cfg.Cache.PreloadSource != "recent" {
-		v.add("cache.preloadSource", "must be popular or recent")
+	if c := cfg.Cache.PreloadContent; c != "" && c != "mixed" && c != "movies" && c != "tv" {
+		v.add("cache.preloadContent", "must be mixed, movies or tv")
+	}
+	if w := cfg.Cache.PreloadHouseholdWeight; w != nil && (*w < 0 || *w > 100) {
+		v.add("cache.preloadHouseholdWeight", "must be between 0 and 100")
+	}
+	if s := cfg.Cache.PreloadHouseholdScope; s != "" && s != "home" && s != "all" {
+		v.add("cache.preloadHouseholdScope", "must be home or all")
+	}
+	if n := cfg.Cache.PreloadEpisodesAhead; n < 0 || n > 24 {
+		v.add("cache.preloadEpisodesAhead", "must be between 0 and 24 (0 uses 3)")
+	}
+	if n := cfg.Cache.PreloadHistoryDays; n < 0 || n > 730 {
+		v.add("cache.preloadHistoryDays", "must be between 0 and 730 (0 uses 90)")
+	}
+	if cfg.Cache.PreloadSource != "" && cfg.Cache.PreloadSource != "popular" && cfg.Cache.PreloadSource != "recent" && cfg.Cache.PreloadSource != "smart" {
+		v.add("cache.preloadSource", "must be smart, popular or recent")
 	}
 	switch cfg.Cache.Mode {
 	case "", "demand", "adaptive", "off":
