@@ -112,6 +112,9 @@ func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	if v, ok := ctx.Value(previewSettingsKey{}).(Settings); ok {
 		return normalizeSettings(v), nil
 	}
+	if snap, ok := ctx.Value(settingsSnapshotKey{s}).(settingsSnapshot); ok {
+		return snap.value, snap.err
+	}
 	var v Settings
 	var raw string
 	e := s.db.QueryRowContext(ctx, `SELECT value FROM overlays_settings WHERE id=1`).Scan(&raw)

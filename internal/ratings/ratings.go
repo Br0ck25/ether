@@ -104,6 +104,9 @@ func New(db *sql.DB, o Options) *Service {
 	return &Service{db: db, o: o, queue: make(chan core.Title, 128), queued: map[core.RatingKey]bool{}, retryAt: map[core.RatingKey]time.Time{}}
 }
 func (s *Service) settings(ctx context.Context) (Settings, error) {
+	if snap, ok := ctx.Value(settingsSnapshotKey{s}).(settingsSnapshot); ok {
+		return snap.value, snap.err
+	}
 	v := Settings{Provider: "omdb", Critic: "tomatoes", Audience: "imdb", CacheHours: 168}
 	var raw string
 	e := s.db.QueryRowContext(ctx, `SELECT value FROM ratings_settings WHERE id=1`).Scan(&raw)
