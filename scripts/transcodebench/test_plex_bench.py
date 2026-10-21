@@ -211,6 +211,19 @@ class TestFakeServer(unittest.TestCase):
         self.assertEqual(meta["waves"][0]["actual_media_total_s"], 8.0)  # sum of 2x4s, not per-session time
         self.assertAlmostEqual(meta["waves"][0]["aggregate_media_per_wall_s"],
                                  meta["waves"][0]["actual_media_total_s"]/meta["waves"][0]["wall_s"], places=2)
+    def test_main_records_explicit_fixture_hash(self):
+        Handler.mode = "ok"
+        import tempfile, json, hashlib
+        with tempfile.TemporaryDirectory() as d:
+            fixture = Path(d)/"actual-fixture.mp4"; fixture.write_bytes(b"natural-fixture-bytes")
+            (Path(d)/"media").mkdir(); (Path(d)/"media"/"source.mkv").write_bytes(b"different-default")
+            rc = pb.main(["--no-launch", "--base-url", f"http://127.0.0.1:{self.port}", "--lab-root", d,
+                          "--duration", "4", "--concurrency", "1", "--repeats", "1", "--timeout", "20",
+                          "--fixture", str(fixture), "--out", str(Path(d)/"out")])
+            meta = json.loads((Path(d)/"out"/"result.json").read_text())
+        self.assertEqual(rc, 0)
+        self.assertEqual(meta["source"]["fixture"], str(fixture))
+        self.assertEqual(meta["source"]["sha256"], hashlib.sha256(b"natural-fixture-bytes").hexdigest())
     def test_non200_decision_rejected(self):
         Handler.mode = "decision500"
         import tempfile

@@ -555,6 +555,38 @@ class TestJobAccounting(unittest.TestCase):
         self.assertIn('"job_accounting_start": job_start', src)
 
 
+class TestOwnedStopDrain(unittest.TestCase):
+    def test_job_children_are_awaited_after_root_exit(self):
+        from unittest import mock
+        p = win.PmsProcessWin(win.pb.Config())
+        p.proc = mock.MagicMock()
+        p.proc.poll.return_value = 0
+        p.pid = 10
+        p.job = 123
+        with mock.patch.object(win, "_snapshot", side_effect=[
+            ({10: 1, 11: 10}, {}), ({11: 10}, {}), ({}, {})
+        ]), mock.patch.object(win, "_kernel32") as kernel, mock.patch.object(win.time, "sleep") as sleep:
+            kernel.return_value.CloseHandle.return_value = 1
+            self.assertTrue(p.stop())
+            sleep.assert_called_once_with(0.05)
+            p.proc.terminate.assert_not_called()
+            p.proc.close_handles.assert_called_once()
+
+    def test_survivor_after_deadline_remains_failure(self):
+        from unittest import mock
+        p = win.PmsProcessWin(win.pb.Config())
+        p.proc = mock.MagicMock()
+        p.proc.poll.return_value = 0
+        p.pid = 10
+        p.job = 123
+        with mock.patch.object(win, "_snapshot", return_value=({10: 1, 11: 10}, {})), \
+             mock.patch.object(win, "_kernel32") as kernel, \
+             mock.patch.object(win.time, "monotonic", side_effect=[0.0, 6.0]):
+            kernel.return_value.CloseHandle.return_value = 1
+            with self.assertRaisesRegex(win.pb.BenchError, "descendant processes survived"):
+                p.stop()
+
+
 class TestProcessTree(unittest.TestCase):
     def test_tree_includes_only_descendants(self):
         ppid = {10: 1, 11: 10, 12: 11, 13: 10, 99: 1}

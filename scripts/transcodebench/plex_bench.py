@@ -479,6 +479,7 @@ def main(argv=None):
     ap.add_argument("--ffprobe",default=""); ap.add_argument("--video-codec",default="h264")
     ap.add_argument("--video-resolution",default="640x360"); ap.add_argument("--max-video-bitrate",type=int,default=2000)
     ap.add_argument("--audio-codec",default="aac")
+    ap.add_argument("--fixture",default="",help="actual media file for source hash/bytes (default: <lab-root>/media/source.mkv)")
     a=ap.parse_args(argv)
     if a.duration<=0 or a.concurrency<1 or a.repeats<1: ap.error("duration/concurrency/repeats must be positive")
     out_dir=Path(a.out) if a.out else Path(f"/data/bb/thread-storage/transcodebench-{int(time.time())}")
@@ -488,7 +489,7 @@ def main(argv=None):
         preserve_media=a.preserve_media,out_dir=str(out_dir),ffprobe=a.ffprobe,
         profile=Profile(video_codec=a.video_codec,video_resolution=a.video_resolution,
                         max_video_bitrate_kbps=a.max_video_bitrate,audio_codec=a.audio_codec))
-    fixture=Path(cfg.lab_root)/"media/source.mkv"
+    fixture=Path(a.fixture) if a.fixture else Path(cfg.lab_root)/"media/source.mkv"
     meta={"tool":"plex_bench/1","started_at":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),
           "config":{**asdict(cfg),"profile":asdict(cfg.profile)},
           "source":{"fixture":str(fixture),"sha256":sha256_file(fixture) if fixture.exists() else None,

@@ -1079,9 +1079,17 @@ class PmsProcessWin:
                 errors.append(f"PMS root still alive after taskkill: {exc2}")
         survivors = []
         try:
-            ppid_map, _ = _snapshot()
-            alive = set(ppid_map)
-            survivors = [pid for pid in descendants if pid in alive and pid != self.pid]
+            # Job termination is asynchronous: the root can exit before its
+            # encoders disappear from Toolhelp. Wait for the same owned PIDs
+            # to drain, without signalling any process discovered afterward.
+            deadline = time.monotonic() + 5.0
+            while True:
+                ppid_map, _ = _snapshot()
+                alive = set(ppid_map)
+                survivors = [pid for pid in descendants if pid in alive and pid != self.pid]
+                if not survivors or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
         except Exception as exc:  # noqa: BLE001
             errors.append(f"post-stop audit failed: {exc}")
         if survivors:
