@@ -195,7 +195,7 @@ func dashReps(info core.MediaInfo, d core.Decision) []dashRep {
 			if codec == "" {
 				codec = "h264"
 			}
-			w, h = outputSize(v.Width, v.Height, d.MaxHeight)
+			w, h = decisionOutputSize(v, d)
 			r.Bandwidth = videoBitrate(info, d) * 1000
 		}
 		if r.Bandwidth <= 0 {

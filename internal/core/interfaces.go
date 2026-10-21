@@ -339,6 +339,10 @@ type SegmentCache interface {
 // Transcoder (internal/transcode)
 
 type StreamInfo struct {
+	// Probe hints for enhancement backends that require progressive, steady-rate input.
+	Interlaced        bool `json:"interlaced,omitempty"`
+	VariableFrameRate bool `json:"variableFrameRate,omitempty"`
+
 	Index         int     `json:"index"`
 	Type          string  `json:"type"` // video, audio, subtitle
 	Codec         string  `json:"codec"`
@@ -416,6 +420,8 @@ const (
 )
 
 type Decision struct {
+	Enhancement VideoEnhancement `json:"enhancement,omitempty"`
+
 	Kind           DecisionKind `json:"kind"`
 	VideoCopy      bool         `json:"videoCopy"`
 	AudioCopy      bool         `json:"audioCopy"`

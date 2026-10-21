@@ -148,6 +148,9 @@ func withFinder(f finder) Option { return func(o *options) { o.finder = &f } }
 
 // Manager runs ffmpeg for Ether. It implements core.Transcoder.
 type Manager struct {
+	rtx            rtxBackendState
+	pendingEncodes int
+
 	log     *slog.Logger
 	opts    options
 	runner  Runner
@@ -217,6 +220,7 @@ func New(cfg config.Transcode, logger *slog.Logger, opts ...Option) (*Manager, e
 	m.hw = hwDetector{runner: m.runner, ffmpeg: m.ffmpeg, goos: f.goos, log: m.log, statDevice: deviceExists}.
 		detect(ctx, mode, cfg.VAAPIDevice, m.feat)
 
+	m.detectRTX(ctx, f.goos)
 	m.tempDir = cfg.TempDir
 	if m.tempDir == "" {
 		m.tempDir = filepath.Join(os.TempDir(), "ether-transcode")
@@ -305,7 +309,7 @@ func (m *Manager) Probe(ctx context.Context, inputURL string) (*core.MediaInfo, 
 
 // Decide implements core.Transcoder.
 func (m *Manager) Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions) core.Decision {
-	return Decide(info, caps, opts, m.Policy())
+	return m.enhanceDecision(info, caps, opts, Decide(info, caps, opts, m.Policy()))
 }
 
 var unsafeID = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
@@ -323,7 +327,7 @@ func randomHex(n int) string {
 // encoder: transcodes, and copy sessions while their fast-start ramp, a
 // governor clamp or a lower rung is being encoded. Caller holds m.mu.
 func (m *Manager) encodingLocked(except string) int {
-	n := 0
+	n := m.pendingEncodes
 	for sid, s := range m.sessions {
 		if sid != except && s.encoding() {
 			n++
@@ -388,7 +392,13 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		d.Container = segmentContainer(d.VideoCodec, d.AudioCodec)
 	}
 	m.mu.Lock()
+	rtxConfig, _ := normalizedRTX(m.cfg.RTXVideo)
 	adapt := adaptiveFromConfig(m.cfg)
+	if enhancementSelected(d) {
+		// Native VSR uses one steady output; adaptive ramp/ladder variants
+		// have not been validated with this backend.
+		adapt.FastStart, adapt.Ladder, adapt.Governor = false, false, false
+	}
 	atCap := m.cfg.MaxTranscodes > 0 && m.encodingLocked(req.SessionID) >= m.cfg.MaxTranscodes
 	m.mu.Unlock()
 	if atCap && d.VideoCopy {
@@ -499,6 +509,10 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 			return nil, fmt.Errorf("%w (%d running)", ErrTooManyTranscodes, n)
 		}
 	}
+	if !d.VideoCopy {
+		m.pendingEncodes++
+		defer func() { m.mu.Lock(); m.pendingEncodes--; m.mu.Unlock() }()
+	}
 	delete(m.sessions, id)
 	m.mu.Unlock()
 	if old != nil {
@@ -514,6 +528,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
 	}
 	s := &Session{
+		rtxConfig:    rtxConfig,
 		liveInput:    req.LiveInput,
 		id:           id,
 		m:            m,

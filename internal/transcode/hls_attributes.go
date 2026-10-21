@@ -21,7 +21,7 @@ func HLSVariantAttributes(info core.MediaInfo, d core.Decision) string {
 				codec = "h264"
 			}
 			// The level follows the encoded size, not the source's.
-			_, height = outputSize(v.Width, v.Height, d.MaxHeight)
+			_, height = decisionOutputSize(v, d)
 			// What planVideo encodes: HDR kept only in HEVC, from the
 			// decoded picture (a Dolby Vision stream's base layer).
 			if codec == "hevc" && keepsHDR(v) && !d.ToneMap {

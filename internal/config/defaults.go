@@ -64,6 +64,7 @@ func Defaults(dataDir string) Config {
 		},
 		Quality: DefaultQuality(),
 		Transcode: Transcode{
+			RTXVideo:             RTXVideo{Mode: "off", SourceMaxHeight: 720, TargetMaxHeight: 1080, Quality: 2, MaxConcurrent: 1},
 			HWAccel:              "auto",
 			TempDir:              filepath.Join(dataDir, "transcode"),
 			MaxTranscodes:        2,

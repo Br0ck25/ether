@@ -80,6 +80,9 @@ type Transcoder interface {
 
 // DecideOptions are per-request choices from the Plex decision request.
 type DecideOptions struct {
+	// DisableVideoTranscode prevents optional enhancement from promoting direct playback.
+	DisableVideoTranscode bool
+
 	DirectPlay     bool     // client allows direct play
 	DirectStream   bool     // client allows remux
 	MaxBitrateKbps int      // client-requested cap (maxVideoBitrate)

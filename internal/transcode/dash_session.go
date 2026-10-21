@@ -397,6 +397,10 @@ func (s *Session) collectDASH(r *run, exited bool) {
 	}
 	if changed {
 		if r.produced > 0 && s.cur == r {
+			if r.rtx && r.rtxConfirmed.Load() {
+				s.decision.Enhancement.State = "running"
+				s.decision.Enhancement.Reason = "NVEncC NGX VSR produced enhanced segments"
+			}
 			s.failures = 0
 			s.failErr = nil
 		}

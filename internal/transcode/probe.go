@@ -152,6 +152,7 @@ type ffprobeOutput struct {
 }
 
 type ffprobeStream struct {
+	FieldOrder     string            `json:"field_order"`
 	Extradata      string            `json:"extradata"`
 	Index          int               `json:"index"`
 	Level          int               `json:"level"`
@@ -252,7 +253,11 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 	switch s.CodecType {
 	case "video":
 		si.Width, si.Height = s.Width, s.Height
-		si.FrameRate = parseRate(s.AvgFrameRate)
+		si.Interlaced = s.FieldOrder != "" && s.FieldOrder != "unknown" && s.FieldOrder != "progressive"
+		avg, nominal := parseRate(s.AvgFrameRate), parseRate(s.RFrameRate)
+		// A material rate disagreement is evidence against a steady frame clock.
+		si.VariableFrameRate = avg > 0 && nominal > 0 && (avg/nominal < 0.999 || avg/nominal > 1.001)
+		si.FrameRate = avg
 		if si.FrameRate == 0 {
 			si.FrameRate = parseRate(s.RFrameRate)
 		}

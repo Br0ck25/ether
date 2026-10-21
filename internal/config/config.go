@@ -247,6 +247,8 @@ type QualityRule struct {
 }
 
 type Transcode struct {
+	RTXVideo RTXVideo `json:"rtxVideo"`
+
 	FFmpegPath           string `json:"ffmpegPath"` // empty = bundled, then PATH
 	FFprobePath          string `json:"ffprobePath"`
 	HWAccel              string `json:"hwAccel"` // "auto", "none", "videotoolbox", "nvenc", "qsv", "vaapi"

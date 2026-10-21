@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -32,6 +33,9 @@ import (
 // track per representation (video, audio); ffmpeg's dash muxer writes short
 // chunks that the session regroups into numbered segments by timestamp.
 type Session struct {
+	rtxConfig          config.RTXVideo
+	rtxDiscontinuities map[int]bool
+
 	liveInput    bool
 	inputHeaders map[string]string
 	id           string
@@ -104,6 +108,9 @@ type mkvDelivery struct {
 
 // run is one ffmpeg process producing segments from startSeg on.
 type run struct {
+	rtx          bool
+	rtxConfirmed atomic.Bool
+
 	seq      int
 	startSeg int
 	spec     runSpec
@@ -350,6 +357,9 @@ func (s *Session) rampTranscodesLocked() bool {
 // tracks (t > 0) are steady transcodes of one shape, so only the primary
 // track can have discontinuities.
 func (s *Session) discontBeforeLocked(t, n int) bool {
+	if s.rtxDiscontinuities[n] {
+		return true
+	}
 	if s.plan == nil || t != 0 || n <= 0 {
 		return false
 	}
@@ -1215,10 +1225,30 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 		}
 	}}
 	stderr := &lineWriter{fn: func(l string) {
+		l = redactRTXLine(l, spec.Input, spec.InputHeaders)
+		if strings.Contains(strings.ToLower(l), "resize: ngx-vsr ") {
+			r.rtxConfirmed.Store(true)
+		}
 		r.stderr.add(l)
 		runLog.Debug("ffmpeg", "line", l)
 	}}
-	proc, err := s.m.runner.Start(Command{Path: s.m.ffmpeg, Args: args, Dir: s.dir, Stdout: stdout, Stderr: stderr})
+	var proc Process
+	var err error
+	if enhancementSelected(spec.Decision) {
+		proc, args, err = s.startRTXRunLocked(spec, stdout, stderr)
+		if err != nil {
+			s.fallbackRTXLocked(err.Error(), seg)
+			spec.Decision = s.trackDecisionLocked(s.wantTrack)
+			r.spec = spec
+			args = buildArgs(spec)
+		} else {
+			r.rtx = true
+			r.hw = true
+		}
+	}
+	if proc == nil {
+		proc, err = s.m.runner.Start(Command{Path: s.m.ffmpeg, Args: args, Dir: s.dir, Stdout: stdout, Stderr: stderr})
+	}
 	if err != nil {
 		if dr != nil {
 			_ = os.RemoveAll(dr.dir)
@@ -1232,7 +1262,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	s.cur = r
 	runLog.Info("ffmpeg started", "segment", seg, "at", spec.Start, "kind", s.decision.Kind,
 		"videoCopy", s.decision.VideoCopy, "audioCopy", s.decision.AudioCopy, "hw", r.hw)
-	runLog.Debug("ffmpeg args", "args", strings.Join(redactedInputArgs(args), " "))
+	runLog.Debug("ffmpeg args", "args", strings.Join(redactedRTXArgs(args), " "))
 	s.watchers.Add(1)
 	go s.watch(r)
 	s.broadcastLocked()
@@ -1266,6 +1296,10 @@ func (s *Session) stopRunLocked() {
 		return
 	}
 	s.cur = nil
+	if r.rtx && enhancementSelected(s.decision) {
+		s.decision.Enhancement.State = "stopped"
+		s.decision.Enhancement.Reason = "enhancement run stopped"
+	}
 	if !r.finished {
 		r.stopped = true
 		r.proc.Stop()
@@ -1391,6 +1425,10 @@ func (s *Session) noteSegSizeLocked(n int, path string) {
 // the governor, chaining at a plan mode boundary, throttling, waiters.
 func (s *Session) progressedLocked(r *run) {
 	if r.produced > 0 && s.cur == r {
+		if r.rtx && r.rtxConfirmed.Load() {
+			s.decision.Enhancement.State = "running"
+			s.decision.Enhancement.Reason = "NVEncC NGX VSR produced enhanced segments"
+		}
 		s.failures = 0
 		s.failErr = nil
 	}
@@ -1426,6 +1464,10 @@ func (s *Session) finish(r *run) {
 	}
 	log := s.log.With("run", r.seq)
 	if err == nil {
+		if r.rtx && s.cur == r {
+			s.decision.Enhancement.State = "stopped"
+			s.decision.Enhancement.Reason = "enhancement run completed"
+		}
 		// A run bounded by a plan mode boundary that produced up to it
 		// has not hit the end of the input: chain the next mode's run
 		// when the player is in (or near) this run's range.
@@ -1451,6 +1493,17 @@ func (s *Session) finish(r *run) {
 	log.Warn("ffmpeg failed", "err", err, "segments", r.produced, "stderr", tail(stderr, 1500))
 	if s.cur != r {
 		return
+	}
+	if r.rtx && r.produced == 0 && !s.inputFailed {
+		s.fallbackRTXLocked("native VSR run failed before producing segments", r.startSeg)
+		if err := s.startRunLocked(r.startSeg, r.spec.BigProbe); err != nil {
+			s.failErr = err
+		}
+		return
+	}
+	if r.rtx {
+		s.decision.Enhancement.State = "fallback"
+		s.decision.Enhancement.Reason = "native VSR input/process failed"
 	}
 	if r.produced == 0 {
 		if r.hw && !s.forceCPU && looksLikeEncoderFailure(stderr, r.spec) {
@@ -1540,6 +1593,13 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 		}
 	}
 	next := adaptDecision(s.decision, s.info, info, s.container)
+	if inputURL == s.input {
+		next.AudioStream = s.decision.AudioStream
+		next.SubtitleStream = s.decision.SubtitleStream
+	}
+	if next.Enhancement.Backend == rtxBackend && next.Enhancement.State == "stopped" && next.Enhancement.Width > 0 {
+		next.Enhancement.State = "selected"
+	}
 	if s.isDASH() {
 		next = dashDecision(info, next)
 	}

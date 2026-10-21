@@ -131,7 +131,7 @@ func buildRungs(info core.MediaInfo, primary core.Decision, adapt adaptiveSettin
 		if primary.VideoCopy {
 			pw, ph, codec = v.Width, v.Height, v.Codec
 		} else {
-			pw, ph = outputSize(v.Width, v.Height, primary.MaxHeight)
+			pw, ph = decisionOutputSize(v, primary)
 			if codec == "" {
 				codec = "h264"
 			}
