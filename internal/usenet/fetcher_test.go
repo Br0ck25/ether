@@ -365,7 +365,14 @@ func TestCancellationReleasesSlot(t *testing.T) {
 	if time.Since(start) > 200*time.Millisecond {
 		t.Fatal("in-flight request not interrupted promptly")
 	}
+	// Caller cancellation returns immediately; the scheduler joins the socket
+	// cancellation asynchronously so independent pipelined callers can survive.
+	deadline := time.Now().Add(200 * time.Millisecond)
 	st := statsFor(f, "p")
+	for st.ActiveConnections != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		st = statsFor(f, "p")
+	}
 	if st.ActiveConnections != 0 || st.WaitingPrefetch != 0 || st.LiveConnections != 0 {
 		t.Fatalf("slots not released / broken conn kept: %+v", st)
 	}
@@ -477,22 +484,9 @@ func TestReconnectAfterServerDrop(t *testing.T) {
 	s := nntptest.Start(t, nntptest.Options{})
 	addSeg(t, s, "a@x", []byte("alpha"))
 	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 4)}, Options{})
-	// Open several connections so several idle ones go stale at once.
-	var wg sync.WaitGroup
-	s.SetLatency(20 * time.Millisecond)
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := f.Body(context.Background(), "a@x", nil, core.PriorityLive); err != nil {
-				t.Error(err)
-			}
-		}()
-	}
-	wg.Wait()
-	s.SetLatency(0)
-	if st := statsFor(f, "p"); st.IdleConnections < 2 {
-		t.Fatalf("expected several idle connections: %+v", st)
+	// Explicitly warm several sockets: duplicate BODY requests now coalesce.
+	if err := f.Warm(context.Background(), 4); err != nil {
+		t.Fatal(err)
 	}
 	s.DropConnections()
 	time.Sleep(20 * time.Millisecond)

@@ -31,6 +31,8 @@ type prioSem struct {
 	prefetchMax int
 	inUse       int
 	prefetching int
+	nonLive     int
+	reserveLive bool                     // connection pools reserve one slot against all speculative work
 	waiters     [numPriorities]list.List // of *semWaiter
 	closed      bool
 }
@@ -60,6 +62,9 @@ func (s *prioSem) grantableLocked(prio core.Priority) bool {
 	if s.inUse >= s.size {
 		return false
 	}
+	if s.reserveLive && s.size >= 2 && prio != core.PriorityLive && s.nonLive >= s.size-1 {
+		return false
+	}
 	if prio == core.PriorityPrefetch && s.prefetching >= s.prefetchMax {
 		return false
 	}
@@ -79,6 +84,9 @@ func (s *prioSem) mustQueueLocked(prio core.Priority) bool {
 
 func (s *prioSem) takeLocked(prio core.Priority) {
 	s.inUse++
+	if prio != core.PriorityLive {
+		s.nonLive++
+	}
 	if prio == core.PriorityPrefetch {
 		s.prefetching++
 	}
@@ -170,10 +178,13 @@ func (s *prioSem) Release(prio core.Priority) {
 	prio = clampPriority(prio)
 	s.mu.Lock()
 	s.inUse--
+	if prio != core.PriorityLive {
+		s.nonLive--
+	}
 	if prio == core.PriorityPrefetch {
 		s.prefetching--
 	}
-	if s.inUse < 0 || s.prefetching < 0 {
+	if s.inUse < 0 || s.prefetching < 0 || s.nonLive < 0 {
 		s.mu.Unlock()
 		panic("usenet: semaphore released more than acquired")
 	}

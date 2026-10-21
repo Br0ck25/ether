@@ -14,11 +14,12 @@ type segKey struct {
 
 // segData is a decoded segment plus where it sits in its posted file.
 type segData struct {
-	data     []byte
-	begin    int64 // 0-based offset of data[0] in the posted file
-	fileSize int64 // 0 if unknown
-	total    int   // parts in the post, 0 if unknown
-	name     string
+	rangeExact bool // decoded length matches an explicit yEnc part range
+	data       []byte
+	begin      int64 // 0-based offset of data[0] in the posted file
+	fileSize   int64 // 0 if unknown
+	total      int   // parts in the post, 0 if unknown
+	name       string
 }
 
 func (s *segData) end() int64 { return s.begin + int64(len(s.data)) }

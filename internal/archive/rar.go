@@ -3,6 +3,7 @@ package archive
 import (
 	"fmt"
 	"io"
+	"math"
 )
 
 // RARFile is one file header found in one RAR volume.
@@ -160,6 +161,9 @@ func ComposeRAR(vols []*RARVolume) ([]Member, error) {
 		} else if m.Stored && !m.Encrypted {
 			var sum int64
 			for _, e := range m.Extents {
+				if e.Size > math.MaxInt64-sum {
+					return nil, fmt.Errorf("archive: stored file %q size overflows: %w", m.Name, ErrCorrupt)
+				}
 				sum += e.Size
 			}
 			if m.Size < 0 {

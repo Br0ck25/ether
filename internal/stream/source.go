@@ -20,10 +20,12 @@ const backSlack = 1 << 20
 
 // cursor follows one sequential reader.
 type cursor struct {
-	next     int64 // offset after the last byte read
-	window   int64 // current read-ahead window
-	frontier int64 // read-ahead scheduled up to here
-	used     time.Time
+	next      int64 // offset after the last byte read
+	window    int64 // current read-ahead window
+	frontier  int64 // read-ahead scheduled up to here
+	used      time.Time
+	verifying bool // one archive-layout verification per cursor
+	blocked   bool // failed verification waits for a new foreground read
 }
 
 // source implements core.MediaSource.
@@ -41,8 +43,12 @@ type source struct {
 	cursors []*cursor
 	closed  bool
 
-	raSem chan struct{}
-	raWG  sync.WaitGroup
+	damage damageRecovery
+
+	raSem     chan struct{}
+	raWG      sync.WaitGroup
+	raPumping bool // protected by mu; one source-local scheduling pump
+	raPending bool // coalesced foreground/completion wakeup
 }
 
 func newSource(e *Engine, rel *release, p *plan, releaseID string) *source {
@@ -150,7 +156,7 @@ func (s *source) readAtWithPriority(parent context.Context, p []byte, off int64,
 
 // read fills p (within the video) at off.
 func (s *source) read(ctx context.Context, p []byte, off int64, prio core.Priority) (int, error) {
-	return readPlan(ctx, s.e, s.rel, s.plan, p, off, prio, s.fo)
+	return s.readWithDamageRecovery(ctx, p, off, prio)
 }
 
 // readPlan reads video bytes through the plan's layout, verifying volumes
@@ -206,6 +212,16 @@ func (s *source) readAhead(off, n int64) {
 	now := time.Now()
 	end := off + n
 	opts := s.e.opts
+	// A speculative window must coexist with the foreground request in the
+	// decoded cache. Reserve half the cache for demand reads, and account for
+	// whole articles straddling the read/window boundaries. Otherwise a small
+	// cache can evict prefetched bytes before the player ever consumes them.
+	partSize := s.rel.partSize.Load()
+	if partSize <= 0 {
+		partSize = 716800
+	}
+	windowCap := min(opts.ReadAheadMax, opts.HotBufferBytes/2,
+		max(int64(0), opts.HotBufferBytes-n-2*partSize))
 
 	s.mu.Lock()
 	if s.closed {
@@ -220,7 +236,7 @@ func (s *source) readAhead(off, n int64) {
 		}
 	}
 	if c == nil {
-		c = &cursor{next: end, window: opts.ReadAheadMin, frontier: end}
+		c = &cursor{next: end, window: min(opts.ReadAheadMin, windowCap), frontier: end}
 		if len(s.cursors) < maxCursors {
 			s.cursors = append(s.cursors, c)
 		} else {
@@ -235,55 +251,157 @@ func (s *source) readAhead(off, n int64) {
 	} else {
 		if off >= c.next-backSlack && end > c.next {
 			// Sequential progress: grow the window with the bytes consumed.
-			c.window = min(opts.ReadAheadMax, c.window+2*(end-c.next))
+			c.window = min(windowCap, c.window+2*(end-c.next))
 		}
 		c.next = max(c.next, end)
 	}
+	c.window = min(c.window, windowCap)
 	c.used = now
-	from := max(c.frontier, c.next)
-	to := min(c.next+c.window, s.plan.size)
-	if from >= to {
+	c.blocked = false // a new demand read permits retrying a failed layout check
+	s.mu.Unlock()
+	s.kickReadAhead()
+}
+
+// kickReadAhead coalesces wakeups into one source-local scheduler. Workers add
+// its reference before dropping their own, so Close/Wait cannot miss a refill.
+func (s *source) kickReadAhead() {
+	s.mu.Lock()
+	if s.closed || s.ctx.Err() != nil {
 		s.mu.Unlock()
 		return
 	}
-	c.frontier = to // optimistic; lowered below if scheduling stops early
-	s.mu.Unlock()
-
-	scheduled := s.schedule(from, to)
-	if scheduled < to {
-		s.mu.Lock()
-		if c.frontier == to {
-			c.frontier = scheduled
-		}
+	s.raPending = true
+	if s.raPumping {
 		s.mu.Unlock()
+		return
 	}
+	s.raPumping = true
+	s.raWG.Add(1)
+	s.mu.Unlock()
+	go s.pumpReadAhead()
+}
+
+func (s *source) pumpReadAhead() {
+	defer s.raWG.Done()
+	for {
+		s.mu.Lock()
+		if s.closed || s.ctx.Err() != nil || !s.raPending {
+			s.raPumping = false
+			s.mu.Unlock()
+			return
+		}
+		s.raPending = false
+		cursors := append([]*cursor(nil), s.cursors...)
+		s.mu.Unlock()
+		for _, c := range cursors {
+			s.mu.Lock()
+			present := false
+			for _, current := range s.cursors {
+				if current == c {
+					present = true
+					break
+				}
+			}
+			if !present || s.closed || c.blocked || c.verifying {
+				s.mu.Unlock()
+				continue
+			}
+			from := max(c.frontier, c.next)
+			to := min(c.next+c.window, s.plan.size)
+			if from >= to {
+				s.mu.Unlock()
+				continue
+			}
+			c.frontier = to // this pump alone claims frontiers; completions only wake it
+			s.mu.Unlock()
+			scheduled := s.scheduleCursor(from, to, c)
+			s.mu.Lock()
+			if c.frontier == to && scheduled < to {
+				c.frontier = scheduled
+			}
+			s.mu.Unlock()
+		}
+	}
+}
+
+// cursorWindow rejects work from evicted seek cursors and rechecks a window
+// shrunk by a simultaneous foreground read. Already running jobs keep their
+// original lifetime, but their completion cannot revive an obsolete cursor.
+func (s *source) cursorWindow(c *cursor) (int64, int64, bool) {
+	if c == nil {
+		return 0, s.plan.size, true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || c.blocked {
+		return 0, 0, false
+	}
+	for _, current := range s.cursors {
+		if current == c {
+			return c.next, min(c.next+c.window, s.plan.size), true
+		}
+	}
+	return 0, 0, false
 }
 
 // schedule starts read-ahead fetches for [from, to) without blocking and
 // returns how far it got (the start of the first slot it could not start).
-func (s *source) schedule(from, to int64) int64 {
+func (s *source) schedule(from, to int64) int64 { return s.scheduleCursor(from, to, nil) }
+
+func (s *source) scheduleCursor(from, to int64, c *cursor) int64 {
 	lay := s.plan.layout()
 	for _, pc := range lay.pieces(from, to-from) {
 		pf := s.plan.vols[pc.vol]
+		if _, limit, valid := s.cursorWindow(c); !valid || from+pc.bufOff >= limit {
+			return from + pc.bufOff
+		}
 		if !s.plan.isVerified(pc.vol) {
-			// Check the volume in the background; its data follows on the
-			// next read once verified.
+			// A failed verification must not become a self-sustaining retry
+			// loop. Only a later foreground read unblocks this cursor.
 			vol := pc.vol
-			s.startRA(func() {
-				_ = s.plan.ensure(s.ctx, verifier{e: s.e, prio: core.PriorityReadahead, fo: s.fo}, []int{vol})
+			if c != nil {
+				s.mu.Lock()
+				c.verifying = true
+				s.mu.Unlock()
+			}
+			started := s.startRA(func() bool {
+				err := s.plan.ensure(s.ctx, verifier{e: s.e, prio: core.PriorityReadahead, fo: s.fo}, []int{vol})
+				if c != nil {
+					s.mu.Lock()
+					c.verifying = false
+					c.blocked = err != nil
+					s.mu.Unlock()
+				}
+				return err == nil
 			})
+			if !started && c != nil {
+				s.mu.Lock()
+				c.verifying = false
+				s.mu.Unlock()
+			}
 			return from + pc.bufOff
 		}
 		for _, i := range pf.slotsFor(pc.off, pc.n) {
+			begin, end, _ := pf.rangeOf(i)
+			inner := from + pc.bufOff + max(0, begin-pc.off)
+			innerEnd := from + pc.bufOff + min(pc.n, end-pc.off)
+			floor, limit, valid := s.cursorWindow(c)
+			if !valid || inner >= limit {
+				return inner
+			}
+			if innerEnd <= floor {
+				continue
+			}
 			key := segKey{s.rel.digest, pf.segBase + i}
 			if s.e.hot.has(key) {
 				continue
 			}
-			started := s.startRA(func() {
+			started := s.startRA(func() bool {
 				_, err := s.e.segment(s.ctx, s.rel, pf, i, core.PriorityReadahead, s.fo)
 				if err != nil && s.ctx.Err() == nil && !isMissing(err) {
 					s.e.log.Debug("read-ahead fetch failed", "name", s.plan.name, "part", i+1, "err", err)
 				}
+				return err == nil
 			})
 			if !started {
 				b, _, _ := pf.rangeOf(i)
@@ -300,7 +418,7 @@ func (s *source) schedule(from, to int64) int64 {
 // lock Close sets closed under before raWG.Wait, so no worker starts once
 // Close is waiting for them (Add must not race Wait, and a worker must not
 // outlive the release reference Close drops).
-func (s *source) startRA(fn func()) bool {
+func (s *source) startRA(fn func() bool) bool {
 	select {
 	case s.raSem <- struct{}{}:
 	default:
@@ -316,8 +434,11 @@ func (s *source) startRA(fn func()) bool {
 	s.mu.Unlock()
 	go func() {
 		defer s.raWG.Done()
-		defer func() { <-s.raSem }()
-		fn()
+		progress := fn()
+		<-s.raSem
+		if progress {
+			s.kickReadAhead()
+		}
 	}()
 	return true
 }

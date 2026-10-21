@@ -11,13 +11,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/ratings"
 	"github.com/braedonsaunders/ether/internal/store"
 	xdraw "golang.org/x/image/draw"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/opentype"
 	"image"
 	"image/draw"
 	"image/jpeg"
@@ -36,6 +37,7 @@ type Settings struct {
 	Status      bool   `json:"status"`
 	Quality     bool   `json:"quality"`
 	Ratings     bool   `json:"ratings"`
+	Details     bool   `json:"details"`
 	Personalize bool   `json:"personalize"`
 	Localize    bool   `json:"localize"`
 	Style       string `json:"style"`
@@ -59,6 +61,7 @@ type Facts struct {
 	NewSeason   bool
 	Returning   bool
 	LastChance  time.Time
+	Width       int
 	Height      int
 	HDR         bool
 	DolbyVision bool
@@ -68,27 +71,39 @@ type ImageSource interface {
 	Get(context.Context, string, int) ([]byte, string, error)
 }
 type Options struct {
-	Images   ImageSource
-	Allowed  func(*core.User, *core.Title) bool
-	Facts    func(context.Context, *core.User, *core.Title) Facts
-	Ratings  *ratings.Service
-	Taste    func(context.Context, *core.User) []string
-	Now      func() time.Time
-	Variants func(context.Context, *core.Title, string) (Artwork, error)
+	// CacheDir contains disposable generated variants only. Empty disables disk caching.
+	CacheDir string
+	// Zero selects defaults (16 MiB memory, 256 MiB disk); negative disables a tier.
+	MemoryCacheBytes int64
+	DiskCacheBytes   int64
+	// RenderConcurrency bounds CPU-heavy cold work (default 2, maximum 16).
+	RenderConcurrency int
+	Images            ImageSource
+	Allowed           func(*core.User, *core.Title) bool
+	Facts             func(context.Context, *core.User, *core.Title) Facts
+	FactsFor          func(context.Context, *core.User, *core.Title, bool, bool) Facts
+	Ratings           *ratings.Service
+	Taste             func(context.Context, *core.User) []string
+	Now               func() time.Time
+	Variants          func(context.Context, *core.Title, string) (Artwork, error)
 }
 type Service struct {
 	db         *sql.DB
 	o          Options
-	mu         sync.Mutex
-	cache      map[string][]byte
-	cacheBytes int64
+	generated  *posterCache
+	parsedFont *opentype.Font
+	fontErr    error
+	sampleOnce sync.Once
+	sampleData []byte
+	sampleErr  error
 }
 
 func New(db *sql.DB, o Options) *Service {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Service{db: db, o: o, cache: map[string][]byte{}}
+	f, err := opentype.Parse(gobold.TTF)
+	return &Service{db: db, o: o, generated: newPosterCache(o), parsedFont: f, fontErr: err}
 }
 
 type previewSettingsKey struct{}
@@ -206,59 +221,19 @@ func (s *Service) Paths(ctx context.Context, u *core.User, t *core.Title, lang s
 	return choose(v.Posters, v.PinnedPoster, poster, lang, taste), choose(v.Backdrops, v.PinnedBackdrop, backdrop, "", taste)
 }
 func (s *Service) Labels(ctx context.Context, u *core.User, t *core.Title) []string {
-	cfg, e := s.Settings(ctx)
-	if e != nil || !cfg.Enabled {
+	report, err := s.Inspect(ctx, u, t)
+	if err != nil {
 		return nil
 	}
-	var labels []string
-	var f Facts
-	if s.o.Facts != nil {
-		f = s.o.Facts(ctx, u, t)
-	}
-	if cfg.Status {
-		switch {
-		case f.NewSeason:
-			labels = append(labels, "NEW SEASON")
-		case f.NewEpisode:
-			labels = append(labels, "NEW EPISODE")
-		case f.Returning:
-			labels = append(labels, "RETURNING")
-		}
-		if !f.LastChance.IsZero() && f.LastChance.After(s.o.Now()) {
-			labels = append(labels, "LAST CHANCE IN ROW "+f.LastChance.Format("02 Jan"))
-		}
-	}
-	if cfg.Quality {
-		var q []string
-		if f.Height >= 2160 {
-			q = append(q, "4K")
-		}
-		if f.DolbyVision {
-			q = append(q, "DV")
-		} else if f.HDR {
-			q = append(q, "HDR")
-		}
-		if f.Atmos {
-			q = append(q, "ATMOS")
-		}
-		if len(q) > 0 {
-			labels = append(labels, strings.Join(q, " · "))
-		}
-	}
-	if cfg.Ratings && s.o.Ratings != nil {
-		bs, e := s.o.Ratings.Cached(ctx, t)
-		if e == nil {
-			for _, b := range bs {
-				labels = append(labels, fmt.Sprintf("%s %.1f/%.0f", strings.ToUpper(b.Source), b.Value, b.Scale))
-			}
-		}
-	}
-	return labels
+	return report.Labels
 }
 func (s *Service) Version(ctx context.Context, u *core.User, t *core.Title, lang string) string {
-	p, b := s.Paths(ctx, u, t, lang)
 	cfg, _ := s.Settings(ctx)
-	raw, _ := json.Marshal([]any{p, b, t.LogoPath, s.Labels(ctx, u, t), t.UpdatedAt.Unix(), cfg})
+	ctx = context.WithValue(ctx, previewSettingsKey{}, cfg)
+	p, b := s.Paths(ctx, u, t, lang)
+	labels := visibleLabels(s.presentation(ctx, u, t, cfg).Labels)
+	// Viewer identity and unrelated catalogue updates do not change pixels.
+	raw, _ := json.Marshal([]any{p, b, t.LogoPath, labels, pixelStyle(cfg, len(labels) > 0), "compositor-v4"})
 	hash := sha256.Sum256(raw)
 	return hex.EncodeToString(hash[:8])
 }
@@ -268,72 +243,106 @@ func (s *Service) Poster(ctx context.Context, u *core.User, t *core.Title, lang 
 	if s.o.Images == nil {
 		return nil, "", errors.New("artwork unavailable")
 	}
-	path, _ := s.Paths(ctx, u, t, lang)
-	data, ct, e := s.o.Images.Get(ctx, path, 500)
-	if e != nil {
-		return nil, "", e
+	cfg, err := s.Settings(ctx)
+	if err != nil {
+		return nil, "", err
 	}
-	labels := s.Labels(ctx, u, t)
+	ctx = context.WithValue(ctx, previewSettingsKey{}, cfg)
+	path, _ := s.Paths(ctx, u, t, lang)
+	data, ct, err := s.o.Images.Get(ctx, path, 500)
+	if err != nil {
+		return nil, "", err
+	}
+	labels := s.presentation(ctx, u, t, cfg).Labels
 	if len(labels) == 0 {
 		return data, ct, nil
 	}
-	settings, e := s.Settings(ctx)
-	if e != nil {
-		return nil, "", e
-	}
-	return s.composite(data, labels, settings)
+	return s.compositeContext(ctx, data, labels, cfg)
 }
 
+// composite retains the package's offline rendering entry point.
 func (s *Service) composite(data []byte, labels []string, settings Settings) ([]byte, string, error) {
+	return s.compositeContext(context.Background(), data, labels, settings)
+}
+
+func (s *Service) compositeContext(ctx context.Context, data []byte, labels []string, settings Settings) ([]byte, string, error) {
 	settings = normalizeSettings(settings)
 	if err := validateSettings(settings); err != nil {
 		return nil, "", err
 	}
-	styleKey, _ := json.Marshal([]any{labels, settings, "compositor-v2"})
-	hash := sha256.Sum256(append(append([]byte(nil), data...), styleKey...))
-	key := hex.EncodeToString(hash[:])
-	s.mu.Lock()
-	cached := s.cache[key]
-	s.mu.Unlock()
-	if cached != nil {
-		return cached, "image/jpeg", nil
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
 	}
-	// Decoding, scaling and encoding run outside the lock: it only guards
-	// the cache, so concurrent posters render in parallel. Two requests for
-	// one poster may both render it; the later store wins.
+	labels = visibleLabels(labels)
+	// Hash incrementally; never duplicate the source image on a warm request.
+	hash := sha256.New()
+	_, _ = hash.Write(data)
+	_ = json.NewEncoder(hash).Encode([]any{labels, pixelStyle(settings, len(labels) > 0), "compositor-v4"})
+	key := hex.EncodeToString(hash.Sum(nil))
+	result, err := s.generated.get(ctx, key, func(workCtx context.Context) ([]byte, error) {
+		return s.renderPoster(workCtx, data, labels, settings)
+	})
+	return result, "image/jpeg", err
+}
+
+// Only visual inputs belong in a generated-image key. Localization, taste and
+// evidence toggles have already resolved to source bytes and visible labels.
+func pixelStyle(v Settings, hasLabels bool) [4]string {
+	if !hasLabels {
+		return [4]string{}
+	}
+	return [4]string{v.Style, v.Position, v.Accent, v.Size}
+}
+func visibleLabels(labels []string) []string {
+	out := make([]string, min(len(labels), 6))
+	for i := range out {
+		out[i] = strings.Map(func(r rune) rune {
+			if r < 32 {
+				return -1
+			}
+			return r
+		}, labels[i])
+	}
+	return out
+}
+
+func (s *Service) renderPoster(ctx context.Context, data []byte, labels []string, settings Settings) ([]byte, error) {
 	cfg, _, e := image.DecodeConfig(bytes.NewReader(data))
 	if e != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 20_000_000 {
-		return nil, "", errors.New("poster dimensions invalid")
+		return nil, errors.New("poster dimensions invalid")
+	}
+	if e = ctx.Err(); e != nil {
+		return nil, e
 	}
 	src, _, e := image.Decode(bytes.NewReader(data))
 	if e != nil {
-		return nil, "", e
+		return nil, e
+	}
+	if e = ctx.Err(); e != nil {
+		return nil, e
 	}
 	w := 500
-	h := src.Bounds().Dy() * w / src.Bounds().Dx()
-	if h > 1500 {
-		h = 1500
-	}
+	h := max(1, min(src.Bounds().Dy()*w/src.Bounds().Dx(), 1500))
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Src, nil)
-	if err := paintBadges(dst, labels, settings); err != nil {
-		return nil, "", err
+	if src.Bounds().Dx() == w && src.Bounds().Dy() == h {
+		draw.Draw(dst, dst.Bounds(), src, src.Bounds().Min, draw.Src)
+	} else {
+		xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Src, nil)
+	}
+	if e = ctx.Err(); e != nil {
+		return nil, e
+	}
+	if e = s.paintBadges(dst, labels, settings); e != nil {
+		return nil, e
+	}
+	if e = ctx.Err(); e != nil {
+		return nil, e
 	}
 	var out bytes.Buffer
 	if e = jpeg.Encode(&out, dst, &jpeg.Options{Quality: 88}); e != nil {
-		return nil, "", e
+		return nil, e
 	}
-	generated := out.Bytes()
-	s.mu.Lock()
-	if s.cacheBytes+int64(len(generated)) > 16<<20 {
-		s.cache = map[string][]byte{}
-		s.cacheBytes = 0
-	}
-	s.cacheBytes -= int64(len(s.cache[key]))
-	s.cache[key] = generated
-	s.cacheBytes += int64(len(generated))
-	s.mu.Unlock()
-	return generated, "image/jpeg", nil
+	return out.Bytes(), nil
 }
 
 func (s *Service) Backdrop(ctx context.Context, u *core.User, t *core.Title, lang string) ([]byte, string, error) {

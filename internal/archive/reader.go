@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 )
 
@@ -68,7 +69,8 @@ func (s *spanReader) readAt(p []byte, off int64) (int, error) {
 // MultiReader is an io.ReaderAt over the concatenation of volumes, e.g. a
 // split .7z.001/.7z.002… set.
 type MultiReader struct {
-	sr spanReader
+	sr  spanReader
+	err error
 }
 
 // NewMultiReader returns a reader over the concatenation of vols in order.
@@ -80,6 +82,14 @@ func NewMultiReader(vols []Volume) *MultiReader {
 		if v.Size <= 0 {
 			continue
 		}
+		if v.R == nil {
+			m.err = fmt.Errorf("archive: volume has no reader: %w", ErrMissingVolume)
+			return m
+		}
+		if v.Size > math.MaxInt64-pos {
+			m.err = fmt.Errorf("archive: concatenated volume size overflows: %w", ErrCorrupt)
+			return m
+		}
 		m.sr.spans = append(m.sr.spans, span{r: v.R, start: pos, off: 0, size: v.Size})
 		pos += v.Size
 	}
@@ -88,7 +98,12 @@ func NewMultiReader(vols []Volume) *MultiReader {
 }
 
 // ReadAt implements io.ReaderAt.
-func (m *MultiReader) ReadAt(p []byte, off int64) (int, error) { return m.sr.readAt(p, off) }
+func (m *MultiReader) ReadAt(p []byte, off int64) (int, error) {
+	if m.err != nil {
+		return 0, m.err
+	}
+	return m.sr.readAt(p, off)
+}
 
 // Size returns the total size of all volumes.
 func (m *MultiReader) Size() int64 { return m.sr.size }
@@ -98,31 +113,42 @@ func (m *MultiReader) Size() int64 { return m.sr.size }
 // of the individual volumes passed to NewMultiReader. Volumes with Size <= 0
 // keep their index but never receive extents.
 func SplitExtents(vols []Volume, exts []Extent) ([]Extent, error) {
-	var out []Extent
+	// Index once instead of scanning from volume zero for each member. Large
+	// season packs can have thousands of both volumes and members. Keep empty
+	// volumes out of the search while preserving the original volume indexes.
+	type volumeSpan struct {
+		index      int
+		start, end int64
+	}
+	index := make([]volumeSpan, 0, len(vols))
+	var total int64
+	for vi, v := range vols {
+		if v.Size <= 0 {
+			continue
+		}
+		if v.Size > math.MaxInt64-total {
+			return nil, fmt.Errorf("archive: concatenated volume size overflows: %w", ErrCorrupt)
+		}
+		index = append(index, volumeSpan{vi, total, total + v.Size})
+		total += v.Size
+	}
+	out := make([]Extent, 0, len(exts))
 	for _, e := range exts {
 		if e.Volume != 0 || e.Offset < 0 || e.Size < 0 {
 			return nil, fmt.Errorf("archive: extent %+v is not a concatenated-stream extent: %w", e, ErrCorrupt)
 		}
-		off, rem := e.Offset, e.Size
-		var base int64
-		for vi, v := range vols {
-			if rem == 0 {
-				break
-			}
-			if v.Size <= 0 {
-				continue
-			}
-			end := base + v.Size
-			if off < end {
-				n := min(end-off, rem)
-				out = append(out, Extent{Volume: vi, Offset: off - base, Size: n})
-				off += n
-				rem -= n
-			}
-			base = end
-		}
-		if rem > 0 {
+		if e.Offset > total || e.Size > total-e.Offset {
 			return nil, fmt.Errorf("archive: extent %+v runs past the last volume: %w", e, ErrMissingVolume)
+		}
+		off, rem := e.Offset, e.Size
+		vi := sort.Search(len(index), func(i int) bool { return index[i].end > off })
+		for rem > 0 {
+			v := index[vi]
+			n := min(v.end-off, rem)
+			out = append(out, Extent{Volume: v.index, Offset: off - v.start, Size: n})
+			off += n
+			rem -= n
+			vi++
 		}
 	}
 	return out, nil
@@ -142,18 +168,31 @@ func NewMemberReader(m Member, vols []Volume) (*MemberReader, error) {
 	}
 	mr := &MemberReader{}
 	var pos int64
+	lastVolume := -1
+	if m.Size < 0 {
+		return nil, fmt.Errorf("archive: member %q has negative size: %w", m.Name, ErrCorrupt)
+	}
 	for _, e := range m.Extents {
 		if e.Volume < 0 || e.Volume >= len(vols) || vols[e.Volume].R == nil {
 			return nil, fmt.Errorf("archive: member %q needs volume %d: %w", m.Name, e.Volume, ErrMissingVolume)
 		}
-		if e.Offset < 0 || e.Size < 0 || e.Size > vols[e.Volume].Size-e.Offset {
+		if e.Offset < 0 || e.Size < 0 || e.Offset > vols[e.Volume].Size || e.Size > vols[e.Volume].Size-e.Offset {
 			return nil, fmt.Errorf("archive: member %q extent %+v outside volume of %d bytes: %w",
 				m.Name, e, vols[e.Volume].Size, ErrCorrupt)
 		}
 		if e.Size == 0 {
 			continue
 		}
-		mr.sr.spans = append(mr.sr.spans, span{r: vols[e.Volume].R, start: pos, off: e.Offset, size: e.Size})
+		if e.Size > math.MaxInt64-pos {
+			return nil, fmt.Errorf("archive: member %q size overflows: %w", m.Name, ErrCorrupt)
+		}
+		if n := len(mr.sr.spans); n > 0 && lastVolume == e.Volume && mr.sr.spans[n-1].off+mr.sr.spans[n-1].size == e.Offset {
+			// One upstream range read can cover physically contiguous pieces.
+			mr.sr.spans[n-1].size += e.Size
+		} else {
+			mr.sr.spans = append(mr.sr.spans, span{r: vols[e.Volume].R, start: pos, off: e.Offset, size: e.Size})
+		}
+		lastVolume = e.Volume
 		pos += e.Size
 	}
 	if pos != m.Size {

@@ -2,6 +2,7 @@ package overlays
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"image"
@@ -12,7 +13,7 @@ import (
 	"strings"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/gofont/gobold"
+
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
@@ -60,12 +61,11 @@ func validateSettings(v Settings) error {
 }
 
 // Each render owns its font face: opentype faces contain mutable glyph buffers.
-func renderFace(size float64) (font.Face, error) {
-	f, err := opentype.Parse(gobold.TTF)
-	if err != nil {
-		return nil, err
+func (s *Service) renderFace(size float64) (font.Face, error) {
+	if s.fontErr != nil {
+		return nil, s.fontErr
 	}
-	return opentype.NewFace(f, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingFull})
+	return opentype.NewFace(s.parsedFont, &opentype.FaceOptions{Size: size, DPI: 72, Hinting: font.HintingFull})
 }
 
 func rounded(dst *image.RGBA, rect image.Rectangle, radius int, c color.NRGBA) {
@@ -83,7 +83,11 @@ func rounded(dst *image.RGBA, rect image.Rectangle, radius int, c color.NRGBA) {
 	draw.DrawMask(dst, rect, image.NewUniform(c), image.Point{}, mask, rect.Min, draw.Over)
 }
 
+// paintBadges is the standalone offline helper; production reuses the parsed font.
 func paintBadges(dst *image.RGBA, labels []string, cfg Settings) error {
+	return New(nil, Options{}).paintBadges(dst, labels, cfg)
+}
+func (s *Service) paintBadges(dst *image.RGBA, labels []string, cfg Settings) error {
 	if len(labels) == 0 {
 		return nil
 	}
@@ -94,7 +98,7 @@ func paintBadges(dst *image.RGBA, labels []string, cfg Settings) error {
 	case "large":
 		size = 22
 	}
-	face, err := renderFace(size)
+	face, err := s.renderFace(size)
 	if err != nil {
 		return err
 	}
@@ -150,29 +154,90 @@ func paintBadges(dst *image.RGBA, labels []string, cfg Settings) error {
 	for _, b := range badges {
 		y := startY + b.row*(height+gap)
 		rect := image.Rect(b.x, y, b.x+b.width, y+height)
+		ink := color.NRGBA{R: 246, G: 245, B: 241, A: 255}
 		switch cfg.Style {
 		case "solid":
-			rounded(dst, rect, 10, color.NRGBA{R: 15, G: 20, B: 29, A: 255})
+			rounded(dst, rect, 10, accent)
+			ink = readableInk(accent)
+			rounded(dst, image.Rect(b.x+padding, y+height/2-3, b.x+padding+6, y+height/2+3), 3, ink)
 		case "minimal":
-			rounded(dst, rect, 8, color.NRGBA{R: 10, G: 14, B: 22, A: 160})
+			// An unboxed label with an accent rule; the scrim supplies contrast.
+			draw.Draw(dst, image.Rect(b.x+padding, y+10, b.x+padding+2, y+height-10), image.NewUniform(accent), image.Point{}, draw.Src)
 		default:
-			rounded(dst, rect, 11, color.NRGBA{R: 255, G: 255, B: 255, A: 60})
+			rounded(dst, rect, 11, color.NRGBA{R: 255, G: 255, B: 255, A: 75})
 			rounded(dst, rect.Inset(1), 10, color.NRGBA{R: 18, G: 24, B: 34, A: 215})
+			rounded(dst, image.Rect(b.x+padding, y+height/2-3, b.x+padding+6, y+height/2+3), 3, accent)
 		}
-		rounded(dst, image.Rect(b.x+padding, y+height/2-3, b.x+padding+6, y+height/2+3), 3, accent)
-		d := font.Drawer{Dst: dst, Src: image.NewUniform(color.NRGBA{R: 246, G: 245, B: 241, A: 255}), Face: face, Dot: fixed.P(b.x+padding+12, y+(height-face.Metrics().Height.Ceil())/2+face.Metrics().Ascent.Ceil())}
+		dot := fixed.P(b.x+padding+12, y+(height-face.Metrics().Height.Ceil())/2+face.Metrics().Ascent.Ceil())
+		if cfg.Style == "minimal" {
+			shadow := font.Drawer{Dst: dst, Src: image.NewUniform(color.NRGBA{A: 200}), Face: face, Dot: dot.Add(fixed.P(0, 1))}
+			shadow.DrawString(b.text)
+		}
+		d := font.Drawer{Dst: dst, Src: image.NewUniform(ink), Face: face, Dot: dot}
 		d.DrawString(b.text)
 	}
 	return nil
 }
 
+// Use linear-light luminance, not raw RGB brightness; saturated custom colours
+// otherwise choose white ink even when dark text is substantially more legible.
+func readableInk(background color.NRGBA) color.NRGBA {
+	dark := color.NRGBA{R: 13, G: 20, B: 28, A: 255}
+	light := color.NRGBA{R: 246, G: 245, B: 241, A: 255}
+	luminance := func(c color.NRGBA) float64 {
+		linear := func(v uint8) float64 {
+			n := float64(v) / 255
+			if n <= .04045 {
+				return n / 12.92
+			}
+			return math.Pow((n+.055)/1.055, 2.4)
+		}
+		return .2126*linear(c.R) + .7152*linear(c.G) + .0722*linear(c.B)
+	}
+	bg := luminance(background)
+	contrast := func(c color.NRGBA) float64 {
+		v := luminance(c)
+		return (math.Max(bg, v) + .05) / (math.Min(bg, v) + .05)
+	}
+	if contrast(dark) >= contrast(light) {
+		return dark
+	}
+	return light
+}
+
 // Sample is an original offline illustration. Its fictional facts are deliberately
 // separate from Labels, which accepts only observed catalog/release information.
 func (s *Service) Sample(cfg Settings) ([]byte, string, error) {
+	return s.SampleContext(context.Background(), cfg)
+}
+func (s *Service) SampleContext(ctx context.Context, cfg Settings) ([]byte, string, error) {
 	cfg = normalizeSettings(cfg)
 	if err := validateSettings(cfg); err != nil {
 		return nil, "", err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	s.sampleOnce.Do(func() { s.sampleData, s.sampleErr = s.sampleOriginal() })
+	if s.sampleErr != nil {
+		return nil, "", s.sampleErr
+	}
+	var labels []string
+	if cfg.Enabled {
+		if cfg.Status {
+			labels = append(labels, "NEW SEASON")
+		}
+		if cfg.Quality {
+			labels = append(labels, "4K HDR")
+		}
+		if cfg.Ratings {
+			labels = append(labels, "IMDb 8.6")
+		}
+	}
+	return s.compositeContext(ctx, s.sampleData, labels, cfg)
+}
+
+func (s *Service) sampleOriginal() ([]byte, error) {
 	img := image.NewRGBA(image.Rect(0, 0, 500, 750))
 	for y := 0; y < 750; y++ {
 		for x := 0; x < 500; x++ {
@@ -198,9 +263,9 @@ func (s *Service) Sample(cfg Settings) ([]byte, string, error) {
 			}
 		}
 	}
-	face, err := renderFace(45)
+	face, err := s.renderFace(45)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer face.Close()
 	d := font.Drawer{Dst: img, Src: image.NewUniform(color.NRGBA{R: 244, G: 234, B: 218, A: 255}), Face: face}
@@ -208,9 +273,9 @@ func (s *Service) Sample(cfg Settings) ([]byte, string, error) {
 		d.Dot = fixed.P((500-font.MeasureString(face, line).Ceil())/2, 460+i*52)
 		d.DrawString(line)
 	}
-	small, err := renderFace(11)
+	small, err := s.renderFace(11)
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	defer small.Close()
 	d.Face = small
@@ -219,19 +284,8 @@ func (s *Service) Sample(cfg Settings) ([]byte, string, error) {
 	d.DrawString(caption)
 	var raw bytes.Buffer
 	if err := jpeg.Encode(&raw, img, &jpeg.Options{Quality: 92}); err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	var labels []string
-	if cfg.Enabled {
-		if cfg.Status {
-			labels = append(labels, "NEW SEASON")
-		}
-		if cfg.Quality {
-			labels = append(labels, "4K HDR")
-		}
-		if cfg.Ratings {
-			labels = append(labels, "IMDb 8.6")
-		}
-	}
-	return s.composite(raw.Bytes(), labels, cfg)
+
+	return raw.Bytes(), nil
 }

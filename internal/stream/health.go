@@ -45,7 +45,16 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 		}
 	}()
 	trace := HealthTrace{}
-	defer func() { e.healthMu.Lock(); e.healthTrace = trace; e.healthMu.Unlock() }()
+	started := time.Now()
+	defer func() {
+		e.healthMu.Lock()
+		e.healthTrace = trace
+		e.healthMu.Unlock()
+		e.log.Debug("release health completed", "release", releaseID, "healthy", healthy, "err", err,
+			"total", time.Since(started), "parse", trace.Parse, "plan", trace.Plan,
+			"sample", trace.STAT, "body", trace.Body, "samples", trace.Samples,
+			"bodyProbes", trace.BodyProbes, "bodyOK", trace.BodyOK, "failReason", trace.FailReason)
+	}()
 	if err := e.ctx.Err(); err != nil {
 		return false, ErrClosed
 	}
@@ -69,16 +78,19 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 	statCh := make(chan statResult, 1)
 	sctx, cancelStats := context.WithCancel(ctx)
 	defer cancelStats()
-	var guessed []*postedFile
-	if len(cands) > 0 && !b.shouldProbe(cands) {
-		guessed = cands[0].files
-		go func() {
-			started := time.Now()
-			out := e.statSample(sctx, guessed)
-			statCh <- statResult{files: guessed, out: out, duration: time.Since(started)}
-		}()
-	} else {
-		statCh <- statResult{}
+	var sampleOnce sync.Once
+	startSample := func(files []*postedFile) {
+		sampleOnce.Do(func() {
+			go func() {
+				started := time.Now()
+				out := e.statSample(sctx, files)
+				statCh <- statResult{files: files, out: out, duration: time.Since(started)}
+			}()
+		})
+	}
+	earlySample := len(cands) > 0 && !b.shouldProbe(cands)
+	if earlySample {
+		startSample(cands[0].files)
 	}
 	record := func(res statResult) {
 		trace.STAT, trace.Samples = res.duration, res.out.total
@@ -106,7 +118,10 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 	planCh := make(chan planned, 1)
 	go func() {
 		started := time.Now()
-		p, err := rel.ensurePlan(sctx, core.PriorityLive, releaseID)
+		p, err := rel.ensurePlanWithCandidate(sctx, core.PriorityLive, releaseID, startSample)
+		// Identification can reject before announcing any candidate. Always
+		// settle the sample channel so cancellation cleanup can join it.
+		startSample(nil)
 		planCh <- planned{p, err, time.Since(started)}
 	}()
 	var ready planned
@@ -115,10 +130,14 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 	defer func() {
 		cancelStats()
 		if !gotStats {
-			<-statCh
+			reason := trace.FailReason
+			record(<-statCh)
+			if reason != "" {
+				trace.FailReason = reason
+			}
 		}
 		if !gotPlan {
-			<-planCh
+			trace.Plan = (<-planCh).elapsed
 		}
 		<-par2Done
 	}()
@@ -135,7 +154,10 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 		case res = <-statCh:
 			gotStats = true
 			record(res)
-			if res.out.err != nil || res.out.missing > 0 {
+			// Newly identified obfuscated candidates may still fall through
+			// to another archive if the first contains no video. Its sample
+			// must not reject the eventual candidate before planning settles.
+			if (earlySample || (gotPlan && sameFiles(res.files, ready.p.vols))) && (res.out.err != nil || res.out.missing > 0) {
 				cancelStats()
 				if res.out.err != nil {
 					return false, res.out.err

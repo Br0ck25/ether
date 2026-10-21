@@ -199,8 +199,32 @@ func (s *Service) routeSources(cands []candidate, t *core.Title, trace *Trace) [
 			hasUsenet = true
 		}
 	}
-	if !hasUsenet || !hasTorrent {
-		return cands // nothing to choose between
+	if hasTorrent && !hasUsenet {
+		// Availability still matters when only torrents are eligible. The
+		// search cache check may already know a ready equivalent, while a
+		// slightly higher-scored descriptor has no hash yet. Promote the
+		// ready copy before preparation so unrelated descriptor discovery
+		// does not delay its validation. Keep unknown copies as fallbacks.
+		for _, i := range indexes {
+			if !s.knownCached(cands[i].rel) || !equivalentHedge(lead, cands[i], margin) {
+				continue
+			}
+			if i == 0 {
+				return cands
+			}
+			out := make([]candidate, 0, len(cands))
+			out = append(out, cands[i])
+			out = append(out, cands[:i]...)
+			out = append(out, cands[i+1:]...)
+			if trace != nil && out[0].trace >= 0 && out[0].trace < len(trace.Candidates) {
+				trace.Candidates[out[0].trace].Route = "ready equivalent: cached on debrid"
+			}
+			return out
+		}
+		return cands
+	}
+	if !hasTorrent {
+		return cands
 	}
 
 	var want, why string

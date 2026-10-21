@@ -586,7 +586,8 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		remuxSwitch bool
 		lastErr     error
 	)
-	if !direct && !fo.down {
+	prepared := cur.takeDamageResolution(tried)
+	if !direct && !fo.down && prepared == nil {
 		// Any healthy alternate continues an encoder session, so open
 		// several at once instead of stalling through each broken one.
 		var failed []string
@@ -597,7 +598,12 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		tried = append(tried, failed...)
 	}
 	for attempt := 0; g == nil && attempt < m.opts.MaxAttempts; attempt++ {
-		res, err := m.nextResolution(ctx, s, tried, alternates)
+		res := prepared
+		prepared = nil
+		var err error
+		if res == nil {
+			res, err = m.nextResolution(ctx, s, tried, alternates)
+		}
 		if err != nil {
 			lastErr = err
 			break

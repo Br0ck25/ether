@@ -3,6 +3,7 @@ package stream
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 
@@ -50,10 +51,10 @@ type piece struct {
 
 // pieces splits [off, off+n) into per-volume runs.
 func (l *layout) pieces(off, n int64) []piece {
-	if off >= l.size || n <= 0 {
+	if off < 0 || off >= l.size || n <= 0 {
 		return nil
 	}
-	if off+n > l.size {
+	if n > l.size-off {
 		n = l.size - off
 	}
 	i := sort.Search(len(l.ext), func(i int) bool { return l.ext[i].inner+l.ext[i].size > off })
@@ -137,7 +138,13 @@ func (p *plan) isVerified(vol int) bool {
 }
 
 func (p *plan) buildLocked(version int) (*layout, error) {
+	if p.size < 0 || len(p.info) != len(p.vols) || len(p.verified) != len(p.vols) {
+		return nil, fmt.Errorf("stream: inconsistent archive layout: %w", ErrCorrupt)
+	}
 	for k, vi := range p.info {
+		if vi.size < 0 || vi.dataSize < 0 {
+			return nil, fmt.Errorf("stream: volume %d has a negative size: %w", k, ErrCorrupt)
+		}
 		if !p.verified[k] {
 			p.vols[k].setAssumed(vi.size)
 		}
@@ -147,13 +154,20 @@ func (p *plan) buildLocked(version int) (*layout, error) {
 	case kind7z:
 		starts := make([]int64, len(p.info)+1)
 		for k, vi := range p.info {
+			if vi.size > math.MaxInt64-starts[k] {
+				return nil, fmt.Errorf("stream: concatenated archive size overflows: %w", ErrCorrupt)
+			}
 			starts[k+1] = starts[k] + vi.size
 		}
 		var inner int64
 		for _, x := range p.concatExt {
+			total := starts[len(p.info)]
+			if x.Volume != 0 || x.Offset < 0 || x.Size < 0 || x.Offset > total || x.Size > total-x.Offset || x.Size > p.size-inner {
+				return nil, fmt.Errorf("stream: invalid concatenated archive extent: %w", ErrCorrupt)
+			}
 			off, rem := x.Offset, x.Size
+			k := sort.Search(len(p.info), func(k int) bool { return starts[k+1] > off })
 			for rem > 0 {
-				k := sort.Search(len(p.info), func(k int) bool { return starts[k+1] > off })
 				if k >= len(p.info) {
 					return nil, fmt.Errorf("stream: 7z member extends past the last volume: %w", ErrCorrupt)
 				}
@@ -165,6 +179,7 @@ func (p *plan) buildLocked(version int) (*layout, error) {
 				inner += take
 				off += take
 				rem -= take
+				k++
 			}
 		}
 		if inner != p.size {
@@ -176,7 +191,7 @@ func (p *plan) buildLocked(version int) (*layout, error) {
 			if vi.dataSize <= 0 {
 				continue
 			}
-			if vi.dataOff < 0 || vi.dataOff+vi.dataSize > vi.size {
+			if vi.dataOff < 0 || vi.dataOff > vi.size || vi.dataSize > vi.size-vi.dataOff || vi.dataSize > p.size-inner {
 				return nil, fmt.Errorf("stream: volume %d data [%d,+%d) exceeds its size %d: %w", k, vi.dataOff, vi.dataSize, vi.size, ErrCorrupt)
 			}
 			l.ext = append(l.ext, extent{inner: inner, size: vi.dataSize, vol: k, off: vi.dataOff})

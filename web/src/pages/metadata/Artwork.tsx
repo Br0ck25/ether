@@ -15,7 +15,13 @@ import { useAsync, useDebouncedValue } from "../../lib/hooks";
 import { blankSpec } from "../../lib/rules";
 import { nativeSelect } from "./shared";
 import { MetadataWorkspace } from "./MetadataWorkspace";
-import { normalizeOverlays, PRESETS, type Overlays } from "./model";
+import {
+  normalizeOverlays,
+  PRESETS,
+  explanationURL,
+  type ArtworkExplanation,
+  type Overlays,
+} from "./model";
 import { PosterCanvas } from "./PosterCanvas";
 
 type Variant = { path: string; language?: string; tags?: string[] };
@@ -29,14 +35,23 @@ const OPTIONS = [
   {
     key: "status",
     label: "Release status badge",
-    hint: "New episodes, seasons and returning shows.",
+    hint: "Recent releases, unwatched new episodes and seasons.",
   },
   {
     key: "quality",
     label: "Quality badge",
-    hint: "4K, HDR, Dolby Vision and Atmos, when verified.",
+    hint: "Last verified playback: resolution, HDR, Dolby Vision and Atmos.",
   },
-  { key: "ratings", label: "Rating badges", hint: "Cached scores, clearly labelled by source." },
+  {
+    key: "ratings",
+    label: "Rating badges",
+    hint: "TMDB by default; cached provider scores when configured.",
+  },
+  {
+    key: "details",
+    label: "Title details",
+    hint: "Year, runtime and content rating from the catalogue.",
+  },
   {
     key: "personalize",
     label: "Match posters to taste",
@@ -88,6 +103,24 @@ export function ArtworkSettings() {
   const preview = useDebouncedValue(draft, 180);
   const previewUser = viewer ?? (users.data?.find((u) => u.isOwner) ?? users.data?.[0])?.id ?? null;
   const [mode, setMode] = useState<"poster" | "library" | "compare">("poster");
+  const explanationRequest =
+    title && preview && previewUser != null
+      ? explanationURL(preview, title.key, previewUser, lang, nonce)
+      : null;
+  const explanation = useAsync(
+    async (signal) => {
+      if (!explanationRequest) return null;
+      const report = await apiFetch<ArtworkExplanation>(explanationRequest, { signal });
+      return { request: explanationRequest, report };
+    },
+    [explanationRequest],
+  );
+  // useAsync keeps old data during reloads. Never attribute a previous title's
+  // or viewer's evidence to the newly selected preview, even before effects run.
+  const explanationData =
+    !explanation.loading && !explanation.error && explanation.data?.request === explanationRequest
+      ? explanation.data?.report
+      : null;
   if (doc.error)
     return (
       <MetadataWorkspace
@@ -256,12 +289,35 @@ export function ArtworkSettings() {
             <section className="metadata-control-section" aria-label="Poster layers">
               <div className="metadata-section-title">
                 <h3>Poster layers</h3>
+                <span className="text-[10px] text-fg-muted">
+                  {explanation.loading || draft !== preview ? "Checking title…" : "Live title data"}
+                </span>
               </div>
+              {explanation.error && !explanation.loading ? (
+                <p className="text-xs text-fg-muted">
+                  Preview data unavailable.{" "}
+                  <button className="underline" onClick={() => void explanation.reload()}>
+                    Retry title data
+                  </button>
+                </p>
+              ) : null}
               {OPTIONS.map((o) => (
                 <div className="metadata-toggle" key={o.key}>
                   <div>
                     <label htmlFor={`overlay-${o.key}`}>{o.label}</label>
                     <p>{o.hint}</p>
+                    {explanationData?.layers.find((l) => l.key === o.key && l.state !== "off") &&
+                      (() => {
+                        const layer = explanationData!.layers.find((l) => l.key === o.key)!;
+                        return (
+                          <p
+                            className={`metadata-layer-state is-${layer.state}`}
+                            title={layer.reason}
+                          >
+                            {layer.state === "ready" ? layer.labels.join(" · ") : layer.reason}
+                          </p>
+                        );
+                      })()}
                   </div>
                   <Switch
                     id={`overlay-${o.key}`}
@@ -394,7 +450,12 @@ export function ArtworkSettings() {
               <span>
                 {mode === "library"
                   ? "Library preview · Plex layouts vary"
-                  : "Originals preserved · available badges only"}
+                  : !explanation.loading &&
+                      explanationData &&
+                      draft.enabled &&
+                      explanationData.labels.length === 0
+                    ? "No selected badges available · see Poster layers"
+                    : "Originals preserved · available badges only"}
               </span>
               <Badge variant="outline">{draft.enabled ? "Ether design" : "Original artwork"}</Badge>
             </div>

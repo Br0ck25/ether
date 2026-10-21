@@ -220,13 +220,13 @@ func TestStyleChangesInvalidatePlexArtworkVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	s := New(db, Options{})
+	s := New(db, Options{Facts: func(context.Context, *core.User, *core.Title) Facts { return Facts{NewSeason: true} }})
 	title := &core.Title{Key: core.MovieKey(1), PosterPath: "/default.jpg"}
-	if err := s.SaveSettings(ctx, Settings{Enabled: true}); err != nil {
+	if err := s.SaveSettings(ctx, Settings{Enabled: true, Status: true}); err != nil {
 		t.Fatal(err)
 	}
 	before := s.Version(ctx, nil, title, "en")
-	if err := s.SaveSettings(ctx, Settings{Enabled: true, Style: "minimal"}); err != nil {
+	if err := s.SaveSettings(ctx, Settings{Enabled: true, Status: true, Style: "minimal"}); err != nil {
 		t.Fatal(err)
 	}
 	if before == s.Version(ctx, nil, title, "en") {

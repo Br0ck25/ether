@@ -2,11 +2,14 @@ package overlays
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/go-chi/chi/v5"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // Router must be owner authenticated. Previews pass through the same generator
@@ -56,7 +59,7 @@ func (s *Service) Router(cat core.Catalog, users func(*http.Request, int64) (*co
 			http.Error(w, e.Error(), 400)
 			return
 		}
-		data, ct, e := s.Sample(cfg)
+		data, ct, e := s.SampleContext(r.Context(), cfg)
 		if e != nil {
 			http.Error(w, "Sample unavailable", 500)
 			return
@@ -117,7 +120,7 @@ func (s *Service) Router(cat core.Catalog, users func(*http.Request, int64) (*co
 		}
 		reply(w, v)
 	})
-	r.Get("/preview/{key}", func(w http.ResponseWriter, r *http.Request) {
+	preview := func(w http.ResponseWriter, r *http.Request) {
 		if cat == nil {
 			http.Error(w, "Catalog unavailable", 503)
 			return
@@ -159,14 +162,37 @@ func (s *Service) Router(cat core.Catalog, users func(*http.Request, int64) (*co
 			}
 			ctx = context.WithValue(ctx, previewSettingsKey{}, cfg)
 		}
+		if strings.HasPrefix(r.URL.Path, "/explain/") || strings.Contains(r.URL.Path, "/overlays/explain/") {
+			report, err := s.Inspect(ctx, u, t)
+			if err != nil {
+				http.Error(w, "Preview data unavailable", 500)
+				return
+			}
+			w.Header().Set("Cache-Control", "private, no-store")
+			reply(w, report)
+			return
+		}
 		data, ct, e := s.Poster(ctx, u, t, r.URL.Query().Get("lang"))
 		if e != nil {
 			http.Error(w, "Preview unavailable", 502)
 			return
 		}
+		etag := fmt.Sprintf("\"%x\"", sha256.Sum256(data))
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
+		w.Header().Set("Vary", "X-Plex-Token")
+		if r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		w.Header().Set("Content-Type", ct)
-		w.Header().Set("Cache-Control", "private, no-store")
 		_, _ = w.Write(data)
+	}
+	r.Get("/preview/{key}", preview)
+	r.Get("/explain/{key}", preview)
+	r.Get("/cache", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, no-store")
+		reply(w, s.CacheStats())
 	})
 	return r
 }

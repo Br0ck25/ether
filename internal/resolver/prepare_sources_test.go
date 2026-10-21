@@ -83,3 +83,81 @@ func TestPrepareSourcesDoesNotDelayKnownCachedLeader(t *testing.T) {
 		t.Fatal("cached leader waited for unrelated descriptor preparation")
 	}
 }
+
+func TestTorrentOnlyRoutingSkipsUnneededDiscovery(t *testing.T) {
+	for _, mode := range []string{PreferAuto, PreferDebrid, PreferUsenet} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := testCfg()
+			cfg.Resolver.SourcePreference = mode
+			idx := &preparingIndexer{signals: cachedSet{hashA: true}}
+			svc := New(idx, fakeHealth{}, nil, cfg, Options{})
+			defer svc.Close()
+			svc.SetSourceSignals(idx.signals)
+			ready := routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")[1]
+			ready.Score = 100
+			ready.Info.Height = 1080
+			unknown := ready
+			unknown.ID, unknown.InfoHash, unknown.Score = "unknown", "", 101
+			middle, last := unknown, unknown
+			middle.ID, last.ID = "middle", "last"
+			cands := []candidate{{rel: unknown, trace: 0}, {rel: middle, trace: 1}, {rel: ready, trace: 2}, {rel: last, trace: 3}}
+			tr := &Trace{Candidates: make([]CandidateTrace, len(cands))}
+			routed := svc.routeSources(cands, routingTitle(false), tr)
+			got := svc.prepareSources(t.Context(), routed, routingTitle(false), tr)
+			if idx.calls != 0 || len(got) != 4 || got[0].rel.ID != ready.ID || got[1].rel.ID != unknown.ID || got[2].rel.ID != middle.ID || got[3].rel.ID != last.ID {
+				t.Fatalf("ready torrent waited for discovery: calls=%d candidates=%+v", idx.calls, got)
+			}
+			if cands[0].rel.ID != unknown.ID || tr.Candidates[2].Route == "" {
+				t.Fatal("routing mutated its input or omitted its explanation")
+			}
+		})
+	}
+}
+
+func TestTorrentOnlyReadyRoutingPreservesConstraints(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func([]candidate)
+	}{
+		{"verified", func(cs []candidate) { cs[0].verified = true }},
+		{"quality", func(cs []candidate) { cs[1].rel.Info.Height = 720 }},
+		{"edition", func(cs []candidate) { cs[1].rel.Info.Edition = "extended" }},
+		{"score", func(cs []candidate) { cs[1].rel.Score = 50 }},
+		{"bandwidth", func(cs []candidate) { cs[1].bandwidth = -1 }},
+		{"availability", func(cs []candidate) { cs[1].rel.InfoHash = "unknown" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := New(nil, fakeHealth{}, nil, testCfg(), Options{})
+			defer svc.Close()
+			svc.SetSourceSignals(cachedSet{hashA: true})
+			ready := routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")[1]
+			ready.Score = 100
+			ready.Info.Height = 1080
+			unknown := ready
+			unknown.ID, unknown.InfoHash = "unknown", ""
+			cs := []candidate{{rel: unknown}, {rel: ready}}
+			tc.change(cs)
+			if got := svc.routeSources(cs, routingTitle(true), nil); got[0].rel.ID != unknown.ID {
+				t.Fatalf("routing violated %s constraint", tc.name)
+			}
+		})
+	}
+}
+
+func TestTorrentOnlyCachedAnswerStillRequiresHealth(t *testing.T) {
+	ready := routingReleases("The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-OTHER")[1]
+	ready.Score, ready.Info.Height = 100, 1080
+	unknown := ready
+	unknown.ID, unknown.InfoHash, unknown.Score = "unknown", "", 101
+	idx := &preparingIndexer{signals: cachedSet{hashA: true}}
+	svc := New(idx, fakeHealth{unhealthy: map[string]bool{ready.ID: true}}, nil, testCfg(), Options{})
+	defer svc.Close()
+	svc.SetSourceSignals(idx.signals)
+	tr := &Trace{Candidates: make([]CandidateTrace, 2)}
+	cs := svc.routeSources([]candidate{{rel: unknown, trace: 0}, {rel: ready, trace: 1}}, routingTitle(false), tr)
+	cs = svc.prepareSources(t.Context(), cs, routingTitle(false), tr)
+	winner, _, err := svc.validateCandidates(t.Context(), cs, tr, 0)
+	if err != nil || winner < 0 || cs[winner].rel.ID != unknown.ID || !tr.Candidates[1].Rejected || !tr.Candidates[0].Healthy {
+		t.Fatalf("stale cache answer bypassed validation/fallback: winner=%d err=%v trace=%+v", winner, err, tr)
+	}
+}

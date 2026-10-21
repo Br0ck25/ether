@@ -295,3 +295,43 @@ optional managed shelf of movies and TV episodes. Presets range from no persiste
 through small caches to multi-terabyte preloading. Every budget is adjustable;
 selecting a preset only changes the draft until you save. See [Cache management](cache.md)
 for retention, preload limits, pause behaviour, and storage accounting.
+
+## Metadata artwork
+
+**Metadata → Artwork** previews real catalogue posters with your unsaved design.
+Use the refresh button to try another title, or compare your design with the
+original. The canvas stays fitted to the window; the controls scroll separately.
+
+Cinema combines scores and title details in glass badges. Spotlight uses the
+accent colour for prominent badges and adds recent-release signals when they
+exist. Essential keeps a small, unboxed score. Finishes, placement, size, colour
+and individual layers remain editable after choosing a preset.
+
+Ratings use the catalogue's TMDB score when no cached external-provider score is
+available. Sources are always named. IMDb and other provider scores require the
+owner's configured provider; Ether never relabels a TMDB score as IMDb. Unrated
+titles receive no invented score. **Poster layers** shows the actual labels or
+explains which data is unavailable for the selected title and viewer.
+
+Release status highlights releases within 30 days, unwatched recent episodes or
+seasons, and scheduled collection-row expiry. An ongoing series is not labelled
+“Returning” merely because TMDB says it is still in production. Quality badges
+start with **PLAYED**: they describe verified media from this viewer's current
+playback or a matching resume release probed within 30 days. They do not promise
+the next selected release has the same format. Release-name estimates and other
+viewers' playback are excluded.
+
+Ether retains the original image and renders a separate poster copy on demand.
+It does not modify video or upload replacement posters into a separate Plex
+server. Plex receives versioned image URLs; disabling customization restores
+original artwork after the client refreshes its metadata.
+
+Identical rendered results share a cache across viewers. Each node defaults to
+16 MiB of generated posters in memory and 256 MiB on its local disk under
+`cache/overlays`; least-recently-used entries are evicted within those limits.
+Generated files survive restarts, validate their content before reuse, and can be
+regenerated from the original artwork. Simultaneous requests for the same image
+share one render, with at most two cold renders running at once. Unneeded queued
+work is cancelled when its last requester leaves. Disk failures fall back to
+memory/rendering rather than making posters unavailable. These caches are local
+to each server process; they are not a shared media-cache directory.
