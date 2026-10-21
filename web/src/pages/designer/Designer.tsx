@@ -23,7 +23,7 @@ function initialContext(): ViewContext {
 }
 
 /**
- * HomeScreen: the native Plex Home (each viewer's For You) for everyone, personalization
+ * Home: the native Plex Home (each viewer's For You) for everyone, personalization
  * within it, and per-viewer overrides on top. Controls on the left third,
  * the live Plex Home (rendered server-side from the draft) on the right.
  */
@@ -141,7 +141,7 @@ export default function Designer() {
 
   return (
     <Workspace
-      title="HomeScreen"
+      title="Home"
       subtitle="Shape the native Plex Home: every viewer's personalized For You, with per-viewer overrides on top."
       actions={actions}
       asideLabel="Designer controls"

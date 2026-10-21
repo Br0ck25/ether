@@ -49,6 +49,7 @@ import {
   posterFor,
   type FakeTitle,
 } from "./data";
+import { createMetadataMock } from "./metadata";
 import { createMaintenance } from "./maintenance";
 import { createReleaseConsoleMock } from "./releases";
 import { createSitesMock } from "./sites";
@@ -1707,6 +1708,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
     };
   }
 
+  const metadata = createMetadataMock();
+
   // ---- Router ------------------------------------------------------------------------
 
   async function handle(method: string, url: URL, body: unknown): Promise<Response> {
@@ -1727,6 +1730,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const rc = releaseConsole.handle(method, seg, q, body);
     if (rc)
       return rc.status === 204 ? new Response(null, { status: 204 }) : json(rc.body, rc.status);
+
+    const md = metadata(method, p, body, q);
+    if (md) return md;
 
     const mr = maintenance.handle(method, seg, body);
     if (mr) return json(mr.body, mr.status);

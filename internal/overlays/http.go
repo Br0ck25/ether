@@ -31,11 +31,39 @@ func (s *Service) Router(cat core.Catalog, users func(*http.Request, int64) (*co
 			http.Error(w, "Invalid settings", 400)
 			return
 		}
+		v = normalizeSettings(v)
+		if e := validateSettings(v); e != nil {
+			http.Error(w, e.Error(), 400)
+			return
+		}
 		if s.SaveSettings(r.Context(), v) != nil {
 			http.Error(w, "Settings could not be saved", 500)
 			return
 		}
 		reply(w, v)
+	})
+	r.Get("/sample", func(w http.ResponseWriter, r *http.Request) {
+		cfg := Settings{Enabled: true, Status: true, Quality: true, Ratings: true}
+		if raw := r.URL.Query().Get("settings"); raw != "" {
+			cfg = Settings{}
+			if len(raw) > 2048 || json.Unmarshal([]byte(raw), &cfg) != nil {
+				http.Error(w, "Invalid preview settings", 400)
+				return
+			}
+		}
+		cfg = normalizeSettings(cfg)
+		if e := validateSettings(cfg); e != nil {
+			http.Error(w, e.Error(), 400)
+			return
+		}
+		data, ct, e := s.Sample(cfg)
+		if e != nil {
+			http.Error(w, "Sample unavailable", 500)
+			return
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Cache-Control", "private, no-store")
+		_, _ = w.Write(data)
 	})
 	r.Get("/artwork/{key}", func(w http.ResponseWriter, r *http.Request) {
 		k, e := core.ParseRatingKey(chi.URLParam(r, "key"))
@@ -122,6 +150,11 @@ func (s *Service) Router(cat core.Catalog, users func(*http.Request, int64) (*co
 			var cfg Settings
 			if len(raw) > 2048 || json.Unmarshal([]byte(raw), &cfg) != nil {
 				http.Error(w, "Invalid preview settings", 400)
+				return
+			}
+			cfg = normalizeSettings(cfg)
+			if e := validateSettings(cfg); e != nil {
+				http.Error(w, e.Error(), 400)
 				return
 			}
 			ctx = context.WithValue(ctx, previewSettingsKey{}, cfg)

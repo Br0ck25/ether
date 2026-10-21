@@ -130,7 +130,7 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
     {
       label: "In Plex",
       items: [
-        { href: "/home-screens", label: "HomeScreen", icon: <LayoutTemplate size={icon} /> },
+        { href: "/home", label: "Home", icon: <LayoutTemplate size={icon} /> },
         { href: "/collections", label: "Collections", icon: <Layers size={icon} />, mobile: true },
         { href: "/livetv", label: "Live TV", icon: <Tv size={icon} /> },
         { href: "/metadata", label: "Metadata", icon: <Tags size={icon} /> },
@@ -323,7 +323,8 @@ function Shell() {
             <Route path="/viewers/people" element={<ViewersList tab="people" />} />
             <Route path="/viewers/defaults" element={<ViewersList tab="defaults" />} />
             <Route path="/viewers/:id/:tab?" element={<ViewerProfile />} />
-            <Route path="/home-screens" element={<Designer />} />
+            <Route path="/home" element={<Designer />} />
+            <Route path="/home-screens" element={<Navigate to="/home" replace />} />
             <Route path="/collections" element={<CollectionsGallery />} />
             <Route path="/collections/new" element={<CollectionDrawer fresh />} />
             <Route path="/collections/:id" element={<CollectionDrawer />} />

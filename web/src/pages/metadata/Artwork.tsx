@@ -1,14 +1,6 @@
-import {
-  Button,
-  Input,
-  SettingsSection,
-  Spinner,
-  Switch,
-  cn,
-  toast,
-} from "@braedonsaunders/appkit-ui";
-import { ImageIcon, Pin, RotateCcw, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Badge, Button, Input, Spinner, Switch, cn, toast } from "@braedonsaunders/appkit-ui";
+import { Check, ImageIcon, Pin, RotateCcw, SlidersHorizontal, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Artwork } from "../../components/Artwork";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, MutationError } from "../../components/feedback";
@@ -17,20 +9,14 @@ import { Section } from "../../components/layout";
 import { TitleSearch } from "../../components/pickers";
 import { titleSubtitle } from "../../components/Poster";
 import { SaveBar, useDraft } from "../../components/SaveBar";
-import { SettingsRow } from "../../components/SettingsRow";
 import { api, apiFetch } from "../../lib/api";
 import type { TitleCard } from "../../lib/contract";
-import { useAsync } from "../../lib/hooks";
+import { useAsync, useDebouncedValue } from "../../lib/hooks";
 import { nativeSelect } from "./shared";
+import { MetadataWorkspace } from "./MetadataWorkspace";
+import { normalizeOverlays, PRESETS, previewURL, type Overlays } from "./model";
+import { PosterCanvas } from "./PosterCanvas";
 
-type Overlays = {
-  enabled: boolean;
-  status: boolean;
-  quality: boolean;
-  ratings: boolean;
-  personalize: boolean;
-  localize: boolean;
-};
 type Variant = { path: string; language?: string; tags?: string[] };
 type Art = {
   posters: Variant[] | null;
@@ -38,65 +24,58 @@ type Art = {
   pinnedPoster?: string;
   pinnedBackdrop?: string;
 };
-
-const OPTIONS: { key: keyof Overlays; label: string; hint: string }[] = [
-  {
-    key: "enabled",
-    label: "Ether posters",
-    hint: "Serve Ether's own posters and backdrops, with the badges and choices below.",
-  },
+const OPTIONS = [
   {
     key: "status",
     label: "Release status badge",
-    hint: "New, new season or ended, only when Ether has seen it happen.",
+    hint: "New episodes, seasons and returning shows.",
   },
   {
     key: "quality",
     label: "Quality badge",
-    hint: "4K, HDR, Dolby Vision or Atmos, only when a verified release has it.",
+    hint: "4K, HDR, Dolby Vision and Atmos, when verified.",
   },
-  {
-    key: "ratings",
-    label: "Rating badges",
-    hint: "Cached scores from Ratings, labelled by source.",
-  },
+  { key: "ratings", label: "Rating badges", hint: "Cached scores, clearly labelled by source." },
   {
     key: "personalize",
     label: "Match posters to taste",
-    hint: "Pick the tagged poster that best fits each viewer's taste.",
+    hint: "Choose tagged artwork for each viewer.",
   },
-  {
-    key: "localize",
-    label: "Localized artwork",
-    hint: "Use posters in the language each viewer's Plex app asks for.",
-  },
-];
+  { key: "localize", label: "Localized artwork", hint: "Follow the language requested by Plex." },
+] as const;
 
-/** Server-wide poster appearance in place, a live preview beside it, and per-title pins. */
 export function ArtworkSettings() {
-  const doc = useAsync(() => apiFetch<Overlays>("/discovery/overlays/settings"), []);
+  const doc = useAsync(
+    async () => normalizeOverlays(await apiFetch<Overlays>("/discovery/overlays/settings")),
+    [],
+  );
   const users = useAsync(() => api.users(), []);
   const { draft, setDraft, dirty, reset } = useDraft(doc.data);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [title, setTitle] = useState<TitleCard | null>(null);
   const [lang, setLang] = useState("en");
+  const [viewer, setViewer] = useState<number | null>(null);
   const [nonce, setNonce] = useState(0);
   const [pinning, setPinning] = useState<TitleCard | null>(null);
-  // Previews render as the owner; personalized choices differ per viewer.
-  const previewUser = useMemo(() => {
-    const list = users.data ?? [];
-    return (list.find((u) => u.isOwner) ?? list[0])?.id ?? null;
-  }, [users.data]);
-
-  if (doc.error) return <ErrorPanel error={doc.error} onRetry={() => void doc.reload()} />;
-  if (!draft)
+  const preview = useDebouncedValue(draft, 180);
+  const previewUser = viewer ?? (users.data?.find((u) => u.isOwner) ?? users.data?.[0])?.id ?? null;
+  const [mode, setMode] = useState<"poster" | "library" | "compare">("poster");
+  if (doc.error)
     return (
-      <div className="py-10 text-center">
-        <Spinner size={20} label="Loading artwork settings" />
-      </div>
+      <MetadataWorkspace
+        aside={<ErrorPanel error={doc.error} onRetry={() => void doc.reload()} />}
+        main={null}
+      />
     );
-
+  if (!draft || !preview)
+    return (
+      <MetadataWorkspace
+        aside={<Spinner size={20} label="Loading artwork settings" />}
+        main={null}
+      />
+    );
+  const set = (patch: Partial<Overlays>) => setDraft({ ...draft, ...patch });
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -105,97 +84,287 @@ export function ArtworkSettings() {
         method: "PUT",
         body: JSON.stringify(draft),
       });
-      doc.setData(next);
+      doc.setData(normalizeOverlays(next));
       setNonce((n) => n + 1);
-      toast.success("Artwork settings saved");
+      toast.success("Artwork settings saved", {
+        description: "Plex picks up the new artwork when it refreshes.",
+      });
     } catch (e) {
       setError(e);
     } finally {
       setSaving(false);
     }
   };
-  const previewSrc =
-    title && previewUser !== null
-      ? `/ether/api/discovery/overlays/preview/${title.key}?userId=${previewUser}&lang=${encodeURIComponent(lang)}&v=${nonce}&settings=${encodeURIComponent(JSON.stringify(draft))}`
-      : null;
-
+  const src = previewURL(preview, title?.key, previewUser, lang, nonce);
+  const original = previewURL({ ...preview, enabled: false }, title?.key, previewUser, lang, nonce);
   return (
     <>
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <SettingsSection
-          title="Posters in Plex"
-          description="Applies to every viewer. Badges only appear when there's evidence for them."
-        >
-          {OPTIONS.map((o) => (
-            <SettingsRow
-              key={o.key}
-              title={<label htmlFor={`overlay-${o.key}`}>{o.label}</label>}
-              description={o.hint}
-              control={
-                <Switch
-                  id={`overlay-${o.key}`}
-                  aria-label={o.label}
-                  checked={draft[o.key]}
-                  disabled={o.key !== "enabled" && !draft.enabled}
-                  onChange={(e) => setDraft({ ...draft, [o.key]: e.currentTarget.checked })}
-                />
-              }
-            />
-          ))}
-        </SettingsSection>
-        <Section
-          title="Preview"
-          description="Shows your unsaved choices on one title, as you would see it."
-        >
-          {title ? (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-fg">{title.title}</p>
-                  <p className="truncate text-xs text-fg-muted">{titleSubtitle(title)}</p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
-                  aria-label="Choose another title"
-                  onClick={() => setTitle(null)}
-                >
-                  <X size={14} />
-                </Button>
+      <MetadataWorkspace
+        actions={
+          <Badge variant={dirty ? "warning" : "secondary"}>
+            {dirty ? "Unsaved design" : "Saved design"}
+          </Badge>
+        }
+        aside={
+          <>
+            <div className="metadata-enable">
+              <div>
+                <label htmlFor="overlay-enabled">Ether posters</label>
+                <p>Serve customized posters in Plex</p>
               </div>
-              {previewSrc ? (
-                <Artwork
-                  src={previewSrc}
-                  alt={`${title.title} poster preview`}
-                  className="mx-auto aspect-[2/3] w-full max-w-[200px] rounded-lg"
-                  eager
-                />
-              ) : (
-                <Spinner size={16} label="Loading preview" />
-              )}
-              <label className="block space-y-1 text-sm">
-                <span className="text-fg-muted">Preview language</span>
-                <Input
-                  value={lang}
-                  onChange={(e) => setLang(e.currentTarget.value)}
-                  placeholder="en, fr-CA, es"
-                />
-              </label>
+              <Switch
+                id="overlay-enabled"
+                aria-label="Ether posters"
+                checked={draft.enabled}
+                disabled={saving}
+                onChange={(e) => set({ enabled: e.currentTarget.checked })}
+              />
             </div>
-          ) : (
-            <TitleSearch placeholder="Find a title to preview…" onPick={setTitle} />
-          )}
-        </Section>
-      </div>
-      <Section
-        title="Title artwork"
-        description="Pin a poster or backdrop for one title, or tag its posters so taste matching can choose between them."
-      >
-        <div className="max-w-xl">
-          <TitleSearch placeholder="Find a title to customise…" onPick={setPinning} />
-        </div>
-      </Section>
+            <section className="metadata-control-section" aria-label="Design presets">
+              <div className="metadata-section-title">
+                <h3>Preset</h3>
+              </div>
+              <div className="metadata-presets">
+                {PRESETS.map((p) => {
+                  const selected = Object.entries(p.settings).every(
+                    ([k, v]) => draft[k as keyof Overlays] === v,
+                  );
+                  return (
+                    <button
+                      key={p.name}
+                      type="button"
+                      className={cn("metadata-preset", selected && "selected")}
+                      aria-pressed={selected}
+                      disabled={saving}
+                      onClick={() => set(p.settings)}
+                    >
+                      <span className={`metadata-preset-art preset-${p.name.toLowerCase()}`}>
+                        <span style={{ background: p.settings.accent }} />
+                        {selected && <Check size={13} />}
+                      </span>
+                      <strong>{p.name}</strong>
+                      <small>{p.description}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+            <fieldset disabled={!draft.enabled || saving} className="metadata-control-section">
+              <div className="metadata-section-title">
+                <h3>Badge appearance</h3>
+              </div>
+              <label className="metadata-field">
+                Badge finish
+                <select
+                  className={nativeSelect}
+                  value={draft.style}
+                  onChange={(e) => set({ style: e.currentTarget.value as Overlays["style"] })}
+                >
+                  <option value="glass">Glass</option>
+                  <option value="solid">Solid</option>
+                  <option value="minimal">Minimal</option>
+                </select>
+              </label>
+              <div className="metadata-field-row">
+                <label className="metadata-field">
+                  Placement
+                  <select
+                    className={nativeSelect}
+                    value={draft.position}
+                    onChange={(e) =>
+                      set({ position: e.currentTarget.value as Overlays["position"] })
+                    }
+                  >
+                    <option value="bottom">Bottom</option>
+                    <option value="top">Top</option>
+                  </select>
+                </label>
+                <label className="metadata-field">
+                  Badge size
+                  <select
+                    className={nativeSelect}
+                    value={draft.size}
+                    onChange={(e) => set({ size: e.currentTarget.value as Overlays["size"] })}
+                  >
+                    <option value="small">Small</option>
+                    <option value="medium">Medium</option>
+                    <option value="large">Large</option>
+                  </select>
+                </label>
+              </div>
+              <div className="metadata-field">
+                <span>Accent colour</span>
+                <div className="metadata-swatches">
+                  {[
+                    ["#d4a574", "Sand"],
+                    ["#a7c4b5", "Sage"],
+                    ["#9ab6d4", "Glacier"],
+                    ["#c0a6d8", "Lavender"],
+                    ["#e8e4dc", "Pearl"],
+                  ].map(([color, name]) => (
+                    <button
+                      type="button"
+                      key={color}
+                      aria-label={name}
+                      aria-pressed={draft.accent === color}
+                      onClick={() => set({ accent: color })}
+                      style={{ background: color }}
+                    >
+                      {draft.accent === color && <Check size={16} />}
+                    </button>
+                  ))}
+                  <label className="metadata-custom-color" title="Custom accent">
+                    <input
+                      type="color"
+                      aria-label="Custom accent"
+                      value={draft.accent}
+                      onChange={(e) => set({ accent: e.currentTarget.value })}
+                    />
+                    <SlidersHorizontal size={15} />
+                  </label>
+                  <code>{draft.accent}</code>
+                </div>
+              </div>
+            </fieldset>
+            <section className="metadata-control-section" aria-label="Poster layers">
+              <div className="metadata-section-title">
+                <h3>Poster layers</h3>
+              </div>
+              {OPTIONS.map((o) => (
+                <div className="metadata-toggle" key={o.key}>
+                  <div>
+                    <label htmlFor={`overlay-${o.key}`}>{o.label}</label>
+                    <p>{o.hint}</p>
+                  </div>
+                  <Switch
+                    id={`overlay-${o.key}`}
+                    aria-label={o.label}
+                    checked={draft[o.key]}
+                    disabled={!draft.enabled || saving}
+                    onChange={(e) => set({ [o.key]: e.currentTarget.checked })}
+                  />
+                </div>
+              ))}
+            </section>
+            <Section
+              title="Title artwork"
+              description="Give an individual title its own poster or backdrop."
+            >
+              <TitleSearch placeholder="Find a title to customise…" onPick={setPinning} />
+            </Section>
+          </>
+        }
+        main={
+          <>
+            <div className="metadata-preview-toolbar">
+              <div>
+                <h2>{title ? title.title : "Artwork preview"}</h2>
+              </div>
+              <div className="metadata-view-switch" aria-label="Preview view">
+                {(
+                  [
+                    ["poster", "Poster"],
+                    ["library", "Library"],
+                    ["compare", "Compare"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    type="button"
+                    aria-pressed={mode === key}
+                    key={key}
+                    onClick={() => setMode(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <PosterCanvas
+              src={src}
+              original={original}
+              title={title}
+              mode={mode}
+              enabled={preview.enabled}
+              settings={preview}
+            />
+            <div className="metadata-preview-caption">
+              <span className="metadata-live-dot" />
+              <span>
+                {title
+                  ? "Live title preview · actual available badges"
+                  : "Sample artwork · illustrative scores and quality"}
+              </span>
+              <Badge variant="outline">{draft.enabled ? "Ether design" : "Original artwork"}</Badge>
+            </div>
+            <div className="metadata-preview-context">
+              <div className="metadata-context-heading">
+                <ImageIcon size={17} />
+                <div>
+                  <h3>Preview title</h3>
+                  <p>Search your catalogue or use the sample poster.</p>
+                </div>
+                {title && (
+                  <Button size="sm" variant="ghost" onClick={() => setTitle(null)}>
+                    <X size={13} /> Use sample
+                  </Button>
+                )}
+              </div>
+              {title ? (
+                <div className="metadata-selected-title">
+                  <span>
+                    <strong>{title.title}</strong>
+                    <small>{titleSubtitle(title)}</small>
+                  </span>
+                  <Button size="sm" variant="outline" onClick={() => setPinning(title)}>
+                    <Pin size={13} /> Edit artwork
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setTitle(null)}>
+                    Change title
+                  </Button>
+                </div>
+              ) : (
+                <TitleSearch placeholder="Search movies and shows…" onPick={setTitle} />
+              )}
+              {title && (
+                <div className="metadata-field-row">
+                  <label className="metadata-field">
+                    Preview as
+                    <select
+                      className={nativeSelect}
+                      value={previewUser ?? ""}
+                      onChange={(e) => setViewer(Number(e.currentTarget.value))}
+                    >
+                      <option value="" disabled>
+                        Select a viewer
+                      </option>
+                      {users.data?.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.title || u.username}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="metadata-field">
+                    Preview language
+                    <Input
+                      value={lang}
+                      onChange={(e) => setLang(e.currentTarget.value)}
+                      placeholder="en, fr-CA, es"
+                    />
+                  </label>
+                </div>
+              )}
+              {title && users.error ? (
+                <ErrorPanel error={users.error} onRetry={() => void users.reload()} />
+              ) : null}
+            </div>
+            <p className="text-xs text-fg-muted">
+              Previews use unsaved settings. Original artwork is preserved; Plex receives cached
+              image variants.
+            </p>
+          </>
+        }
+      />
       <TitleArtworkDrawer
         title={pinning}
         lang={lang}
@@ -384,6 +553,29 @@ function TitleArtworkDrawer({
             <label htmlFor="pinned-backdrop" className="block text-sm font-semibold text-fg">
               Backdrop
             </label>
+            <div className="metadata-backdrops">
+              {choices.backdrops?.map((v, index) => (
+                <button
+                  type="button"
+                  key={v.path}
+                  aria-label={`Pin backdrop ${index + 1} (${v.language || "textless"})`}
+                  aria-pressed={art.pinnedBackdrop === v.path}
+                  onClick={() =>
+                    setArt({ ...art, pinnedBackdrop: art.pinnedBackdrop === v.path ? "" : v.path })
+                  }
+                  className={cn(
+                    "overflow-hidden rounded-lg border-2",
+                    art.pinnedBackdrop === v.path ? "border-primary" : "border-transparent",
+                  )}
+                >
+                  <Artwork
+                    src={`https://image.tmdb.org/t/p/w300${v.path}`}
+                    alt={`Backdrop ${index + 1}`}
+                    className="aspect-video"
+                  />
+                </button>
+              ))}
+            </div>
             <select
               id="pinned-backdrop"
               className={nativeSelect}

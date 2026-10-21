@@ -82,3 +82,73 @@ describe("Metadata episode orders", () => {
     await waitFor(() => expect(within(sam).getByText("Uses default")).toBeInTheDocument());
   });
 });
+
+describe("Metadata artwork studio", () => {
+  it("previews a draft without saving, compares originals, discards and persists the complete design", async () => {
+    const { fake } = renderAppWith("/metadata", () => undefined);
+    const style = await screen.findByLabelText("Badge finish", {}, WAIT);
+    fireEvent.click(screen.getByRole("button", { name: /Spotlight/ }));
+    expect(style).toHaveValue("solid");
+    expect(screen.getByLabelText("Placement")).toHaveValue("top");
+    expect(calls(fake, "PUT", "/discovery/overlays/settings")).toHaveLength(0);
+    await waitFor(() => {
+      const img = screen.getByRole("img", { name: "After the Tide Original sample artwork" });
+      const settings = JSON.parse(
+        new URL(img.getAttribute("src")!, "http://localhost").searchParams.get("settings")!,
+      );
+      expect(settings).toMatchObject({ style: "solid", position: "top", accent: "#a7c4b5" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Compare" }));
+    const original = await screen.findByRole("img", {
+      name: "After the Tide Original",
+    });
+    expect(
+      JSON.parse(
+        new URL(original.getAttribute("src")!, "http://localhost").searchParams.get("settings")!,
+      ),
+    ).toMatchObject({ enabled: false });
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(style).toHaveValue("glass"));
+    fireEvent.change(screen.getByLabelText("Badge size"), { target: { value: "large" } });
+    fireEvent.click(screen.getByRole("button", { name: "Lavender" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(calls(fake, "PUT", "/discovery/overlays/settings").at(-1)?.body).toMatchObject({
+        size: "large",
+        accent: "#c0a6d8",
+        style: "glass",
+        position: "bottom",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps an unsuccessful save editable and supports retry", async () => {
+    let failed = true;
+    const { fake } = renderAppWith("/metadata/artwork", (method, path) => {
+      if (method === "PUT" && path === "/discovery/overlays/settings" && failed)
+        return new Response("Storage unavailable", { status: 500 });
+      return undefined;
+    });
+    fireEvent.change(await screen.findByLabelText("Placement", {}, WAIT), {
+      target: { value: "top" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByRole("alert");
+    expect(screen.getByLabelText("Placement")).toHaveValue("top");
+    failed = false;
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/discovery/overlays/settings")).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("preserves the old Home URL and points navigation to /home", async () => {
+    renderAppWith("/home-screens", () => undefined);
+    expect(await screen.findByRole("heading", { name: "Home" }, WAIT)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Home" })).toHaveAttribute("href", "/home");
+  });
+});

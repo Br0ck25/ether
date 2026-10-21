@@ -18,12 +18,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/ratings"
 	"github.com/braedonsaunders/ether/internal/store"
 	xdraw "golang.org/x/image/draw"
-	"golang.org/x/image/font"
-	"golang.org/x/image/font/gofont/gobold"
-	"golang.org/x/image/font/opentype"
-	"golang.org/x/image/math/fixed"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/jpeg"
 	_ "image/png"
@@ -37,12 +32,16 @@ func init() {
 }
 
 type Settings struct {
-	Enabled     bool `json:"enabled"`
-	Status      bool `json:"status"`
-	Quality     bool `json:"quality"`
-	Ratings     bool `json:"ratings"`
-	Personalize bool `json:"personalize"`
-	Localize    bool `json:"localize"`
+	Enabled     bool   `json:"enabled"`
+	Status      bool   `json:"status"`
+	Quality     bool   `json:"quality"`
+	Ratings     bool   `json:"ratings"`
+	Personalize bool   `json:"personalize"`
+	Localize    bool   `json:"localize"`
+	Style       string `json:"style"`
+	Position    string `json:"position"`
+	Accent      string `json:"accent"`
+	Size        string `json:"size"`
 }
 type Variant struct {
 	Path     string   `json:"path"`
@@ -83,37 +82,38 @@ type Service struct {
 	mu         sync.Mutex
 	cache      map[string][]byte
 	cacheBytes int64
-	face       font.Face
 }
 
 func New(db *sql.DB, o Options) *Service {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	f, _ := opentype.Parse(gobold.TTF)
-	face, _ := opentype.NewFace(f, &opentype.FaceOptions{Size: 20, DPI: 72, Hinting: font.HintingFull})
-	return &Service{db: db, o: o, cache: map[string][]byte{}, face: face}
+	return &Service{db: db, o: o, cache: map[string][]byte{}}
 }
 
 type previewSettingsKey struct{}
 
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	if v, ok := ctx.Value(previewSettingsKey{}).(Settings); ok {
-		return v, nil
+		return normalizeSettings(v), nil
 	}
 	var v Settings
 	var raw string
 	e := s.db.QueryRowContext(ctx, `SELECT value FROM overlays_settings WHERE id=1`).Scan(&raw)
 	if errors.Is(e, sql.ErrNoRows) {
-		return v, nil
+		return normalizeSettings(v), nil
 	}
 	if e != nil {
 		return v, e
 	}
 	e = json.Unmarshal([]byte(raw), &v)
-	return v, e
+	return normalizeSettings(v), e
 }
 func (s *Service) SaveSettings(ctx context.Context, v Settings) error {
+	v = normalizeSettings(v)
+	if err := validateSettings(v); err != nil {
+		return err
+	}
 	raw, e := json.Marshal(v)
 	if e != nil {
 		return e
@@ -167,7 +167,7 @@ func choose(variants []Variant, pinned, fallback, lang string, taste []string) s
 		n := 0
 		if v.Language == strings.Split(lang, "-")[0] {
 			n += 100
-		} else if v.Language != "" && lang != "" {
+		} else if v.Language != "" {
 			continue
 		}
 		for _, tag := range v.Tags {
@@ -199,6 +199,9 @@ func (s *Service) Paths(ctx context.Context, u *core.User, t *core.Title, lang s
 	var taste []string
 	if cfg.Personalize && s.o.Taste != nil {
 		taste = s.o.Taste(ctx, u)
+	}
+	if !cfg.Localize {
+		lang = ""
 	}
 	return choose(v.Posters, v.PinnedPoster, poster, lang, taste), choose(v.Backdrops, v.PinnedBackdrop, backdrop, "", taste)
 }
@@ -254,7 +257,8 @@ func (s *Service) Labels(ctx context.Context, u *core.User, t *core.Title) []str
 }
 func (s *Service) Version(ctx context.Context, u *core.User, t *core.Title, lang string) string {
 	p, b := s.Paths(ctx, u, t, lang)
-	raw, _ := json.Marshal([]any{p, b, t.LogoPath, s.Labels(ctx, u, t), t.UpdatedAt.Unix()})
+	cfg, _ := s.Settings(ctx)
+	raw, _ := json.Marshal([]any{p, b, t.LogoPath, s.Labels(ctx, u, t), t.UpdatedAt.Unix(), cfg})
 	hash := sha256.Sum256(raw)
 	return hex.EncodeToString(hash[:8])
 }
@@ -273,7 +277,20 @@ func (s *Service) Poster(ctx context.Context, u *core.User, t *core.Title, lang 
 	if len(labels) == 0 {
 		return data, ct, nil
 	}
-	hash := sha256.Sum256(append(append([]byte(nil), data...), []byte(strings.Join(labels, "\x00"))...))
+	settings, e := s.Settings(ctx)
+	if e != nil {
+		return nil, "", e
+	}
+	return s.composite(data, labels, settings)
+}
+
+func (s *Service) composite(data []byte, labels []string, settings Settings) ([]byte, string, error) {
+	settings = normalizeSettings(settings)
+	if err := validateSettings(settings); err != nil {
+		return nil, "", err
+	}
+	styleKey, _ := json.Marshal([]any{labels, settings, "compositor-v2"})
+	hash := sha256.Sum256(append(append([]byte(nil), data...), styleKey...))
 	key := hex.EncodeToString(hash[:])
 	s.mu.Lock()
 	cached := s.cache[key]
@@ -299,24 +316,8 @@ func (s *Service) Poster(ctx context.Context, u *core.User, t *core.Title, lang 
 	}
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Src, nil)
-	labels = labels[:min(len(labels), 6)]
-	height := len(labels)*32 + 12
-	if height > h {
-		height = h
-	}
-	draw.Draw(dst, image.Rect(0, h-height, w, h), image.NewUniform(color.RGBA{16, 20, 30, 245}), image.Point{}, draw.Over)
-	for i, label := range labels {
-		label = strings.Map(func(r rune) rune {
-			if r == '·' {
-				return '|'
-			}
-			if r < 32 || r > 126 {
-				return -1
-			}
-			return r
-		}, label)
-		d := font.Drawer{Dst: dst, Src: image.NewUniform(color.White), Face: s.face, Dot: fixed.P(12, h-height+26+i*32)}
-		d.DrawString(label)
+	if err := paintBadges(dst, labels, settings); err != nil {
+		return nil, "", err
 	}
 	var out bytes.Buffer
 	if e = jpeg.Encode(&out, dst, &jpeg.Options{Quality: 88}); e != nil {
@@ -328,6 +329,7 @@ func (s *Service) Poster(ctx context.Context, u *core.User, t *core.Title, lang 
 		s.cache = map[string][]byte{}
 		s.cacheBytes = 0
 	}
+	s.cacheBytes -= int64(len(s.cache[key]))
 	s.cache[key] = generated
 	s.cacheBytes += int64(len(generated))
 	s.mu.Unlock()
