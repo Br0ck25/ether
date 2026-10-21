@@ -141,7 +141,7 @@ func TestFormLoginSearchAndDownload(t *testing.T) {
 	if got.InfoHash != site.hash || b.grabs != 1 {
 		t.Fatalf("resolved %+v grabs=%d", got, b.grabs)
 	}
-	row, ok, _ := sessions.load(ctx, r.id)
+	row, ok, _ := sessions.load(ctx, r.id, siteOrigin(r.site))
 	if !ok || row.Version != 1 || len(row.Cookies) == 0 || row.Cookies[0].Name != "session" {
 		t.Fatalf("stored session = %+v", row)
 	}
@@ -306,25 +306,25 @@ func TestSessionStoreVersionsInDatabase(t *testing.T) {
 	}
 	defer db.Close()
 	s := &sessionStore{db: db, now: func() time.Time { return testNow }}
-	if _, ok, err := s.load(ctx, "ix"); ok || err != nil {
+	if _, ok, err := s.load(ctx, "ix", "https://site.test"); ok || err != nil {
 		t.Fatalf("empty load ok=%v err=%v", ok, err)
 	}
-	v1, err := s.save(ctx, "ix", []savedCookie{{Name: "a", Value: "1"}}, "UA/1")
+	v1, err := s.save(ctx, "ix", "https://site.test", []savedCookie{{Name: "a", Value: "1"}}, "UA/1")
 	if err != nil || v1 != 1 {
 		t.Fatalf("save v1 = %d %v", v1, err)
 	}
-	v2, err := s.save(ctx, "ix", []savedCookie{{Name: "a", Value: "2"}}, "UA/2")
+	v2, err := s.save(ctx, "ix", "https://site.test", []savedCookie{{Name: "a", Value: "2"}}, "UA/2")
 	if err != nil || v2 != 2 {
 		t.Fatalf("save v2 = %d %v", v2, err)
 	}
-	row, ok, err := s.load(ctx, "ix")
+	row, ok, err := s.load(ctx, "ix", "https://site.test")
 	if err != nil || !ok || row.Version != 2 || row.Cookies[0].Value != "2" || row.UserAgent != "UA/2" {
 		t.Fatalf("row = %+v ok=%v err=%v", row, ok, err)
 	}
 	if err := s.clear(ctx, "ix"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := s.load(ctx, "ix"); ok {
+	if _, ok, _ := s.load(ctx, "ix", "https://site.test"); ok {
 		t.Fatal("clear left the row")
 	}
 }

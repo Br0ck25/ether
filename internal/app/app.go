@@ -194,6 +194,9 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	if a.cfg, err = config.Open(opts.DataDir); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if warning := config.DataDirWarning(opts.DataDir); warning != "" {
+		a.log.Warn(warning)
+	}
 	cfg := a.cfg.Get()
 	if opts.Spike {
 		_ = a.cfg.Update(func(c *config.Config) error {
@@ -264,6 +267,10 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	} else if imported {
 		a.log.Info("database: imported restored backup")
 	}
+	if err := a.checkCredentialKey(ctx); err != nil {
+		a.Close()
+		return nil, err
+	}
 	if dialect == store.Postgres {
 		if err := a.attachCluster(ctx, dbCfg.URL); err != nil {
 			a.Close()
@@ -308,7 +315,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 			a.log.Warn("state: watch progress lost at shutdown", "err", err)
 		}
 	})
-	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
+	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Sealer: a.cfg, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
 	a.trakt.SubscribeTo(a.state)
 	a.collections.SetState(a.state)
 	a.closers = append(a.closers, a.trakt.Close)
@@ -383,7 +390,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	a.closers = append(a.closers, func() { a.engine.Close() })
 
 	// Indexers and resolver.
-	siteOpts := cardigann.Options{DB: a.db, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites}
+	siteOpts := cardigann.Options{DB: a.db, Sealer: a.cfg, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites}
 	if a.clustered() {
 		siteOpts.LoginLock = a.clusterLoginLock // one login per site across nodes
 	}
@@ -719,6 +726,7 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.runClusterSync(ctx) })
 	background.start(func() { a.runBudgets(ctx) })
 	background.start(func() { a.runEgress(ctx) })
+	background.start(func() { a.runCredentialUpgrade(ctx) })
 
 	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
 	ln, err := net.Listen("tcp", addr)

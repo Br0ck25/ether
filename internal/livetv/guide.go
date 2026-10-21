@@ -176,7 +176,7 @@ func (s *Service) storedSourceByID(ctx context.Context, id string) (Source, erro
 		return src, core.ErrNotFound
 	}
 	if err == nil {
-		err = json.Unmarshal(b, &src)
+		src, _, err = s.decodeSource(b)
 	}
 	return src, err
 }

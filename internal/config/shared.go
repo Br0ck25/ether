@@ -418,7 +418,7 @@ func (s *Store) updateClustered(fn func(*Config) error) error {
 }
 
 func (s *Store) sealShared(plain []byte) (string, error) {
-	b, err := transformCredentials(plain, s.credentialKey, true)
+	b, err := sealDocument(plain, s.credentialKey, s.bound.Load())
 	return string(b), err
 }
 
@@ -427,7 +427,7 @@ func (s *Store) mergeDoc(base Config, doc SharedDoc) (Config, error) {
 	if fp := s.KeyFingerprint(); doc.KeyFingerprint != fp {
 		return Config{}, fmt.Errorf("%w (cluster %.12s, this node %.12s); add this node with `ether cluster join <token>`", ErrKeyMismatch, doc.KeyFingerprint, fp)
 	}
-	plain, err := transformCredentials([]byte(doc.Doc), s.credentialKey, false)
+	plain, _, err := openDocument([]byte(doc.Doc), s.credentialKey)
 	if err != nil {
 		return Config{}, fmt.Errorf("config: open shared settings: %w", err)
 	}

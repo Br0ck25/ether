@@ -42,6 +42,18 @@ func (r *Runner) setLoggedIn(ok bool) {
 	r.mu.Unlock()
 }
 
+// loadSession reads the shared session row. A row that does not open for
+// this site (errSessionUnreadable) is treated as no session, so the next
+// login replaces it instead of reusing cookies issued to another origin.
+func (r *Runner) loadSession(ctx context.Context) (sessionRow, bool, error) {
+	row, ok, err := r.sessions.load(ctx, r.id, siteOrigin(r.site))
+	if errors.Is(err, errSessionUnreadable) {
+		r.log.Warn("cardigann: stored session unusable; logging in again", "indexer", r.id, "err", err)
+		return sessionRow{}, false, nil
+	}
+	return row, ok, err
+}
+
 // ensureLogin makes sure the jar holds a working session. The database
 // row is the source of truth: a session another node saved is reused
 // before logging in again.
@@ -53,7 +65,7 @@ func (r *Runner) ensureLogin(ctx context.Context) error {
 	if loggedIn {
 		return nil
 	}
-	row, ok, err := r.sessions.load(ctx, r.id)
+	row, ok, err := r.loadSession(ctx)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
 	}
@@ -89,7 +101,7 @@ func (r *Runner) login(ctx context.Context, stale int64, force bool) error {
 	}
 	defer unlock()
 	if !force {
-		row, ok, err := r.sessions.load(ctx, r.id)
+		row, ok, err := r.loadSession(ctx)
 		if err != nil {
 			return fmt.Errorf("load session: %w", err)
 		}
@@ -104,7 +116,7 @@ func (r *Runner) login(ctx context.Context, stale int64, force bool) error {
 		r.setLoggedIn(false)
 		return err
 	}
-	version, err := r.sessions.save(ctx, r.id, r.http.exportCookies(r.site), r.http.userAgent())
+	version, err := r.sessions.save(ctx, r.id, siteOrigin(r.site), r.http.exportCookies(r.site), r.http.userAgent())
 	if err != nil {
 		r.log.Warn("cardigann: could not save session", "indexer", r.id, "err", err)
 	}

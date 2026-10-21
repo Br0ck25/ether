@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/faillog"
 	"github.com/braedonsaunders/ether/internal/playback"
 	"github.com/braedonsaunders/ether/internal/store"
@@ -77,6 +78,9 @@ type Options struct {
 	Client     *http.Client
 	Now        func() time.Time
 	Logger     *slog.Logger
+	// Sealer protects stored channel secrets and the push identity
+	// (secrets.go); nil stores them as given.
+	Sealer config.FieldSealer
 }
 type Service struct {
 	monitorDone             <-chan struct{}
@@ -126,11 +130,11 @@ func (s *Service) channels(ctx context.Context) ([]Channel, error) {
 	out := []Channel{}
 	for rows.Next() {
 		var raw string
-		var c Channel
 		if err := rows.Scan(&raw); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		c, _, err := s.decodeChannel(raw)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -165,16 +169,8 @@ func (s *Service) Save(ctx context.Context, c Channel) error {
 	}
 	for _, old := range cs {
 		if old.ID == c.ID {
-			if c.Subscription != nil && c.Subscription.Endpoint == Redacted {
-				c.Subscription = old.Subscription
-			}
-			for _, pair := range []struct {
-				p   *string
-				old string
-			}{{&c.Endpoint, old.Endpoint}, {&c.Token, old.Token}, {&c.Password, old.Password}} {
-				if *pair.p == Redacted {
-					*pair.p = pair.old
-				}
+			if err := keepChannelSecrets(&c, old); err != nil {
+				return err
 			}
 		}
 	}
@@ -187,11 +183,11 @@ func (s *Service) Save(ctx context.Context, c Channel) error {
 	if err := validateChannel(c); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(c)
+	raw, err := s.encodeChannel(c)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO notify_channels(id,config) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config`, c.ID, string(raw))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO notify_channels(id,config) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config`, c.ID, raw)
 	if err == nil {
 		s.refreshMonitor()
 	}

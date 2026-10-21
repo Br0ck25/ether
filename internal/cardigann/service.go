@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -39,6 +40,8 @@ type Options struct {
 	// in-process lock.
 	LoginLock LoginLock
 	Sites     config.IndexerSites
+	// Sealer protects stored login cookies; nil stores them as given.
+	Sealer config.FieldSealer
 }
 
 // Service manages installed definitions and the runners of configured
@@ -90,7 +93,7 @@ func New(o Options) *Service {
 	}
 	return &Service{
 		defs:     &defStore{db: o.DB},
-		sessions: &sessionStore{db: o.DB, now: o.Now},
+		sessions: &sessionStore{db: o.DB, sealer: o.Sealer, now: o.Now},
 		tests:    &testStore{db: o.DB},
 		hc:       o.HTTPClient,
 		log:      o.Logger,
@@ -320,6 +323,42 @@ func (s *Service) test(ctx context.Context, cfg config.Indexer) TestResult {
 		s.mu.Unlock()
 	}
 	return res
+}
+
+// MigrateSecrets seals login cookies stored in plaintext, bound to each
+// configured built-in indexer's site origin, drops plaintext cookies of
+// indexers no longer configured, and returns how many rows it changed.
+// Indexers whose definition cannot be loaded keep their row for a later
+// run (reported in the error).
+func (s *Service) MigrateSecrets(ctx context.Context, indexers []config.Indexer) (int, error) {
+	if s.sessions.db == nil || s.sessions.sealer == nil {
+		return 0, nil
+	}
+	origins := map[string]string{}
+	for _, cfg := range indexers {
+		if !cfg.IsBuiltin() {
+			continue
+		}
+		id := cfg.ID
+		p, err := s.definition(ctx, cfg.Definition)
+		if err == nil {
+			var site *url.URL
+			if site, err = url.Parse(p.def.SiteLink(cfg.URL)); err == nil {
+				if id == "" {
+					id = p.def.ID
+				}
+				origins[id] = siteOrigin(site)
+				continue
+			}
+		}
+		// Unknown origin: keep the row (not "removed") for a later run.
+		origins[id] = ""
+	}
+	n, waiting, err := s.sessions.migrate(ctx, origins)
+	if err == nil && len(waiting) > 0 {
+		err = fmt.Errorf("cardigann: plaintext sessions of %s left for a later run: definition unavailable", strings.Join(waiting, ", "))
+	}
+	return n, err
 }
 
 // Statuses returns the last test result of every tested indexer.

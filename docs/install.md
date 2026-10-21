@@ -368,3 +368,27 @@ Check the system clock and the feed publisher’s workflow if it occurs.
 Feeds use detached `.json.sig` signatures so older Ether clients can verify the
 new freshness fields. Custom feed publishers must supply both files and renew
 them before expiry with `ether-release-sign renew`; never renew unverified input.
+
+### Stored credentials
+
+Ether seals the credentials it stores, in `config.json` and in the database
+(Trakt tokens, notification channels, Live TV sources, built-in indexer
+logins, the ratings key), with the credential key `.credentials-key` in the
+data directory. Each one is bound to its setting and to where it is sent, so
+a credential copied to another setting, or left behind when a host is
+changed by editing the files, no longer works. Backups include the key and
+restore only with it; keep them private.
+
+After updating from a release that stored database credentials in plain
+text, Ether converts them once the update is confirmed healthy and, in a
+cluster, every node runs the new release. Until then older releases can
+still read everything, so an automatic rollback is safe. Going back to an
+older release by hand afterwards leaves its stored credentials unusable until
+you update again or re-enter them. Backups and database copies made before
+the conversion still hold the old plain-text values: re-create backups you
+keep and delete old ones you no longer need. Search results Ether caches no
+longer contain indexer API keys.
+
+Ether warns at startup when the data directory or the credential key can be
+read by other accounts on the machine; it does not change permissions you
+chose.

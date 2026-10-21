@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
@@ -128,6 +129,9 @@ type Options struct {
 	Allowed func(*core.User, *core.Title) bool
 	// Warm resolves/primes a title without opening a viewer stream.
 	Warm func(context.Context, core.RatingKey) error
+	// Sealer protects source credentials at rest (secrets.go); nil stores
+	// them as given.
+	Sealer config.FieldSealer
 }
 type SessionInfo struct {
 	ActiveSourceID string `json:"activeSourceId,omitempty"`

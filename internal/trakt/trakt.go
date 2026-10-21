@@ -100,6 +100,9 @@ type Options struct {
 	// NodeID names this node on import-queue rows it claims; a random id is
 	// used when empty.
 	NodeID string
+	// Sealer protects the stored tokens (secrets.go); nil stores them as
+	// given.
+	Sealer config.FieldSealer
 }
 
 // ErrRevoked is returned when Trakt rejects a user's refresh token; the
@@ -114,6 +117,7 @@ var ErrNotConnected = errors.New("trakt: user not connected")
 type Client struct {
 	cfg     config.Trakt
 	db      *sql.DB
+	sealer  config.FieldSealer
 	catalog core.Catalog
 	base    string
 	http    *http.Client
@@ -188,7 +192,7 @@ func New(opts Options) *Client {
 		opts.NodeID = hex.EncodeToString(b[:])
 	}
 	return &Client{
-		cfg: opts.Config, db: opts.DB, catalog: opts.Catalog, base: strings.TrimSuffix(opts.BaseURL, "/"),
+		cfg: opts.Config, db: opts.DB, sealer: opts.Sealer, catalog: opts.Catalog, base: strings.TrimSuffix(opts.BaseURL, "/"),
 		http: opts.HTTPClient, log: opts.Logger, now: opts.Now, maxWait: opts.MaxRetryAfter,
 		notify: make(chan struct{}, 1), done: make(chan struct{}), qsize: opts.QueueSize,
 		minPost: opts.MinPostInterval, cache: map[string]*cacheEntry{}, ttl: opts.CacheTTL,
@@ -305,10 +309,14 @@ func (c *Client) saveTokens(ctx context.Context, t Tokens) error {
 	if c.db == nil {
 		return fmt.Errorf("trakt: no database configured")
 	}
-	_, err := c.db.ExecContext(ctx, `INSERT INTO trakt_tokens(user_id, access_token, refresh_token, expires_at, username, updated_at)
+	access, refresh, err := c.sealTokens(t.UserID, t.AccessToken, t.RefreshToken)
+	if err != nil {
+		return err
+	}
+	_, err = c.db.ExecContext(ctx, `INSERT INTO trakt_tokens(user_id, access_token, refresh_token, expires_at, username, updated_at)
 		VALUES(?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET access_token=excluded.access_token,
 		  refresh_token=excluded.refresh_token, expires_at=excluded.expires_at, username=excluded.username, updated_at=excluded.updated_at`,
-		t.UserID, t.AccessToken, t.RefreshToken, t.ExpiresAt.Unix(), t.Username, c.now().Unix())
+		t.UserID, access, refresh, t.ExpiresAt.Unix(), t.Username, c.now().Unix())
 	return err
 }
 
@@ -325,6 +333,9 @@ func (c *Client) Tokens(ctx context.Context, userID int64) (Tokens, bool, error)
 		return Tokens{}, false, nil
 	}
 	if err != nil {
+		return Tokens{}, false, err
+	}
+	if t.AccessToken, t.RefreshToken, _, err = c.openTokens(userID, t.AccessToken, t.RefreshToken); err != nil {
 		return Tokens{}, false, err
 	}
 	t.UserID = userID

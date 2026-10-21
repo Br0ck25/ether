@@ -7,10 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/url"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
+
+	"github.com/braedonsaunders/ether/internal/config"
 )
 
 type PushKeys struct {
@@ -50,18 +53,27 @@ func (s *Service) pushKeys(ctx context.Context) (private, public string, err err
 		return s.pushPrivate, s.pushPublic, nil
 	}
 	err = s.db.QueryRowContext(ctx, `SELECT private_key,public_key FROM notify_push_keys WHERE id='vapid'`).Scan(&private, &public)
-	if !errors.Is(err, sql.ErrNoRows) {
-		return
+	if errors.Is(err, sql.ErrNoRows) {
+		private, public, err = webpush.GenerateVAPIDKeys()
+		if err != nil {
+			return "", "", err
+		}
+		sealed, serr := config.SealWith(s.opts.Sealer, private, pushKeyContext(public)...)
+		if serr != nil {
+			return "", "", serr
+		}
+		if _, err = s.db.ExecContext(ctx, `INSERT INTO notify_push_keys(id,private_key,public_key) VALUES('vapid',?,?) ON CONFLICT(id) DO NOTHING`, sealed, public); err != nil {
+			return "", "", err
+		}
+		err = s.db.QueryRowContext(ctx, `SELECT private_key,public_key FROM notify_push_keys WHERE id='vapid'`).Scan(&private, &public)
 	}
-	private, public, err = webpush.GenerateVAPIDKeys()
 	if err != nil {
 		return "", "", err
 	}
-	if _, err = s.db.ExecContext(ctx, `INSERT INTO notify_push_keys(id,private_key,public_key) VALUES('vapid',?,?) ON CONFLICT(id) DO NOTHING`, private, public); err != nil {
-		return "", "", err
+	if private, _, err = config.OpenWith(s.opts.Sealer, private, pushKeyContext(public)...); err != nil {
+		return "", "", fmt.Errorf("notify: push identity: %w", err)
 	}
-	err = s.db.QueryRowContext(ctx, `SELECT private_key,public_key FROM notify_push_keys WHERE id='vapid'`).Scan(&private, &public)
-	return
+	return private, public, nil
 }
 func (s *Service) sendPush(ctx context.Context, c Channel, e Event) error {
 	if err := validatePush(c.Subscription); err != nil {

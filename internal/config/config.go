@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -417,6 +418,13 @@ type Store struct {
 	cfg           Config
 	subs          []func(Config)
 
+	// keyCreated is set when Open generated the credential key, so data
+	// sealed elsewhere (the database) cannot have been sealed with it.
+	keyCreated bool
+	// bound selects v2 credentials (credentials.go): set by
+	// UpgradeCredentials, or at Open for a configuration already upgraded.
+	bound atomic.Bool
+
 	// Cluster mode (see shared.go). shared is nil on a standalone server,
 	// where config.json is the only source. writeMu sequences cluster-mode
 	// writers (Update, refresh) so mu is never held across database calls.
@@ -445,6 +453,28 @@ func EnsureDataDir(dataDir string) error {
 	return err
 }
 
+// DataDirWarning returns a warning when the data directory or the
+// credential key can be read by other local accounts, or "" (always on
+// Windows, where the installer and service install manage ACLs). It never
+// changes permissions: an existing directory keeps the mode its owner or a
+// package postinstall chose. The message names modes, not paths.
+func DataDirWarning(dataDir string) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	var exposed []string
+	if fi, err := os.Stat(dataDir); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		exposed = append(exposed, fmt.Sprintf("the data directory (mode %04o)", fi.Mode().Perm()))
+	}
+	if fi, err := os.Stat(filepath.Join(dataDir, CredentialKeyFile)); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		exposed = append(exposed, fmt.Sprintf("the credential key (mode %04o)", fi.Mode().Perm()))
+	}
+	if len(exposed) == 0 {
+		return ""
+	}
+	return "data directory: " + strings.Join(exposed, " and ") + " can be read by other local accounts; it holds the credential key and database. Restrict it to the server account (chmod 700 on the directory, 600 on .credentials-key) unless shared access is deliberate"
+}
+
 func Open(dataDir string) (*Store, error) {
 	if err := EnsureDataDir(dataDir); err != nil {
 		return nil, err
@@ -452,22 +482,28 @@ func Open(dataDir string) (*Store, error) {
 	s := &Store{path: filepath.Join(dataDir, "config.json"), cfg: Defaults(dataDir), kick: make(chan struct{}, 1)}
 	b, err := os.ReadFile(s.path)
 	readErr := err
+	_, statErr := os.Lstat(filepath.Join(dataDir, CredentialKeyFile))
 	key, keyErr := credentialKey(dataDir, b)
 	if keyErr != nil {
 		return nil, keyErr
 	}
 	s.credentialKey = key
+	s.keyCreated = errors.Is(statErr, fs.ErrNotExist)
 	err = readErr
 	switch {
 	case err == nil:
-		plain, err := transformCredentials(b, s.credentialKey, false)
+		plain, stats, err := openDocument(b, s.credentialKey)
 		if err != nil {
 			return nil, err
 		}
 		if s.cfg, err = decodeOverDefaults(s.cfg, plain); err != nil {
 			return nil, fmt.Errorf("parse %s: %w", s.path, err)
 		}
-		if !strings.Contains(string(b), sealedPrefix) {
+		// A configuration already upgraded to v2 credentials stays v2.
+		s.bound.Store(stats.strict)
+		// Seal secrets written in plaintext (by hand, or by a release that
+		// predates sealing).
+		if stats.plaintext > 0 || !ContainsSealed(b) {
 			if err := s.save(); err != nil {
 				return nil, err
 			}
@@ -494,12 +530,12 @@ func Read(dataDir string) (Config, error) {
 		return Config{}, err
 	}
 	plain := b
-	if strings.Contains(string(b), sealedPrefix) {
+	if ContainsSealed(b) {
 		key, err := ReadCredentialKey(dataDir)
 		if err != nil {
 			return Config{}, fmt.Errorf("config: credential key: %w", err)
 		}
-		if plain, err = transformCredentials(b, key, false); err != nil {
+		if plain, _, err = openDocument(b, key); err != nil {
 			return Config{}, err
 		}
 	}
@@ -598,7 +634,7 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	b, err = transformCredentials(b, s.credentialKey, true)
+	b, err = sealDocument(b, s.credentialKey, s.bound.Load())
 	if err != nil {
 		return err
 	}

@@ -220,11 +220,7 @@ func (c *Client) cacheGet(ctx context.Context, key string) ([]core.Release, bool
 	if err != nil || now.Unix() > exp {
 		return nil, false
 	}
-	var out []core.Release
-	if json.Unmarshal([]byte(raw), &out) != nil {
-		return nil, false
-	}
-	return out, true
+	return c.decodeCached(raw)
 }
 
 func (c *Client) cachePut(ctx context.Context, key string, results []core.Release) {
@@ -242,14 +238,14 @@ func (c *Client) cachePut(ctx context.Context, key string, results []core.Releas
 		c.memCache[key] = memCacheEntry{results: append([]core.Release(nil), results...), expires: exp}
 		return
 	}
-	raw, err := json.Marshal(results)
-	if err != nil {
+	raw, ok := c.encodeCached(results)
+	if !ok {
 		return
 	}
 	_, _ = c.db.ExecContext(ctx,
 		`INSERT INTO newznab_cache(cache_key, indexer_id, results, expires_at) VALUES (?,?,?,?)
 		 ON CONFLICT(cache_key) DO UPDATE SET results=excluded.results, expires_at=excluded.expires_at`,
-		key, c.indexerID(), string(raw), exp.Unix())
+		key, c.indexerID(), raw, exp.Unix())
 	_, _ = c.db.ExecContext(ctx, `DELETE FROM newznab_cache WHERE expires_at < ?`, c.now().Unix())
 }
 

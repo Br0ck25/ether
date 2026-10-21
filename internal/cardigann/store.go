@@ -5,9 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -149,13 +153,33 @@ type sessionRow struct {
 // sessionStore is the source of truth for login cookies; nodes keep only
 // a cached copy.
 type sessionStore struct {
-	db  *sql.DB
-	now func() time.Time
-	mu  sync.Mutex
-	mem map[string]sessionRow
+	db *sql.DB
+	// sealer protects stored cookies, bound to the indexer and the site
+	// origin they were issued by (nil stores them as given).
+	sealer config.FieldSealer
+	now    func() time.Time
+	mu     sync.Mutex
+	mem    map[string]sessionRow
 }
 
-func (s *sessionStore) load(ctx context.Context, indexerID string) (sessionRow, bool, error) {
+// errSessionUnreadable means the stored cookies did not open: they belong
+// to another site origin (the indexer was repointed), another credential
+// key, or were damaged. The session is unusable; logging in replaces it.
+var errSessionUnreadable = errors.New("stored login session does not open for this site")
+
+func cookieContext(indexerID, origin string) []string {
+	return []string{"cardigann_sessions", "cookies", indexerID, origin}
+}
+
+// siteOrigin is the scheme and host a session's cookies belong to.
+func siteOrigin(site *url.URL) string {
+	if site == nil {
+		return ""
+	}
+	return strings.ToLower(site.Scheme + "://" + site.Host)
+}
+
+func (s *sessionStore) load(ctx context.Context, indexerID, origin string) (sessionRow, bool, error) {
 	if s.db == nil {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -173,14 +197,91 @@ func (s *sessionStore) load(ctx context.Context, indexerID string) (sessionRow, 
 	if err != nil {
 		return r, false, err
 	}
-	_ = json.Unmarshal([]byte(raw), &r.Cookies)
+	plain, legacy, err := config.OpenWith(s.sealer, raw, cookieContext(indexerID, origin)...)
+	if err != nil {
+		return r, false, fmt.Errorf("%w: %v", errSessionUnreadable, err)
+	}
+	_ = json.Unmarshal([]byte(plain), &r.Cookies)
 	r.UserAgent, r.UpdatedAt = ua, time.Unix(at, 0)
+	if legacy {
+		s.reseal(ctx, indexerID, origin, raw, plain)
+	}
 	return r, true, nil
+}
+
+// reseal replaces a plaintext cookies row with its sealed form, keeping
+// its version; a row changed meanwhile is left to its writer.
+func (s *sessionStore) reseal(ctx context.Context, indexerID, origin, raw, plain string) bool {
+	sealed, err := config.SealWith(s.sealer, plain, cookieContext(indexerID, origin)...)
+	if err != nil || sealed == raw {
+		return false
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE cardigann_sessions SET cookies=? WHERE indexer_id=? AND cookies=?`, sealed, indexerID, raw)
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
+// migrate seals the plaintext cookie rows of configured indexers (origins
+// maps indexer id to site origin; "" when unknown, which leaves the row)
+// and drops plaintext rows of indexers that are no longer configured.
+// Sealed rows are never rewritten.
+func (s *sessionStore) migrate(ctx context.Context, origins map[string]string) (int, []string, error) {
+	if s.db == nil || s.sealer == nil {
+		return 0, nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT indexer_id, cookies FROM cardigann_sessions ORDER BY indexer_id`)
+	if err != nil {
+		return 0, nil, err
+	}
+	type row struct{ id, raw string }
+	var all []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.raw); err != nil {
+			rows.Close()
+			return 0, nil, err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, nil, err
+	}
+	n := 0
+	var waiting []string
+	for _, r := range all {
+		if config.IsSealed(r.raw) {
+			continue
+		}
+		origin, ok := origins[r.id]
+		if !ok {
+			// Login cookies of a removed indexer: useless, and plaintext.
+			res, err := s.db.ExecContext(ctx, `DELETE FROM cardigann_sessions WHERE indexer_id=? AND cookies=?`, r.id, r.raw)
+			if err != nil {
+				return n, waiting, err
+			}
+			if k, _ := res.RowsAffected(); k > 0 {
+				n++
+			}
+			continue
+		}
+		if origin == "" {
+			waiting = append(waiting, r.id)
+			continue
+		}
+		if s.reseal(ctx, r.id, origin, r.raw, r.raw) {
+			n++
+		}
+	}
+	return n, waiting, nil
 }
 
 // save stores a fresh login in one statement, incrementing the version,
 // and returns the new version.
-func (s *sessionStore) save(ctx context.Context, indexerID string, cookies []savedCookie, ua string) (int64, error) {
+func (s *sessionStore) save(ctx context.Context, indexerID, origin string, cookies []savedCookie, ua string) (int64, error) {
 	raw, _ := json.Marshal(cookies)
 	now := s.now()
 	if s.db == nil {
@@ -194,10 +295,14 @@ func (s *sessionStore) save(ctx context.Context, indexerID string, cookies []sav
 		s.mem[indexerID] = r
 		return r.Version, nil
 	}
+	sealed, err := config.SealWith(s.sealer, string(raw), cookieContext(indexerID, origin)...)
+	if err != nil {
+		return 0, err
+	}
 	var version int64
-	err := s.db.QueryRowContext(ctx, `INSERT INTO cardigann_sessions(indexer_id, cookies, user_agent, version, updated_at) VALUES (?,?,?,1,?)
+	err = s.db.QueryRowContext(ctx, `INSERT INTO cardigann_sessions(indexer_id, cookies, user_agent, version, updated_at) VALUES (?,?,?,1,?)
 ON CONFLICT(indexer_id) DO UPDATE SET cookies=excluded.cookies, user_agent=excluded.user_agent, version=cardigann_sessions.version+1, updated_at=excluded.updated_at
-RETURNING version`, indexerID, string(raw), ua, now.Unix()).Scan(&version)
+RETURNING version`, indexerID, sealed, ua, now.Unix()).Scan(&version)
 	return version, err
 }
 

@@ -533,11 +533,11 @@ func (s *Service) Sources(ctx context.Context) ([]Source, error) {
 	out := []Source{}
 	for rows.Next() {
 		var b []byte
-		var v Source
 		if err = rows.Scan(&b); err != nil {
 			return nil, err
 		}
-		if err = json.Unmarshal(b, &v); err != nil {
+		v, _, err := s.decodeSource(b)
+		if err != nil {
 			return nil, err
 		}
 		v.HasPlaylist = v.Playlist != "" || v.PlaylistURL != ""
@@ -613,7 +613,7 @@ func (s *Service) ImportSource(ctx context.Context, src Source) (Source, error) 
 	// of the same source on another node waits here; the owner's channel
 	// edits are then read inside the transaction and cannot be lost.
 	src.UpdatedAt = s.o.Now()
-	sb, err := json.Marshal(storedSource(src))
+	sb, err := s.encodeSource(src)
 	if err != nil {
 		return src, err
 	}

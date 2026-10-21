@@ -185,6 +185,19 @@ func (a *SourceAuth) keepSecrets(old *SourceAuth) {
 	}
 }
 
+// hasRedacted reports whether a carries a redacted placeholder to restore.
+func (a *SourceAuth) hasRedacted() bool {
+	if a.Password == redactedSecret || a.Token == redactedSecret {
+		return true
+	}
+	for _, v := range a.Headers {
+		if v == redactedSecret {
+			return true
+		}
+	}
+	return false
+}
+
 // prepareSourceAuth runs before an import: it restores secrets the owner
 // API sent back redacted, validates the settings and derives Xtream URLs.
 func (s *Service) prepareSourceAuth(ctx context.Context, src *Source) error {
@@ -195,6 +208,9 @@ func (s *Service) prepareSourceAuth(ctx context.Context, src *Source) error {
 	old, err := s.storedSourceByID(ctx, src.ID)
 	if err != nil && !errors.Is(err, core.ErrNotFound) {
 		return err
+	}
+	if src.Auth.hasRedacted() && old.Auth != nil && sourceMoved(src, old) {
+		return errSourceSecretMoved
 	}
 	src.Auth.keepSecrets(old.Auth)
 	if err := src.Auth.validate(); err != nil {

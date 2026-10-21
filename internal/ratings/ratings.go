@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/store"
 	"io"
@@ -73,6 +74,9 @@ type Options struct {
 	OMDbBaseURL    string
 	MDBListBaseURL string
 	Now            func() time.Time
+	// Sealer protects the stored API key, bound to its provider; nil
+	// stores it as given.
+	Sealer config.FieldSealer
 }
 type Service struct {
 	db      *sql.DB
@@ -109,8 +113,68 @@ func (s *Service) settings(ctx context.Context) (Settings, error) {
 	if e != nil {
 		return v, e
 	}
-	e = json.Unmarshal([]byte(raw), &v)
-	return v, e
+	if e = json.Unmarshal([]byte(raw), &v); e != nil {
+		return v, e
+	}
+	if v.APIKey, _, e = config.OpenWith(s.o.Sealer, v.APIKey, apiKeyContext(v.Provider)...); e != nil {
+		return v, fmt.Errorf("ratings: stored API key: %w", e)
+	}
+	return v, nil
+}
+
+// apiKeyContext binds the stored key to the provider it is sent to.
+func apiKeyContext(provider string) []string {
+	return []string{"ratings_settings", "apiKey", "1", provider}
+}
+
+// encodeSettings is the stored form of v, with the API key sealed.
+func (s *Service) encodeSettings(v Settings) (string, error) {
+	sealed, err := config.SealWith(s.o.Sealer, v.APIKey, apiKeyContext(v.Provider)...)
+	if err != nil {
+		return "", fmt.Errorf("ratings: seal API key: %w", err)
+	}
+	v.APIKey = sealed
+	raw, err := json.Marshal(v)
+	return string(raw), err
+}
+
+// MigrateSecrets seals an API key stored in plaintext; it returns 1 when
+// it rewrote the settings. The row is replaced only if unchanged since
+// read, and a key that does not open is left untouched.
+func (s *Service) MigrateSecrets(ctx context.Context) (int, error) {
+	if s.db == nil || s.o.Sealer == nil {
+		return 0, nil
+	}
+	var raw string
+	e := s.db.QueryRowContext(ctx, `SELECT value FROM ratings_settings WHERE id=1`).Scan(&raw)
+	if errors.Is(e, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if e != nil {
+		return 0, e
+	}
+	var v Settings
+	if e = json.Unmarshal([]byte(raw), &v); e != nil {
+		return 0, e
+	}
+	plain, legacy, e := config.OpenWith(s.o.Sealer, v.APIKey, apiKeyContext(v.Provider)...)
+	if e != nil {
+		return 0, fmt.Errorf("ratings: stored API key left unchanged: %w", e)
+	}
+	if !legacy {
+		return 0, nil
+	}
+	v.APIKey = plain
+	next, e := s.encodeSettings(v)
+	if e != nil || next == raw {
+		return 0, e
+	}
+	res, e := s.db.ExecContext(ctx, `UPDATE ratings_settings SET value=? WHERE id=1 AND value=?`, next, raw)
+	if e != nil {
+		return 0, e
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 func (s *Service) Settings(ctx context.Context) (Settings, error) {
 	v, e := s.settings(ctx)
@@ -131,6 +195,10 @@ func (s *Service) SaveSettings(ctx context.Context, v Settings) error {
 		if e != nil {
 			return e
 		}
+		// A key belongs to its provider: never send it to the other one.
+		if old.APIKey != "" && old.Provider != v.Provider {
+			return errors.New("enter the API key for the new ratings provider")
+		}
 		v.APIKey = old.APIKey
 	}
 	for _, src := range []string{v.Critic, v.Audience} {
@@ -141,11 +209,11 @@ func (s *Service) SaveSettings(ctx context.Context, v Settings) error {
 	if v.Enabled && strings.TrimSpace(v.APIKey) == "" {
 		return errors.New("an owner API key is required")
 	}
-	raw, e := json.Marshal(v)
+	raw, e := s.encodeSettings(v)
 	if e != nil {
 		return e
 	}
-	_, e = s.db.ExecContext(ctx, `INSERT INTO ratings_settings(id,value) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value`, string(raw))
+	_, e = s.db.ExecContext(ctx, `INSERT INTO ratings_settings(id,value) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value`, raw)
 	return e
 }
 
