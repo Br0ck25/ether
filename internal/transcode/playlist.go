@@ -205,9 +205,9 @@ type ffmpegEntry struct {
 	dur  time.Duration
 }
 
-// readFFmpegPlaylist parses ffmpeg's playlist. Only segments listed there
-// are complete (ffmpeg writes them with temp_file and lists them after the
-// rename).
+// readFFmpegPlaylist parses ffmpeg's playlist. HLS temp_file entries are
+// published after rename. The ssegment muxer can list a Matroska chunk
+// before closing it; collectChunks checks its separate completion fence.
 func readFFmpegPlaylist(path string) (ffmpegPlaylist, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {

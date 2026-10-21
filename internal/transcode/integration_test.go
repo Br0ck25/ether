@@ -103,6 +103,14 @@ func fetch(t *testing.T, s core.HLSSession, n int) []byte {
 	rec := httptest.NewRecorder()
 	s.ServeSegment(rec, httptest.NewRequest(http.MethodGet, "/", nil), n)
 	if rec.Code != 200 {
+		if session, ok := s.(*Session); ok {
+			session.mu.Lock()
+			t.Logf("segment state: end=%d done=%v", session.endSeg, session.done)
+			if run := session.cur; run != nil {
+				t.Logf("run=%d start=%d maxDone=%d finished=%v stopped=%v stderr=%s", run.seq, run.startSeg, run.maxDone, run.finished, run.stopped, run.stderr.String())
+			}
+			session.mu.Unlock()
+		}
 		t.Fatalf("segment %d: HTTP %d %s", n, rec.Code, rec.Body.String())
 	}
 	return rec.Body.Bytes()

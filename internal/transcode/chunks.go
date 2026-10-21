@@ -574,6 +574,20 @@ func (s *Session) collectChunks(r *run, exited bool) {
 		for ; cr.next < len(p.entries); cr.next++ {
 			e := p.entries[cr.next]
 			path := filepath.Join(cr.dir, e.name)
+			if cr.container == ContainerMatroska && !exited {
+				// The segment muxer lists a chunk before closing its AVIO
+				// buffer. Opening the following numbered file is the fence
+				// that proves this chunk is closed. Unlike the HLS muxer,
+				// ssegment does not publish chunks with temp_file+rename.
+				n, ok := ParseSegmentName(e.name)
+				if !ok {
+					s.failChunkRun(r, cr, path, fmt.Errorf("transcode: invalid chunk name %q", e.name))
+					return
+				}
+				if _, err := os.Stat(filepath.Join(cr.dir, fmt.Sprintf("%05d.mkv", n+1))); err != nil {
+					break
+				}
+			}
 			if s.heldToClock(r) {
 				if err := s.moveOntoRetained(r, path); err != nil {
 					s.failChunkRun(r, cr, path, fmt.Errorf("transcode: %s on the retained clock: %w", e.name, err))
@@ -582,11 +596,14 @@ func (s *Session) collectChunks(r *run, exited bool) {
 			}
 			start, err := cr.chunkStart(path)
 			if err != nil {
-				// Chunks are renamed into place once complete, so this is
-				// a muxer change or a full disk; skip rather than stall.
-				s.log.Warn("unreadable HLS chunk", "run", r.seq, "chunk", e.name, "err", err)
-				s.removals.remove(path)
-				continue
+				// A transient read must not consume the playlist entry and
+				// silently remove a GOP. Retry while the producer is alive;
+				// after exit, unusable media takes the normal failover path.
+				if !exited {
+					break
+				}
+				s.failChunkRun(r, cr, path, fmt.Errorf("transcode: read chunk %s: %w", e.name, err))
+				return
 			}
 			c := fmp4Chunk{path: path, start: start, end: start + e.dur}
 			if !cr.sl.started {
