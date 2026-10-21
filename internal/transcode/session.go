@@ -66,6 +66,9 @@ type Session struct {
 	runSeq      int
 	lastReq     int
 	mkvDelivery map[int]mkvDelivery // last response per track, including retries of a seek
+	// Published Matroska data segment path -> the video stream that
+	// produced it: a copy of an input, or an encode run (chunks.go).
+	mkvSources map[string]string
 	// reqSeq numbers segment requests as they arrive; movedBy is the number
 	// of the request that last moved the encoder. A request that arrived
 	// before that move is one the player abandoned by seeking: it must not

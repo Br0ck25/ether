@@ -64,6 +64,20 @@ type chunkRun struct {
 	sl        *slotter
 	vTrack    uint32 // fMP4 video track and timescale, once read
 	vScale    uint32
+	mkvVideo  uint64 // Matroska video TrackNumber and NAL length size, once read
+	mkvNALLen int
+	mkvRead   bool
+	// The published Matroska segment a player continuing into the run
+	// holds (heldSeg), once read: its last video frame and the stream it
+	// came from (mkvSource).
+	heldRead, heldOK bool
+	heldSeg          int
+	heldEnd          time.Duration
+	heldSource       string
+	// The published segment whose media the run's preroll repeated.
+	prerollOK  bool
+	prerollSeg int
+	failed     bool // output that cannot be published: see failChunkRun
 }
 
 // chunkStart is the media time a chunk starts at (its first video
@@ -90,7 +104,12 @@ func (cr *chunkRun) chunkStart(path string) (time.Duration, error) {
 		}
 		return fmp4ChunkStart(path, cr.vTrack, cr.vScale)
 	case ContainerMatroska:
-		return mkvChunkStart(path)
+		if !cr.mkvRead {
+			// Unreadable: Cluster Timestamps, as without a video track.
+			cr.mkvVideo, cr.mkvNALLen, _ = mkvVideoTrack(cr.initPath)
+			cr.mkvRead = true
+		}
+		return mkvChunkStart(path, cr.mkvVideo)
 	default:
 		return tsChunkStart(path)
 	}
@@ -237,62 +256,6 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 	return 0, fmt.Errorf("fmp4: no fragment in %s", filepath.Base(path))
 }
 
-// mkvChunkStart reads the Timestamp of the first Cluster of a segmented
-// Matroska chunk (millisecond TimestampScale, as ffmpeg writes), less the
-// output origin matroskaHLSMuxArgs adds.
-func mkvChunkStart(path string) (time.Duration, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	buf := make([]byte, 4096)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return 0, err
-	}
-	buf = buf[:n]
-	id, l := chunkVint(buf, true)
-	if l == 0 || id != 0x1F43B675 {
-		return 0, fmt.Errorf("matroska: %s does not start with a Cluster", filepath.Base(path))
-	}
-	off := l
-	_, sl := chunkVint(buf[off:], false)
-	if sl == 0 {
-		return 0, errors.New("matroska: bad Cluster size")
-	}
-	off += sl
-	for off < len(buf) {
-		cid, il := chunkVint(buf[off:], true)
-		if il == 0 {
-			break
-		}
-		size, szl := chunkVint(buf[off+il:], false)
-		if szl == 0 {
-			break
-		}
-		body := off + il + szl
-		if cid == 0xE7 {
-			if size == 0 || size > 8 || body+int(size) > len(buf) {
-				break
-			}
-			var ts uint64
-			for _, c := range buf[body : body+int(size)] {
-				ts = ts<<8 | uint64(c)
-			}
-			if ts > uint64(1<<53) {
-				break
-			}
-			return time.Duration(ts)*time.Millisecond - matroskaOrigin, nil
-		}
-		if cid == 0xA3 || cid == 0xA0 || size > uint64(len(buf)) {
-			break // blocks before the timestamp: not ffmpeg's layout
-		}
-		off = body + int(size)
-	}
-	return 0, fmt.Errorf("matroska: no Cluster Timestamp in %s", filepath.Base(path))
-}
-
 // emptyClusterSize is the size of emptyCluster's output.
 const emptyClusterSize = 15
 
@@ -430,26 +393,130 @@ func copyMP4Boxes(w io.Writer, path string, keepStyp bool) error {
 }
 
 // isPreroll reports whether a run's first chunk c is media an earlier
-// segment holds: it ends by the run's first segment, or its GOP starts in
-// an earlier segment that is already published (a restart continuing
-// playback, where repeating the GOP would run the stream backwards).
-// Otherwise it is kept, so the run's first segment starts on its keyframe.
-// It takes s.mu.
-func (s *Session) isPreroll(r *run, cr *chunkRun, c fmp4Chunk) bool {
-	if c.end <= cr.startAt+cr.sl.tol {
-		return true
-	}
-	if c.start >= cr.startAt-cr.sl.tol {
-		return false
+// segment holds: it ends by the run's first segment, it starts before the
+// end of the Matroska GOP a player continuing into the run already holds,
+// or its GOP starts in an earlier segment that is already published (a
+// restart continuing playback, where repeating the GOP would run the
+// stream backwards). Otherwise it is kept, so the run's first segment
+// starts on its keyframe. held is the published segment holding a preroll
+// chunk's media (-1 when none or unknown). It takes s.mu.
+func (s *Session) isPreroll(r *run, cr *chunkRun, c fmp4Chunk) (preroll bool, held int) {
+	if !cr.heldRead {
+		cr.heldRead = true
+		s.heldMKV(r, cr)
 	}
 	slot := cr.sl.slotOf(c.start)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	t := r.track
 	if t < 0 || t >= len(s.done) {
 		t = 0
 	}
-	return slot < r.startSeg && s.done[t][slot]
+	held = -1
+	if slot < r.startSeg && s.done[t][slot] {
+		held = slot
+	}
+	s.mu.Unlock()
+	switch {
+	case c.end <= cr.startAt+cr.sl.tol:
+		return true, held
+	case cr.heldOK && c.start <= cr.heldEnd:
+		if held < 0 {
+			held = cr.heldSeg
+		}
+		return true, held
+	case c.start >= cr.startAt-cr.sl.tol:
+		return false, -1
+	}
+	return held >= 0, held
+}
+
+// heldMKV is the latest published Matroska segment with media before
+// run r's first segment, when a player continuing into the run holds it
+// (every segment between is published: empty Clusters inside its GOP),
+// and the presentation time of its last video frame. A copy restart's
+// keyframes need not match the GOP that segment ends with: an open GOP's
+// leading pictures are in the next segment, a release swap brings other
+// keyframes, and a GOP longer than a segment runs past r's start. It
+// takes s.mu.
+func (s *Session) heldMKV(r *run, cr *chunkRun) {
+	if cr.container != ContainerMatroska || cr.mkvVideo == 0 {
+		return
+	}
+	s.mu.Lock()
+	t := r.track
+	if t < 0 || t >= len(s.done) {
+		t = 0
+	}
+	k, path := r.startSeg-1, ""
+	for ; k >= 0 && s.done[t][k]; k-- {
+		p := s.trackSegPath(t, k)
+		st, err := os.Stat(p)
+		if err != nil {
+			break
+		}
+		if st.Size() > emptyClusterSize {
+			path = p
+			break
+		}
+	}
+	source := s.mkvSources[path]
+	s.mu.Unlock()
+	if path == "" {
+		return
+	}
+	last, ok, err := mkvLastVideo(path, cr.mkvVideo)
+	if err != nil || !ok {
+		return
+	}
+	cr.heldOK, cr.heldSeg, cr.heldEnd, cr.heldSource = true, k, last, source
+}
+
+// mkvSource identifies the video stream a run writes: a copy of its input,
+// or (each encode being its own) the run.
+func mkvSource(r *run) string {
+	if r.spec.Decision.VideoCopy {
+		return "copy " + r.spec.Input
+	}
+	return fmt.Sprintf("run %d", r.seq)
+}
+
+// failChunkRun ends a chunked run whose output cannot be published as it
+// is (a keyframe that needed splicing and could not be): nothing more of
+// it is published, and it fails with err however ffmpeg exits, through
+// the session's usual failure handling (a retry, then the input failure
+// handler).
+func (s *Session) failChunkRun(r *run, cr *chunkRun, path string, err error) {
+	s.log.Warn("HLS run output unusable", "run", r.seq, "err", err)
+	s.removals.remove(path)
+	cr.failed = true
+	r.stderr.add(err.Error())
+	s.mu.Lock()
+	r.proc = failedProc{Process: r.proc, err: err}
+	p := r.proc
+	s.mu.Unlock()
+	p.Stop()
+}
+
+// failedProc is a run's process once its output is unusable.
+type failedProc struct {
+	Process
+	err error
+}
+
+func (p failedProc) Err() error {
+	<-p.Done()
+	return p.err
+}
+
+// runVideoCodec is the video codec a run writes.
+func runVideoCodec(s runSpec) string {
+	if !s.Decision.VideoCopy {
+		return s.Decision.VideoCodec
+	}
+	if v := s.Info.Video(); v != nil {
+		return v.Codec
+	}
+	return ""
 }
 
 // chunkSeg is one segment a chunked run finished: assembled into file, or
@@ -471,6 +538,9 @@ func (s *Session) collectChunks(r *run, exited bool) {
 		return
 	}
 	cr := r.chunks
+	if cr.failed {
+		return
+	}
 	var outs []slotOut
 	p, err := readFFmpegPlaylist(filepath.Join(r.spec.Dir, r.spec.Playlist))
 	if err == nil {
@@ -486,11 +556,34 @@ func (s *Session) collectChunks(r *run, exited bool) {
 				continue
 			}
 			c := fmp4Chunk{path: path, start: start, end: start + e.dur}
-			if !cr.sl.started && s.isPreroll(r, cr, c) {
-				// The keyframe interval before the seek point a remux
-				// restart reads first: an earlier segment's media.
-				s.removals.remove(path)
-				continue
+			if !cr.sl.started {
+				pre, held := s.isPreroll(r, cr, c)
+				if pre {
+					// The keyframe interval before the seek point a remux
+					// restart reads first: an earlier segment's media.
+					s.removals.remove(path)
+					if held >= 0 {
+						cr.prerollOK, cr.prerollSeg = true, held
+					}
+					continue
+				}
+				if cr.heldOK && cr.heldSource != mkvSource(r) && runVideoCodec(r.spec) == "hevc" {
+					// A decoder continuing from the held segment goes on
+					// into this keyframe from another stream.
+					if _, err := mkvSpliceHEVC(path, cr.mkvVideo, cr.mkvNALLen); err != nil {
+						s.failChunkRun(r, cr, path, fmt.Errorf("transcode: splice %s: %w", e.name, err))
+						return
+					}
+				}
+				if n := cr.sl.slotOf(c.start); n > cr.sl.startSeg && cr.prerollOK {
+					// The preroll's GOP spans the run's first segments up
+					// to this keyframe: they are inside it, as when the
+					// GOP was first published.
+					for k := cr.sl.startSeg; k < n; k++ {
+						outs = append(outs, slotOut{n: k, alias: cr.prerollSeg})
+					}
+					cr.sl.startSeg, cr.sl.floor = n, n
+				}
 			}
 			outs = append(outs, cr.sl.add(c)...)
 		}
@@ -564,6 +657,12 @@ func (s *Session) collectChunks(r *run, exited bool) {
 			if os.Rename(sg.file, dst) != nil {
 				s.removals.remove(sg.file)
 				continue
+			}
+			if s.container == ContainerMatroska {
+				if s.mkvSources == nil {
+					s.mkvSources = map[string]string{}
+				}
+				s.mkvSources[dst] = mkvSource(r)
 			}
 		}
 		done[n] = true

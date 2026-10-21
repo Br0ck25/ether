@@ -121,26 +121,90 @@ func TestMatroskaChunkStart(t *testing.T) {
 	crc := []byte{0xBF, 0x84, 1, 2, 3, 4}
 	ts := []byte{0xE7, 0x83, 0x00, 0x75, 0x4F} // 30031 ms
 	block := []byte{0xA3, 0x81, 0x00}
+	at := 30031*time.Millisecond - matroskaOrigin
+	// matroskaenc's layout with B-frames: the audio held back for the
+	// keyframe (track 2, 208 ms early) opens the Cluster; the keyframe
+	// follows, then an open-GOP leading picture 125 ms before it.
+	simple := func(track byte, rel int16, payload ...byte) []byte {
+		b := []byte{0xA3, byte(0x80 | (4 + len(payload))), 0x80 | track, byte(uint16(rel) >> 8), byte(rel), 0x80}
+		return append(b, payload...)
+	}
+	audio := simple(2, -208, 0xAA, 0xAA)
+	key := simple(1, 0, 0x26, 0x01)
+	leading := simple(1, -125, 0x02, 0x01)
+	group := []byte{0xA0, 0x8C, 0x9B, 0x81, 0x10, 0xA1, 0x86, 0x81, 0x00, 0x05, 0x80, 0x26, 0x01} // BlockDuration, Block(track 1, +5)
 	for _, tc := range []struct {
-		b    []byte
-		want time.Duration
-		ok   bool
+		b     []byte
+		video uint64
+		want  time.Duration
+		ok    bool
 	}{
-		{cluster(crc, ts, block), 30031*time.Millisecond - matroskaOrigin, true},
-		{cluster(ts), 30031*time.Millisecond - matroskaOrigin, true},
-		{cluster(block, ts), 0, false},
-		{[]byte{0x1A, 0x45, 0xDF, 0xA3, 0x80}, 0, false},
-		{cluster([]byte{0xE7, 0x89, 1, 2, 3, 4, 5, 6, 7, 8, 9}), 0, false},
-		{[]byte{0x1F, 0x43, 0xB6, 0x75}, 0, false},
-		{nil, 0, false},
+		{cluster(crc, ts, block), 0, at, true},
+		{cluster(ts), 0, at, true},
+		{cluster(ts, audio, key, leading), 1, at, true},
+		{cluster(ts, audio, leading, key), 1, at - 125*time.Millisecond, true},
+		{cluster(ts, audio, group), 1, at + 5*time.Millisecond, true},
+		{cluster(ts, audio), 1, at, true}, // no video: the Cluster's time
+		{cluster(ts, audio, key), 0, at, true},
+		{cluster(block, ts), 0, 0, false},
+		{cluster(audio, ts, key), 1, 0, false},
+		{[]byte{0x1A, 0x45, 0xDF, 0xA3, 0x80}, 0, 0, false},
+		{cluster([]byte{0xE7, 0x89, 1, 2, 3, 4, 5, 6, 7, 8, 9}), 0, 0, false},
+		{cluster(ts[:4]), 0, 0, false},
+		{[]byte{0x1F, 0x43, 0xB6, 0x75}, 0, 0, false},
+		{nil, 0, 0, false},
 	} {
 		p := filepath.Join(dir, "c.mkv")
 		if err := os.WriteFile(p, tc.b, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got, err := mkvChunkStart(p)
+		got, err := mkvChunkStart(p, tc.video)
 		if (err == nil) != tc.ok || got != tc.want {
-			t.Errorf("% x: %v %v, want %v ok=%v", tc.b, got, err, tc.want, tc.ok)
+			t.Errorf("% x (video %d): %v %v, want %v ok=%v", tc.b, tc.video, got, err, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestMatroskaVideoTrack(t *testing.T) {
+	dir := t.TempDir()
+	el := func(id []byte, body ...[]byte) []byte {
+		b := bytes.Join(body, nil)
+		return append(append(append([]byte(nil), id...), byte(0x80|len(b))), b...)
+	}
+	// hvcC with lengthSizeMinusOne 3 in byte 21.
+	hvcC := make([]byte, 23)
+	hvcC[0], hvcC[21] = 1, 0xF3
+	entry := func(number, kind byte, extra ...[]byte) []byte {
+		return el([]byte{0xAE}, append([][]byte{el([]byte{0xD7}, []byte{number}), el([]byte{0x83}, []byte{kind})}, extra...)...)
+	}
+	hevc := [][]byte{el([]byte{0x86}, []byte("V_MPEGH/ISO/HEVC")), el([]byte{0x63, 0xA2}, hvcC)}
+	ebml := el([]byte{0x1A, 0x45, 0xDF, 0xA3}, el([]byte{0x42, 0x82}, []byte("matroska")))
+	tracks := el([]byte{0x16, 0x54, 0xAE, 0x6B}, entry(1, 2), entry(2, 1, hevc...))
+	unknown := []byte{0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+	for _, tc := range []struct {
+		name   string
+		b      []byte
+		want   uint64
+		nalLen int
+		ok     bool
+	}{
+		{"unknown-size segment, audio first", bytes.Join([][]byte{ebml, unknown, tracks}, nil), 2, 4, true},
+		{"placeholder segment size", bytes.Join([][]byte{ebml, {0x18, 0x53, 0x80, 0x67, 0x01, 0, 0, 0, 0, 0, 0x10, 0}, tracks}, nil), 2, 4, true},
+		{"annex b hevc", bytes.Join([][]byte{ebml, unknown, el([]byte{0x16, 0x54, 0xAE, 0x6B}, entry(1, 1, hevc[0], el([]byte{0x63, 0xA2}, []byte{0, 0, 0, 1, 0x40, 1})))}, nil), 1, 0, true},
+		{"hevc without CodecPrivate", bytes.Join([][]byte{ebml, unknown, el([]byte{0x16, 0x54, 0xAE, 0x6B}, entry(1, 1, hevc[0]))}, nil), 1, -1, true},
+		{"hevc with reserved length size", bytes.Join([][]byte{ebml, unknown, el([]byte{0x16, 0x54, 0xAE, 0x6B}, entry(1, 1, hevc[0], el([]byte{0x63, 0xA2}, append(append([]byte{1}, make([]byte, 20)...), 0xFE, 0))))}, nil), 1, -1, true},
+		{"h264", bytes.Join([][]byte{ebml, unknown, el([]byte{0x16, 0x54, 0xAE, 0x6B}, entry(1, 1, el([]byte{0x86}, []byte("V_MPEG4/ISO/AVC")), el([]byte{0x63, 0xA2}, hvcC)))}, nil), 1, 0, true},
+		{"audio only", bytes.Join([][]byte{ebml, unknown, el([]byte{0x16, 0x54, 0xAE, 0x6B}, entry(1, 2))}, nil), 0, 0, true},
+		{"cluster ends the header", bytes.Join([][]byte{ebml, unknown, {0x1F, 0x43, 0xB6, 0x75, 0x80}, tracks}, nil), 0, 0, true},
+		{"bad track number", bytes.Join([][]byte{ebml, unknown, el([]byte{0x16, 0x54, 0xAE, 0x6B}, el([]byte{0xAE}, el([]byte{0xD7})))}, nil), 0, 0, false},
+	} {
+		p := filepath.Join(dir, "h.mkv")
+		if err := os.WriteFile(p, tc.b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, nalLen, err := mkvVideoTrack(p)
+		if (err == nil) != tc.ok || got != tc.want || nalLen != tc.nalLen {
+			t.Errorf("%s: track %d NAL length %d %v, want %d %d ok=%v", tc.name, got, nalLen, err, tc.want, tc.nalLen, tc.ok)
 		}
 	}
 }
@@ -441,5 +505,75 @@ func TestChunkedMatroskaAliasServedForSeeks(t *testing.T) {
 	}
 	if b := body(1); !bytes.Contains(b, []byte("t=0.000")) {
 		t.Errorf("first GET after init: %q", b)
+	}
+}
+
+// A restart behind the encoder whose copy reads a GOP the player already
+// holds (here from 0s to 10s, past the restart's segment [4s,8s)) drops
+// that GOP and keeps the plan: the segments inside it are aliases as on
+// the first run, and the next keyframe starts its own segment, not the
+// restart's.
+func TestChunkedRestartInsidePublishedGOPKeepsPlan(t *testing.T) {
+	for _, container := range []string{ContainerMPEGTS, ContainerFMP4, ContainerMatroska} {
+		t.Run(container, func(t *testing.T) {
+			fr := newFakeRunner()
+			fr.chunkGOP = 10 * time.Second
+			fr.chunkEnd = time.Minute
+			m := newTestManager(t, fr, config.Transcode{}, WithBuffering(60*time.Second, 0, 0))
+			info := mustParse(t, "mp4_h264_aac.json")
+			info.Duration = time.Minute
+			d := core.Decision{Kind: core.DecisionRemux, Container: container, VideoCopy: true, AudioCopy: true, AudioStream: 1}
+			hs, err := m.StartHLS(t.Context(), core.HLSRequest{SessionID: "restart-in-gop-" + container, InputURL: "http://127.0.0.1:1/source", Info: info, Decision: d})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := hs.(*Session)
+			body := func(n int) []byte {
+				t.Helper()
+				r := get(t, s, n)
+				if r.Code != 200 {
+					t.Fatalf("segment %d: %d", n, r.Code)
+				}
+				return r.Body.Bytes()
+			}
+			// The fake's marker names the GOP a segment holds.
+			gop := func(b []byte) string {
+				if i := bytes.Index(b, []byte(" t=")); i >= 0 {
+					end := i + 3
+					for end < len(b) && (b[end] == '.' || b[end] >= '0' && b[end] <= '9') {
+						end++
+					}
+					return string(b[i+1 : end])
+				}
+				return fmt.Sprintf("%d bytes, no GOP", len(b))
+			}
+			if b := body(0); gop(b) != "t=0.000" {
+				t.Fatalf("segment 0: %s", gop(b))
+			}
+			s.mu.Lock()
+			for n := range s.done[0] {
+				if n > 0 {
+					delete(s.done[0], n)
+				}
+			}
+			err = s.startRunLocked(1, false)
+			s.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := body(1)
+			switch {
+			case container == ContainerMatroska && len(b) > emptyClusterSize:
+				t.Errorf("segment 1 after 0 is %d bytes, want the empty Cluster inside the GOP at 0s", len(b))
+			case container != ContainerMatroska && gop(b) != "t=0.000":
+				t.Errorf("segment 1: %s, want the GOP at 0s again", gop(b))
+			}
+			if b := body(2); gop(b) != "t=10.000" {
+				t.Errorf("segment 2: %s, want the GOP at 10s", gop(b))
+			}
+			if starts := fr.startCount(); starts != 2 {
+				t.Errorf("%d ffmpeg runs, want 2", starts)
+			}
+		})
 	}
 }
