@@ -129,7 +129,10 @@ export function WeeklyReport({ notifications }: { notifications: NotificationsDa
 
   const people = viewers.data ?? [];
   const hasEmailChannel = notifications?.channels.some(
-    (c) => c.enabled && c.kind === "smtp" && c.events.includes("newsletter.weekly"),
+    (c) =>
+      c.enabled &&
+      c.kind === "smtp" &&
+      (c.events.includes("newsletter.weekly") || c.events.includes("*")),
   );
   return (
     <>

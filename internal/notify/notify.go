@@ -29,6 +29,10 @@ CREATE INDEX notify_due ON notify_queue(status,due);
 `)
 	// Claim columns let several nodes drain one queue: a row is delivered
 	// by the node whose conditional update moved it out of 'pending'.
+	store.Register("notify", 3, `ALTER TABLE notify_queue ADD COLUMN error TEXT NOT NULL DEFAULT '';
+ALTER TABLE notify_queue ADD COLUMN immediate INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE notify_settings(id TEXT PRIMARY KEY,config TEXT NOT NULL);
+CREATE TABLE notify_push_keys(id TEXT PRIMARY KEY,private_key TEXT NOT NULL,public_key TEXT NOT NULL);`)
 	store.Register("notify", 2, `
 ALTER TABLE notify_queue ADD COLUMN claimed_by TEXT NOT NULL DEFAULT '';
 ALTER TABLE notify_queue ADD COLUMN claimed_at INTEGER NOT NULL DEFAULT 0;
@@ -37,23 +41,25 @@ ALTER TABLE notify_queue ADD COLUMN claimed_at INTEGER NOT NULL DEFAULT 0;
 
 const Redacted = "[configured]"
 
-var Kinds = []string{"playback.start", "playback.stop", "playback.error", "playback.failover", "provider.outage", "indexer.outage", "indexer.budget", "cache.full", "cert.renewed", "update.available", "user.joined", "title.available", "newsletter.weekly", "test"}
+var Kinds = []string{"server.started", "server.stopping", "server.crash", "provider.recovered", "indexer.recovered", "cache.recovered", "playback.start", "playback.stop", "playback.error", "playback.failover", "provider.outage", "indexer.outage", "indexer.budget", "cache.full", "cert.renewed", "update.available", "user.joined", "title.available", "newsletter.weekly", "test"}
 
 type Channel struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Kind          string   `json:"kind"`
-	Enabled       bool     `json:"enabled"`
-	Events        []string `json:"events"`
-	Endpoint      string   `json:"endpoint"`
-	Token         string   `json:"token"`
-	Target        string   `json:"target"`
-	Username      string   `json:"username"`
-	Password      string   `json:"password"`
-	From          string   `json:"from"`
-	To            string   `json:"to"`
-	PerMinute     int      `json:"perMinute"`
-	DigestMinutes int      `json:"digestMinutes"`
+	SMTPMode      string            `json:"smtpMode,omitempty"`
+	Subscription  *PushSubscription `json:"subscription,omitempty"`
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Kind          string            `json:"kind"`
+	Enabled       bool              `json:"enabled"`
+	Events        []string          `json:"events"`
+	Endpoint      string            `json:"endpoint"`
+	Token         string            `json:"token"`
+	Target        string            `json:"target"`
+	Username      string            `json:"username"`
+	Password      string            `json:"password"`
+	From          string            `json:"from"`
+	To            string            `json:"to"`
+	PerMinute     int               `json:"perMinute"`
+	DigestMinutes int               `json:"digestMinutes"`
 }
 type Event struct {
 	HTML    string    `json:"html,omitempty"`
@@ -73,7 +79,12 @@ type Options struct {
 	Logger     *slog.Logger
 }
 type Service struct {
-	drainMu        sync.Mutex
+	monitorDone             <-chan struct{}
+	watchMu                 sync.Mutex
+	watchUpdate             func() error
+	pushPrivate, pushPublic string
+
+	drainMu        chan struct{}
 	healthMu       sync.Mutex
 	sampleMu       sync.Mutex // serializes provider/cache sampling independently of indexer callbacks
 	providerStates map[string]string
@@ -99,7 +110,7 @@ func New(db *sql.DB, opts Options) *Service {
 		_, _ = rand.Read(b[:])
 		opts.NodeID = hex.EncodeToString(b[:])
 	}
-	return &Service{db: db, opts: opts, indexerLog: faillog.New(opts.Logger, "enqueue indexer notification")}
+	return &Service{drainMu: make(chan struct{}, 1), db: db, opts: opts, indexerLog: faillog.New(opts.Logger, "enqueue indexer notification")}
 }
 
 // claimTimeout is how long a claimed row may stay in 'sending' before it is
@@ -132,6 +143,9 @@ func redacted(c Channel) Channel {
 			*p = Redacted
 		}
 	}
+	if c.Subscription != nil {
+		c.Subscription = &PushSubscription{Endpoint: Redacted, Keys: PushKeys{Auth: Redacted, P256dh: Redacted}}
+	}
 	return c
 }
 func (s *Service) Channels(ctx context.Context) ([]Channel, error) {
@@ -151,6 +165,9 @@ func (s *Service) Save(ctx context.Context, c Channel) error {
 	}
 	for _, old := range cs {
 		if old.ID == c.ID {
+			if c.Subscription != nil && c.Subscription.Endpoint == Redacted {
+				c.Subscription = old.Subscription
+			}
 			for _, pair := range []struct {
 				p   *string
 				old string
@@ -175,6 +192,9 @@ func (s *Service) Save(ctx context.Context, c Channel) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO notify_channels(id,config) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET config=excluded.config`, c.ID, string(raw))
+	if err == nil {
+		s.refreshMonitor()
+	}
 	return err
 }
 func (s *Service) Emit(ctx context.Context, e Event) error {
@@ -244,7 +264,7 @@ func enqueueWith(ctx context.Context, db interface {
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, `INSERT INTO notify_queue(channel,event,created,due) VALUES(?,?,?,?)`, c.ID, string(raw), now.Unix(), now.Add(time.Duration(c.DigestMinutes)*time.Minute).Unix())
+	_, err = db.ExecContext(ctx, `INSERT INTO notify_queue(channel,event,created,due,immediate) VALUES(?,?,?,?,?)`, c.ID, string(raw), now.Unix(), deliveryDue(c, e, now).Unix(), immediateEvent(e))
 	return err
 }
 
@@ -294,8 +314,12 @@ func (s *Service) Run(ctx context.Context) {
 	}
 }
 func (s *Service) Drain(ctx context.Context) error {
-	s.drainMu.Lock()
-	defer s.drainMu.Unlock()
+	select {
+	case s.drainMu <- struct{}{}:
+		defer func() { <-s.drainMu }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	cs, err := s.channels(ctx)
 	if err != nil {
 		return err
@@ -312,25 +336,31 @@ func (s *Service) Drain(ctx context.Context) error {
 		if recent >= c.PerMinute {
 			continue
 		}
+		var immediate int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notify_queue WHERE channel=? AND status='pending' AND immediate=1 AND due<=?`, c.ID, now).Scan(&immediate); err != nil {
+			return err
+		}
 		limit := 1
-		if c.DigestMinutes > 0 {
+		if c.DigestMinutes > 0 && immediate == 0 {
 			limit = 100
 		}
 		query := `SELECT id,event FROM notify_queue WHERE channel=? AND status='pending' AND due<=? ORDER BY id LIMIT ?`
 		args := []any{c.ID, now, limit}
-		if c.DigestMinutes > 0 {
+		if immediate > 0 {
+			query = `SELECT id,event FROM notify_queue WHERE channel=? AND status='pending' AND immediate=1 AND due<=? ORDER BY id LIMIT ?`
+		} else if c.DigestMinutes > 0 {
 			// A digest window opens with its first event: once that event
 			// is due, everything queued behind it goes in the same message.
 			// Selecting only due rows would send each event on its own as
 			// it individually came due, so nothing was ever batched.
 			var due int
-			if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notify_queue WHERE channel=? AND status='pending' AND due<=?`, c.ID, now).Scan(&due); err != nil {
+			if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM notify_queue WHERE channel=? AND status='pending' AND immediate=0 AND due<=?`, c.ID, now).Scan(&due); err != nil {
 				return err
 			}
 			if due == 0 {
 				continue
 			}
-			query = `SELECT id,event FROM notify_queue WHERE channel=? AND status='pending' ORDER BY id LIMIT ?`
+			query = `SELECT id,event FROM notify_queue WHERE channel=? AND status='pending' AND immediate=0 ORDER BY id LIMIT ?`
 			args = []any{c.ID, limit}
 		}
 		rows, err := s.db.QueryContext(ctx, query, args...)
@@ -387,22 +417,38 @@ func (s *Service) Drain(ctx context.Context) error {
 			}
 			e.Message = strings.Join(parts, "\n")
 		}
-		status := "sent"
+		status, detail := "sent", ""
 		if err := s.deliver(ctx, c, e); err != nil {
-			status = "failed"
+			status, detail = "failed", err.Error()
 		}
 		for _, id := range ids {
-			if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status=? WHERE id=? AND claimed_by=?`, status, id, s.opts.NodeID); err != nil {
+			if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status=?,error=? WHERE id=? AND claimed_by=?`, status, detail, id, s.opts.NodeID); err != nil {
 				return err
 			}
 		}
 	}
 	// A claim whose node stopped mid-delivery is recorded as failed rather
 	// than resent: the event may already have been delivered.
-	if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status='failed' WHERE status='sending' AND claimed_at<?`,
+	if _, err := s.db.ExecContext(ctx, `UPDATE notify_queue SET status='failed',error='Delivery interrupted; receipt unknown' WHERE status='sending' AND claimed_at<?`,
 		s.opts.Now().Add(-claimTimeout).Unix()); err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM notify_queue WHERE status IN ('sent','failed') AND created<?`, s.opts.Now().AddDate(0, 0, -30).Unix())
+	_, err = s.db.ExecContext(ctx, `DELETE FROM notify_queue WHERE status IN ('sent','failed','cancelled') AND created<?`, s.opts.Now().AddDate(0, 0, -30).Unix())
 	return err
+}
+
+// Critical lifecycle events bypass digest delays. Crash delivery itself is handled
+// by the independent monitor, without relying on this queue or database.
+func deliveryDue(c Channel, e Event, now time.Time) time.Time {
+	if immediateEvent(e) == 1 {
+		return now
+	}
+	return now.Add(time.Duration(c.DigestMinutes) * time.Minute)
+}
+
+func immediateEvent(e Event) int {
+	if strings.HasPrefix(e.Kind, "server.") || e.Kind == "test" || e.Kind == "newsletter.weekly" {
+		return 1
+	}
+	return 0
 }

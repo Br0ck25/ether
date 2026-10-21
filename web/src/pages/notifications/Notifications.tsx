@@ -5,10 +5,12 @@ import { useAsync, useInterval } from "../../lib/hooks";
 import { Channels } from "./Channels";
 import { Deliveries } from "./Deliveries";
 import type { NotificationsData } from "./types";
+import { Protection } from "./Protection";
 import { WeeklyReport } from "./WeeklyReport";
 
 const TABS = [
   { key: "channels", label: "Channels" },
+  { key: "protection", label: "Server protection" },
   { key: "report", label: "Weekly report" },
   { key: "deliveries", label: "Delivery history" },
 ] as const;
@@ -18,6 +20,7 @@ export default function Notifications() {
   const notices = useAsync(async () => {
     const n = await apiFetch<NotificationsData>("/notifications/");
     return {
+      ...n,
       channels: n.channels ?? [],
       events: n.events ?? [],
       deliveries: n.deliveries ?? [],
@@ -27,7 +30,9 @@ export default function Notifications() {
 
   const data = notices.data;
   const body =
-    tab === "report" ? (
+    tab === "protection" ? (
+      <Protection active={data?.crashWatcher} />
+    ) : tab === "report" ? (
       <WeeklyReport notifications={data} />
     ) : notices.error && !data ? (
       <ErrorPanel error={notices.error} onRetry={() => void notices.reload()} />
@@ -42,7 +47,7 @@ export default function Notifications() {
   return (
     <DomainPage
       title="Notifications"
-      description="Alerts for you, and a weekly viewing report."
+      description="Know when something needs you. Send server, playback and source alerts to your devices."
       base="/notifications"
       tabs={TABS.map((t) =>
         t.key === "channels" && data?.channels.length ? { ...t, count: data.channels.length } : t,

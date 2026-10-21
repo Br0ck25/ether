@@ -70,8 +70,10 @@ import (
 // Options configure a run.
 type Options struct {
 	clusterSetup *clusterSetup
-	DataDir      string
-	Version      string
+	// NotificationExecutable enables the independent crash watcher for executable runs.
+	NotificationExecutable string
+	DataDir                string
+	Version                string
 	// Logger receives everything; the admin log ring is teed onto it.
 	Logger *slog.Logger
 	// Spike forces spike mode (local files, no Usenet) on top of config.
@@ -704,9 +706,23 @@ func (a *App) Run(ctx context.Context) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(dl) }()
+	a.notifyLifecycle("server.started", "Ether is online", cfg.Server.FriendlyName+" is ready for connections.")
 	// Hang watchdog: restart via the supervisor if we stop answering.
 	watchdogErr := make(chan error, 1)
-	go func() { watchdogErr <- newWatchdog(probeURL(ln.Addr()), a.log.With("component", "watchdog")).run(ctx) }()
+	go func() {
+		watchdog := newWatchdog(probeURL(ln.Addr()), a.log.With("component", "watchdog"))
+		probe := watchdog.probe
+		watchdog.probe = func(ctx context.Context) error {
+			if err := probe(ctx); err != nil {
+				return err
+			}
+			if err := a.notifications.Heartbeat(ctx); err != nil && ctx.Err() == nil {
+				a.log.Warn("external uptime heartbeat failed")
+			}
+			return nil
+		}
+		watchdogErr <- watchdog.run(ctx)
+	}()
 	var runErr error
 	var setupStop <-chan struct{}
 	if a.opts.clusterSetup != nil {
@@ -722,6 +738,9 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	case runErr = <-watchdogErr:
 	case runErr = <-a.clusterFatal: // nil channel (never ready) when standalone
+	}
+	if runErr == nil {
+		a.notifyLifecycle("server.stopping", "Ether is stopping", "The server is shutting down or restarting.")
 	}
 	// Hand leadership over first: another node takes over singleton work
 	// and plex.tv publication while this one finishes shutting down.

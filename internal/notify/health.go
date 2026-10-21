@@ -29,6 +29,11 @@ func (s *Service) SampleHealth(ctx context.Context) error {
 					return err
 				}
 			}
+			if (old == usenet.StateBackoff || old == usenet.StateAuthFail) && p.State == usenet.StateOK {
+				if err := s.Emit(ctx, Event{Kind: "provider.recovered", Title: "Provider recovered", Message: p.Name + " is available again."}); err != nil {
+					return err
+				}
+			}
 			s.providerStates[id] = p.State
 		}
 	}
@@ -37,6 +42,11 @@ func (s *Service) SampleHealth(ctx context.Context) error {
 		full := budget > 0 && used >= budget
 		if full && !s.cacheFull {
 			if err := s.Emit(ctx, Event{Kind: "cache.full", Title: "Ether cache is full", Message: "The configured segment cache budget has been reached."}); err != nil {
+				return err
+			}
+		}
+		if !full && s.cacheFull {
+			if err := s.Emit(ctx, Event{Kind: "cache.recovered", Title: "Cache space available", Message: "The segment cache is below its configured budget again."}); err != nil {
 				return err
 			}
 		}

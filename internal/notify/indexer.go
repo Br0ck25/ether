@@ -30,8 +30,16 @@ func (s *Service) ObserveIndexer(e newznab.Event) {
 		s.indexerAlerts = map[string]*indexerAlert{}
 	}
 	if state == "" {
+		previous := s.indexerAlerts[key]
 		delete(s.indexerAlerts, key)
 		s.healthMu.Unlock()
+		if previous != nil && previous.sent {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := s.Emit(ctx, Event{Kind: "indexer.recovered", Title: e.Indexer, Message: "The indexer is responding again.", At: e.At}); err != nil {
+				s.indexerLog.Fail(err)
+			}
+		}
 		return
 	}
 	a := s.indexerAlerts[key]

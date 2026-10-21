@@ -3,13 +3,20 @@ import { useEffect, useId, useState } from "react";
 import { Drawer } from "../../components/Drawer";
 import { Field, NumberInput, SecretInput } from "../../components/fields";
 import { MutationError } from "../../components/feedback";
-import { TRANSPORTS, eventLabel, transportLabel, type Channel } from "./types";
+import {
+  TRANSPORTS,
+  TRANSPORT_HELP,
+  CRITICAL_EVENTS,
+  eventLabel,
+  transportLabel,
+  type Channel,
+} from "./types";
 
 const SMTP_FIELDS = [
   { key: "username", label: "Username" },
   { key: "password", label: "Password" },
   { key: "from", label: "From address" },
-  { key: "to", label: "To address" },
+  { key: "to", label: "To addresses" },
 ] as const;
 
 /** Create or edit one notification channel. */
@@ -20,6 +27,7 @@ export function ChannelDrawer({
   events,
   saving,
   error,
+  catalog,
   onClose,
   onSave,
 }: {
@@ -30,6 +38,7 @@ export function ChannelDrawer({
   events: string[];
   saving: boolean;
   error: unknown;
+  catalog?: { kind: string; description: string; automatic: boolean }[];
   onClose: () => void;
   onSave: (channel: Channel) => void;
 }) {
@@ -72,8 +81,17 @@ export function ChannelDrawer({
               id={`${id}-kind`}
               aria-label="Transport"
               value={channel.kind}
-              onChange={(e) => patch({ kind: e.target.value })}
+              disabled={channel.kind === "webpush" || !isNew}
+              onChange={(e) =>
+                patch({
+                  kind: e.target.value,
+                  events: channel.events.filter(
+                    (k) => k !== "newsletter.weekly" || e.target.value === "smtp",
+                  ),
+                })
+              }
             >
+              {channel.kind === "webpush" ? <option value="webpush">Browser push</option> : null}
               {TRANSPORTS.map((v) => (
                 <option key={v} value={v}>
                   {transportLabel(v)}
@@ -81,7 +99,8 @@ export function ChannelDrawer({
               ))}
             </Select>
           </Field>
-          {channel.kind !== "telegram" ? (
+          <p className="text-sm text-fg-muted sm:col-span-2">{TRANSPORT_HELP[channel.kind]}</p>
+          {channel.kind !== "telegram" && channel.kind !== "webpush" ? (
             <Field
               label={channel.kind === "smtp" ? "SMTP host:port" : "Endpoint URL"}
               hint={channel.kind === "smtp" ? "The server must support TLS." : undefined}
@@ -95,7 +114,7 @@ export function ChannelDrawer({
               />
             </Field>
           ) : null}
-          {channel.kind !== "smtp" ? (
+          {channel.kind !== "smtp" && channel.kind !== "webpush" ? (
             <Field
               label={channel.kind === "telegram" ? "Bot token" : "Access token"}
               hint={
@@ -119,6 +138,19 @@ export function ChannelDrawer({
                 value={channel.target}
                 onChange={(e) => patch({ target: e.target.value })}
               />
+            </Field>
+          ) : null}
+          {channel.kind === "smtp" ? (
+            <Field label="Connection security" htmlFor={`${id}-security`}>
+              <Select
+                id={`${id}-security`}
+                aria-label="Connection security"
+                value={channel.smtpMode || (channel.endpoint.endsWith(":465") ? "tls" : "starttls")}
+                onChange={(e) => patch({ smtpMode: e.target.value })}
+              >
+                <option value="starttls">STARTTLS (usually 587)</option>
+                <option value="tls">Implicit TLS (usually 465)</option>
+              </Select>
             </Field>
           ) : null}
           {channel.kind === "smtp"
@@ -180,22 +212,74 @@ export function ChannelDrawer({
         <fieldset className="space-y-2">
           <legend className="text-sm font-medium text-fg">Send these events</legend>
           <p className="text-xs text-fg-muted">
-            Playback and indexer events are collected automatically. Other events are sent when the
-            part of Ether that produces them raises an alert.
+            Choose exactly what reaches this destination. Server lifecycle alerts bypass digest
+            delays. Weekly reports are delivered by email.
           </p>
+          <div className="flex flex-wrap gap-2 py-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => patch({ events: CRITICAL_EVENTS.filter((k) => events.includes(k)) })}
+            >
+              Critical alerts
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                patch({
+                  events: events.filter(
+                    (k) =>
+                      k !== "test" &&
+                      (k !== "newsletter.weekly" || channel.kind === "smtp") &&
+                      (catalog?.find((e) => e.kind === k)?.automatic ??
+                        !["cert.renewed", "update.available", "user.joined"].includes(k)),
+                  ),
+                })
+              }
+            >
+              All automatic events
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => patch({ events: [] })}>
+              Clear
+            </Button>
+          </div>
           <div className="grid gap-x-6 gap-y-2 pt-1 sm:grid-cols-2">
             {events
               .filter((k) => k !== "test")
               .map((k) => (
                 <label key={k} className="flex items-center justify-between gap-3 py-1 text-sm">
-                  <span className="text-fg">{eventLabel(k)}</span>
+                  <span className="text-fg">
+                    {eventLabel(k)}
+                    <span className="block text-xs text-fg-muted">
+                      {catalog?.find((e) => e.kind === k)?.description ??
+                        (["cert.renewed", "update.available", "user.joined"].includes(k)
+                          ? "Owner API integration only; not produced automatically."
+                          : "")}
+                      {k === "newsletter.weekly" && channel.kind !== "smtp"
+                        ? " Email channels only."
+                        : ""}
+                    </span>
+                  </span>
                   <Switch
-                    checked={channel.events.includes(k)}
+                    aria-label={eventLabel(k)}
+                    disabled={k === "newsletter.weekly" && channel.kind !== "smtp"}
+                    checked={
+                      (k !== "newsletter.weekly" || channel.kind === "smtp") &&
+                      (channel.events.includes(k) || channel.events.includes("*"))
+                    }
                     onChange={(e) =>
                       patch({
                         events: e.target.checked
-                          ? [...channel.events, k]
-                          : channel.events.filter((v) => v !== k),
+                          ? [...channel.events.filter((v) => v !== "*"), k]
+                          : channel.events.includes("*")
+                            ? events.filter(
+                                (v) =>
+                                  v !== "test" &&
+                                  v !== k &&
+                                  (v !== "newsletter.weekly" || channel.kind === "smtp"),
+                              )
+                            : channel.events.filter((v) => v !== k),
                       })
                     }
                   />

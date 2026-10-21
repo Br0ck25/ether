@@ -3,6 +3,7 @@ import { BellRing, Pencil, Plus, Send, Smartphone, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Section } from "../../components/layout";
 import { apiFetch, errorMessage } from "../../lib/api";
+import { BrowserPush } from "./BrowserPush";
 import { ChannelDrawer } from "./ChannelDrawer";
 import {
   blankChannel,
@@ -58,6 +59,7 @@ export function Channels({
       await onChanged();
     } catch (e) {
       toast.error(errorMessage(e));
+      await onChanged();
     } finally {
       setBusy(null);
     }
@@ -66,7 +68,9 @@ export function Channels({
   const test = (c: Channel) =>
     run(c.id, async () => {
       await apiFetch(`/notifications/${c.id}/test`, { method: "POST", body: "{}" });
-      toast.success("Test queued", { description: "Its result appears in Delivery history." });
+      toast.success("Test accepted by destination", {
+        description: "Check your inbox or device. The result is saved in Delivery history.",
+      });
     });
 
   const remove = async (c: Channel) => {
@@ -113,9 +117,24 @@ export function Channels({
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy === c.id}
+                  onClick={() =>
+                    void run(c.id, async () => {
+                      await apiFetch(`/notifications/${c.id}`, {
+                        method: "PUT",
+                        body: JSON.stringify({ ...c, enabled: !c.enabled }),
+                      });
+                    })
+                  }
+                >
+                  {c.enabled ? "Pause" : "Resume"}
+                </Button>
+                <Button
                   variant="outline"
                   size="sm"
-                  disabled={busy === c.id || !c.enabled}
+                  disabled={busy === c.id}
                   onClick={() => void test(c)}
                 >
                   <Send size={14} /> Send test
@@ -144,16 +163,18 @@ export function Channels({
         )}
       </Section>
 
+      <BrowserPush data={data} onChanged={onChanged} />
       <Section
         title="Alerts on your phone"
-        description="Install this dashboard as an app for quick access to Activity."
+        description="Choose where you want to receive background alerts."
       >
         <div className="flex items-start gap-3 text-sm text-fg-muted">
-          <Smartphone size={18} className="mt-0.5 shrink-0 text-fg-subtle" />
+          <Smartphone size={18} className="mt-0.5 shrink-0" />
           <p>
-            Open the dashboard over HTTPS and use your browser's Install app or Add to Home Screen
-            action. Activity shows live streams with stop controls. Background alerts arrive through
-            the channels above; browser push notifications aren't available in this version.
+            Use browser push on this device, or create an ntfy, Gotify, Telegram or email channel.
+            Those apps can alert you while the dashboard is closed. On iPhone and iPad, add Ether to
+            your Home Screen over HTTPS, open it there, and connect that device. Each device has its
+            own event rules.
           </p>
         </div>
       </Section>
@@ -164,6 +185,7 @@ export function Channels({
           channel={editing.channel}
           isNew={editing.isNew}
           events={data.events}
+          catalog={data.eventCatalog}
           saving={saving}
           error={saveError}
           onClose={() => setOpen(false)}

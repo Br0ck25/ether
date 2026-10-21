@@ -50,3 +50,16 @@ func (a *App) widgetStatus(context.Context) any {
 	used, budget := a.cache.Usage()
 	return map[string]any{"server": a.cfg.Get().Server.FriendlyName, "version": a.opts.Version, "streams": len(groups), "providers": len(providers), "healthyProviders": healthy, "cacheUsed": used, "cacheBudget": budget}
 }
+
+// WatchNotifications is enabled by the executable, never by embedded/test apps.
+func (a *App) WatchNotifications(executable string) (func(bool) error, error) {
+	return a.notifications.WatchProcess(executable)
+}
+func (a *App) notifyLifecycle(kind, title, message string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.notifications.Emit(ctx, notify.Event{Kind: kind, Title: title, Message: message}); err != nil {
+		a.log.Warn("server notification could not be queued")
+	}
+	_ = a.notifications.Drain(ctx)
+}

@@ -23,11 +23,18 @@ import (
 	"github.com/braedonsaunders/ether/internal/app"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/logfile"
+	"github.com/braedonsaunders/ether/internal/notify"
 	"github.com/braedonsaunders/ether/internal/service"
 	"github.com/braedonsaunders/ether/internal/updater"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "notification-monitor" {
+		if notify.RunMonitor(os.Stdin) != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Printf("ether %s (%s, %s)\n", updater.Version, updater.Commit, updater.Date)
 		return
@@ -63,8 +70,13 @@ func main() {
 
 	logger := setupLogging(*dataDir, logLevelFor(*logLevel, *dataDir))
 	run := func(ctx context.Context) error {
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
 		return app.Serve(ctx, app.Options{
 			DataDir: *dataDir, Logger: logger, Spike: *spike, SpikeFiles: fs.Args(),
+			NotificationExecutable: exe,
 		})
 	}
 

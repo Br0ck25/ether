@@ -1,7 +1,7 @@
 import { Badge, EmptyState, PagedTable } from "@braedonsaunders/appkit-ui";
 import { Inbox } from "lucide-react";
 import { Section } from "../../components/layout";
-import { channelName, type Delivery, type NotificationsData } from "./types";
+import { channelName, eventLabel, type Delivery, type NotificationsData } from "./types";
 
 function statusVariant(status: string) {
   const s = status.toLowerCase();
@@ -20,7 +20,7 @@ export function Deliveries({ data }: { data: NotificationsData }) {
   return (
     <Section
       title="Delivery history"
-      description="Failed deliveries aren't retried; send a new test or wait for the next event. Timeouts are never retried automatically, since the alert may have arrived."
+      description="Last 100 deliveries, retained for 30 days. Sent means the destination accepted the message. Failed or interrupted sends are not automatically retried because the alert may have arrived. Crash-watcher alerts are sent outside this queue."
     >
       {data.deliveries.length ? (
         <PagedTable
@@ -46,6 +46,22 @@ export function Deliveries({ data }: { data: NotificationsData }) {
               search: name,
               sortValue: name,
               cell: name,
+            },
+            {
+              key: "kind",
+              header: "Event",
+              search: (d) => eventLabel(d.kind ?? ""),
+              cell: (d) => eventLabel(d.kind ?? ""),
+            },
+            {
+              key: "error",
+              header: "Details",
+              search: (d) => d.error ?? "",
+              cell: (d) =>
+                d.error ||
+                (d.status === "pending" && d.due
+                  ? `Scheduled ${new Date(d.due * 1000).toLocaleString()}`
+                  : "—"),
             },
             {
               key: "status",

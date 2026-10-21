@@ -26,7 +26,14 @@ export function createMaintenance() {
       digestMinutes: 0,
     },
   ];
+  let heartbeat = { enabled: false, endpoint: "" };
   const events = [
+    "server.started",
+    "server.stopping",
+    "server.crash",
+    "provider.recovered",
+    "indexer.recovered",
+    "cache.recovered",
     "playback.start",
     "playback.stop",
     "playback.error",
@@ -102,7 +109,14 @@ export function createMaintenance() {
     const route = `${method} ${path}`;
     switch (route) {
       case "GET /notifications":
-        return { status: 200, body: { channels, events, deliveries } };
+        return { status: 200, body: { channels, events, deliveries, crashWatcher: true } };
+      case "GET /notifications/heartbeat":
+        return { status: 200, body: heartbeat };
+      case "PUT /notifications/heartbeat":
+        heartbeat = { ...heartbeat, ...(body as object) };
+        return { status: 200, body: { ok: true } };
+      case "POST /notifications/heartbeat/test":
+        return { status: 200, body: { sent: true } };
       case "GET /stats/newsletter/settings":
         return { status: 200, body: newsletter };
       case "PUT /stats/newsletter/settings":
@@ -120,6 +134,8 @@ export function createMaintenance() {
       case "GET /discovery/ratings/settings":
         return { status: 200, body: { enabled: true, provider: "omdb" } };
     }
+    if (method === "POST" && seg[0] === "notifications" && seg[2] === "test")
+      return { status: 200, body: { sent: true } };
     if (method === "PUT" && seg[0] === "notifications" && seg[1]) {
       const c = body as (typeof channels)[number];
       const i = channels.findIndex((x) => x.id === seg[1]);

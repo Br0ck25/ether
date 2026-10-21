@@ -12,6 +12,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/clusterconfig"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/service"
 )
 
 var errClusterSetup = errors.New("cluster setup requested")
@@ -37,7 +38,19 @@ func Serve(ctx context.Context, opts Options) error {
 		if err != nil {
 			return err
 		}
+		finish := func(bool) error { return nil }
+		if opts.NotificationExecutable != "" {
+			watch, watchErr := a.WatchNotifications(opts.NotificationExecutable)
+			if watchErr != nil {
+				a.log.Warn("crash notification watcher unavailable")
+			} else {
+				finish = watch
+			}
+		}
 		err = a.Run(ctx)
+		// A cluster transition deliberately replaces this App within the same
+		// process. Close its watcher cleanly before starting the replacement.
+		_ = finish(err == nil || errors.Is(err, errClusterSetup) || errors.Is(err, service.ErrRestartRequested))
 		a.Close()
 		if !errors.Is(err, errClusterSetup) {
 			return err

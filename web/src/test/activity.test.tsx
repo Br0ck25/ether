@@ -222,7 +222,9 @@ describe("Notifications", () => {
     fireEvent.change(within(drawer).getByLabelText("Endpoint URL"), {
       target: { value: "https://notify.example/hook" },
     });
-    fireEvent.click(within(drawer).getByLabelText("Weekly newsletter"));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Clear" }));
+    expect(within(drawer).getByLabelText("Weekly newsletter")).toBeDisabled();
+    fireEvent.click(within(drawer).getByLabelText("Playback failed"));
     fireEvent.click(within(drawer).getByRole("button", { name: "Save channel" }));
     await waitFor(() =>
       expect(
@@ -231,7 +233,7 @@ describe("Notifications", () => {
             c.url.includes("/notifications/") &&
             c.init?.method === "PUT" &&
             body(c).endpoint === "https://notify.example/hook" &&
-            body(c).events.includes("newsletter.weekly"),
+            body(c).events.includes("playback.error"),
         ),
       ).toBe(true),
     );
