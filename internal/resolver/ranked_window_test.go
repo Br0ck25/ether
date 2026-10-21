@@ -182,3 +182,40 @@ func TestRankedWindowPreservesBudgetAndTransientFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestRankedWindowCountsGraceAlreadySpentDuringDiscovery(t *testing.T) {
+	for _, discovery := range []time.Duration{time.Second, 3 * time.Second} {
+		t.Run(discovery.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				stopped := make(chan struct{})
+				h := windowHealth(func(ctx context.Context, id string) (bool, error) {
+					if id == "prepared" {
+						<-ctx.Done()
+						close(stopped)
+						return false, ctx.Err()
+					}
+					return true, nil
+				})
+				s := New(&fakeIndexer{}, h, nil, testCfg(), Options{})
+				defer s.Close()
+				checks := &candidateChecks{}
+				defer checks.close()
+				cs, tr := windowCandidates("prepared", "backup")
+				start := time.Now()
+				cs[0].prepared = checks.start(context.Background(), s, cs[0].rel)
+				time.Sleep(discovery)
+				winner, _, err := s.validateCandidates(context.Background(), cs, tr, 0)
+				checks.close()
+				want := max(discovery, rankedSourceGrace)
+				if winner != 1 || err != nil || time.Since(start) != want {
+					t.Fatalf("winner=%d err=%v total=%s want=%s", winner, err, time.Since(start), want)
+				}
+				select {
+				case <-stopped:
+				default:
+					t.Fatal("prepared check not joined")
+				}
+			})
+		})
+	}
+}

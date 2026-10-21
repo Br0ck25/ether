@@ -25,9 +25,10 @@ func (s *Service) validateOne(ctx context.Context, rel core.Release) validation 
 }
 
 type candidateCheck struct {
-	done   chan struct{}
-	cancel context.CancelFunc
-	result validation // immutable after done closes
+	started time.Time // includes time spent checking during source discovery
+	done    chan struct{}
+	cancel  context.CancelFunc
+	result  validation // immutable after done closes
 }
 
 func (c *candidateCheck) wait(ctx context.Context) validation {
@@ -45,7 +46,7 @@ type candidateChecks struct{ all []*candidateCheck }
 
 func (c *candidateChecks) start(ctx context.Context, s *Service, rel core.Release) *candidateCheck {
 	ctx, cancel := context.WithTimeout(ctx, candidateBudget)
-	f := &candidateCheck{done: make(chan struct{}), cancel: cancel}
+	f := &candidateCheck{started: time.Now(), done: make(chan struct{}), cancel: cancel}
 	c.all = append(c.all, f)
 	go func() { defer close(f.done); defer cancel(); f.result = s.validateOne(ctx, rel) }()
 	return f

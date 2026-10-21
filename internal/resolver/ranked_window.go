@@ -40,6 +40,11 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 		next++
 		inflight++
 		startedAt[i] = time.Now()
+		if prepared := cands[i].prepared; prepared != nil && !prepared.started.IsZero() {
+			// Discovery already spent part (or all) of this source's grace.
+			// Reusing the check must not restart that grace period.
+			startedAt[i] = prepared.started
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
