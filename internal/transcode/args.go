@@ -330,7 +330,12 @@ func dashMuxArgs(s runSpec) []string {
 		"-adaptation_sets", strings.Join(sets, " "),
 		"-init_seg_name", dashInitPattern,
 		"-media_seg_name", dashChunkPattern,
-		filepath.Join(s.Dir, s.Playlist),
+		// The dash muxer places segment files in the manifest's
+		// directory, which it finds by scanning the output path for
+		// '/'. A Windows path with backslashes has none, so segments
+		// landed in ffmpeg's working directory instead of the run
+		// directory. Forward slashes work in Windows paths too.
+		filepath.ToSlash(filepath.Join(s.Dir, s.Playlist)),
 	}
 }
 
