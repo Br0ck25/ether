@@ -25,6 +25,17 @@ def sanitize(text: str) -> str:
 
 class BenchError(RuntimeError): pass
 
+def hardware_encode_verified(cmdlines: list[dict]) -> bool:
+    """Require an encoder token, and reject mixed hardware/software runs.
+
+    A decoder's hwaccel token alone does not prove hardware encoding.
+    A hardware attempt followed by software fallback is not a hardware run.
+    """
+    text = "\n".join(c.get("cmdline", "") for c in cmdlines).lower()
+    hw = re.search(r"\b(?:h264|hevc|av1)_(?:nvenc|videotoolbox|qsv|vaapi)\b", text)
+    sw = re.search(r"\blib(?:x264|x265|aom-av1|svtav1)\b", text)
+    return bool(hw) and not bool(sw)
+
 @dataclass
 class Profile:
     video_codec: str = "h264"

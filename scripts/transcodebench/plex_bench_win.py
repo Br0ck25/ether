@@ -629,6 +629,9 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
                     if found:
                         with lock:
                             for entry in found:
+                                command = entry.get("cmdline", "")
+                                if "/video/:/transcode/session/" in command and f"/{session}/" not in command:
+                                    continue
                                 key = (entry.get("pid"),
                                        entry.get("process_creation_time"),
                                        entry.get("cmdline"))
@@ -800,7 +803,7 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
             "actual_resolution": (result["decision_media"][0].get("videoResolution")
                                   if result.get("decision_media") else None),
             "hw_note": "inspect transcoder cmdline for nvenc tokens (native PMS NVENC expected)",
-            "transcoder_used_hw": any("nvenc" in c["cmdline"] for c in cmdlines)}
+            "transcoder_used_hw": pb.hardware_encode_verified(cmdlines)}
         return result
     finally:
         try:

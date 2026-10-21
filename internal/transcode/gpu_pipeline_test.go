@@ -101,3 +101,21 @@ func TestVideoToolboxScalerOptionCompatibility(t *testing.T) {
 		}
 	}
 }
+
+func TestHigh10KeepsNVENCWithoutCUDADecoding(t *testing.T) {
+	info := mustParse(t, "mp4_h264_aac.json")
+	for i := range info.Streams {
+		if info.Streams[i].Type == "video" {
+			info.Streams[i].BitDepth = 10
+		}
+	}
+	opts := allow()
+	opts.MaxHeight = 720
+	s := baseSpec(info, Decide(info, appleTV, opts, Policy{}))
+	s.Accel = core.HWAccel{Name: AccelNVENC, Encoders: []string{"h264_nvenc"}}
+	s.Features.hwaccels = map[string]bool{"cuda": true}
+	s.Features.filters["scale_cuda"] = true
+	args := buildArgs(s)
+	mustContain(t, args, "-c:v h264_nvenc", "scale=1280:720")
+	mustNotContain(t, args, "-hwaccel cuda", "-hwaccel_output_format cuda", "scale_cuda=")
+}

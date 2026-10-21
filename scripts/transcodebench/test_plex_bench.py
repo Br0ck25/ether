@@ -220,3 +220,11 @@ class TestFakeServer(unittest.TestCase):
         Handler.mode = "ok"
 
 if __name__ == "__main__": unittest.main(verbosity=2)
+
+class HardwareProofTests(unittest.TestCase):
+    def test_decoder_only_is_not_encoder_proof(self):
+        self.assertFalse(pb.hardware_encode_verified([{"cmdline": "Plex Transcoder -hwaccel nvdec -codec:0 libx264"}]))
+    def test_mixed_fallback_is_not_hardware_run(self):
+        self.assertFalse(pb.hardware_encode_verified([{"cmdline": "-codec:0 h264_nvenc"}, {"cmdline": "-codec:0 libx264"}]))
+    def test_hardware_encoder(self):
+        self.assertTrue(pb.hardware_encode_verified([{"cmdline": "-codec:0 h264_videotoolbox"}]))

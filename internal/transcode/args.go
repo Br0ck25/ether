@@ -512,7 +512,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		hwFrames = true
 	case accel == AccelVideoToolbox:
 		p.inputArgs = append(p.inputArgs, "-hwaccel", "videotoolbox")
-	case accel == AccelNVENC:
+	case accel == AccelNVENC && !(v.Codec == "h264" && v.BitDepth > 8):
 		p.inputArgs = append(p.inputArgs, "-hwaccel", "cuda")
 	case accel == AccelVAAPI:
 		dev := s.Accel.Device

@@ -590,12 +590,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) (*Result, error) {
 	// transcode that claimed hardware but where any launch used a
 	// software encoder is a fallback, even if other (or later) launches
 	// used hardware.
-	if cfg.Mode == ModeTranscode && isExplicitHW(cfg.HWAccel) {
+	if cfg.Mode == ModeTranscode && hw.Name != transcode.AccelNone {
 		if encs := softwareFallbackEncoders(res.Launches); len(encs) > 0 {
 			res.Runtime.HWFallback = true
 			for i := range res.Sessions {
 				res.Sessions[i].HWFallback = true
-				if res.Sessions[i].Success {
+				if isExplicitHW(cfg.HWAccel) && res.Sessions[i].Success {
 					res.Sessions[i].Success = false
 					res.Sessions[i].Error = fmt.Sprintf("software encoder(s) %s used despite requested hwaccel %q", strings.Join(encs, ","), cfg.HWAccel)
 				}

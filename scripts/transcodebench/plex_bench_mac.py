@@ -574,7 +574,10 @@ def run_session_mac(cfg: MacConfig, root_pid: int | None, out_dir: Path, idx: in
         stop_poll.set(); th.join(timeout=3)
     if root_pid:
         state["end"] = sample_tree(root_pid)
-        cmdlines = list(state["argv"].values())
+        session_id = result.get("session_id", "")
+        cmdlines = [c for c in state["argv"].values()
+                    if "/video/:/transcode/session/" not in c.get("cmdline", "")
+                    or f"/{session_id}/" in c.get("cmdline", "")]
         if not cmdlines:
             raise BenchError("authentic encode claimed but no Plex Transcoder argv captured from owned descendants")
         result["transcoder_cmdlines"] = cmdlines
@@ -588,7 +591,7 @@ def run_session_mac(cfg: MacConfig, root_pid: int | None, out_dir: Path, idx: in
             result["cpu_sampling"] = "unavailable"
             result["cpu_sampling_reason"] = "invalid/incomplete tree delta (negative; children likely exited)"
         rva = result.get("requested_vs_actual") or {}
-        rva["transcoder_used_hw"] = any(any(t in c["cmdline"].lower() for t in HW_TOKENS) for c in cmdlines)
+        rva["transcoder_used_hw"] = pb.hardware_encode_verified(cmdlines)
         rva["hw_tokens_checked"] = list(HW_TOKENS)
         rva["hw_note"] = "macOS VideoToolbox expected via videotoolbox token in authentic argv; absence = software fallback, not HW"
         result["requested_vs_actual"] = rva
