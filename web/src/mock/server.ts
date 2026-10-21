@@ -265,6 +265,14 @@ function defaultConfig(): EtherConfig {
       tempDir: "/tmp/ether-transcode",
       maxTranscodes: 2,
       remoteMaxBitrateKbps: 8000,
+      rtxVideo: {
+        mode: "off",
+        executablePath: "",
+        sourceMaxHeight: 720,
+        targetMaxHeight: 1080,
+        quality: 2,
+        maxConcurrent: 1,
+      },
     },
     trakt: { enabled: false, clientId: "", clientSecret: "" },
     openSubtitles: { enabled: false, apiKey: "", username: "", password: "" },
@@ -1525,6 +1533,12 @@ export function createFakeServer(opts: FakeOptions = {}) {
         hwaccel: {
           ffmpeg: "8.0.1",
           hwaccel: { name: "videotoolbox", encoders: ["h264_videotoolbox", "hevc_videotoolbox"] },
+          enhancement: {
+            backend: "nvenc-ngx",
+            available: false,
+            reason: "An NVIDIA RTX GPU and NVEnc are required on this server.",
+            active: 0,
+          },
         },
         indexers: (state.config.indexers ?? []).map((ix, i) => ({
           indexer: ix.name,

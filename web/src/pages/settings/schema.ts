@@ -389,6 +389,73 @@ export const TRANSCODE: FieldGroup[] = [
     ],
   },
   {
+    title: "Server video enhancement",
+    description:
+      "Use NVIDIA RTX Video Super Resolution on this server to improve lower-resolution video before streaming. Requires a supported NVIDIA GPU and NVEnc installation. Enhancement uses additional GPU capacity.",
+    fields: [
+      {
+        key: "rtxVideo",
+        label: "RTX Video Super Resolution",
+        kind: "group",
+        fields: [
+          {
+            key: "mode",
+            label: "RTX Video Super Resolution",
+            kind: "select",
+            options: [
+              { value: "off", label: "Off" },
+              { value: "auto", label: "Automatic · local streams" },
+              { value: "on", label: "On · eligible streams" },
+            ],
+            help: "Eligible videos are enhanced within the viewer's resolution and bitrate limits. Unsupported videos use ordinary playback.",
+          },
+          {
+            key: "sourceMaxHeight",
+            label: "Enhance sources up to",
+            kind: "number",
+            min: 144,
+            max: 2160,
+            step: 1,
+            unit: "p",
+          },
+          {
+            key: "targetMaxHeight",
+            label: "Enhanced resolution limit",
+            kind: "number",
+            min: 144,
+            max: 2160,
+            step: 1,
+            unit: "p",
+          },
+          {
+            key: "quality",
+            label: "Enhancement quality",
+            kind: "number",
+            min: 1,
+            max: 4,
+            step: 1,
+            help: "1 uses the least GPU capacity; 4 uses the most. Start with 2.",
+          },
+          {
+            key: "maxConcurrent",
+            label: "Simultaneous enhancements",
+            kind: "number",
+            min: 1,
+            max: 8,
+            step: 1,
+            help: "Additional streams use ordinary playback when this limit is reached.",
+          },
+          {
+            key: "executablePath",
+            label: "NVEnc executable path",
+            kind: "text",
+            help: "Path to NVEncC64.exe on this server. Restart Ether after changing it.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     title: "ffmpeg",
     fields: [
       {

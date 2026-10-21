@@ -213,5 +213,27 @@ describe("Playback", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("h264_videotoolbox")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Hardware acceleration" })).toBeInTheDocument();
+    expect(screen.getByText("RTX Video: Unavailable")).toBeInTheDocument();
+  });
+
+  it("saves nested server enhancement settings without losing transcoding preferences", async () => {
+    const { fake } = renderApp("/playback");
+    await screen.findByRole("button", { name: "RTX Video Super Resolution" }, WAIT);
+    await choose("RTX Video Super Resolution", "Automatic · local streams");
+    fireEvent.change(screen.getByLabelText("Enhanced resolution limit"), {
+      target: { value: "1440" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/transcode")).toHaveLength(1), WAIT);
+    expect(calls(fake, "PUT", "/config/transcode")[0]!.body).toMatchObject({
+      hwAccel: "auto",
+      rtxVideo: {
+        mode: "auto",
+        targetMaxHeight: 1440,
+        sourceMaxHeight: 720,
+        quality: 2,
+        maxConcurrent: 1,
+      },
+    });
   });
 });

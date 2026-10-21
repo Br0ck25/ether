@@ -141,6 +141,7 @@ export function ConfigSection({
                 value={draft[f.key]}
                 path={`${configKey}.${f.key}`}
                 error={errors[`${configKey}.${f.key}`]}
+                errors={errors}
                 onChange={(v) => change({ ...draft, [f.key]: v })}
               />
             ))}

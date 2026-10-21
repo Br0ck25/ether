@@ -288,6 +288,14 @@ export interface EtherConfig {
     tempDir: string;
     maxTranscodes: number;
     remoteMaxBitrateKbps: number;
+    rtxVideo?: {
+      mode: "off" | "auto" | "on";
+      executablePath: string;
+      sourceMaxHeight: number;
+      targetMaxHeight: number;
+      quality: number;
+      maxConcurrent: number;
+    };
   };
   trakt: { enabled: boolean; clientId: string; clientSecret: string };
   openSubtitles: { enabled: boolean; apiKey: string; username: string; password: string };

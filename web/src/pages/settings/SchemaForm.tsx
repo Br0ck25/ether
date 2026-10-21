@@ -15,6 +15,7 @@ import { REDACTED } from "../../lib/types";
 type Obj = Record<string, unknown>;
 
 export type FieldDef =
+  | { key: string; label: string; help?: ReactNode; kind: "group"; fields: FieldDef[] }
   | {
       key: string;
       label: string;
@@ -69,12 +70,14 @@ export function SchemaField({
   value,
   onChange,
   error,
+  errors,
   path,
 }: {
   def: FieldDef;
   value: unknown;
   onChange: (v: unknown) => void;
   error?: string;
+  errors?: Record<string, string>;
   path: string;
 }) {
   const id = `f-${path.replace(/[^a-z0-9]+/gi, "-")}`;
@@ -89,6 +92,29 @@ export function SchemaField({
     </>
   );
   switch (def.kind) {
+    case "group": {
+      const nested = asObj(value);
+      return (
+        <div role="group" aria-label={def.label}>
+          {def.fields.map((field) => (
+            <SchemaField
+              key={field.key}
+              def={field}
+              value={nested[field.key]}
+              path={`${path}.${field.key}`}
+              errors={errors}
+              error={errors?.[`${path}.${field.key}`]}
+              onChange={(v) => onChange({ ...nested, [field.key]: v })}
+            />
+          ))}
+          {error ? (
+            <p role="alert" className="text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
+        </div>
+      );
+    }
     case "hidden":
       return null;
     case "json":
@@ -303,6 +329,7 @@ export function SchemaGroups({
                 value={value[f.key]}
                 path={`${prefix}.${f.key}`}
                 error={errors[`${prefix}.${f.key}`]}
+                errors={errors}
                 onChange={(v) => onChange({ ...value, [f.key]: v })}
               />
             ))}

@@ -9,6 +9,14 @@ type Hardware = {
   hwaccel?: { name: string; encoders: string[] | null; device?: string };
   ffmpeg?: unknown;
   error?: string;
+  enhancement?: {
+    backend: string;
+    available: boolean;
+    reason?: string;
+    version?: string;
+    protocols?: string[];
+    active: number;
+  };
 };
 
 /** Detected transcoding hardware: acceleration, encoders and the bundled FFmpeg. */
@@ -76,6 +84,26 @@ export function HardwareStatus() {
           <p className="text-xs text-fg-subtle">
             Live CPU and GPU load, disk checks and tone-mapping benchmarks aren't collected.
           </p>
+          {data.enhancement ? (
+            <div
+              className="rounded-md border border-border p-3"
+              aria-label="Server enhancement status"
+            >
+              <p className="text-sm font-medium text-fg">
+                RTX Video:{" "}
+                {data.enhancement.active > 0
+                  ? `${data.enhancement.active} active`
+                  : data.enhancement.available
+                    ? "Detected · idle"
+                    : "Unavailable"}
+              </p>
+              <p className="mt-1 text-xs text-fg-muted">
+                {data.enhancement.reason ||
+                  "Detected support is verified when an eligible stream starts."}
+                {data.enhancement.version ? ` · ${data.enhancement.version}` : ""}
+              </p>
+            </div>
+          ) : null}
         </div>
       )}
     </Section>
