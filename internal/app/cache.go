@@ -1,11 +1,13 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
@@ -92,4 +94,30 @@ func (a *App) cacheHandler() http.Handler {
 		w.WriteHeader(http.StatusAccepted)
 	})
 	return mux
+}
+
+// Cache learning defaults to the owner and active Plex Home members, never
+// silently treating every remote friend as part of the household.
+func (a *App) cacheHousehold(ctx context.Context, scope string) ([]core.User, error) {
+	active, err := a.users.Users(ctx)
+	if err != nil || scope == "all" {
+		return active, err
+	}
+	all, err := a.users.AllUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	home := map[int64]bool{}
+	for _, u := range all {
+		if u.Home || u.IsOwner {
+			home[u.ID] = true
+		}
+	}
+	out := make([]core.User, 0)
+	for _, u := range active {
+		if home[u.ID] {
+			out = append(out, u)
+		}
+	}
+	return out, nil
 }

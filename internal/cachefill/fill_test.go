@@ -23,6 +23,16 @@ func (c catalogFake) Browse(_ context.Context, q core.BrowseQuery) (core.Page, e
 	return core.Page{Items: c.items[q.Offset:min(q.Offset+q.Limit, len(c.items))], Total: len(c.items)}, nil
 }
 
+func (c catalogFake) CachedTitle(_ context.Context, key core.RatingKey) (*core.Title, error) {
+	for _, t := range c.items {
+		if t.Key == key {
+			return &t, nil
+		}
+	}
+	return nil, core.ErrNotFound
+}
+func (c catalogFake) Children(context.Context, core.RatingKey) ([]core.Title, error) { return nil, nil }
+
 type resolverFake struct {
 	core.Resolver
 	calls atomic.Int32

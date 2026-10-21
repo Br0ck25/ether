@@ -12,6 +12,11 @@ func TestCachePolicyValidation(t *testing.T) {
 		mutate func(*config.Cache)
 		field  string
 	}{
+		{"bad content", func(c *config.Cache) { c.PreloadContent = "all-files" }, "cache.preloadContent"},
+		{"bad blend", func(c *config.Cache) { v := 101; c.PreloadHouseholdWeight = &v }, "cache.preloadHouseholdWeight"},
+		{"bad household", func(c *config.Cache) { c.PreloadHouseholdScope = "everybody" }, "cache.preloadHouseholdScope"},
+		{"oversized episode window", func(c *config.Cache) { c.PreloadEpisodesAhead = 25 }, "cache.preloadEpisodesAhead"},
+		{"unbounded history", func(c *config.Cache) { c.PreloadHistoryDays = 731 }, "cache.preloadHistoryDays"},
 		{"bad mode", func(c *config.Cache) { c.Mode = "infinite-magic" }, "cache.mode"},
 		{"negative retention", func(c *config.Cache) { c.RetentionDays = -1 }, "cache.retentionDays"},
 		{"oversized warm", func(c *config.Cache) { c.DetailBytes = 65 << 20 }, "cache.detailBytes"},
@@ -35,6 +40,12 @@ func TestCachePolicyValidation(t *testing.T) {
 	cfg.Cache.PreloadEnabled = true
 	cfg.Cache.PreloadBudgetBytes = 18 << 40
 	cfg.Cache.PreloadMaxTitles = 2500
+	cfg.Cache.PreloadSource = "smart"
+	cfg.Cache.PreloadContent = "mixed"
+	zero := 0
+	cfg.Cache.PreloadHouseholdWeight = &zero
+	cfg.Cache.PreloadEpisodesAhead = 24
+	cfg.Cache.PreloadHouseholdScope = "home"
 	if errs := admin.ValidateConfig(cfg); len(errs) > 0 {
 		t.Fatal(errs)
 	}
