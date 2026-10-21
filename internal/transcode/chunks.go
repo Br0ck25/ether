@@ -65,6 +65,7 @@ type chunkRun struct {
 	vTrack    uint32 // fMP4 video track and timescale, once read
 	vScale    uint32
 	vShift    int64  // fMP4 video edit list shift (trackInit.EditShift)
+	vBad      bool   // fMP4 video edit list unreadable
 	mkvVideo  uint64 // Matroska video TrackNumber and NAL length size, once read
 	mkvNALLen int
 	mkvRead   bool
@@ -95,13 +96,17 @@ func (cr *chunkRun) chunkStart(path string) (time.Duration, error) {
 			if err != nil {
 				return 0, err
 			}
-			cr.vTrack, cr.vScale, cr.vShift = tracks[0].TrackID, tracks[0].Timescale, tracks[0].EditShift
+			v := tracks[0]
 			for _, t := range tracks {
 				if t.Handler == "vide" {
-					cr.vTrack, cr.vScale, cr.vShift = t.TrackID, t.Timescale, t.EditShift
+					v = t
 					break
 				}
 			}
+			cr.vTrack, cr.vScale, cr.vShift, cr.vBad = v.TrackID, v.Timescale, v.EditShift, v.EditBad
+		}
+		if cr.vBad {
+			return 0, errors.New("fmp4: unreadable video edit list")
 		}
 		// The edit list is the run's own: a restart starting on an
 		// open-GOP keyframe has a larger first composition offset.
@@ -569,6 +574,12 @@ func (s *Session) collectChunks(r *run, exited bool) {
 		for ; cr.next < len(p.entries); cr.next++ {
 			e := p.entries[cr.next]
 			path := filepath.Join(cr.dir, e.name)
+			if s.heldToClock(r) {
+				if err := s.moveOntoRetained(r, path); err != nil {
+					s.failChunkRun(r, cr, path, fmt.Errorf("transcode: %s on the retained clock: %w", e.name, err))
+					return
+				}
+			}
 			start, err := cr.chunkStart(path)
 			if err != nil {
 				// Chunks are renamed into place once complete, so this is
@@ -640,7 +651,16 @@ func (s *Session) collectChunks(r *run, exited bool) {
 	if t < 0 || t >= len(s.done) {
 		t = 0
 	}
-	s.noteInitLocked(r, t)
+	if err := s.noteInitLocked(r, t); err != nil {
+		for _, sg := range segs {
+			if sg.file != "" {
+				s.removals.remove(sg.file)
+			}
+		}
+		cr.failed = true
+		s.failRunOutputLocked(r, err)
+		return
+	}
 	changed := false
 	done := s.done[t]
 	for _, sg := range segs {

@@ -90,6 +90,10 @@ type Session struct {
 	// across failovers; nil for every other session (contract.go).
 	contract *videoContract
 
+	// fmp4Edits is, per HLS fMP4 init scope, the edits of the first init
+	// published there: the clock later runs are held to (fmp4_edit.go).
+	fmp4Edits map[clockScope]map[string]trackEdit
+
 	// Adaptive HLS engine: the shared segment plan (HLS only), the config
 	// snapshot, the ABR ladder and measured delivery goodput.
 	plan           *Timeline
@@ -144,6 +148,7 @@ type run struct {
 
 	dash   *dashRun  // DASH runs only; owned by the run's watch goroutine
 	chunks *chunkRun // chunked HLS runs only (chunks.go); likewise
+	edits  *runEdits // HLS fMP4 runs: correction onto the retained clock (fmp4_edit.go)
 }
 
 func (r *run) next() int {
@@ -1435,6 +1440,9 @@ func (s *Session) poll(r *run, playlist string) {
 	if r.stopped && s.cur != r {
 		return // superseded; its segments may already be discarded
 	}
+	if r.edits != nil && r.edits.failed {
+		return
+	}
 	changed := false
 	t := r.track
 	if t < 0 || t >= len(s.done) {
@@ -1453,7 +1461,20 @@ func (s *Session) poll(r *run, playlist string) {
 			_ = os.Remove(s.trackSegPath(t, n))
 			continue
 		}
-		s.noteInitLocked(r, t)
+		if s.heldToClock(r) {
+			path := s.trackSegPath(t, n)
+			err := s.moveOntoRetainedLocked(r, t, path)
+			if err == nil {
+				err = s.noteInitLocked(r, t)
+			}
+			if err != nil {
+				_ = os.Remove(path)
+				s.failRunOutputLocked(r, fmt.Errorf("transcode: segment %d on the retained clock: %w", n, err))
+				break
+			}
+		} else {
+			_ = s.noteInitLocked(r, t)
+		}
 		if r.produced == 0 {
 			s.log.Info("first segment ready", "run", r.seq, "segment", n, "after", time.Since(r.started))
 		}
@@ -1472,16 +1493,21 @@ func (s *Session) poll(r *run, playlist string) {
 
 // noteInitLocked publishes run r's init segment (fMP4 init or Matroska
 // header) as track t's once ffmpeg has written it.
-func (s *Session) noteInitLocked(r *run, t int) {
+// An fMP4 init off the track's retained clock is an error: neither it nor
+// the run's media may be published.
+func (s *Session) noteInitLocked(r *run, t int) error {
 	if !hasInitSegment(s.container) {
-		return
+		return nil
 	}
 	if _, err := os.Stat(filepath.Join(r.spec.Dir, r.spec.InitName)); err != nil {
-		return
+		return nil
 	}
 	rel, err := filepath.Rel(s.dir, filepath.Join(r.spec.Dir, r.spec.InitName))
 	if err != nil {
-		return
+		return nil
+	}
+	if err := s.holdInitEditsLocked(r, t); err != nil {
+		return err
 	}
 	for len(s.initFiles) <= t {
 		s.initFiles = append(s.initFiles, "")
@@ -1490,6 +1516,7 @@ func (s *Session) noteInitLocked(r *run, t int) {
 	if t == 0 {
 		s.initFile = rel
 	}
+	return nil
 }
 
 // noteSegSizeLocked records a primary-track segment's size (governor).

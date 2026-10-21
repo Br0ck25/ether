@@ -96,6 +96,9 @@ type trackInit struct {
 	// Timescale): a sample presents at its composition time minus this.
 	// It is the edit list's media_time less any leading empty edit.
 	EditShift int64
+	// EditBad is set when the track has an edit list this reader cannot
+	// map (truncated, or no edit that maps media).
+	EditBad bool
 }
 
 // parseInit reads the first track of an init segment (ftyp + moov).
@@ -187,7 +190,8 @@ func parseTrak(b []byte, moov, trak mp4Box) (trackInit, error) {
 		if mvhd, ok := child(b, moov, "mvhd"); ok {
 			movieScale, _ = fullBoxTime(mvhd.payload(b))
 		}
-		ti.EditShift = editShift(elst.payload(b), movieScale, ti.Timescale)
+		shift, err := editShift(elst.payload(b), movieScale, ti.Timescale)
+		ti.EditShift, ti.EditBad = shift, err != nil
 	}
 	if mvex, ok := child(b, moov, "mvex"); ok {
 		kids, _ := readBoxes(b, mvex.start+mvex.hdr, mvex.end)
@@ -222,36 +226,64 @@ func parseTrak(b []byte, moov, trak mp4Box) (trackInit, error) {
 // maps media, less the empty edits (durations in the movie timescale)
 // that delay it, in the media timescale. ffmpeg writes one edit whose
 // media_time is the first sample's composition offset.
-func editShift(p []byte, movieScale, mediaScale uint32) int64 {
-	if len(p) < 8 {
-		return 0
+func editShift(p []byte, movieScale, mediaScale uint32) (int64, error) {
+	at, version, empty, err := mediaEdit(p)
+	if err != nil {
+		return 0, err
 	}
-	var empty uint64
-	for i, at := uint32(0), 8; i < binary.BigEndian.Uint32(p[4:]); i++ {
+	media := int64(int32(binary.BigEndian.Uint32(p[at:])))
+	if version == 1 {
+		media = int64(binary.BigEndian.Uint64(p[at:]))
+	}
+	if empty > 0 {
+		if movieScale == 0 {
+			return 0, errors.New("fmp4: empty edit without a movie timescale")
+		}
+		media -= int64(empty * uint64(mediaScale) / uint64(movieScale))
+	}
+	return media, nil
+}
+
+// mediaEdit finds the media_time field of an elst payload's first edit
+// that maps media: its offset in p, the box version (field width 4 or 8)
+// and the summed durations of the empty edits before it.
+func mediaEdit(p []byte) (at int, version byte, empty uint64, err error) {
+	if len(p) < 8 || p[0] > 1 {
+		return 0, 0, 0, errors.New("fmp4: bad elst")
+	}
+	version, at = p[0], 8
+	n, size := uint64(binary.BigEndian.Uint32(p[4:])), uint64(12)
+	if version == 1 {
+		size = 20
+	}
+	if uint64(len(p)) < 8+n*size {
+		return 0, 0, 0, errors.New("fmp4: truncated elst")
+	}
+	for i := uint64(0); i < n; i++ {
 		var seg uint64
 		var media int64
-		if p[0] == 1 {
+		if version == 1 {
 			if len(p) < at+20 {
-				return 0
+				return 0, 0, 0, errors.New("fmp4: truncated elst")
 			}
 			seg, media = binary.BigEndian.Uint64(p[at:]), int64(binary.BigEndian.Uint64(p[at+8:]))
 			at += 20
 		} else {
 			if len(p) < at+12 {
-				return 0
+				return 0, 0, 0, errors.New("fmp4: truncated elst")
 			}
 			seg, media = uint64(binary.BigEndian.Uint32(p[at:])), int64(int32(binary.BigEndian.Uint32(p[at+4:])))
 			at += 12
 		}
 		if media >= 0 {
-			if empty > 0 && movieScale > 0 {
-				media -= int64(empty * uint64(mediaScale) / uint64(movieScale))
+			if version == 1 {
+				return at - 12, version, empty, nil // media_time follows the 8-byte duration
 			}
-			return media
+			return at - 8, version, empty, nil
 		}
 		empty += seg
 	}
-	return 0
+	return 0, 0, 0, errors.New("fmp4: elst maps no media")
 }
 
 // describeSampleEntry fills the codec, size and audio fields from a sample

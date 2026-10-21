@@ -355,7 +355,11 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 		if !filepath.IsAbs(initPath) {
 			initPath = filepath.Join(filepath.Dir(playlist), initPath)
 		}
-		_ = os.WriteFile(initPath, []byte("init"), 0o644)
+		b := []byte("init")
+		if argValue(args, "-hls_segment_type") == "fmp4" {
+			b = testVideoInit(1280, 720) // read for the session's retained clock
+		}
+		_ = os.WriteFile(initPath, b, 0o644)
 	}
 	var list strings.Builder
 	list.WriteString("#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n")

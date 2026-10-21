@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -83,44 +85,70 @@ func TestEditShift(t *testing.T) {
 		name string
 		elst []byte
 		want int64
+		ok   bool
 	}{
-		{"ffmpeg v0", mkFullBox("elst", 0, 0, u32(1), entry0(0, 1328)), 1328},
-		{"v1", mkFullBox("elst", 1, 0, u32(1), entry1(0, 3328)), 3328},
+		{"ffmpeg v0", mkFullBox("elst", 0, 0, u32(1), entry0(0, 1328)), 1328, true},
+		{"v1", mkFullBox("elst", 1, 0, u32(1), entry1(0, 3328)), 3328, true},
 		// 0.5s empty edit (movie timescale 1000) delays media 0.083s in.
-		{"empty edit first", mkFullBox("elst", 0, 0, u32(2), entry0(500, -1), entry0(0, 1328)), 1328 - 8000},
-		{"truncated", mkFullBox("elst", 0, 0, u32(2), entry0(500, -1)), 0},
+		{"empty edit first", mkFullBox("elst", 0, 0, u32(2), entry0(500, -1), entry0(0, 1328)), 1328 - 8000, true},
+		{"v1 empty edit first", mkFullBox("elst", 1, 0, u32(2), entry1(500, -1), entry1(0, 1328)), 1328 - 8000, true},
+		{"truncated", mkFullBox("elst", 0, 0, u32(2), entry0(500, -1)), 0, false},
+		{"only empty edits", mkFullBox("elst", 0, 0, u32(1), entry0(500, -1)), 0, false},
+		{"bad version", mkFullBox("elst", 2, 0, u32(1), entry0(0, 1328)), 0, false},
+		{"short", mkFullBox("elst", 0, 0)[:10], 0, false},
 	} {
-		if got := editShift(tc.elst[8:], 1000, 16000); got != tc.want {
-			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
+		got, err := editShift(tc.elst[8:], 1000, 16000)
+		if got != tc.want || (err == nil) != tc.ok {
+			t.Errorf("%s: %d %v, want %d ok=%v", tc.name, got, err, tc.want, tc.ok)
 		}
+	}
+	if _, err := editShift(mkFullBox("elst", 0, 0, u32(2), entry0(500, -1), entry0(0, 1328))[8:], 0, 16000); err == nil {
+		t.Error("empty edit without a movie timescale: no error")
 	}
 }
 
 // openGOPInit is an HLS fMP4 init as ffmpeg writes it for open-GOP HEVC:
 // video track 1 at 16000 with the first sample's composition offset as
 // its edit, and audio track 2.
-func openGOPInit(edit uint32) []byte {
+func openGOPInit(edit uint32) []byte { return openGOPInitScale(edit, 16000) }
+
+// openGOPInitScale is openGOPInit with the video track at timescale scale.
+func openGOPInitScale(edit, scale uint32) []byte {
+	return openGOPInitBoxes(scale, mkFullBox("elst", 0, 0, u32(1), u32(0), u32(edit), u32(0x10000)), 1)
+}
+
+// openGOPInitBoxes builds it with the video edit list videoElst and
+// videos video tracks.
+func openGOPInitBoxes(scale uint32, videoElst []byte, videos int) []byte {
 	ftyp := mkBox("ftyp", []byte("iso5"), u32(512), []byte("iso5iso6mp41"))
 	mvhd := mkFullBox("mvhd", 0, 0, u32(0), u32(0), u32(1000), u32(0), make([]byte, 80))
-	trak := func(id, scale uint32, handler string, edit uint32, entry []byte) []byte {
+	trak := func(id, scale uint32, handler string, elst []byte, entry []byte) []byte {
 		tkhd := mkFullBox("tkhd", 0, 3, u32(0), u32(0), u32(id), u32(0), u32(0), make([]byte, 60))
-		edts := mkBox("edts", mkFullBox("elst", 0, 0, u32(1), u32(0), u32(edit), u32(0x10000)))
+		edts := mkBox("edts", elst)
 		mdhd := mkFullBox("mdhd", 0, 0, u32(0), u32(0), u32(scale), u32(0), u16(0x55c4), u16(0))
 		hdlr := mkFullBox("hdlr", 0, 0, u32(0), []byte(handler), make([]byte, 12), []byte("Handler\x00"))
 		stbl := mkBox("stbl", mkFullBox("stsd", 0, 0, u32(1), entry))
 		return mkBox("trak", tkhd, edts, mkBox("mdia", mdhd, hdlr, mkBox("minf", stbl)))
 	}
 	hvc1 := mkBox("hvc1", make([]byte, 6), u16(1), make([]byte, 16), u16(640), u16(360), make([]byte, 50))
-	moov := mkBox("moov", mvhd, trak(2, 48000, "soun", 0, audioEntry("mp4a", 2, 48000, esdsAAC(2))), trak(1, 16000, "vide", edit, hvc1))
-	return append(ftyp, moov...)
+	traks := [][]byte{mvhd, trak(2, 48000, "soun", mkFullBox("elst", 0, 0, u32(1), u32(0), u32(0), u32(0x10000)), audioEntry("mp4a", 2, 48000, esdsAAC(2)))}
+	for i := 0; i < videos; i++ {
+		traks = append(traks, trak(uint32(1+2*i), scale, "vide", videoElst, hvc1))
+	}
+	return append(ftyp, mkBox("moov", traks...)...)
 }
 
 // openGOPChunk is one HLS fMP4 fragment: audio first, then video whose
 // first sample (the keyframe) has composition offset cto.
 func openGOPChunk(videoTfdt uint64, version byte, cto uint32) []byte {
-	audio := mkBox("traf", mkFullBox("tfhd", 0, 0x020000, u32(2)), mkFullBox("tfdt", 1, 0, u64(uint64(videoTfdt)*3-4000)),
+	return openGOPChunkTfdt(mkFullBox("tfdt", 1, 0, u64(videoTfdt)), version, cto)
+}
+
+// openGOPChunkTfdt is openGOPChunk with the video tfdt box given (nil none).
+func openGOPChunkTfdt(tfdt []byte, version byte, cto uint32) []byte {
+	audio := mkBox("traf", mkFullBox("tfhd", 0, 0x020000, u32(2)), mkFullBox("tfdt", 1, 0, u64(96000)),
 		mkFullBox("trun", 0, 0x301, u32(1), u32(0), u32(1024), u32(10)))
-	video := mkBox("traf", mkFullBox("tfhd", 0, 0x020038, u32(1), u32(672), u32(100), u32(0x01010000)), mkFullBox("tfdt", 1, 0, u64(videoTfdt)),
+	video := mkBox("traf", mkFullBox("tfhd", 0, 0x020038, u32(1), u32(672), u32(100), u32(0x01010000)), tfdt,
 		mkFullBox("trun", version, 0xb05, u32(2), u32(0), u32(0x02000000), u32(672), u32(50), u32(cto), u32(672), u32(50), u32(cto-2000)))
 	moof := mkBox("moof", mkFullBox("mfhd", 0, 0, u32(3)), audio, video)
 	return bytes.Join([][]byte{mkBox("styp", []byte("msdh"), u32(0), []byte("msdhmsix")), moof, mkBox("mdat", make([]byte, 110))}, nil)
@@ -304,45 +332,8 @@ func TestIntegrationFMP4OpenGOPMatchesSource(t *testing.T) {
 			starts := planStarts(t, hs, 0)
 			total := len(starts) - 1
 			init0 := fetch(t, hs, InitSegment)
-			check := func(label string, from int, restart bool) {
-				joined := append([]byte(nil), init0...)
-				for n := from; n < total; n++ {
-					seg := fetch(t, hs, n)
-					joined = append(joined, seg...)
-					file := e.writeTemp(t, fmt.Sprintf("%s-%d.mp4", label, n), append(append([]byte(nil), init0...), seg...))
-					v := e.packets(t, file, "v")
-					// Each segment starts on its plan boundary's keyframe,
-					// which presents at the source's time.
-					if len(v) == 0 || !v[0].key || math.Abs(v[0].pts-starts[n]) > fx.tol {
-						t.Errorf("%s segment %d starts %+v, plan %.4f", label, n, firstPacket(v), starts[n])
-					}
-					if n == from {
-						e.decodesAlone(t, ContainerFMP4, init0, seg, fmt.Sprintf("%s-%d", label, n))
-					}
-				}
-				file := e.writeTemp(t, label+"-joined.mp4", joined)
-				// A restart's first keyframe is read after a seek, where
-				// ffmpeg guesses Matroska decode times and its leading
-				// pictures (undecodable without the previous GOP, which a
-				// fresh decoder drops) come out with collapsed times: an
-				// input-side defect outside the muxer, counted not hidden.
-				lead := matchSource(t, label+" video", srcV, e.packets(t, file, "v"), fx.tol, restart)
-				if restart && lead > 4 {
-					t.Errorf("%s: %d leading pictures skipped", label, lead)
-				}
-				if restart {
-					t.Logf("%s: skipped %d leading pictures of the first keyframe", label, lead)
-				}
-				matchSource(t, label+" audio", srcA, e.packets(t, file, "a"), fx.tol, false)
-			}
-			check("first", 0, false)
-			if strings.HasSuffix(fx.name, ".mp4") {
-				// A restart of an MP4 source on a CRA writes decode times
-				// against its own edit (the CRA's larger offset), which a
-				// player holding init0 places late: a separate frag_discont
-				// defect, not covered here.
-				return
-			}
+			mkv := strings.HasSuffix(fx.name, ".mkv")
+			e.checkOnClock(t, hs, init0, starts, 0, srcV, srcA, fx.tol, false, "first")
 			mid := total / 2
 			s.mu.Lock()
 			for n := range s.done[0] {
@@ -355,7 +346,112 @@ func TestIntegrationFMP4OpenGOPMatchesSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			check("restart", mid, true)
+			// The restart starts on a CRA: its own edit is the CRA's
+			// offset, larger than init0's. Under init0 (and the init now
+			// served) it must present exactly as the source.
+			e.checkOnClock(t, hs, init0, starts, mid, srcV, srcA, fx.tol, mkv, "restart")
+			e.checkOnClock(t, hs, fetch(t, hs, InitSegment), starts, mid, srcV, srcA, fx.tol, mkv, "restart-refetched-init")
+		})
+	}
+}
+
+// checkOnClock fetches segments from..end of hs and requires each, under
+// init, to start on its plan keyframe at the source's time, and the
+// joined segments to present every source packet (video and audio) at its
+// source time within tol. With skipLead (Matroska after a seek) the
+// leading pictures of the first keyframe are counted, not checked: ffmpeg
+// guesses Matroska decode times after a seek and collapses theirs (an
+// input-side defect outside the muxer; a fresh decoder drops them).
+func (e *realEnv) checkOnClock(t *testing.T, hs core.HLSSession, init []byte, starts []float64, from int,
+	srcV, srcA []srcPacket, tol float64, skipLead bool, label string) {
+	t.Helper()
+	joined := append([]byte(nil), init...)
+	for n := from; n < len(starts)-1; n++ {
+		seg := fetch(t, hs, n)
+		joined = append(joined, seg...)
+		file := e.writeTemp(t, fmt.Sprintf("%s-%d.mp4", label, n), append(append([]byte(nil), init...), seg...))
+		v := e.packets(t, file, "v")
+		if len(v) == 0 || !v[0].key || math.Abs(v[0].pts-starts[n]) > tol {
+			t.Errorf("%s segment %d starts %+v, plan %.4f", label, n, firstPacket(v), starts[n])
+		}
+		if n == from {
+			e.decodesAlone(t, ContainerFMP4, init, seg, fmt.Sprintf("%s-%d", label, n))
+		}
+	}
+	file := e.writeTemp(t, label+"-joined.mp4", joined)
+	lead := matchSource(t, label+" video", srcV, e.packets(t, file, "v"), tol, skipLead)
+	if lead > 4 {
+		t.Errorf("%s: %d leading pictures skipped", label, lead)
+	}
+	if skipLead {
+		t.Logf("%s: skipped %d leading pictures of the first keyframe", label, lead)
+	}
+	matchSource(t, label+" audio", srcA, e.packets(t, file, "a"), tol, false)
+}
+
+// A failover to a release with a deeper reorder delay (x265 bframes=4
+// with a B-pyramid against bframes=2): the replacement's edit is larger
+// at every keyframe, so its decode times must move onto the first run's
+// clock for players keeping init0.
+func TestIntegrationFMP4FailoverChangedDelay(t *testing.T) {
+	e := newRealEnv(t, WithoutHWDetection(), WithBuffering(4*time.Second, 0, 0))
+	for _, fx := range []struct{ name, params string }{
+		{"shallow", "bframes=2:b-pyramid=0"},
+		{"deep", "bframes=4:b-pyramid=1"},
+	} {
+		e.gen(t, fx.name+".mkv", 24, "-c:v", "libx265", "-preset", "ultrafast",
+			"-x265-params", "log-level=error:keyint=24:min-keyint=24:scenecut=0:open-gop=1:repeat-headers=1:"+fx.params, "-c:a", "aac", "-ac", "2")
+		if out, err := exec.Command(e.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", filepath.Join(e.dir, fx.name+".mkv"),
+			"-map", "0", "-c", "copy", "-tag:v", "hvc1", filepath.Join(e.dir, fx.name+".mp4")).CombinedOutput(); err != nil {
+			t.Fatalf("remux to mp4: %v %s", err, out)
+		}
+	}
+	for _, c := range []struct {
+		ext string
+		tol float64
+	}{{".mp4", 0.00005}, {".mkv", 0.0015}} {
+		t.Run(c.ext, func(t *testing.T) {
+			from, to := "shallow"+c.ext, "deep"+c.ext
+			info, err := e.m.Probe(t.Context(), e.url(from))
+			if err != nil {
+				t.Fatal(err)
+			}
+			info.Keyframes = e.keyframeIndex(t, from)
+			d := core.Decision{Kind: core.DecisionRemux, Container: ContainerFMP4, VideoCopy: true, AudioCopy: true, AudioStream: 1}
+			hs, err := e.m.StartHLS(context.Background(), core.HLSRequest{SessionID: "delay" + c.ext, InputURL: e.url(from), Info: *info, Decision: d})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer hs.Close()
+			starts := planStarts(t, hs, 0)
+			init0 := fetch(t, hs, InitSegment)
+			srcV, srcA := e.packets(t, filepath.Join(e.dir, from), "v"), e.packets(t, filepath.Join(e.dir, from), "a")
+			e.checkOnClock(t, hs, init0, starts, 0, srcV, srcA, c.tol, false, "before")
+
+			toInfo, err := e.m.Probe(t.Context(), e.url(to))
+			if err != nil {
+				t.Fatal(err)
+			}
+			toInfo.Keyframes = e.keyframeIndex(t, to)
+			mid := (len(starts) - 1) / 2
+			if err := hs.SwapInput(context.Background(), e.url(to), *toInfo, time.Duration(starts[mid]*float64(time.Second))); err != nil {
+				t.Fatal(err)
+			}
+			dstV, dstA := e.packets(t, filepath.Join(e.dir, to), "v"), e.packets(t, filepath.Join(e.dir, to), "a")
+			mkv := c.ext == ".mkv"
+			e.checkOnClock(t, hs, init0, starts, mid, dstV, dstA, c.tol, mkv, "failover")
+			e.checkOnClock(t, hs, fetch(t, hs, InitSegment), starts, mid, dstV, dstA, c.tol, mkv, "failover-refetched-init")
+			// The replacement's own edit is deeper: the test is vacuous
+			// unless the correction had something to do.
+			s := hs.(*Session)
+			s.mu.Lock()
+			cur := s.cur
+			s.mu.Unlock()
+			if cur == nil || cur.edits == nil || len(cur.edits.delta) == 0 {
+				t.Errorf("failover run needed no correction: %+v", cur.edits)
+			} else {
+				t.Logf("failover run moved decode times by %v (own edits %v)", cur.edits.delta, cur.edits.own)
+			}
 		})
 	}
 }
@@ -365,4 +461,91 @@ func firstPacket(p []srcPacket) srcPacket {
 		return srcPacket{}
 	}
 	return p[0]
+}
+
+// A failover inside one init scope to a release whose output video
+// counts in another timescale: every fragment time it writes means
+// something else under init0, so its output must never be served.
+func TestIntegrationFMP4FailoverChangedTimescaleRefused(t *testing.T) {
+	e := newRealEnv(t, WithoutHWDetection(), WithBuffering(4*time.Second, 0, 0))
+	e.gen(t, "ts16k.mkv", 24, "-c:v", "libx265", "-preset", "ultrafast",
+		"-x265-params", "log-level=error:keyint=24:min-keyint=24:scenecut=0:open-gop=1:repeat-headers=1", "-c:a", "aac", "-ac", "2")
+	for _, fx := range []struct{ name, scale string }{{"ts16k.mp4", "16000"}, {"ts90k.mp4", "90000"}} {
+		if out, err := exec.Command(e.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", filepath.Join(e.dir, "ts16k.mkv"),
+			"-map", "0", "-c", "copy", "-tag:v", "hvc1", "-video_track_timescale", fx.scale, filepath.Join(e.dir, fx.name)).CombinedOutput(); err != nil {
+			t.Fatalf("remux: %v %s", err, out)
+		}
+	}
+	info, err := e.m.Probe(t.Context(), e.url("ts16k.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Keyframes = e.keyframeIndex(t, "ts16k.mp4")
+	d := core.Decision{Kind: core.DecisionRemux, Container: ContainerFMP4, VideoCopy: true, AudioCopy: true, AudioStream: 1}
+	hs, err := e.m.StartHLS(context.Background(), core.HLSRequest{SessionID: "timescale", InputURL: e.url("ts16k.mp4"), Info: *info, Decision: d})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hs.Close()
+	s := hs.(*Session)
+	starts := planStarts(t, hs, 0)
+	init0 := fetch(t, hs, InitSegment)
+	srcV, srcA := e.packets(t, filepath.Join(e.dir, "ts16k.mp4"), "v"), e.packets(t, filepath.Join(e.dir, "ts16k.mp4"), "a")
+	e.checkOnClock(t, hs, init0, starts, 0, srcV, srcA, 0.00005, false, "before")
+	tracks, err := parseInitTracks(init0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toInfo, err := e.m.Probe(t.Context(), e.url("ts90k.mp4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	toInfo.Keyframes = e.keyframeIndex(t, "ts90k.mp4")
+	mid := (len(starts) - 1) / 2
+	if err := hs.SwapInput(context.Background(), e.url("ts90k.mp4"), *toInfo, time.Duration(starts[mid]*float64(time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	rec := httptest.NewRecorder()
+	hs.ServeSegment(rec, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx), mid)
+	if rec.Code == http.StatusOK {
+		t.Errorf("segment %d of the 90000 timescale run served: %d bytes", mid, rec.Body.Len())
+	}
+	s.mu.Lock()
+	for n := mid; n < len(starts)-1; n++ {
+		if s.done[0][n] {
+			t.Errorf("segment %d of the refused run published", n)
+		}
+	}
+	initRel := s.initFileLocked(0)
+	s.mu.Unlock()
+	served, err := os.ReadFile(filepath.Join(s.dir, initRel))
+	if err != nil || !bytes.Equal(served, init0) {
+		t.Errorf("served init changed from init0 (%v)", err)
+	}
+	// Not vacuous: the refused run's own init counts video in 90000.
+	refused := false
+	_ = filepath.WalkDir(s.dir, func(p string, de os.DirEntry, err error) error {
+		if err != nil || de.IsDir() || filepath.Ext(p) != ".mp4" {
+			return nil
+		}
+		if b, err := os.ReadFile(p); err == nil {
+			if ts, err := parseInitTracks(b); err == nil {
+				for _, tr := range ts {
+					if tr.Handler == "vide" && tr.Timescale == 90000 {
+						refused = true
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if !refused || tracks[0].Timescale == 90000 {
+		t.Errorf("replacement init at 90000 not found (init0 tracks %+v)", tracks)
+	}
+	if rec.Code != http.StatusOK {
+		t.Logf("segment %d after the refused failover: HTTP %d %s", mid, rec.Code, strings.TrimSpace(rec.Body.String()))
+	}
 }
