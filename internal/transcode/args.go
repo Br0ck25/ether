@@ -138,6 +138,27 @@ func buildArgs(s runSpec) []string {
 	return append(args, hlsMuxArgs(s)...)
 }
 
+// Segmented Matroska carries parameter sets only in the header's
+// CodecPrivate, and Plex's native player keeps the header it opened with:
+// one EXT-X-MAP, never refetched. A failover to an encode with different
+// SPS/PPS then decodes against the old ones. Repeating them in-band at
+// every keyframe reconfigures the open decoder. These filters only add
+// parameter sets from extradata (Annex B input passes through unchanged);
+// matroskaenc stores the packets length-prefixed and still writes the
+// avcC/hvcC CodecPrivate.
+func matroskaCopyParameterSets(d core.Decision, codec string) string {
+	if d.Container != ContainerMatroska {
+		return ""
+	}
+	switch codec {
+	case "hevc":
+		return "hevc_mp4toannexb"
+	case "h264":
+		return "h264_mp4toannexb"
+	}
+	return ""
+}
+
 // buildCodecArgs is the input, stream mapping and codec part of a run's
 // command line, shared by HLS and DASH.
 func buildCodecArgs(s runSpec) []string {
@@ -208,7 +229,12 @@ func buildCodecArgs(s runSpec) []string {
 					// HDR10 base NALs remain byte-for-byte unchanged.
 					filter += ",filter_units=remove_types=62|63"
 				}
+				if ps := matroskaCopyParameterSets(d, v.Codec); ps != "" {
+					filter += "," + ps
+				}
 				args = append(args, "-bsf:v", filter)
+			} else if ps := matroskaCopyParameterSets(d, v.Codec); ps != "" {
+				args = append(args, "-bsf:v", ps)
 			}
 			if container == ContainerFMP4 && v.Codec != "hevc" {
 				tag := "0"
@@ -230,6 +256,11 @@ func buildCodecArgs(s runSpec) []string {
 		} else {
 			args = append(args, vp.encodeArgs...)
 			args = append(args, videotoolboxCaptionArgs(v, vp.encodeArgs)...)
+			if d.Container == ContainerMatroska {
+				// Encoders emit Annex B with the global header as extradata;
+				// matroskaenc converts both to length-prefixed form.
+				args = append(args, "-bsf:v", "dump_extra=freq=keyframe")
+			}
 			if len(s.KeyTimes) > 0 {
 				keys := make([]string, len(s.KeyTimes))
 				for i, k := range s.KeyTimes {
