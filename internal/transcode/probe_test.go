@@ -44,7 +44,8 @@ func TestParseProbeGolden(t *testing.T) {
 				Container: "mkv", Duration: sec(7950.125), Size: 59836712345, BitrateKbps: 60211,
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Level: 153, Default: true, Width: 3840, Height: 2160,
-						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", BitrateKbps: 58312},
+						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", BitrateKbps: 58312,
+						SampleAspectRatio: "1:1", ColorRange: "tv", ColorPrimaries: "bt2020", ColorSpace: "bt2020nc"},
 					{Index: 1, Type: "audio", Codec: "eac3", Language: "eng", Title: "English DD+ 5.1", Default: true,
 						Channels: 6, ChannelLayout: "5.1(side)", SampleRate: 48000, BitrateKbps: 768},
 					{Index: 2, Type: "audio", Codec: "ac3", Language: "fre", Title: "French AC3 5.1",
@@ -61,6 +62,7 @@ func TestParseProbeGolden(t *testing.T) {
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "hevc", Profile: "Main 10", Default: true, Width: 3840, Height: 1608,
 						FrameRate: 23.976, BitDepth: 10, ColorTransfer: "smpte2084", DolbyVision: true, DolbyVisionProfile: 8, DolbyVisionLevel: 6, DolbyVisionCompatibilityID: 1,
+						ColorRange: "tv", ColorPrimaries: "bt2020", ColorSpace: "bt2020nc",
 						DolbyVisionVersion: "1.0", DolbyVisionBLPresent: boolean(true), DolbyVisionELPresent: boolean(false), DolbyVisionRPUPresent: boolean(true),
 						BitrateKbps: 15876},
 					{Index: 1, Type: "audio", Codec: "eac3", Profile: "Dolby Digital Plus + Dolby Atmos", Language: "eng",
@@ -75,7 +77,8 @@ func TestParseProbeGolden(t *testing.T) {
 				Container: "mp4", Duration: sec(5400.042), Size: 4062345678, BitrateKbps: 6018,
 				Streams: []core.StreamInfo{
 					{Index: 0, Type: "video", Codec: "h264", Profile: "High", Level: 40, Default: true, Width: 1920, Height: 1080,
-						FrameRate: 24, BitDepth: 8, ColorTransfer: "bt709", BitrateKbps: 5823},
+						FrameRate: 24, BitDepth: 8, ColorTransfer: "bt709", BitrateKbps: 5823,
+						ColorRange: "tv", ColorPrimaries: "bt709", ColorSpace: "bt709"},
 					{Index: 1, Type: "audio", Codec: "aac", Profile: "LC", Language: "eng", Default: true,
 						Channels: 2, ChannelLayout: "stereo", SampleRate: 48000, BitrateKbps: 192},
 					{Index: 2, Type: "subtitle", Codec: "mov_text", Language: "eng"},

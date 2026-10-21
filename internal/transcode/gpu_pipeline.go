@@ -7,12 +7,12 @@ import "fmt"
 // software scale/format filter downloads every picture and the encoder uploads
 // it again. Return false when the installed FFmpeg lacks the complete graph;
 // planVideo then retains the software-filter path (including subtitle burn-in).
-func gpuPipeline(s runSpec, accel string, w, h int, toneMap, keepHDR, burn bool) (input, filters []string, ok bool) {
+func gpuPipeline(s runSpec, accel string, w, h int, toneMap, tenBit, burn bool) (input, filters []string, ok bool) {
 	if burn || w <= 0 || h <= 0 {
 		return nil, nil, false
 	}
 	format := "nv12"
-	if keepHDR {
+	if tenBit {
 		format = "p010le"
 	}
 	switch accel {
@@ -42,9 +42,10 @@ func gpuPipeline(s runSpec, accel string, w, h int, toneMap, keepHDR, burn bool)
 		scale := fmt.Sprintf("scale_vt=w=%d:h=%d", w, h)
 		if s.Features.scaleVTFormat {
 			scale += ":format=" + format
-		} else if v := s.Info.Video(); v != nil && v.BitDepth > 8 && !keepHDR && !toneMap {
-			// Older scale_vt can resize but cannot convert 10-bit SDR to
-			// the 8-bit surfaces required by the H.264 encoder.
+		} else if v := s.Info.Video(); v != nil && (v.BitDepth > 8) != tenBit && !toneMap {
+			// Older scale_vt can resize but cannot change bit depth: 10-bit
+			// SDR to the H.264 encoder's 8-bit surfaces, or 8-bit to a
+			// 10-bit contract.
 			return nil, nil, false
 		}
 		filters = append(filters, scale)

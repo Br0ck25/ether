@@ -165,6 +165,9 @@ type ffprobeStream struct {
 	PixFmt         string            `json:"pix_fmt"`
 	ColorTransfer  string            `json:"color_transfer"`
 	ColorPrimaries string            `json:"color_primaries"`
+	ColorSpace     string            `json:"color_space"`
+	ColorRange     string            `json:"color_range"`
+	SAR            string            `json:"sample_aspect_ratio"`
 	RFrameRate     string            `json:"r_frame_rate"`
 	AvgFrameRate   string            `json:"avg_frame_rate"`
 	BitsPerRaw     string            `json:"bits_per_raw_sample"`
@@ -263,6 +266,10 @@ func mapStream(s ffprobeStream) (core.StreamInfo, bool) {
 		}
 		si.BitDepth = bitDepth(s)
 		si.ColorTransfer = s.ColorTransfer
+		si.SampleAspectRatio = probedSAR(s.SAR)
+		si.ColorRange = probedColour(s.ColorRange)
+		si.ColorPrimaries = probedColour(s.ColorPrimaries)
+		si.ColorSpace = probedColour(s.ColorSpace)
 		si.DolbyVision, si.DolbyVisionProfile = dolbyVision(s)
 		for _, sd := range s.SideDataList {
 			if major, ok := sd["dv_version_major"].(float64); ok {
@@ -330,6 +337,26 @@ func isImageCodec(c string) bool {
 		return true
 	}
 	return false
+}
+
+// probedSAR keeps a signalled sample aspect ratio; ffprobe reports 0:1
+// (or nothing) when neither stream nor container carries one.
+func probedSAR(s string) string {
+	n, d, ok := strings.Cut(s, ":")
+	if !ok || atoi64(n) <= 0 || atoi64(d) <= 0 {
+		return ""
+	}
+	a, b := reduce(int(atoi64(n)), int(atoi64(d)))
+	return strconv.Itoa(a) + ":" + strconv.Itoa(b)
+}
+
+// probedColour drops ffprobe's placeholders for unsignalled colour facts.
+func probedColour(s string) string {
+	switch s {
+	case "", "unknown", "unspecified", "reserved":
+		return ""
+	}
+	return s
 }
 
 var pixDepthRE = regexp.MustCompile(`p(9|10|12|14|16)(le|be)?$`)

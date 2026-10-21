@@ -90,6 +90,10 @@ func (r *bitReader) se() int64 {
 type spsFacts struct {
 	bitDepth int
 	transfer int
+	// VUI picture format; zero when not signalled (fullRange -1).
+	sarNum, sarDen    int
+	fullRange         int
+	primaries, matrix int
 }
 
 // avcSPS parses an H.264 sequence parameter set NAL (header byte included).
@@ -102,7 +106,7 @@ func avcSPS(nal []byte) (spsFacts, error) {
 	r.skip(8) // constraint flags
 	r.skip(8) // level
 	r.ue()    // seq_parameter_set_id
-	f := spsFacts{bitDepth: 8}
+	f := spsFacts{bitDepth: 8, fullRange: -1}
 	switch profile {
 	case 100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135:
 		chroma := r.ue()
@@ -162,7 +166,7 @@ func avcSPS(nal []byte) (spsFacts, error) {
 		return spsFacts{}, r.err
 	}
 	if r.flag() {
-		f.transfer = vuiTransfer(r)
+		vuiFacts(r, &f)
 	}
 	if r.err != nil {
 		return spsFacts{}, r.err
@@ -182,27 +186,73 @@ func avcScalingList(r *bitReader, size int) {
 	}
 }
 
-// vuiTransfer reads the VUI prefix shared by H.264 and HEVC up to
-// transfer_characteristics.
-func vuiTransfer(r *bitReader) int {
+// vuiSAR is Table E-1 of H.264/H.265: aspect_ratio_idc 1..16.
+var vuiSAR = [...][2]int{{1, 1}, {12, 11}, {10, 11}, {16, 11}, {40, 33}, {24, 11}, {20, 11}, {32, 11},
+	{80, 33}, {18, 11}, {15, 11}, {64, 33}, {160, 99}, {4, 3}, {3, 2}, {2, 1}}
+
+// vuiFacts reads the start of vui_parameters, which H.264 and H.265 share,
+// through the colour description.
+func vuiFacts(r *bitReader, f *spsFacts) {
 	if r.flag() { // aspect_ratio_info_present_flag
-		if r.u(8) == 255 {
-			r.skip(32)
+		idc := int(r.u(8))
+		switch {
+		case idc == 255:
+			f.sarNum, f.sarDen = int(r.u(16)), int(r.u(16))
+		case idc >= 1 && idc <= len(vuiSAR):
+			f.sarNum, f.sarDen = vuiSAR[idc-1][0], vuiSAR[idc-1][1]
 		}
 	}
 	if r.flag() { // overscan_info_present_flag
 		r.skip(1)
 	}
 	if !r.flag() { // video_signal_type_present_flag
-		return 0
+		return
 	}
 	r.skip(3) // video_format
-	r.skip(1) // video_full_range_flag
+	f.fullRange = int(r.u(1))
 	if !r.flag() {
-		return 0
+		return
 	}
-	r.skip(8) // colour_primaries
-	return int(r.u(8))
+	f.primaries = int(r.u(8))
+	f.transfer = int(r.u(8))
+	f.matrix = int(r.u(8))
+}
+
+// primariesName and matrixName map H.273 codes to ffprobe's names.
+func primariesName(code int) string {
+	switch code {
+	case 1:
+		return "bt709"
+	case 4:
+		return "bt470m"
+	case 5:
+		return "bt470bg"
+	case 6:
+		return "smpte170m"
+	case 7:
+		return "smpte240m"
+	case 9:
+		return "bt2020"
+	}
+	return ""
+}
+
+func matrixName(code int) string {
+	switch code {
+	case 1:
+		return "bt709"
+	case 5:
+		return "bt470bg"
+	case 6:
+		return "smpte170m"
+	case 7:
+		return "smpte240m"
+	case 9:
+		return "bt2020nc"
+	case 10:
+		return "bt2020c"
+	}
+	return ""
 }
 
 // hevcSPS parses an HEVC sequence parameter set NAL (2-byte header
@@ -249,7 +299,7 @@ func hevcSPS(nal []byte) (spsFacts, error) {
 		r.ue()
 		r.ue()
 	}
-	f := spsFacts{bitDepth: int(r.ue()) + 8}
+	f := spsFacts{bitDepth: int(r.ue()) + 8, fullRange: -1}
 	r.ue() // bit_depth_chroma_minus8
 	pocBits := int(r.ue()) + 4
 	ordering := r.flag()
@@ -326,7 +376,7 @@ func hevcSPS(nal []byte) (spsFacts, error) {
 		return spsFacts{}, r.err
 	}
 	if r.flag() {
-		f.transfer = vuiTransfer(r)
+		vuiFacts(r, &f)
 	}
 	if r.err != nil {
 		return spsFacts{}, r.err

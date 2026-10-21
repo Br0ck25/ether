@@ -83,6 +83,10 @@ type Session struct {
 	listed      []int      // unknown duration: per-track listed prefix; never shrinks
 	dash        *dashState // DASH sessions only
 
+	// contract is the delivered video a static-header session keeps
+	// across failovers; nil for every other session (contract.go).
+	contract *videoContract
+
 	// Adaptive HLS engine: the shared segment plan (HLS only), the config
 	// snapshot, the ABR ladder and measured delivery goodput.
 	plan           *Timeline
@@ -1196,6 +1200,9 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	if s.container == ContainerMatroska {
 		spec.InitName = fmt.Sprintf("header-%d.mkv", s.runSeq)
 	}
+	if s.contract != nil && !rp.decision.VideoCopy {
+		spec.Target = s.contract
+	}
 	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
 		return fmt.Errorf("transcode: run dir: %w", err)
 	}
@@ -1638,6 +1645,9 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	if inputURL == "" {
 		return errors.New("transcode: SwapInput: empty input URL")
 	}
+	if err := s.CheckSwap(info); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -1663,7 +1673,7 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 			}
 		}
 	}
-	next := adaptDecision(s.decision, s.info, info, s.container)
+	next := adaptToContract(s.decision, s.info, info, s.container, s.contract)
 	if inputURL == s.input {
 		next.AudioStream = s.decision.AudioStream
 		next.SubtitleStream = s.decision.SubtitleStream
@@ -1708,6 +1718,16 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	s.seekRampSeg = seg
 	s.log.Info("input swapped", "at", at, "segment", seg)
 	return s.startRunLocked(seg, false)
+}
+
+// CheckSwap reports whether SwapInput can deliver info's video in the
+// format the client already opened. Playback calls it before committing
+// a replacement so an incompatible candidate is skipped, not spliced.
+func (s *Session) CheckSwap(info core.MediaInfo) error {
+	if s.contract == nil {
+		return nil
+	}
+	return s.contract.check(info, s.m.feat)
 }
 
 // adaptDecision keeps a failover's output compatible with what the client

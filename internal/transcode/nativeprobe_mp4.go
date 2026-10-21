@@ -268,9 +268,20 @@ func mp4Video(b []byte, e mp4Box, si *core.StreamInfo) error {
 		}
 		return nil
 	}
-	transfer := 0
+	transfer, primaries, matrix, fullRange := 0, 0, 0, -1
 	if c := find("colr"); len(c) >= 10 && (string(c[:4]) == "nclx" || string(c[:4]) == "nclc") {
+		primaries = int(binary.BigEndian.Uint16(c[4:]))
 		transfer = int(binary.BigEndian.Uint16(c[6:]))
+		matrix = int(binary.BigEndian.Uint16(c[8:]))
+		if string(c[:4]) == "nclx" && len(c) >= 11 {
+			fullRange = int(c[10] >> 7)
+		}
+	}
+	displayW, displayH := 0, 0
+	if p := find("pasp"); len(p) >= 8 {
+		if h, v := int(binary.BigEndian.Uint32(p)), int(binary.BigEndian.Uint32(p[4:])); h > 0 && v > 0 {
+			displayW, displayH = si.Width*h, si.Height*v
+		}
 	}
 	dovi := find("dvcC")
 	if dovi == nil {
@@ -293,6 +304,7 @@ func mp4Video(b []byte, e mp4Box, si *core.StreamInfo) error {
 	if err != nil {
 		return err
 	}
+	containerPicture(si, primaries, matrix, fullRange, displayW, displayH)
 	switch e.typ {
 	case "dva1", "dvav", "dvh1", "dvhe", "dav1":
 		si.DolbyVision = true // ffprobe also infers it from the sample entry

@@ -358,6 +358,13 @@ type StreamInfo struct {
 	FrameRate     float64 `json:"frameRate,omitempty"`
 	BitDepth      int     `json:"bitDepth,omitempty"`
 	ColorTransfer string  `json:"colorTransfer,omitempty"` // smpte2084 = HDR10, arib-std-b67 = HLG
+	// Signalled picture format, in ffprobe's names; empty when the stream
+	// and container leave it unspecified (decoders then assume square
+	// pixels and limited range).
+	SampleAspectRatio string `json:"sampleAspectRatio,omitempty"` // "N:D"
+	ColorRange        string `json:"colorRange,omitempty"`        // tv, pc
+	ColorPrimaries    string `json:"colorPrimaries,omitempty"`    // bt709, bt2020, smpte170m...
+	ColorSpace        string `json:"colorSpace,omitempty"`        // matrix: bt709, bt2020nc, smpte170m...
 	DolbyVision   bool    `json:"dolbyVision,omitempty"`
 	Channels      int     `json:"channels,omitempty"`
 	ChannelLayout string  `json:"channelLayout,omitempty"`

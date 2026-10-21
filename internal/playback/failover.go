@@ -613,6 +613,12 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 			break
 		}
 		g, err = m.openGeneration(ctx, s, res, fallback)
+		if err == nil {
+			if perr := m.preflightSwap(s, g); perr != nil {
+				m.dropGeneration(g)
+				g, err = nil, perr
+			}
+		}
 		// Byte-range clients retain the original container headers and
 		// offsets. Only an exact-size repost may replace a non-spliceable
 		// direct source in place; a healthy mismatched candidate is kept

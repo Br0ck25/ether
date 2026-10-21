@@ -561,6 +561,13 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	for t := range s.done {
 		s.done[t] = map[int]bool{}
 	}
+	if proto == core.ProtocolHLS && d.Container == ContainerMatroska {
+		// Plex keeps the first EXT-X-MAP header for the whole session.
+		if c, ok := contractOf(req.Info, d); ok {
+			s.contract = c
+			s.log.Info("static header output contract", "video", c.String())
+		}
+	}
 	if proto == core.ProtocolDASH {
 		s.dash = newDASHState(reps, m.opts.dashURLs, id)
 	}

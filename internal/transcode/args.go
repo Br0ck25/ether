@@ -54,6 +54,9 @@ type runSpec struct {
 	// keyframes at (a chunked run's plan boundaries) instead of every
 	// SegDur.
 	KeyTimes []time.Duration
+	// Target, when set, is the static-header session's video contract
+	// every encode must deliver (contract.go).
+	Target *videoContract
 }
 
 // segmentExt is the segment file extension for a decision's container.
@@ -531,12 +534,36 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	// picture (a Dolby Vision SDR base layer) never is.
 	keepHDR := keepsHDR(v) && !d.ToneMap && codec == "hevc"
 	tonemap := encodedRange(v) != rangeSDR && !keepHDR
+	// tenBit and outRange describe the encoded picture; without a
+	// contract they follow keepHDR.
+	tenBit, outRange := keepHDR, rangeSDR
+	if keepHDR {
+		outRange = encodedRange(v)
+	}
+	convert, pad, setSAR := "", false, ""
+	if t := s.Target; t != nil {
+		// A static-header session: encode the contract's picture
+		// whatever this source is (contract.go).
+		w, h = t.fit(v)
+		scaling = w != v.Width || h != v.Height
+		pad = w != t.width || h != t.height
+		tenBit, outRange = t.depth == 10, t.rng
+		tonemap = t.tonemaps(v)
+		if t.convertsColour(v) {
+			convert = zscaleColour(v, t)
+		}
+		// scale keeps the display aspect: its output SAR follows the source's.
+		src := pictureOf(v)
+		if n, dd := reduce(src.sarNum*v.Width*h, src.sarDen*v.Height*w); pad || n != t.pic.sarNum || dd != t.pic.sarDen {
+			setSAR = fmt.Sprintf("setsar=%d/%d", t.pic.sarNum, t.pic.sarDen)
+		}
+	}
 	sub := findStream(s.Info, d.SubtitleStream, "subtitle")
 	burn := d.BurnSubtitles && sub != nil
 
 	// Software pixel format the encoder receives.
 	swFmt := "yuv420p"
-	if keepHDR {
+	if tenBit {
 		swFmt = "yuv420p10le"
 		if hw {
 			swFmt = "p010le"
@@ -544,22 +571,45 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	} else if accel == AccelQSV || accel == AccelVAAPI {
 		swFmt = "nv12"
 	}
+	// finish sizes, pads and formats software frames for the encoder.
+	finish := func(c []string) []string {
+		if scaling {
+			c = append(c, fmt.Sprintf("scale=%d:%d", w, h))
+		}
+		if pad {
+			c = append(c, fmt.Sprintf("pad=%d:%d:(ow-iw)/2:(oh-ih)/2", s.Target.width, s.Target.height))
+		}
+		if setSAR != "" {
+			c = append(c, setSAR)
+		}
+		c = append(c, "format="+swFmt)
+		if accel == AccelVAAPI {
+			c = append(c, "hwupload")
+		}
+		return c
+	}
+	// Software filters only: GPU scalers neither pad nor convert SDR to
+	// HDR, and their 8-bit tone-map paths cannot feed a 10-bit contract.
+	gpuOff := pad || convert != "" || (tonemap && tenBit)
 
 	in := fmt.Sprintf("[0:%d]", v.Index)
 	var chain []string
 	hwFrames := false
-	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, w, h, tonemap, keepHDR, burn)
+	gpuInput, gpuFilters, gpuOK := gpuPipeline(s, accel, w, h, tonemap, tenBit, burn)
 	switch {
-	case gpuOK:
+	case gpuOK && !gpuOff:
 		p.inputArgs = append(p.inputArgs, gpuInput...)
 		chain = append(chain, gpuFilters...)
+		if setSAR != "" {
+			chain = append(chain, setSAR)
+		}
 		hwFrames = true
-	case accel == AccelVideoToolbox && tonemap && !burn && s.Features.hasFilter("scale_vt"):
+	case accel == AccelVideoToolbox && tonemap && !gpuOff && !burn && s.Features.hasFilter("scale_vt"):
 		// Decode, tone-map and scale on the GPU.
 		p.inputArgs = append(p.inputArgs, "-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld")
 		chain = append(chain, fmt.Sprintf("scale_vt=w=%d:h=%d:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709", w, h))
 		hwFrames = true
-	case accel == AccelVAAPI && !burn && (!tonemap || s.Features.hasFilter("tonemap_vaapi")):
+	case accel == AccelVAAPI && !burn && !gpuOff && (!tonemap || s.Features.hasFilter("tonemap_vaapi")):
 		dev := s.Accel.Device
 		if dev == "" {
 			dev = DefaultVAAPIDevice
@@ -569,10 +619,13 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 			chain = append(chain, "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709")
 		}
 		f := "nv12"
-		if keepHDR {
+		if tenBit {
 			f = "p010"
 		}
 		chain = append(chain, fmt.Sprintf("scale_vaapi=w=%d:h=%d:format=%s", w, h, f))
+		if setSAR != "" {
+			chain = append(chain, setSAR)
+		}
 		hwFrames = true
 	case accel == AccelVideoToolbox:
 		p.inputArgs = append(p.inputArgs, "-hwaccel", "videotoolbox")
@@ -587,17 +640,14 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 
 	if !hwFrames {
-		if tonemap {
+		switch {
+		case convert != "":
+			chain = append(chain, convert)
+		case tonemap:
 			chain = append(chain, cpuToneMap(s.Features))
 		}
-		if scaling && !burn {
-			chain = append(chain, fmt.Sprintf("scale=%d:%d", w, h))
-		}
 		if !burn {
-			chain = append(chain, "format="+swFmt)
-			if accel == AccelVAAPI {
-				chain = append(chain, "hwupload")
-			}
+			chain = finish(chain)
 		}
 	}
 
@@ -608,14 +658,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		if pre == "" {
 			pre = "null"
 		}
-		post := []string{}
-		if scaling {
-			post = append(post, fmt.Sprintf("scale=%d:%d", w, h))
-		}
-		post = append(post, "format="+swFmt)
-		if accel == AccelVAAPI {
-			post = append(post, "hwupload")
-		}
+		post := finish(nil)
 		subW, subH := v.Width, v.Height
 		subScale := "null"
 		if subW > 0 && subH > 0 {
@@ -632,19 +675,15 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 			opt = fmt.Sprintf(":si=%d", subtitleOrdinal(s.Info, sub.Index))
 		}
 		chain = append(chain, fmt.Sprintf("subtitles=filename=%s%s", escapeFilterValue(src), opt))
-		if scaling {
-			chain = append(chain, fmt.Sprintf("scale=%d:%d", w, h))
-		}
-		chain = append(chain, "format="+swFmt)
-		if accel == AccelVAAPI {
-			chain = append(chain, "hwupload")
-		}
+		chain = finish(chain)
 		graph = in + strings.Join(chain, ",") + "[vout]"
 	default:
 		if burn {
 			// Text burn-in needs libass (the subtitles filter); without it
 			// the client gets the subtitle as a sidecar instead.
-			chain = appendScaleFormat(chain, scaling, w, h, swFmt, accel, hwFrames)
+			if !hwFrames {
+				chain = finish(chain)
+			}
 		}
 		if len(chain) == 0 {
 			chain = []string{"null"}
@@ -689,8 +728,8 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 	case "libx265":
 		params := "log-level=error"
-		if keepHDR {
-			params += hdrX265Params(v)
+		if outRange != rangeSDR {
+			params += hdrX265Params(outRange)
 		}
 		peak := b
 		if s.Rate.Quality {
@@ -708,7 +747,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		if enc == "h264_videotoolbox" {
 			e = append(e, "-profile:v", "high")
-		} else if keepHDR {
+		} else if tenBit {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_nvenc", "hevc_nvenc":
@@ -723,7 +762,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		if enc == "h264_nvenc" {
 			e = append(e, "-profile:v", "high")
-		} else if keepHDR {
+		} else if tenBit {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_qsv", "hevc_qsv":
@@ -734,7 +773,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		if enc == "h264_qsv" {
 			e = append(e, "-profile:v", "high")
-		} else if keepHDR {
+		} else if tenBit {
 			e = append(e, "-profile:v", "main10")
 		}
 	case "h264_vaapi", "hevc_vaapi":
@@ -745,7 +784,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		if enc == "h264_vaapi" {
 			e = append(e, "-profile:v", "high")
-		} else if keepHDR {
+		} else if tenBit {
 			e = append(e, "-profile:v", "main10")
 		}
 	}
@@ -757,9 +796,20 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	// conversion that cannot take hardware frames.
 	switch {
 	case hwFrames:
-	case keepHDR:
+	case s.Target != nil:
+		trc := "bt709"
+		switch outRange {
+		case rangeHDR10:
+			trc = "smpte2084"
+		case rangeHLG:
+			trc = "arib-std-b67"
+		}
+		// Range follows the frames: zscale converts it, else the source's
+		// already matches (convertsColour).
+		e = append(e, "-color_primaries", s.Target.pic.prim, "-color_trc", trc, "-colorspace", s.Target.pic.matrix)
+	case outRange != rangeSDR:
 		trc := "smpte2084"
-		if v.ColorTransfer == "arib-std-b67" {
+		if outRange == rangeHLG {
 			trc = "arib-std-b67"
 		}
 		e = append(e, "-color_primaries", "bt2020", "-color_trc", trc, "-colorspace", "bt2020nc")
@@ -770,9 +820,9 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	return p
 }
 
-func hdrX265Params(v *core.StreamInfo) string {
+func hdrX265Params(outRange string) string {
 	trc := "smpte2084"
-	if v.ColorTransfer == "arib-std-b67" {
+	if outRange == rangeHLG {
 		trc = "arib-std-b67"
 	}
 	return ":hdr10-opt=1:repeat-headers=1:colorprim=bt2020:colormatrix=bt2020nc:transfer=" + trc
@@ -796,22 +846,6 @@ func videoBitrate(info core.MediaInfo, d core.Decision) int {
 		k = 200
 	}
 	return k
-}
-
-// appendScaleFormat adds the scale/format/upload tail that the burn-in
-// branches normally add themselves.
-func appendScaleFormat(chain []string, scaling bool, w, h int, swFmt, accel string, hwFrames bool) []string {
-	if hwFrames {
-		return chain
-	}
-	if scaling {
-		chain = append(chain, fmt.Sprintf("scale=%d:%d", w, h))
-	}
-	chain = append(chain, "format="+swFmt)
-	if accel == AccelVAAPI {
-		chain = append(chain, "hwupload")
-	}
-	return chain
 }
 
 // subtitleArgs extracts one embedded text subtitle stream as WebVTT on

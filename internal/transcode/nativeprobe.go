@@ -63,6 +63,12 @@ const (
 	mkvColour       = 0x55b0
 	mkvBitsPerChan  = 0x55b2
 	mkvTransfer     = 0x55ba
+	mkvPrimaries    = 0x55bb
+	mkvMatrix       = 0x55b1
+	mkvRange        = 0x55b9
+	mkvDisplayW     = 0x54b0
+	mkvDisplayH     = 0x54ba
+	mkvDisplayU     = 0x54b2
 	mkvAudio        = 0xe1
 	mkvSampling     = 0xb5
 	mkvOutSampling  = 0x78b5
@@ -274,6 +280,12 @@ type mkvTrack struct {
 	height      uint64
 	bitsPerChan uint64
 	transfer    int
+	primaries   int
+	matrix      int
+	colourRange int // Matroska Range: 1 broadcast, 2 full
+	displayW    uint64
+	displayH    uint64
+	displayUnit uint64
 	sampling    float64
 	outSampling float64
 	channels    uint64
@@ -635,12 +647,24 @@ func mkvTracksOf(b []byte) ([]mkvTrack, error) {
 						t.width = mkvUint(v.body)
 					case mkvPixelHeight:
 						t.height = mkvUint(v.body)
+					case mkvDisplayW:
+						t.displayW = mkvUint(v.body)
+					case mkvDisplayH:
+						t.displayH = mkvUint(v.body)
+					case mkvDisplayU:
+						t.displayUnit = mkvUint(v.body)
 					case mkvColour:
 						cs, _ := mkvNodes(v.body)
 						for _, c := range cs {
 							switch c.id {
 							case mkvTransfer:
 								t.transfer = int(mkvUint(c.body))
+							case mkvPrimaries:
+								t.primaries = int(mkvUint(c.body))
+							case mkvMatrix:
+								t.matrix = int(mkvUint(c.body))
+							case mkvRange:
+								t.colourRange = int(mkvUint(c.body))
 							case mkvBitsPerChan:
 								t.bitsPerChan = mkvUint(c.body)
 							}
@@ -781,7 +805,61 @@ func (t mkvTrack) video(si *core.StreamInfo) error {
 	default:
 		return incomplete("video codec %s", t.codecID)
 	}
-	return videoConfig(si, codec, t.private, t.transfer, t.dovi)
+	if err := videoConfig(si, codec, t.private, t.transfer, t.dovi); err != nil {
+		return err
+	}
+	fullRange := -1
+	switch t.colourRange {
+	case 1:
+		fullRange = 0
+	case 2:
+		fullRange = 1
+	}
+	var dw, dh int
+	if t.displayUnit <= 3 { // pixels, cm, inches or aspect ratio: all proportional
+		dw, dh = int(t.displayW), int(t.displayH)
+	}
+	containerPicture(si, t.primaries, t.matrix, fullRange, dw, dh)
+	return nil
+}
+
+// spsPicture records the sample aspect ratio and colour the SPS VUI
+// signals. A container's own values (mkvColour, colr, pasp) replace them.
+func spsPicture(si *core.StreamInfo, f spsFacts) {
+	if f.sarNum > 0 && f.sarDen > 0 {
+		n, d := reduce(f.sarNum, f.sarDen)
+		si.SampleAspectRatio = fmt.Sprintf("%d:%d", n, d)
+	}
+	switch f.fullRange {
+	case 0:
+		si.ColorRange = "tv"
+	case 1:
+		si.ColorRange = "pc"
+	}
+	si.ColorPrimaries = primariesName(f.primaries)
+	si.ColorSpace = matrixName(f.matrix)
+}
+
+// containerPicture applies a container's explicit picture facts: H.273
+// primaries and matrix codes (0 or 2 unspecified), full range (-1 unknown)
+// and display size in pixels (0 unknown).
+func containerPicture(si *core.StreamInfo, primaries, matrix, fullRange, displayW, displayH int) {
+	if n := primariesName(primaries); n != "" {
+		si.ColorPrimaries = n
+	}
+	if n := matrixName(matrix); n != "" {
+		si.ColorSpace = n
+	}
+	switch fullRange {
+	case 0:
+		si.ColorRange = "tv"
+	case 1:
+		si.ColorRange = "pc"
+	}
+	if displayW > 0 && displayH > 0 && si.Width > 0 && si.Height > 0 {
+		n, d := reduce(displayW*si.Height, displayH*si.Width)
+		si.SampleAspectRatio = fmt.Sprintf("%d:%d", n, d)
+	}
 }
 
 // videoConfig fills codec facts from a decoder configuration record (avcC,
@@ -809,6 +887,7 @@ func videoConfig(si *core.StreamInfo, codec string, p []byte, transfer int, dovi
 			return incomplete("h264 SPS: %v", err)
 		}
 		si.BitDepth = f.bitDepth
+		spsPicture(si, f)
 		if transfer == 0 || transfer == 2 {
 			transfer = f.transfer
 		}
@@ -831,6 +910,7 @@ func videoConfig(si *core.StreamInfo, codec string, p []byte, transfer int, dovi
 			return incomplete("hevc SPS: %v", err)
 		}
 		si.BitDepth = f.bitDepth
+		spsPicture(si, f)
 		if transfer == 0 || transfer == 2 {
 			transfer = f.transfer
 		}
