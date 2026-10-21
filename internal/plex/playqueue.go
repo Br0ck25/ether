@@ -178,6 +178,7 @@ func (s *playQueueStore) selectItem(userID, itemID int64) {
 		for i, it := range q.items {
 			if it.id == itemID {
 				q.selected = i
+				q.updatedAt = s.now()
 				return
 			}
 		}
@@ -405,7 +406,9 @@ func (s *playQueueStore) withShared(id, userID int64, now time.Time, fn func(q *
 	return playQueue{}, false
 }
 
-// selectShared records the playing item, writing only when it changed.
+// selectShared records the playing item and periodically renews its idle TTL.
+// Repeated timelines for the same item must keep long sessions alive, but
+// need not write the shared database on every client heartbeat.
 func (s *playQueueStore) selectShared(userID, itemID int64) {
 	if itemID <= 0 {
 		return
@@ -420,7 +423,7 @@ func (s *playQueueStore) selectShared(userID, itemID int64) {
 	s.mu.Lock()
 	for _, q := range s.queues {
 		if i := find(q); i >= 0 {
-			if q.selected == i && s.now().Sub(q.loadedAt) <= queueCacheTTL {
+			if q.selected == i && s.now().Sub(q.updatedAt) <= queueCacheTTL {
 				s.mu.Unlock()
 				return
 			}
@@ -449,7 +452,7 @@ func (s *playQueueStore) selectShared(userID, itemID int64) {
 			}
 			if i := find(q); i >= 0 {
 				s.cache(q)
-				if q.selected != i {
+				if q.selected != i || s.now().Sub(q.updatedAt) > queueCacheTTL {
 					qid = id
 				}
 				break
