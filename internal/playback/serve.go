@@ -371,7 +371,11 @@ func (m *Manager) backgroundFailover(s *session, g *generation, at time.Duration
 			stop := context.AfterFunc(s.stopCtx, cancel)
 			defer stop()
 		}
-		if _, err := m.failover(ctx, s, g, at, "source read failed while transcoding"); err != nil && ctx.Err() == nil && !errors.Is(err, errRequireRemux) {
+		if _, err := m.failoverWith(ctx, s, g, at, failoverOpts{
+			reason:       "source read failed while transcoding",
+			markBad:      true,
+			followPlayer: true,
+		}); err != nil && ctx.Err() == nil && !errors.Is(err, errRequireRemux) {
 			m.log.Error("background failover failed", "session", s.id, "err", err)
 		}
 	}()
