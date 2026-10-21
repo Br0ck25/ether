@@ -158,7 +158,23 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install NSIS
-        run: choco install nsis -y --no-progress
+        shell: pwsh
+        run: |
+          $candidates = @("${env:ProgramFiles(x86)}\NSIS\makensis.exe", "$env:ProgramFiles\NSIS\makensis.exe")
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis -y --no-progress
+            $installed = @($candidates | Where-Object { Test-Path -LiteralPath $_ })
+            # Chocolatey can return success after a feed timeout without
+            # installing anything. Require the actual compiler as well.
+            if ($LASTEXITCODE -eq 0 -and $installed.Count -gt 0) {
+              Split-Path $installed[0] | Out-File -FilePath $env:GITHUB_PATH -Append
+              & $installed[0] /VERSION
+              if ($LASTEXITCODE -ne 0) { throw "NSIS compiler did not run" }
+              exit 0
+            }
+            if ($attempt -lt 3) { Start-Sleep -Seconds 10 }
+          }
+          throw "NSIS installation failed after three attempts"
       - name: Decode code-signing cert
         if: env.HAS_WINDOWS_CERT == 'true'
         shell: pwsh

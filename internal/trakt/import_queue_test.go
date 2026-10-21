@@ -58,9 +58,11 @@ func TestBulkImportSurvivesQueueLimitFailureAndWorkerRestart(t *testing.T) {
 	done := make(chan struct{})
 	go func() { resumed.Start(workerCtx); close(done) }()
 	defer func() { cancel(); <-done }()
-	deadline := time.Now().Add(8 * time.Second)
+	// This checks durable delivery of 1205 HTTP requests, not throughput.
+	// Race-instrumented shared CI runners can take longer than eight seconds.
+	deadline := time.Now().Add(60 * time.Second)
 	for importQueueCount(t, resumed) > 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 	if n := importQueueCount(t, resumed); n != 0 {
 		t.Fatalf("worker left %d records", n)
