@@ -976,6 +976,13 @@ func TestRegistrarPublishesClusterUnion(t *testing.T) {
 	now := time.Now()
 	r, err := NewRegistrar(RegistrarOptions{
 		Config: &memConfig{cfg: cfg}, Client: newServerClient(t, f), WAN: &fakeWAN{ip: "198.51.100.1"}, Mapper: &fakeMapper{},
+		// Reachability is unrelated to membership publication. Never let
+		// TEST-NET address probes block the loop on the host's real network.
+		Reach: &remote.ReachabilityChecker{Client: &http.Client{Transport: &http.Transport{
+			DialContext: func(context.Context, string, string) (net.Conn, error) {
+				return nil, errors.New("offline reachability fixture")
+			},
+		}}},
 		LAN: func() ([]net.IP, error) {
 			mu.Lock()
 			defer mu.Unlock()
