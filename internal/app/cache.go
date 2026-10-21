@@ -11,6 +11,16 @@ import (
 	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
+// cacheNodeID identifies the NAS writer. Standalone metadata stays in this
+// server's SQLite database; the mount marker prevents unrelated servers from
+// adopting the same pool. Cluster members use their registered node identity.
+func (a *App) cacheNodeID() string {
+	if id := a.clusterNodeID(); id != "" {
+		return id
+	}
+	return "standalone"
+}
+
 func (a *App) configureCache(c config.Cache) {
 	// Keep the active backend and its policy together until the node restarts.
 	if a.cache.Directory() != c.Dir || a.cache.Shared() != (c.Storage == "shared") {

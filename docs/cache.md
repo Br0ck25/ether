@@ -147,13 +147,18 @@ The page always labels the active directory. With local storage selected, cluste
 nodes fill and retain media independently. Shared NAS storage coordinates one
 pool as described below; it does not combine separate node disks.
 
-## Shared NAS cache for a cluster
+## NAS cache for one server or a cluster
 
-Choose **Edit policy → Where your cache lives → Shared NAS** on a PostgreSQL
-cluster running a shared-cache-capable Ether release on each participating
-node. The cluster shares one pool, with one budget, retention policy, preload
-allocation and set of owner pins. A cluster may keep some nodes on local caches.
-The Shared NAS choice is unavailable on a standalone SQLite server.
+Choose **Edit policy → Where your cache lives → Shared NAS** on any server.
+A standalone server keeps media on the NAS and cache metadata in its existing
+local SQLite database. No cluster or PostgreSQL setup is required. The Overview
+badge reads **NAS storage**. Use a dedicated folder for this Ether server;
+unrelated standalone servers cannot safely use the same cache folder.
+
+For multiple servers to share one cache folder, connect them to the same
+PostgreSQL cluster. The cluster shares one pool, with one budget, retention
+policy, preload allocation and set of owner pins. A cluster may keep some nodes
+on local caches. Each participating node must run a NAS-capable Ether release.
 
 1. Mount an owner-managed NFS or SMB share through the operating system on every
    participating node. Ether uses mounted filesystem paths, not `smb://` URLs,
@@ -161,10 +166,10 @@ The Shared NAS choice is unavailable on a standalone SQLite server.
 2. On the first node, choose an **empty, dedicated directory** on that mount.
    Give the Ether service account read/write access. Select the desired preset,
    budget and preload options, save, then restart this node.
-3. On each other node, select Shared NAS and point to the **same directory on the
+3. If using a cluster, on each other node, select Shared NAS and point to the **same directory on the
    same share**. Mount paths may differ between machines. The existing shared
    policy is offered when joining. Save and restart each node.
-4. The Overview badge reads **Shared cluster pool** once active. Explorer lists
+4. In a cluster, the Overview badge reads **Shared cluster pool** once active. Explorer lists
    the pool's releases and pins. Disk-hit metrics and opening-warmup activity
    describe the serving node; retained bytes and full-title preloading describe
    the shared pool.
@@ -176,8 +181,10 @@ whose mount cannot be verified prevents startup; a lost mount or database during
 operation causes cache misses/write failures and a visible storage error, without
 switching to another disk. Restore the mount/database to resume cache access.
 Changing backend or path is a restart-required operation. Existing local bytes
-are not migrated, merged or deleted. Shared metadata lives in PostgreSQL; do not
-put Ether's SQLite database or transcode output on the shared cache folder.
+are not migrated, merged or deleted. Metadata lives in the server's local SQLite
+database for standalone storage or PostgreSQL for cluster storage; do not put
+Ether's SQLite database or transcode output on the shared cache folder. Back up
+the server database along with the NAS cache to preserve its index and pins.
 
 Each published segment uses an immutable filename and a checksum. PostgreSQL
 transactions serialize pin/accounting/eviction decisions across nodes. Live and

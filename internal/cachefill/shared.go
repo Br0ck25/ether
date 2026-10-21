@@ -16,7 +16,7 @@ func init() {
 	store.Register("cachefill", 1, `CREATE TABLE cachefill_shared(id INTEGER PRIMARY KEY CHECK(id=1), doc TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT '{}', paused INTEGER NOT NULL DEFAULT 0, epoch INTEGER NOT NULL DEFAULT 0, owner TEXT NOT NULL DEFAULT '', expires INTEGER NOT NULL DEFAULT 0, next_run INTEGER NOT NULL DEFAULT 0);`)
 }
 
-// SharedStore keeps the shelf in PostgreSQL and fences every manifest/pin
+// SharedStore keeps the shelf in the server database and fences every manifest/pin
 // mutation with a renewable epoch. A former worker cannot unpin a new worker's
 // shelf after losing its lease. The NAS holds media bytes only.
 type SharedStore struct {

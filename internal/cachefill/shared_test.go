@@ -92,3 +92,43 @@ func TestSharedShelfHandoffReusesCompletedSources(t *testing.T) {
 		t.Fatalf("handoff refetched shelf: calls %d ready %d", res.calls.Load(), other.Status().Ready)
 	}
 }
+
+func TestStandaloneNASShelfSurvivesDatabaseReopen(t *testing.T) {
+	ctx := context.Background()
+	local, nas := t.TempDir(), t.TempDir()
+	db, err := store.Open(ctx, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := segcache.OpenShared(nas, 1024, db, "standalone", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := NewSharedStore(db, "standalone")
+	if err := a.acquire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.save(ctx, []byte(`{"items":[]}`), Status{State: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.pause(true); err != nil {
+		t.Fatal(err)
+	}
+	a.release()
+	c.Close()
+	db.Close()
+	db, err = store.Open(ctx, local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	b := NewSharedStore(db, "standalone")
+	if err := b.acquire(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer b.release()
+	doc, status, err := b.load(ctx)
+	if err != nil || string(doc) != `{"items":[]}` || !status.Paused {
+		t.Fatalf("shelf restart: %s %+v %v", doc, status, err)
+	}
+}

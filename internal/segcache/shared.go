@@ -38,9 +38,10 @@ type sharedCache struct {
 	active map[string]map[string]bool
 }
 
-// OpenShared opens the cluster's single NAS pool. The directory must already
-// exist and be mounted. PostgreSQL owns the index, pins and accounting; media
-// files have immutable, random names. No SQLite database is placed on the NAS.
+// OpenShared opens a NAS pool. The directory must already exist and be mounted.
+// The server database owns the index, pins and accounting: local SQLite for a
+// standalone server, shared PostgreSQL for a cluster. Media files have immutable,
+// random names. No SQLite database is placed on the NAS.
 // Each mount must expose the same marker created by the first pool member.
 func OpenShared(dir string, budget int64, db *sql.DB, node string, logger *slog.Logger) (*Cache, error) {
 	if db == nil || node == "" {
@@ -608,7 +609,7 @@ func ValidateSharedMount(dir string, db *sql.DB) error {
 	}
 	b, err := os.ReadFile(filepath.Join(dir, ".ether-shared-cache"))
 	if err != nil || string(b) != token {
-		return errors.New("this directory does not expose the cluster's shared cache marker; mount the same NAS share used by the first node")
+		return errors.New("this directory does not expose this server's cache pool marker; mount the original NAS share")
 	}
 	return nil
 }

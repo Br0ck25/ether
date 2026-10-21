@@ -14,9 +14,6 @@ import (
 func (a *App) validateExtra(c config.Config) []admin.FieldError {
 	errs := append(validatePlaybackConfig(c), a.validateIndexerSites(c)...)
 	if c.Cache.Storage == "shared" {
-		if !a.clustered() {
-			errs = append(errs, admin.FieldError{Field: "cache.storage", Message: "set up a PostgreSQL cluster before choosing shared NAS storage"})
-		}
 		if err := segcache.ValidateSharedMount(c.Cache.Dir, a.db); err != nil {
 			errs = append(errs, admin.FieldError{Field: "cache.dir", Message: err.Error()})
 		}

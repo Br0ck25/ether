@@ -370,10 +370,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 		if cfg.SharedCache == nil {
 			return errors.New("configure the shared cache policy in Server → Cache before starting a NAS-backed node")
 		}
-		if !a.clustered() {
-			return errors.New("shared NAS cache requires a PostgreSQL cluster")
-		}
-		a.cache, err = segcache.OpenShared(cfg.Cache.Dir, cfg.Cache.BudgetBytes, a.db, a.clusterNodeID(), log)
+		a.cache, err = segcache.OpenShared(cfg.Cache.Dir, cfg.Cache.BudgetBytes, a.db, a.cacheNodeID(), log)
 	} else {
 		a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log)
 	}
@@ -573,7 +570,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 
 	var sharedShelf *cachefill.SharedStore
 	if a.cache.Shared() {
-		sharedShelf = cachefill.NewSharedStore(a.db, a.clusterNodeID())
+		sharedShelf = cachefill.NewSharedStore(a.db, a.cacheNodeID())
 	}
 	a.cachefill, err = cachefill.New(a.cache.Directory(), cachefill.Deps{
 		Shared:  sharedShelf,

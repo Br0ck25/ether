@@ -39,7 +39,7 @@ export function CacheOverview({
           [
             "Retained",
             s ? formatBytes(used) : "—",
-            `${s?.releases.length ?? 0} releases ${s?.shared ? "in the shared pool" : "on this node"}`,
+            `${s?.releases.length ?? 0} releases ${s?.shared ? (s.clustered ? "in the shared pool" : "on the NAS") : "on this node"}`,
           ],
           [
             "Disk hit rate",

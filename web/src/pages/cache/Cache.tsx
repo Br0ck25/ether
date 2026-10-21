@@ -338,7 +338,9 @@ export default function Cache() {
       actions={
         <>
           {dirty && <Badge variant="warning">Unsaved policy</Badge>}
-          <Badge variant="secondary">{snap?.shared ? "Shared cluster pool" : "This node"}</Badge>
+          <Badge variant="secondary">
+            {snap?.shared ? (snap.clustered ? "Shared cluster pool" : "NAS storage") : "This node"}
+          </Badge>
           <Button size="sm" onClick={() => setEditor("policy")}>
             <Settings2 size={14} /> {dirty ? "Resume editing" : "Edit policy"}
           </Button>
@@ -736,7 +738,9 @@ export default function Cache() {
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold">Where your cache lives</h3>
                 <Badge variant="secondary">
-                  {draft.storage === "shared" ? "Cluster policy" : "Node policy"}
+                  {draft.storage === "shared" && snap?.clustered
+                    ? "Cluster policy"
+                    : "Server policy"}
                 </Badge>
               </div>
               <div
@@ -766,7 +770,6 @@ export default function Cache() {
                   type="button"
                   role="radio"
                   aria-checked={draft.storage === "shared"}
-                  disabled={!snap?.clustered}
                   onClick={() =>
                     patch({ ...config.data?.sharedCache, storage: "shared", dir: draft.dir })
                   }
@@ -780,28 +783,17 @@ export default function Cache() {
                   <Network size={18} className="mb-2 text-primary" />
                   <span className="block text-sm font-medium">Shared NAS</span>
                   <span className="mt-1 block text-xs text-fg-muted">
-                    One library and budget across your cluster.
+                    {snap?.clustered
+                      ? "One library and budget across your cluster."
+                      : "Keep your cache on a mounted network share."}
                   </span>
                 </button>
               </div>
-              {!snap?.clustered && (
-                <p className="text-xs text-fg-muted">
-                  Shared NAS becomes available after{" "}
-                  <button
-                    type="button"
-                    className="text-primary underline"
-                    onClick={() => navigate("/cluster")}
-                  >
-                    setting up a cluster
-                  </button>
-                  .
-                </p>
-              )}
               {draft.storage === "shared" && (
                 <p className="rounded-lg bg-primary/5 p-3 text-xs leading-relaxed text-fg-muted">
-                  Mount the same NAS share on every participating node. Each node may use a
-                  different mount path. Budgets, retention, pins, and preloading are shared; saving
-                  this policy updates all members of the pool.
+                  {snap?.clustered
+                    ? "Mount the same NAS share on every participating node. Each node may use a different mount path. Budgets, retention, pins, and preloading are shared; saving this policy updates all members of the pool."
+                    : "Mount your NAS share on this server and choose a dedicated folder. Your media cache lives on the NAS; its database stays on this server. No cluster is required. To let multiple Ether servers use the same cache folder, connect them in a cluster first."}
                 </p>
               )}
               <Field
