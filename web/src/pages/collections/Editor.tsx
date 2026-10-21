@@ -529,7 +529,7 @@ export default function CollectionEditor() {
           <aside
             className={cn(
               "app-scroll min-h-0 overflow-y-auto bg-surface",
-              wide ? "w-[30rem] shrink-0 border-r border-border xl:w-[34rem]" : "w-full",
+              wide ? "w-1/3 shrink-0 border-r border-border" : "w-full",
             )}
             aria-label="Collection editor"
           >
