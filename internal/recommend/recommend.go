@@ -328,11 +328,19 @@ func (r *Recommender) Related(ctx context.Context, user *core.User, key core.Rat
 			return
 		}
 		items := r.browseFor(ctx, user, core.BrowseQuery{Filter: core.Filter{Person: p.TMDB}, Sort: core.SortPopularity, Desc: true, Limit: limit})
+		items = r.personalOrder(ctx, user, r.unwatchedOnly(ctx, user, items))
 		add(fmt.Sprintf("%s.by.actor.or.director.%d", prefix, p.TMDB), fmt.Sprintf("More %s %s", roleWord, p.Name),
 			"hub."+prefix+".by.actor.or.director", items, true)
 	}
 	if len(title.Directors) > 0 {
 		personWork(title.Directors[0], "from director")
+	} else if len(title.Crew) > 0 {
+		for _, cr := range title.Crew {
+			if cr.Role == "Creator" || cr.Role == "Showrunner" {
+				personWork(cr, "from creator")
+				break
+			}
+		}
 	}
 	if len(title.Cast) > 0 {
 		personWork(title.Cast[0], "with")

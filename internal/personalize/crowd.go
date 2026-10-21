@@ -37,6 +37,12 @@ type crowdSource interface {
 	CrowdRecommendations(ctx context.Context, key core.RatingKey, pages int, fetch bool) ([]core.Title, bool, error)
 }
 
+// crowdBatchSource is optionally implemented by the catalogue for zero-network
+// 2-hop co-engagement expansion over stored catalog_crowd lists.
+type crowdBatchSource interface {
+	CrowdGraphBatch(ctx context.Context, keys []core.RatingKey, maxPerKey, maxTargets int) (map[core.RatingKey][]core.RatingKey, map[core.RatingKey]core.Title, error)
+}
+
 const (
 	// crowdMaxSeeds is the most favourites the graph aggregates.
 	crowdMaxSeeds = 20
@@ -77,7 +83,8 @@ type crowdEntry struct {
 	consensus int     // independent seed groups recommending it
 	house     float64 // household co-watch 0..1
 	votes     map[string]crowdVote
-	seeds     []string // seed titles, strongest contribution first
+	hop2Votes map[string]crowdVote // 2-hop popularity-damped paths by seed group
+	seeds     []string             // seed titles, strongest contribution first
 }
 
 // crowdGraph is a build's aggregated crowd evidence.
@@ -234,6 +241,7 @@ func (b *builder) crowd() *crowdGraph {
 		}
 		add(s, recs)
 	}
+	b.addHop2(g, isSeed)
 	b.addHousehold(g, isSeed)
 	finishCrowd(g)
 	b.crowdG = g
@@ -242,22 +250,127 @@ func (b *builder) crowd() *crowdGraph {
 	return g
 }
 
+// hubDamping penalizes mega-popular intermediate hub nodes in a 2-hop walk so
+// mainstream blockbusters do not dominate 2nd-hop propagation, while cult and
+// mid-popularity bridges pass stronger signal.
+func hubDamping(pop float64) float64 {
+	p := math.Max(pop, 10)
+	return 0.35 / math.Pow(1+math.Log10(p/10), 0.65)
+}
+
+// addHop2 walks one additional hop across already-mirrored catalog_crowd lists
+// (zero network calls) from the strongest 1-hop candidates, applying inverse
+// popularity hub damping. Pure 2-hop candidates require at least two
+// independent seed groups to converge on them.
+func (b *builder) addHop2(g *crowdGraph, isSeed map[core.RatingKey]bool) {
+	bs, ok := b.e.catalog.(crowdBatchSource)
+	if !ok || len(g.items) == 0 || b.ctx.Err() != nil {
+		return
+	}
+	type bridge struct {
+		key core.RatingKey
+		sum float64
+	}
+	bridges := make([]bridge, 0, len(g.items))
+	for k, ce := range g.items {
+		s := 0.0
+		for _, v := range ce.votes {
+			s += v.w
+		}
+		if s >= 0.18 {
+			bridges = append(bridges, bridge{key: k, sum: s})
+		}
+	}
+	sort.Slice(bridges, func(i, j int) bool {
+		if bridges[i].sum != bridges[j].sum {
+			return bridges[i].sum > bridges[j].sum
+		}
+		return bridges[i].key < bridges[j].key
+	})
+	if len(bridges) > 36 {
+		bridges = bridges[:36]
+	}
+	bkeys := make([]core.RatingKey, len(bridges))
+	for i, br := range bridges {
+		bkeys[i] = br.key
+	}
+	edges, titles, err := bs.CrowdGraphBatch(b.ctx, bkeys, 20, 240)
+	if err != nil || len(edges) == 0 {
+		return
+	}
+	for _, uKey := range bkeys {
+		uEntry := g.items[uKey]
+		recs := edges[uKey]
+		if uEntry == nil || len(recs) == 0 {
+			continue
+		}
+		damp := hubDamping(uEntry.t.Popularity)
+		for idx, rawKey := range recs {
+			k := tasteKey(rawKey)
+			if isSeed[k] || b.touched[k] || k == uKey {
+				continue
+			}
+			ce := g.items[k]
+			if ce == nil {
+				t, ok := titles[k]
+				if !ok || (t.Type != core.TypeMovie && t.Type != core.TypeShow) {
+					continue
+				}
+				ce = &crowdEntry{t: t, votes: map[string]crowdVote{}, hop2Votes: map[string]crowdVote{}}
+				g.items[k] = ce
+			} else if ce.hop2Votes == nil {
+				ce.hop2Votes = map[string]crowdVote{}
+			}
+			rankMult := damp * math.Pow(crowdRankDecay, float64(idx))
+			for grp, uv := range uEntry.votes {
+				w2 := uv.w * rankMult
+				if w2 > ce.hop2Votes[grp].w {
+					ce.hop2Votes[grp] = crowdVote{w: w2, seed: uv.seed}
+				}
+			}
+		}
+	}
+}
+
 // finishCrowd scores every candidate from its seed votes and household
 // co-watch, and orders them.
 func finishCrowd(g *crowdGraph) {
 	g.order = g.order[:0]
 	for k, ce := range g.items {
+		if len(ce.votes) == 0 && len(ce.hop2Votes) < 2 && ce.house <= 0 {
+			// A pure 2-hop title must be reached by at least two independent
+			// seed groups; single-path 2-hop mentions are dropped.
+			delete(g.items, k)
+			continue
+		}
 		sum := 0.0
 		type sv struct {
 			w    float64
 			seed string
 		}
 		var votes []sv
-		for _, v := range ce.votes {
-			sum += v.w
-			votes = append(votes, sv{v.w, v.seed})
+		if len(ce.votes) > 0 {
+			for grp, v := range ce.votes {
+				w := v.w
+				if h2, ok := ce.hop2Votes[grp]; ok && h2.w > 0 {
+					w = math.Min(1.0, w+0.25*h2.w)
+				}
+				sum += w
+				votes = append(votes, sv{w, v.seed})
+			}
+			for grp, h2 := range ce.hop2Votes {
+				if _, direct := ce.votes[grp]; !direct {
+					sum += 0.5 * h2.w
+				}
+			}
+			ce.consensus = len(ce.votes)
+		} else {
+			for _, v := range ce.hop2Votes {
+				sum += v.w
+				votes = append(votes, sv{v.w, v.seed})
+			}
+			ce.consensus = len(ce.hop2Votes)
 		}
-		ce.consensus = len(ce.votes)
 		sort.Slice(votes, func(i, j int) bool {
 			if votes[i].w != votes[j].w {
 				return votes[i].w > votes[j].w

@@ -165,3 +165,54 @@ func TestIntentRespectsVeto(t *testing.T) {
 		t.Fatal("unexpected veto")
 	}
 }
+
+func TestAbandonBouncePivotAndPersonalizedRelated(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	u := core.User{ID: 41, Username: "pivoter"}
+	h.users.users = []core.User{u}
+	sciFiFan(h, u.ID)
+	h.rebuild(u)
+
+	// Start and abandon a thriller at 4%: bounce pivot should penalize its
+	// specific director/keywords while keeping a positive thriller mood and
+	// acclaim pivot.
+	bounced := h.cat.titles[movieKey(6, 10)]
+	h.start(u.ID, bounced.Key, 0.04, testNow)
+	h.e.syncEvents(ctx)
+	snap, _ := h.e.intentFor(u.ID, testNow)
+	if !snap.active() || snap.acclaimPivot <= 0 {
+		t.Fatalf("expected active bounce pivot snapshot, got %+v", snap)
+	}
+	if snap.genre["Thriller"] <= 0 {
+		t.Fatalf("expected primary genre mood preserved on bounce, got %v", snap.genre)
+	}
+	if d := bounced.Directors[0].TMDB; snap.avoidPerson[d] <= 0 {
+		t.Fatalf("expected bounced director %d penalized, got %v", d, snap.avoidPerson)
+	}
+
+	// Related 2.0 on a long (>125m) Sci-Fi movie appends "Closer to Your Taste"
+	// and "Same Vibe, Under 105 Minutes".
+	longSciFi := movieKey(0, 12) // 80 + 12*6 = 152 min
+	rel, err := h.e.Related(ctx, &u, longSciFi, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasCloser, hasShorter := false, false
+	for _, hub := range rel {
+		if hub.ID == "movie.personal" && len(hub.Items) > 0 {
+			hasCloser = true
+		}
+		if hub.ID == "movie.shorter" && len(hub.Items) > 0 {
+			hasShorter = true
+			for _, it := range hub.Items {
+				if minutes(&it) > 105 {
+					t.Fatalf("shorter hub contains %s (%v)", it.Title, it.Runtime)
+				}
+			}
+		}
+	}
+	if !hasCloser || !hasShorter {
+		t.Fatalf("expected Related 2.0 hubs (hasCloser=%v hasShorter=%v): %+v", hasCloser, hasShorter, rel)
+	}
+}

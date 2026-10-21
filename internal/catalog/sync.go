@@ -3,7 +3,9 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -108,12 +110,31 @@ func (c *Catalog) Run(ctx context.Context) {
 		c.log.Error("catalog: initial sync", "err", err)
 	}
 	for {
-		t := time.NewTimer(c.refreshInterval())
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return
-		case <-t.C:
+		refreshTimer := time.NewTimer(c.refreshInterval())
+		warmTicker := time.NewTicker(90 * time.Second)
+		newReleaseTicker := time.NewTicker(4 * time.Hour)
+	waitLoop:
+		for {
+			select {
+			case <-ctx.Done():
+				refreshTimer.Stop()
+				warmTicker.Stop()
+				newReleaseTicker.Stop()
+				return
+			case <-warmTicker.C:
+				if !c.syncing.Load() {
+					_, _ = c.WarmDetails(ctx, 25)
+				}
+			case <-newReleaseTicker.C:
+				if !c.syncing.Load() {
+					c.syncNewReleases(ctx)
+					_, _ = c.WarmDetails(ctx, 25)
+				}
+			case <-refreshTimer.C:
+				warmTicker.Stop()
+				newReleaseTicker.Stop()
+				break waitLoop
+			}
 		}
 		if err := c.Sync(ctx); err != nil && ctx.Err() == nil {
 			c.log.Error("catalog: refresh sync", "err", err)
@@ -186,6 +207,7 @@ func (c *Catalog) syncLocked(ctx context.Context) error {
 			}
 		}
 	}
+	c.syncNewReleases(ctx)
 	// Demote browsable titles that no longer meet the (possibly raised) threshold?
 	// Deliberately not done: searched titles joined on demand and owners raising
 	// the bar expect new syncs to stop adding, not to hide known titles. The
@@ -301,4 +323,219 @@ func (c *Catalog) syncSlice(ctx context.Context, tv bool, params tmdb.DiscoverPa
 		}
 	}
 	return 500, nil
+}
+
+// qualifiesNewRelease admits a recently released title (last 45 days) that
+// already has real viewer traction even if its cumulative vote count is still
+// building toward the long-term MinVotes bar.
+func (c *Catalog) qualifiesNewRelease(t core.Title) bool {
+	if c.meetsThreshold(t) {
+		return true
+	}
+	now := c.now()
+	if (t.Type != core.TypeMovie && t.Type != core.TypeShow) || t.Adult || !t.IsReleased(now) {
+		return false
+	}
+	if now.Sub(t.Released) > 45*24*time.Hour {
+		return false
+	}
+	cfg := c.config()
+	minPop := math.Max(2.5, cfg.MinPopularity*0.6)
+	minVotes := max(10, cfg.MinVotes/5)
+	return t.Popularity >= minPop && t.VoteCount >= minVotes
+}
+
+// syncNewReleases pulls TMDB's live release feeds (now_playing, airing_today,
+// on_the_air, trending_day, trending_week) so brand-new theatrical, streaming
+// and broadcast releases enter the browsable mirror without waiting for
+// long-term vote counts to accumulate. Errors on optional endpoints are
+// ignored so minimal test fixtures are unaffected.
+func (c *Catalog) syncNewReleases(ctx context.Context) {
+	if c.client == nil || ctx.Err() != nil {
+		return
+	}
+	var batch []core.Title
+	seen := map[core.RatingKey]bool{}
+	collect := func(ts []core.Title) {
+		for _, t := range ts {
+			if t.Key == 0 || seen[t.Key] || !c.qualifiesNewRelease(t) {
+				continue
+			}
+			seen[t.Key] = true
+			batch = append(batch, t)
+		}
+	}
+	for _, list := range []string{"now_playing", "trending_day", "trending_week"} {
+		if items, err := c.fetchList(ctx, list, core.TypeMovie, 40); err == nil {
+			collect(items)
+		}
+	}
+	for _, list := range []string{"airing_today", "on_the_air", "trending_day", "trending_week"} {
+		if items, err := c.fetchList(ctx, list, core.TypeShow, 40); err == nil {
+			collect(items)
+		}
+	}
+	if len(batch) > 0 {
+		_ = c.upsertMany(ctx, batch, upsertOpts{browsable: true})
+	}
+}
+
+// WarmDetails enriches up to limit browsable titles whose detailed metadata
+// (credits, crew, keywords, studios, runtime, content rating, seasons and
+// crowd recommendations) has not been fetched yet, plus returning series
+// whose detail TTL has expired. New releases (<120 days old) are warmed first,
+// followed by the most popular and most-voted titles. Settled titles are
+// marked detail=1 and never re-queried.
+func (c *Catalog) WarmDetails(ctx context.Context, limit int) (int, error) {
+	if c.client == nil || limit <= 0 {
+		return 0, nil
+	}
+	now := c.now()
+	recentCutoff := now.Add(-120 * 24 * time.Hour).Unix()
+	staleCutoff := now.Add(-c.staleAfter).Unix()
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT key FROM catalog_titles
+		WHERE browsable=1 AND adult=0 AND type IN ('movie','show')
+		  AND released_ts>0 AND released_ts<=?
+		  AND (detail=0 OR (type='show' AND status='Returning Series' AND detail_at>0 AND detail_at<?))
+		ORDER BY CASE WHEN detail=0 AND released_ts>=? THEN 0 WHEN detail=0 THEN 1 ELSE 2 END ASC,
+		         popularity DESC, vote_count DESC, key ASC
+		LIMIT ?`, now.Unix(), staleCutoff, recentCutoff, limit)
+	if err != nil {
+		return 0, err
+	}
+	var keys []core.RatingKey
+	for rows.Next() {
+		var k int64
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		keys = append(keys, core.RatingKey(k))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	warmed := 0
+	for _, k := range keys {
+		if ctx.Err() != nil {
+			return warmed, ctx.Err()
+		}
+		if _, err := c.Get(ctx, k); err == nil {
+			warmed++
+		}
+	}
+	return warmed, nil
+}
+
+type personCreditsTMDB interface {
+	PersonCombinedCredits(ctx context.Context, id int64) (*tmdb.PersonCombinedCredits, error)
+}
+
+// ensurePersonCredits hydrates a person's filmography from TMDB's
+// /person/{id}/combined_credits on first browse when the local mirror holds
+// only a few detail-enriched titles for them.
+func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
+	if personID <= 0 || c.client == nil {
+		return
+	}
+	pc, ok := c.client.(personCreditsTMDB)
+	if !ok {
+		return
+	}
+	now := c.now()
+	c.personMu.Lock()
+	if at, seen := c.personHydrated[personID]; seen && now.Sub(at) < 24*time.Hour {
+		c.personMu.Unlock()
+		return
+	}
+	if len(c.personHydrated) >= 2048 {
+		c.personHydrated = map[int64]time.Time{}
+	}
+	c.personHydrated[personID] = now
+	c.personMu.Unlock()
+
+	var have int
+	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT key) FROM catalog_credits WHERE person_tmdb=?`, personID).Scan(&have); err == nil && have >= 8 {
+		return
+	}
+	bctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	credits, err := pc.PersonCombinedCredits(bctx, personID)
+	if err != nil || credits == nil {
+		return
+	}
+	var personName, personThumb string
+	_ = c.db.QueryRowContext(ctx, `SELECT name, thumb FROM catalog_credits WHERE person_tmdb=? AND name<>'' LIMIT 1`, personID).Scan(&personName, &personThumb)
+	if personName == "" {
+		if pd, ok := c.client.(interface {
+			PersonDetails(ctx context.Context, id int64) (*tmdb.Person, error)
+		}); ok {
+			if p, err := pd.PersonDetails(bctx, personID); err == nil && p != nil {
+				personName, personThumb = p.Name, p.ProfilePath
+			}
+		}
+	}
+	type creditLink struct {
+		key  core.RatingKey
+		role string
+		kind string
+		ord  int
+	}
+	var summaries []core.Title
+	seenTitle := map[core.RatingKey]bool{}
+	var links []creditLink
+	addWork := func(w tmdb.PersonCredit, kind, role string, ord int) {
+		var t core.Title
+		switch w.MediaType {
+		case "movie":
+			t = c.movieToTitle(ctx, w.AsMovie())
+		case "tv":
+			t = c.tvToTitle(ctx, w.AsTV())
+		default:
+			return
+		}
+		if t.Key == 0 || t.Adult || !t.IsReleased(now) || !c.meetsThreshold(t) {
+			return
+		}
+		if !seenTitle[t.Key] {
+			seenTitle[t.Key] = true
+			summaries = append(summaries, t)
+		}
+		links = append(links, creditLink{key: t.Key, role: role, kind: kind, ord: ord})
+	}
+	for i, w := range credits.Cast {
+		addWork(w, "cast", w.Character, i)
+	}
+	for i, w := range credits.Crew {
+		job := strings.ToLower(strings.TrimSpace(w.Job))
+		switch job {
+		case "director":
+			addWork(w, "director", w.Job, i)
+		case "writer", "screenplay", "author", "novel", "story", "teleplay":
+			addWork(w, "writer", w.Job, i)
+		case "director of photography", "cinematography":
+			addWork(w, "crew", "Cinematographer", i)
+		case "original music composer", "music", "composer":
+			addWork(w, "crew", "Composer", i)
+		case "creator", "series composition", "showrunner":
+			addWork(w, "crew", "Creator", i)
+		}
+	}
+	if len(summaries) > 0 {
+		_ = c.upsertMany(ctx, summaries, upsertOpts{browsable: true})
+	}
+	if len(links) > 0 {
+		tx, err := c.db.BeginTx(ctx, nil)
+		if err == nil {
+			for _, l := range links {
+				_, _ = tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb)
+			}
+			if tx.Commit() == nil {
+				c.writeGen.Add(1)
+			}
+		}
+	}
 }

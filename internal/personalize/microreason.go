@@ -107,6 +107,19 @@ func personReason(ts *Taste, t *core.Title) string {
 			see(p, "With")
 		}
 	}
+	for i, p := range t.Crew {
+		if i >= 6 {
+			break
+		}
+		switch strings.ToLower(p.Role) {
+		case "creator", "showrunner":
+			see(p, "Created by")
+		case "cinematographer", "director of photography":
+			see(p, "Shot by")
+		case "composer", "original music composer":
+			see(p, "Scored by")
+		}
+	}
 	return reason
 }
 

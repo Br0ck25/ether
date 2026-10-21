@@ -212,8 +212,9 @@ type TVDetails struct {
 	ProductionCompany []Company       `json:"production_companies"`
 	ProductionCountry []Country       `json:"production_countries"`
 	CreatedBy         []struct {
-		ID   int64  `json:"id"`
-		Name string `json:"name"`
+		ID          int64  `json:"id"`
+		Name        string `json:"name"`
+		ProfilePath string `json:"profile_path"`
 	} `json:"created_by"`
 	Credits          *Credits        `json:"credits"`
 	AggregateCredits *Credits        `json:"aggregate_credits"`
@@ -322,4 +323,20 @@ type Person struct {
 	KnownForDepartment string  `json:"known_for_department"`
 	Popularity         float64 `json:"popularity"`
 	IMDBID             string  `json:"imdb_id"`
+}
+
+// PersonCredit is one work in /person/{id}/combined_credits.
+type PersonCredit struct {
+	MultiResult
+	Character    string `json:"character"`
+	Job          string `json:"job"`
+	Department   string `json:"department"`
+	EpisodeCount int    `json:"episode_count"`
+}
+
+// PersonCombinedCredits is /person/{id}/combined_credits.
+type PersonCombinedCredits struct {
+	ID   int64          `json:"id"`
+	Cast []PersonCredit `json:"cast"`
+	Crew []PersonCredit `json:"crew"`
 }

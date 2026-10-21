@@ -286,6 +286,34 @@ func TestUnavailableCooloff(t *testing.T) {
 	}
 }
 
+func TestFreshEpisodeShortCooloffAndReResolveWhenUploaded(t *testing.T) {
+	ctx := context.Background()
+	airDay := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	clock := &fakeClock{t: time.Date(2026, 10, 21, 20, 30, 0, 0, time.UTC)} // 8:30 PM on air day
+	idx := &fakeIndexer{}
+	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{Now: clock.now})
+	ep := &core.Title{
+		Key: core.EpisodeKey(500, 28, 25), Type: core.TypeEpisode,
+		ShowTitle: "Big Brother", Title: "Episode 25", Season: 28, Episode: 25,
+		Released: airDay, Runtime: 45 * time.Minute,
+	}
+	// Checked at 8:30 PM before the release drops: not available yet.
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: ep, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("expected ErrNotAvailable at 8:30 PM, got %v", err)
+	}
+	if known, avail := svc.Available(ctx, ep.Key); !known || avail {
+		t.Fatalf("expected known unavailable immediately after 8:30 PM check, got %v/%v", known, avail)
+	}
+	// Release lands at 10:00 PM (90 minutes later — well inside the 6h/24h old cooloff,
+	// past the 3-minute fresh-release cooloff).
+	clock.add(90 * time.Minute)
+	idx.releases = []core.Release{rel("bb25", "Big.Brother.S28E25.1080p.WEB-DL.H264-GRP", 1800)}
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: ep, Client: webCaps()})
+	if err != nil || res == nil || res.Release.ID != "bb25" {
+		t.Fatalf("expected fresh episode to resolve at 10:00 PM without waiting 24h, got res=%+v err=%v", res, err)
+	}
+}
+
 func TestMarkBadPersists(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenMemory(ctx)

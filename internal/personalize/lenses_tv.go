@@ -1,6 +1,7 @@
 package personalize
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -400,4 +401,128 @@ func (b *builder) genNetwork() []*candRow {
 		rows = append(rows, r)
 	}
 	return rows
+}
+
+type trajectorySource interface {
+	ShowTrajectories(ctx context.Context, shows []core.RatingKey) (map[core.RatingKey]core.ShowTrajectory, error)
+}
+
+type standaloneEpisodeSource interface {
+	StandaloneEpisodes(ctx context.Context, minRating float64, limit int) ([]core.Title, error)
+}
+
+// genSticksLanding: completed multi-season series that ended on their own
+// terms (Status == "Ended", never "Canceled") and whose finale season held or
+// exceeded the series' early rating bar.
+func (b *builder) genSticksLanding() []*candRow {
+	if !b.personal() {
+		return nil
+	}
+	cands := b.tvCandidates()
+	var endedKeys []core.RatingKey
+	for _, t := range cands {
+		if strings.EqualFold(t.Status, statusEnded) && t.ChildCount >= 2 && !limited(&t) {
+			endedKeys = append(endedKeys, t.Key)
+		}
+	}
+	if len(endedKeys) == 0 {
+		return nil
+	}
+	var trajs map[core.RatingKey]core.ShowTrajectory
+	if ts, ok := b.e.catalog.(trajectorySource); ok {
+		trajs, _ = ts.ShowTrajectories(b.ctx, endedKeys)
+	}
+	var in []core.Title
+	for _, t := range cands {
+		if !strings.EqualFold(t.Status, statusEnded) || t.ChildCount < 2 || limited(&t) {
+			continue
+		}
+		if tr, ok := trajs[t.Key]; ok && tr.RatedSeasons > 0 {
+			if tr.SticksLanding {
+				in = append(in, t)
+			}
+			continue
+		}
+		// Fallback when season-level ratings are not mirrored yet: require a
+		// high Bayesian series rating on an explicitly Ended (not Canceled) run.
+		if b.acclaimed(&t, 1.0, 7.6) {
+			in = append(in, t)
+		}
+	}
+	items := b.rankType(in, core.TypeShow, func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
+		tr := trajs[t.Key]
+		r := "Sticks the landing · " + seasonsPhrase(t)
+		bonus := 0.0
+		if tr.FinaleRating > 0 {
+			r = fmt.Sprintf("Finale season rated %.1f · %s", tr.FinaleRating, seasonsPhrase(t))
+			bonus = 0.05 * clamp((tr.FinaleRating-7.5)/2.0, 0, 1)
+		}
+		return 0.55*fit + 0.35*quality(t) + 0.1*popularity(t) + bonus, withWhy(r, why)
+	})
+	kept := items[:0:0]
+	for _, it := range items {
+		if it.fit >= 0.05 {
+			kept = append(kept, it)
+		}
+	}
+	r := newRow(KindSticksLanding, "stickslanding", "Series That Stick the Landing",
+		"Completed series that ended strong without a late-season collapse or cliffhanger cancellation.", kept)
+	r.minItems = 4
+	return []*candRow{r}
+}
+
+// genStandalone: acclaimed standalone and anthology episodes that can be
+// watched tonight in a single sitting without committing to a full series.
+func (b *builder) genStandalone() []*candRow {
+	if !b.personal() {
+		return nil
+	}
+	ss, ok := b.e.catalog.(standaloneEpisodeSource)
+	if !ok {
+		return nil
+	}
+	eps, err := ss.StandaloneEpisodes(b.ctx, 8.2, 40)
+	if err != nil || len(eps) == 0 {
+		return nil
+	}
+	b.loadStatuses(eps)
+	var items []candItem
+	seen := map[core.RatingKey]bool{}
+	for _, ep := range eps {
+		if ep.Type != core.TypeEpisode || seen[ep.Key] {
+			continue
+		}
+		if !ep.Released.IsZero() && ep.Released.After(b.now) {
+			continue
+		}
+		if !recommend.ContentRatingAllowed(ep.ContentRating, b.user.MaxContentRating) {
+			continue
+		}
+		if ws := b.statuses[ep.Key]; ws.ViewCount > 0 || ws.ViewOffset > 0 {
+			continue
+		}
+		seen[ep.Key] = true
+		fit, why := b.fit(&ep)
+		if fit < -0.15 {
+			continue
+		}
+		show := ep.ShowTitle
+		if show == "" {
+			show = "Anthology"
+		}
+		r := fmt.Sprintf("%s S%dE%d · Rated %.1f", show, ep.Season, ep.Episode, ep.Rating)
+		if why != "" {
+			r += " · " + why
+		}
+		score := 0.45*clamp(fit, 0, 1) + 0.55*clamp((ep.Rating-7.5)/2.5, 0, 1)
+		items = append(items, candItem{t: ep, base: score, fit: fit, qual: quality(&ep), reason: r})
+	}
+	sortItems(items)
+	if len(items) < 4 {
+		return nil
+	}
+	r := newRow(KindStandalone, "standalone", "Standalone & Anthology Episodes",
+		"Acclaimed standalone and anthology episodes you can watch in one sitting with no multi-season commitment.", capItems(items, 30))
+	r.minItems = 4
+	return []*candRow{r}
 }

@@ -36,7 +36,11 @@ func (c *Catalog) upsertSummaries(ctx context.Context, titles []core.Title, brow
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	c.writeGen.Add(1)
+	return nil
 }
 
 func limitTitles(items []core.Title, limit int) []core.Title {

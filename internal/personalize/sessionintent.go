@@ -34,13 +34,16 @@ const (
 	intentMaxUsers = 512
 )
 
-// intentOpen is one detail-page open with the features it votes for.
+// intentOpen is one detail-page open (or an early playback bounce) with the
+// features it votes for or against.
 type intentOpen struct {
-	key    core.RatingKey // taste key (episodes fold onto their show)
-	at     time.Time
-	genres []string
-	decade int
-	people []int64 // directors, writers, top cast TMDB ids
+	key      core.RatingKey // taste key (episodes fold onto their show)
+	at       time.Time
+	genres   []string
+	decade   int
+	people   []int64 // directors, writers, top cast TMDB ids
+	keywords []string
+	bounced  bool // started and abandoned under 10%: pivot within the mood
 }
 
 type userIntent struct {
@@ -49,15 +52,19 @@ type userIntent struct {
 }
 
 // intentSnapshot is the decayed, bounded boost view of a viewer's opens at
-// one moment: per-feature boosts already scaled into 0..intentMaxBoost.
+// one moment: per-feature boosts already scaled into 0..intentMaxBoost, plus
+// negative contrast penalties from bounced starts.
 type intentSnapshot struct {
-	genre  map[string]float64
-	person map[int64]float64
-	decade map[int]float64
+	genre        map[string]float64
+	person       map[int64]float64
+	decade       map[int]float64
+	avoidPerson  map[int64]float64
+	avoidKeyword map[string]float64
+	acclaimPivot float64
 }
 
 func (s *intentSnapshot) active() bool {
-	return s != nil && len(s.genre)+len(s.person)+len(s.decade) > 0
+	return s != nil && len(s.genre)+len(s.person)+len(s.decade)+len(s.avoidPerson)+len(s.avoidKeyword) > 0
 }
 
 // boostFor is the assembly-time boost of one title, in 0..intentMaxBoost:
@@ -93,11 +100,35 @@ func (s *intentSnapshot) boostFor(t *core.Title) float64 {
 			see(p)
 		}
 	}
+	for i, p := range t.Crew {
+		if i < 6 {
+			see(p)
+		}
+	}
 	b += 0.4 * best
 	if t.Year > 0 {
 		b += 0.2 * s.decade[t.Year/10*10]
 	}
-	return clamp(b, 0, intentMaxBoost)
+	if len(s.avoidPerson) > 0 {
+		worst := 0.0
+		for _, p := range t.Directors {
+			if v := s.avoidPerson[p.TMDB]; v > worst {
+				worst = v
+			}
+		}
+		b -= 0.5 * worst
+	}
+	if len(s.avoidKeyword) > 0 && len(t.Keywords) > 0 {
+		pen := 0.0
+		for _, kw := range t.Keywords {
+			pen += s.avoidKeyword[kw]
+		}
+		b -= math.Min(0.15, 0.5*pen)
+	}
+	if s.acclaimPivot > 0 && b > 0 && quality(t) >= 0.65 {
+		b += 0.3 * s.acclaimPivot * quality(t)
+	}
+	return clamp(b, -intentMaxBoost, intentMaxBoost)
 }
 
 // intentEnabled reports whether the owner left session intent on (default).
@@ -134,6 +165,11 @@ func (e *Engine) intentFeatures(ctx context.Context, t *core.Title) (genres []st
 	}
 	for i, p := range src.Cast {
 		if i < 5 {
+			add(p)
+		}
+	}
+	for i, p := range src.Crew {
+		if i < 6 {
 			add(p)
 		}
 	}
@@ -213,6 +249,69 @@ func (e *Engine) NotePlayback(user *core.User, key core.RatingKey) {
 	}
 }
 
+// recordAbandonBounce records an immediate contrast signal when a viewer starts
+// a title and abandons it before 10%: keep the broad mood (primary genre)
+// alive tonight while pivoting away from the abandoned title's specific
+// director and sub-themes toward higher-acclaim alternatives.
+func (e *Engine) recordAbandonBounce(ctx context.Context, userID int64, key core.RatingKey, at time.Time) {
+	if userID == 0 || !e.intentEnabled() || e.catalog == nil {
+		return
+	}
+	tk := tasteKey(key)
+	t, err := e.catalog.Get(ctx, tk)
+	if err != nil || t == nil {
+		return
+	}
+	genres := normGenres(t.Genres)
+	var dirs []int64
+	for _, d := range t.Directors {
+		if d.TMDB != 0 {
+			dirs = append(dirs, d.TMDB)
+		}
+	}
+	var kws []string
+	for i, kw := range t.Keywords {
+		if i >= 6 {
+			break
+		}
+		kws = append(kws, kw)
+	}
+	if len(genres) == 0 && len(dirs) == 0 && len(kws) == 0 {
+		return
+	}
+	if at.IsZero() {
+		at = e.now()
+	}
+	hs := e.hookState()
+	hs.mu.Lock()
+	defer hs.mu.Unlock()
+	ui := hs.intent[userID]
+	if ui == nil {
+		if len(hs.intent) >= intentMaxUsers {
+			hs.pruneIntentLocked(at)
+			if len(hs.intent) >= intentMaxUsers {
+				return
+			}
+		}
+		ui = &userIntent{}
+		hs.intent[userID] = ui
+	}
+	ui.opens = pruneOpens(ui.opens, at)
+	kept := ui.opens[:0]
+	for _, o := range ui.opens {
+		if o.key != tk {
+			kept = append(kept, o)
+		}
+	}
+	ui.opens = append(kept, intentOpen{
+		key: tk, at: at, genres: genres, people: dirs, keywords: kws, bounced: true,
+	})
+	if len(ui.opens) > intentMaxOpens {
+		ui.opens = ui.opens[len(ui.opens)-intentMaxOpens:]
+	}
+	ui.version++
+}
+
 // intentFor returns the viewer's decayed snapshot and a memo version. The
 // version mixes the change counter with a 5-minute time bucket while any
 // open is live, so assembled rows also refresh as intent decays.
@@ -235,9 +334,24 @@ func (e *Engine) intentFor(userID int64, now time.Time) (*intentSnapshot, uint64
 		return nil, 0
 	}
 	gw, pw, dw := map[string]float64{}, map[int64]float64{}, map[int]float64{}
+	apw, akw := map[int64]float64{}, map[string]float64{}
+	pivot := 0.0
 	for _, o := range opens {
 		w := intentWeight(now.Sub(o.at))
 		if w <= 0 {
+			continue
+		}
+		if o.bounced {
+			if len(o.genres) > 0 {
+				gw[o.genres[0]] += 0.35 * w
+			}
+			for _, p := range o.people {
+				apw[p] += w
+			}
+			for _, kw := range o.keywords {
+				akw[kw] += w
+			}
+			pivot = math.Max(pivot, intentMaxBoost*w/(w+1.0))
 			continue
 		}
 		for _, g := range o.genres {
@@ -251,9 +365,12 @@ func (e *Engine) intentFor(userID int64, now time.Time) (*intentSnapshot, uint64
 		}
 	}
 	snap := &intentSnapshot{
-		genre:  scaleBoosts(gw),
-		person: scaleBoosts(pw),
-		decade: scaleBoosts(dw),
+		genre:        scaleBoosts(gw),
+		person:       scaleBoosts(pw),
+		decade:       scaleBoosts(dw),
+		avoidPerson:  scaleBoosts(apw),
+		avoidKeyword: scaleBoosts(akw),
+		acclaimPivot: round3(pivot),
 	}
 	if !snap.active() {
 		return nil, 0

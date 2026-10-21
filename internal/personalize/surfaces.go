@@ -163,11 +163,11 @@ func sectionBoost(kind string) float64 {
 		return 1.6
 	case KindFinishShow:
 		return 1.5
-	case KindTasteCluster:
+	case KindTasteCluster, KindBridge:
 		return 1.35
-	case KindStartNew, KindFranchise:
+	case KindStartNew, KindFranchise, KindSticksLanding:
 		return 1.2
-	case KindPerson, KindWorld, KindAcclaimed, KindBinge, KindAiringTaste:
+	case KindPerson, KindStudio, KindWorld, KindAcclaimed, KindBinge, KindAiringTaste, KindStandalone:
 		return 1.1
 	case KindTrending, KindNewReleases, KindTopRated:
 		return 0.9

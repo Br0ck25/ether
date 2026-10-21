@@ -317,7 +317,7 @@ func TestSeriesLensRows(t *testing.T) {
 func TestLensRowsAreTypeNative(t *testing.T) {
 	_, m := lensModel(t, func(h *harness, uid int64) { sciFiFan(h, uid); tvFan(h, uid) })
 	for _, r := range m.rows {
-		if !lensKinds[r.kind] || r.kind == KindPerson || r.kind == KindHiddenGems || r.kind == KindTrendingTaste || r.kind == KindDifferent {
+		if !lensKinds[r.kind] || r.kind == KindPerson || r.kind == KindBridge || r.kind == KindHiddenGems || r.kind == KindTrendingTaste || r.kind == KindDifferent {
 			continue
 		}
 		typ := r.items[0].t.Type
@@ -337,4 +337,48 @@ func TestLensRowsAreTypeNative(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBridgeStudioCraftAndSticksLandingRows(t *testing.T) {
+	h, m := lensModel(t, func(h *harness, uid int64) {
+		// Give several Science Fiction films a boutique studio ("A24-ish") and a Cinematographer.
+		dp := core.Person{TMDB: 88801, Name: "Roger Lens", Role: "Cinematographer", ThumbPath: "/rl.jpg"}
+		for _, j := range []int{1, 2, 3, 14, 15, 16, 17, 18, 19} {
+			k := movieKey(0, j)
+			tt := h.cat.titles[k]
+			tt.Studios = []string{"A24-ish"}
+			tt.Crew = []core.Person{dp}
+			h.cat.add(tt)
+		}
+		sciFiFan(h, uid)
+		tvFan(h, uid)
+	})
+	// 1. Multi-seed Bridge row ("Where <Sci-Fi> Meets <Crime/Drama>").
+	bridges := rowsOfKind(m, KindBridge)
+	if len(bridges) == 0 || !strings.HasPrefix(bridges[0].title, "Where ") || !strings.Contains(bridges[0].title, " Meets ") {
+		t.Fatalf("expected bridge row, got %+v", bridges)
+	}
+	// 2. Boutique Studio lens ("More from A24-ish").
+	studioRow := rowTitled(m, "More from A24-ish")
+	assertItems(t, studioRow, func(x *core.Title) bool {
+		return x.Type == core.TypeMovie && anyShared(x.Studios, []string{"A24-ish"})
+	}, "studio lens")
+	// 3. Cinematographer craft shelf ("Shot by Roger Lens") & MicroReason.
+	dpRow := rowTitled(m, "Shot by Roger Lens")
+	assertItems(t, dpRow, func(x *core.Title) bool {
+		return hasPerson(x, 88801)
+	}, "cinematographer shelf")
+	unseenDP := h.cat.titles[movieKey(0, 18)]
+	mr := h.e.MicroReason(context.Background(), &core.User{ID: 1}, &unseenDP, testNow)
+	if !strings.Contains(mr.Header, "Shot by Roger Lens") {
+		t.Fatalf("expected MicroReason to highlight cinematographer, got %q", mr.Header)
+	}
+	// 4. "Series That Stick the Landing" lens.
+	sticks := rowsOfKind(m, KindSticksLanding)
+	if len(sticks) != 1 {
+		t.Fatalf("expected Sticks the Landing row, got %d", len(sticks))
+	}
+	assertItems(t, sticks[0], func(x *core.Title) bool {
+		return x.Type == core.TypeShow && x.Status == statusEnded && x.ChildCount >= 2
+	}, "sticks the landing")
 }

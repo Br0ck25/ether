@@ -113,6 +113,8 @@ func (m *Mirror) Titles(ctx context.Context, keys []core.RatingKey) ([]core.Titl
 				t.Directors = append(t.Directors, p)
 			case "writer":
 				t.Writers = append(t.Writers, p)
+			case "crew":
+				t.Crew = append(t.Crew, p)
 			default:
 				t.Cast = append(t.Cast, p)
 			}

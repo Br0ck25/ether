@@ -589,3 +589,32 @@ func TestCrowdHouseholdCoWatch(t *testing.T) {
 		t.Fatalf("household reason = %q", r)
 	}
 }
+
+func TestCrowdTwoHopPopularityDampedDiscovery(t *testing.T) {
+	h := newHarness(t, nil)
+	plantCrowd(h, true)
+	hop2Gem := core.MovieKey(77999)
+	h.cat.add(core.Title{
+		Key: hop2Gem, Type: core.TypeMovie, IDs: core.IDs{TMDB: hop2Gem.TMDB()},
+		Title: "Two-Hop Cult Masterpiece", Year: 1998, Genres: []string{"Drama", "Thriller"},
+		Language: "en", ContentRating: "PG-13", Rating: 8.6, VoteCount: 6000, Popularity: 12,
+		Runtime: 112 * time.Minute, Released: time.Date(1998, 5, 1, 0, 0, 0, 0, time.UTC),
+	})
+	// Plant hop2Gem on the 1-hop neighbors of two independent seeds (not on the seeds themselves).
+	h.cat.dataMu.Lock()
+	h.cat.recs[movieKey(1, 20)] = []core.RatingKey{hop2Gem}
+	h.cat.recs[movieKey(2, 22)] = []core.RatingKey{hop2Gem}
+	h.cat.dataMu.Unlock()
+
+	u := core.User{ID: 1, MaxContentRating: "PG-13"}
+	crowdFan(h, u.ID)
+	m := h.rebuild(u)
+	cf, ok := m.crowd[hop2Gem]
+	if !ok || cf.consensus < 2 || cf.score <= 0 {
+		t.Fatalf("expected 2-hop gem to be discovered with consensus >= 2, got %+v (ok=%v)", cf, ok)
+	}
+	// Verify hubDamping penalizes mega-popular hubs relative to cult bridges.
+	if hubDamping(500) >= hubDamping(12) {
+		t.Fatalf("hubDamping(500)=%v should be smaller than hubDamping(12)=%v", hubDamping(500), hubDamping(12))
+	}
+}

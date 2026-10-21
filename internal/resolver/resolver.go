@@ -25,6 +25,11 @@ const (
 	defaultSearchCacheTTL = 6 * time.Hour
 	defaultUnavailableTTL = 24 * time.Hour
 	defaultMaxCandidates  = 3
+	// Newly aired episodes and releases (<72h since release date) use a short
+	// unavailable cooloff and empty-search TTL so checking at 8 PM before an
+	// upload drops never blocks playback at 10 PM.
+	freshReleaseWindow  = 72 * time.Hour
+	freshReleaseCooloff = 3 * time.Minute
 )
 
 // Options tunes a Service. Zero values get sensible defaults.
@@ -215,6 +220,22 @@ func (s *Service) cooloff() time.Duration {
 		return d
 	}
 	return defaultUnavailableTTL
+}
+
+func isFreshRelease(t *core.Title, now time.Time) bool {
+	if t == nil || t.Released.IsZero() {
+		return false
+	}
+	age := now.Sub(t.Released)
+	return age >= -24*time.Hour && age <= freshReleaseWindow
+}
+
+func (s *Service) cooloffFor(t *core.Title) time.Duration {
+	d := s.cooloff()
+	if isFreshRelease(t, s.now()) && d > freshReleaseCooloff {
+		return freshReleaseCooloff
+	}
+	return d
 }
 
 func (s *Service) maxCandidates() int {
@@ -475,7 +496,18 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		// Client/profile restrictions and temporary source skips do not prove
 		// that the title is unavailable for everyone.
 		if !clientRejected && len(req.Exclude) == 0 && searchErr == nil {
-			s.setAvailability(ctx, int64(t.Key), false, s.cooloff())
+			s.setAvailability(ctx, int64(t.Key), false, s.cooloffFor(t))
+		}
+		if isFreshRelease(t, s.now()) {
+			skey := searchCacheKey(sreq)
+			s.mu.Lock()
+			if pe, ok := s.searchCache[skey]; ok {
+				if capExp := s.now().Add(freshReleaseCooloff); pe.expires.After(capExp) {
+					pe.expires = capExp
+					s.searchCache[skey] = pe
+				}
+			}
+			s.mu.Unlock()
 		}
 		trace.Err = "no acceptable candidates"
 		return nil, failed(fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable))
@@ -738,7 +770,11 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 	s.mu.Lock()
 	now := s.now()
 	boundMap(s.searchCache, maxSearchCache, func(e searchCacheEntry) bool { return !now.Before(e.expires) })
-	s.searchCache[key] = searchCacheEntry{results: append([]core.Release(nil), results...), expires: s.now().Add(s.searchTTL())}
+	ttl := s.searchTTL()
+	if len(results) == 0 && ttl > freshReleaseCooloff {
+		ttl = freshReleaseCooloff
+	}
+	s.searchCache[key] = searchCacheEntry{results: append([]core.Release(nil), results...), expires: now.Add(ttl)}
 	s.mu.Unlock()
 	return results, false, nil
 }

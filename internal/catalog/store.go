@@ -33,7 +33,35 @@ type extraScan struct {
 
 func (e extraScan) Scan(dest ...any) error { return e.s.Scan(append(dest, e.extra...)...) }
 
+func cloneTitle(t core.Title) core.Title {
+	t.Genres = append([]string(nil), t.Genres...)
+	t.Keywords = append([]string(nil), t.Keywords...)
+	t.Studios = append([]string(nil), t.Studios...)
+	t.Countries = append([]string(nil), t.Countries...)
+	t.Cast = append([]core.Person(nil), t.Cast...)
+	t.Directors = append([]core.Person(nil), t.Directors...)
+	t.Writers = append([]core.Person(nil), t.Writers...)
+	t.Crew = append([]core.Person(nil), t.Crew...)
+	return t
+}
+
+func (c *Catalog) minuteBucket() int64 {
+	return c.now().Unix() / 60
+}
+
 func (c *Catalog) loadByKey(ctx context.Context, key core.RatingKey) (*storedTitle, error) {
+	gen := c.writeGen.Load()
+	minBucket := c.minuteBucket()
+	if key.Kind() == core.KindMovie {
+		c.cacheMu.RLock()
+		ent, ok := c.titleCache[key]
+		c.cacheMu.RUnlock()
+		if ok && ent.gen == gen && ent.minute == minBucket {
+			cp := ent.st
+			cp.t = cloneTitle(ent.st.t)
+			return &cp, nil
+		}
+	}
 	row := c.db.QueryRowContext(ctx, `SELECT `+titleCols+`,detail_at FROM catalog_titles WHERE key=?`, int64(key))
 	var detailAt int64
 	st, err := scanTitle(extraScan{row, []any{&detailAt}})
@@ -51,6 +79,16 @@ func (c *Catalog) loadByKey(ctx context.Context, key core.RatingKey) (*storedTit
 		return nil, err
 	}
 	st.t = items[0]
+	if key.Kind() == core.KindMovie && c.writeGen.Load() == gen {
+		c.cacheMu.Lock()
+		if len(c.titleCache) >= 8192 {
+			c.titleCache = map[core.RatingKey]cachedStoredTitle{}
+		}
+		cp := *st
+		cp.t = cloneTitle(st.t)
+		c.titleCache[key] = cachedStoredTitle{st: cp, gen: gen, minute: minBucket}
+		c.cacheMu.Unlock()
+	}
 	return st, nil
 }
 
@@ -160,6 +198,8 @@ func (c *Catalog) hydrateSlice(ctx context.Context, items []core.Title) error {
 			items[i].Directors = append(items[i].Directors, p)
 		case "writer":
 			items[i].Writers = append(items[i].Writers, p)
+		case "crew":
+			items[i].Crew = append(items[i].Crew, p)
 		default:
 			items[i].Cast = append(items[i].Cast, p)
 		}
@@ -324,7 +364,11 @@ func (c *Catalog) upsertMany(ctx context.Context, titles []core.Title, o upsertO
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	c.writeGen.Add(1)
+	return nil
 }
 
 func upsertOne(ctx context.Context, tx *sql.Tx, t core.Title, o upsertOpts, now int64) error {
@@ -429,7 +473,7 @@ ON CONFLICT(key) DO UPDATE SET
 			return err
 		}
 	}
-	if t.Cast != nil || t.Directors != nil || t.Writers != nil {
+	if t.Cast != nil || t.Directors != nil || t.Writers != nil || t.Crew != nil {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM catalog_credits WHERE key=?`, int64(t.Key)); err != nil {
 			return err
 		}
@@ -449,6 +493,9 @@ ON CONFLICT(key) DO UPDATE SET
 			return err
 		}
 		if err := insert(t.Writers, "writer"); err != nil {
+			return err
+		}
+		if err := insert(t.Crew, "crew"); err != nil {
 			return err
 		}
 	}

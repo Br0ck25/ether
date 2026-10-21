@@ -124,6 +124,8 @@ func (m *Mirror) Snapshot(ctx context.Context) ([]MirrorItem, error) {
 			t.Directors = append(t.Directors, p)
 		case "writer":
 			t.Writers = append(t.Writers, p)
+		case "crew":
+			t.Crew = append(t.Crew, p)
 		default:
 			t.Cast = append(t.Cast, p)
 		}

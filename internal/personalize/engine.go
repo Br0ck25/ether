@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -354,21 +355,132 @@ func (e *Engine) SectionHubs(ctx context.Context, user *core.User, t core.MediaT
 	return e.SectionHubsFor(ctx, user, t, core.NewHubContext(e.now().In(e.loc), "", "", ""), limit)
 }
 
-// Related implements core.Recommender by delegating to the base
-// recommender (detail-page rows are not personalised per context).
+// Related implements core.Recommender by combining the base recommender's
+// detail-page rows with personalized context-aware shelves (Closer to Your
+// Taste, Same Vibe Under 105 Minutes, and high-affinity craft/auteur matches)
+// when the viewer's model is warm.
 func (e *Engine) Related(ctx context.Context, user *core.User, key core.RatingKey, limit int) ([]core.Hub, error) {
+	var hubs []core.Hub
+	var err error
 	if e.opts.Base != nil {
-		return e.opts.Base.Related(ctx, user, key, limit)
+		hubs, err = e.opts.Base.Related(ctx, user, key, limit)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		items, serr := e.catalog.Similar(ctx, key, limit)
+		if serr != nil {
+			return nil, serr
+		}
+		items = recommend.FilterTitles(items, user)
+		if len(items) > 0 {
+			hubs = []core.Hub{{ID: "movie.similar", Title: "More Like This", Context: "hub.movie.similar", Style: "shelf", Items: items}}
+		}
 	}
-	items, err := e.catalog.Similar(ctx, key, limit)
-	if err != nil {
-		return nil, err
+	return e.enrichRelated(ctx, user, key, limit, hubs), nil
+}
+
+// enrichRelated appends personalized detail shelves from the viewer's warm
+// model without blocking on a rebuild.
+func (e *Engine) enrichRelated(ctx context.Context, user *core.User, key core.RatingKey, limit int, base []core.Hub) []core.Hub {
+	if user == nil || user.ID == 0 {
+		return base
 	}
-	items = recommend.FilterTitles(items, user)
-	if len(items) == 0 {
-		return nil, nil
+	if limit <= 0 {
+		limit = 12
 	}
-	return []core.Hub{{ID: "movie.similar", Title: "More Like This", Context: "hub.movie.similar", Style: "shelf", Items: items}}, nil
+	e.mu.Lock()
+	m := e.models[user.ID]
+	e.mu.Unlock()
+	if m == nil || m.generic || m.taste == nil || m.taste.Confidence < minPersonalConfidence {
+		return base
+	}
+	tk := tasteKey(key)
+	src, err := e.catalog.Get(ctx, tk)
+	if err != nil || src == nil {
+		return base
+	}
+	prefix := "movie"
+	relType := core.TypeMovie
+	if src.Type == core.TypeShow || src.Type == core.TypeSeason || src.Type == core.TypeEpisode {
+		prefix, relType = "tv", core.TypeShow
+	}
+	seen := map[core.RatingKey]bool{key: true, tk: true}
+	for _, h := range base {
+		for _, it := range h.Items {
+			seen[it.Key] = true
+		}
+	}
+	var cands []core.Title
+	seenCand := map[core.RatingKey]bool{key: true, tk: true}
+	for _, r := range m.rows {
+		for _, it := range r.items {
+			if it.t.Type == relType && !seenCand[it.t.Key] && recommend.ContentRatingAllowed(it.t.ContentRating, user.MaxContentRating) {
+				seenCand[it.t.Key] = true
+				cands = append(cands, it.t)
+			}
+		}
+	}
+	type scored struct {
+		t   core.Title
+		val float64
+	}
+	// 1. "Closer to Your Taste": candidates from the viewer's personal rows
+	// that share thematic/feature DNA with the opened title.
+	var closer []scored
+	for _, t := range cands {
+		if seen[t.Key] {
+			continue
+		}
+		sim := titleSimilarity(src, &t)
+		fit, _ := m.taste.Fit(&t)
+		if sim >= 0.18 && fit >= 0.15 {
+			closer = append(closer, scored{t: t, val: 0.55*fit + 0.45*sim})
+		}
+	}
+	if len(closer) >= 3 {
+		sort.SliceStable(closer, func(i, j int) bool { return closer[i].val > closer[j].val })
+		var items []core.Title
+		for i := 0; i < len(closer) && i < limit; i++ {
+			seen[closer[i].t.Key] = true
+			items = append(items, closer[i].t)
+		}
+		base = append(base, core.Hub{
+			ID: prefix + ".personal", Title: "Closer to Your Taste",
+			Type: relType, Context: "hub." + prefix + ".personal", Style: "shelf", Items: items,
+		})
+	}
+	// 2. "Same Vibe, Shorter Runtime": when the opened movie is 125+ minutes,
+	// offer sub-105-minute matches in the same genre.
+	if relType == core.TypeMovie && minutes(src) >= 125 {
+		srcGenres := normGenres(src.Genres)
+		var shorter []scored
+		for _, t := range cands {
+			if seen[t.Key] || minutes(&t) <= 0 || minutes(&t) > 105 {
+				continue
+			}
+			if !anyShared(normGenres(t.Genres), srcGenres) {
+				continue
+			}
+			fit, _ := m.taste.Fit(&t)
+			if fit >= 0 {
+				shorter = append(shorter, scored{t: t, val: 0.5*fit + 0.3*titleSimilarity(src, &t) + 0.2*quality(&t)})
+			}
+		}
+		if len(shorter) >= 3 {
+			sort.SliceStable(shorter, func(i, j int) bool { return shorter[i].val > shorter[j].val })
+			var items []core.Title
+			for i := 0; i < len(shorter) && i < limit; i++ {
+				seen[shorter[i].t.Key] = true
+				items = append(items, shorter[i].t)
+			}
+			base = append(base, core.Hub{
+				ID: prefix + ".shorter", Title: "Same Vibe, Under 105 Minutes",
+				Type: relType, Context: "hub." + prefix + ".shorter", Style: "shelf", Items: items,
+			})
+		}
+	}
+	return base
 }
 
 // HomeHubsFor implements core.ContextualRecommender: the viewer's Home rows

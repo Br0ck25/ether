@@ -49,6 +49,8 @@ const (
 	KindOccasion     = "occasion"           // "Date Night", "Family Night", "Under 100 Minutes"
 	KindAcclaimed    = "acclaimed-unseen"   // acclaimed titles by fit
 	KindTopGenre     = "top-rated-in-genre" // "Top-Rated Thrillers" in the viewer's genres
+	KindBridge       = "taste-bridge"       // "Where <Seed A> Meets <Seed B>"
+	KindStudio       = "more-from-studio"   // "More from A24"
 	KindNewSeasons   = "new-seasons"        // TV Shows → Recommended (lenses_tv.go)
 	KindFinishShow   = "finish-what-you-started"
 	KindStartNew     = "start-something-new"
@@ -56,6 +58,8 @@ const (
 	KindLimited      = "limited-series"
 	KindAiringTaste  = "airing-for-you"
 	KindNetwork      = "more-from-network"
+	KindSticksLanding = "sticks-the-landing"
+	KindStandalone    = "standalone-episodes"
 	// KindCollectionPrefix + collection id is an owner collection row.
 	KindCollectionPrefix = "collection:"
 )
@@ -135,8 +139,8 @@ var kinds = []kindInfo{
 		prior: 0.06, slug: "shortontime", context: "shortontime", surfaces: onHome, group: groupPicks},
 	{kind: KindFranchise, title: "Finish the Franchise", description: "The remaining films of a franchise the viewer has started. Off by default: it is usually one or two titles. Add it to a page to use it.",
 		prior: 0.09, slug: "franchise", context: "franchise", cap: 2, dynamic: true, surfaces: map[string]float64{}, fits: fitsMovies, group: groupExplore, lean: leanFamiliar}, // off unless the owner places it: usually one or two titles
-	{kind: KindLLM, title: "Themed Rows (AI)", description: "Natural-language themed rows from the owner's LLM, seeded by recent favourites.",
-		prior: 0.06, slug: "llm", context: "llm", cap: 2, dynamic: true, surfaces: map[string]float64{surfHome: 1, surfMovies: 0.7, surfShows: 0.7}, group: groupPicks},
+	{kind: KindLLM, title: "Themed Rows (AI)", description: "Natural-language themed rows from the owner's LLM, seeded by recent favourites. Off by default; add it to a page to use it.",
+		prior: 0.06, slug: "llm", context: "llm", cap: 2, dynamic: true, surfaces: map[string]float64{}, group: groupPicks},
 	{kind: KindCrowd, title: "Fans of What You Watch Also Loved", description: "What people who loved the viewer's favourites also loved: TMDB's crowd recommendations aggregated over up to 20 recent favourites, strongest where several favourites agree, plus what similar viewers here watched. Films and series separately on the Movies and TV pages.",
 		prior: 0.09, slug: "crowd", context: "crowd", surfaces: map[string]float64{surfHome: 1, surfMovies: 0.9, surfShows: 0.9}, group: groupPicks},
 	{kind: KindCrowdTrending, title: "Trending With Fans of What You Watch", description: "Titles trending right now (TMDB, and Trakt when it is set up) that fans of the viewer's favourites love: trendy, but personal.",
@@ -175,6 +179,10 @@ var kinds = []kindInfo{
 		prior: 0.06, slug: "acclaimed", context: "acclaimed", surfaces: onMovies, fits: fitsMovies, group: groupExplore, lean: leanEvergreen},
 	{kind: KindTopGenre, title: "Top-Rated <Genre>", description: "The best-rated titles in each of the viewer's favourite genres, films and series separately.",
 		prior: 0.05, slug: "toprated.genre", context: "toprated.genre", cap: 1, sectionCap: 2, dynamic: true, surfaces: onSections, group: groupExplore, lean: leanEvergreen},
+	{kind: KindBridge, title: "Where <A> Meets <B>", description: "Multi-seed bridge rows connecting two distinct favourites in the viewer's history.",
+		prior: 0.085, slug: "bridge", context: "bridge", cap: 1, sectionCap: 2, dynamic: true, surfaces: onSections, group: groupExplore, lean: leanExplore},
+	{kind: KindStudio, title: "More from <Studio>", description: "More films from a studio or boutique label (A24, Neon, Studio Ghibli...) the viewer keeps watching.",
+		prior: 0.065, slug: "studio", context: "studio", cap: 1, sectionCap: 2, dynamic: true, surfaces: onMovies, fits: fitsMovies, group: groupExplore, lean: leanFamiliar},
 
 	// ---- TV Shows → Recommended ----
 	{kind: KindNewSeasons, title: "New Seasons of Your Shows", description: "Shows the viewer watched that have a new season out they haven't started.",
@@ -185,12 +193,16 @@ var kinds = []kindInfo{
 		prior: 0.07, slug: "startnew", context: "startnew", surfaces: onShows, fits: fitsShows, group: groupShows, lean: leanExplore},
 	{kind: KindBinge, title: "Complete Series to Binge", description: "Ended series with every season out, that fit the viewer's taste.",
 		prior: 0.07, slug: "binge", context: "binge", surfaces: onShows, fits: fitsShows, group: groupShows, lean: leanEvergreen},
+	{kind: KindSticksLanding, title: "Series That Stick the Landing", description: "Completed series whose finale and final season rated as high as or higher than where they began.",
+		prior: 0.08, slug: "stickslanding", context: "stickslanding", surfaces: onShows, fits: fitsShows, group: groupShows, lean: leanEvergreen},
 	{kind: KindLimited, title: "Limited Series for You", description: "One-season stories with an ending, ranked by fit.",
 		prior: 0.06, slug: "limited", context: "limited", surfaces: onShows, fits: fitsShows, group: groupShows},
 	{kind: KindAiringTaste, title: "Currently Airing for You", description: "Series in an active run (airing today, or returning and recently premiered) that match the viewer's taste.",
 		prior: 0.07, slug: "airing.taste", context: "airing.taste", surfaces: onShows, fits: fitsShows, group: groupShows, lean: leanFresh},
 	{kind: KindNetwork, title: "More from <Network>", description: "More series from a network or studio the viewer keeps watching.",
 		prior: 0.06, slug: "network", context: "network", cap: 1, sectionCap: 2, dynamic: true, surfaces: onShows, fits: fitsShows, group: groupShows, lean: leanFamiliar},
+	{kind: KindStandalone, title: "Standalone & Anthology Episodes", description: "Acclaimed standalone and anthology episodes that can be watched in one sitting with zero multi-season commitment.",
+		prior: 0.065, slug: "standalone", context: "standalone", surfaces: onShows, fits: fitsShows, group: groupShows},
 }
 
 var kindByName = func() map[string]kindInfo {

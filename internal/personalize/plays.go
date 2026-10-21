@@ -163,6 +163,9 @@ func (e *Engine) trackProgress(ctx context.Context, ev state.Event) {
 	if ev.State == "stopped" {
 		ap.rec.abandoned = !ap.rec.completed && ap.rec.maxFraction < abandonFraction
 		delete(e.active, pk)
+		if ap.rec.abandoned {
+			e.recordAbandonBounce(ctx, ev.UserID, ap.rec.tasteKey, ev.At)
+		}
 	}
 	if err := e.store.updatePlay(ctx, &ap.rec); err != nil {
 		e.log.Warn("personalize: updating play failed", "err", err)

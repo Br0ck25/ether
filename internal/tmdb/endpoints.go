@@ -304,6 +304,13 @@ func (c *Client) PersonDetails(ctx context.Context, id int64) (*Person, error) {
 	return &out, err
 }
 
+// PersonCombinedCredits fetches /person/{id}/combined_credits.
+func (c *Client) PersonCombinedCredits(ctx context.Context, id int64) (*PersonCombinedCredits, error) {
+	var out PersonCombinedCredits
+	err := c.getJSON(ctx, fmt.Sprintf("/person/%d/combined_credits", id), url.Values{}, &out)
+	return &out, err
+}
+
 // Similar / recommendations helpers.
 func (c *Client) MovieSimilar(ctx context.Context, id int64, page int) (*Paged[Movie], error) {
 	var out Paged[Movie]

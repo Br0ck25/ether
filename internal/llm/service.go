@@ -410,7 +410,7 @@ func seedsSig(seeds []core.Title, limit int) string {
 }
 
 // computeRows does the blocking model call + resolution for themed rows.
-func (s *Service) computeRows(ctx context.Context, user core.User, seeds []core.Title, limit int) ([]core.Hub, error) {
+func (s *Service) computeRows(ctx context.Context, user core.User, seeds, dislikes []core.Title, vetoGenres []string, limit int) ([]core.Hub, error) {
 	if limit <= 0 {
 		limit = 12
 	}
@@ -420,13 +420,24 @@ func (s *Service) computeRows(ctx context.Context, user core.User, seeds []core.
 		watched = append(watched, describe(t))
 		exclude[t.Key] = true
 	}
+	var avoided []string
+	for _, t := range dislikes {
+		avoided = append(avoided, describe(t))
+		exclude[t.Key] = true
+	}
 	format := `Reply with JSON: {"rows":[{"title":"theme name","titles":[{"title":"...","year":2000,"type":"movie"}]}]}`
 	var prompt string
 	if len(seeds) == 0 {
 		prompt = fmt.Sprintf("Create up to 3 themed rows of widely acclaimed movies and TV shows for a new viewer, each with a short evocative theme name and %d titles. %s", limit+4, format)
 	} else {
-		prompt = fmt.Sprintf("The user recently watched and enjoyed:\n- %s\n\nCreate up to 3 themed recommendation rows for them, each with a short evocative theme name (like \"Slow-burn sci-fi with a twist\") and %d titles they have not seen. %s",
+		prompt = fmt.Sprintf("The user recently watched and enjoyed:\n- %s\n\nCreate up to 3 hyper-specific themed recommendation rows for them, each with a sharp evocative micro-genre name (like \"Slow-burn sci-fi with a twist\" or \"Competence porn: experts under pressure\") and %d titles they have not seen. Mix iconic essentials with acclaimed deeper cuts and international gems from any era rather than only obvious top-20 blockbusters. %s",
 			strings.Join(watched, "\n- "), limit+4, format)
+	}
+	if len(avoided) > 0 {
+		prompt += fmt.Sprintf("\n\nThey recently abandoned, disliked or passed on:\n- %s\nAvoid recommending titles with the same flaws, tone or sub-genre as those.", strings.Join(avoided, "\n- "))
+	}
+	if len(vetoGenres) > 0 {
+		prompt += fmt.Sprintf(" Never include titles in these disliked genres: %s.", strings.Join(vetoGenres, ", "))
 	}
 	if user.MaxContentRating != "" {
 		prompt += fmt.Sprintf(" Only include titles rated %s or milder.", user.MaxContentRating)
@@ -461,14 +472,16 @@ func (s *Service) computeRows(ctx context.Context, user core.User, seeds []core.
 	return hubs, nil
 }
 
-func (s *Service) rowsCompute(user *core.User, seeds []core.Title, limit int) func(context.Context) ([]core.Hub, []core.Title, error) {
+func (s *Service) rowsCompute(user *core.User, seeds, dislikes []core.Title, vetoGenres []string, limit int) func(context.Context) ([]core.Hub, []core.Title, error) {
 	var u core.User
 	if user != nil {
 		u = *user
 	}
 	seedsCopy := append([]core.Title(nil), seeds...)
+	dislikesCopy := append([]core.Title(nil), dislikes...)
+	vetoCopy := append([]string(nil), vetoGenres...)
 	return func(ctx context.Context) ([]core.Hub, []core.Title, error) {
-		hubs, err := s.computeRows(ctx, u, seedsCopy, limit)
+		hubs, err := s.computeRows(ctx, u, seedsCopy, dislikesCopy, vetoCopy, limit)
 		return hubs, nil, err
 	}
 }
@@ -486,7 +499,7 @@ func (s *Service) ThemedRows(ctx context.Context, user *core.User, seeds []core.
 	defer s.mu.Unlock()
 	e := s.cache[key]
 	if s.needsRefresh(e, sig, s.now()) {
-		s.refreshLocked(key, sig, s.rowsCompute(user, seeds, limit))
+		s.refreshLocked(key, sig, s.rowsCompute(user, seeds, nil, nil, limit))
 	}
 	if e == nil || !e.has() {
 		return nil, nil
@@ -497,10 +510,17 @@ func (s *Service) ThemedRows(ctx context.Context, user *core.User, seeds []core.
 // ThemedRowsSync is ThemedRows that waits (until ctx is done) for a needed
 // refresh — for admin previews and warm-up jobs, not request paths.
 func (s *Service) ThemedRowsSync(ctx context.Context, user *core.User, seeds []core.Title, limit int) ([]core.Hub, error) {
+	return s.ThemedRowsContrastiveSync(ctx, user, seeds, nil, nil, limit)
+}
+
+// ThemedRowsContrastiveSync is ThemedRowsSync with negative evidence
+// (abandoned/ignored titles and disliked genres) so the model steers away
+// from what the viewer bounced off.
+func (s *Service) ThemedRowsContrastiveSync(ctx context.Context, user *core.User, seeds, dislikes []core.Title, vetoGenres []string, limit int) ([]core.Hub, error) {
 	if !s.Enabled() {
 		return nil, nil
 	}
-	key, sig := rowsKey(userID(user)), seedsSig(seeds, limit)
+	key, sig := rowsKey(userID(user)), seedsSig(append(append([]core.Title(nil), seeds...), dislikes...), limit)+"|"+strings.Join(vetoGenres, ",")
 	s.mu.Lock()
 	e := s.cache[key]
 	if !s.needsRefresh(e, sig, s.now()) {
@@ -510,7 +530,7 @@ func (s *Service) ThemedRowsSync(ctx context.Context, user *core.User, seeds []c
 		}
 		return e.hubs, nil
 	}
-	ch := s.refreshLocked(key, sig, s.rowsCompute(user, seeds, limit))
+	ch := s.refreshLocked(key, sig, s.rowsCompute(user, seeds, dislikes, vetoGenres, limit))
 	s.mu.Unlock()
 	select {
 	case <-ch:

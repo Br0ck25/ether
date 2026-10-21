@@ -47,19 +47,23 @@ var generators = []generator{
 	{KindAiringToday, (*builder).genAiringToday},
 	// Movies → Recommended lenses (lenses.go).
 	{KindTasteCluster, (*builder).genTasteClusters},
+	{KindBridge, (*builder).genBridge},
 	{KindEra, (*builder).genEra},
 	{KindWorld, (*builder).genWorld},
 	{KindOccasion, (*builder).genOccasions},
 	{KindAcclaimed, (*builder).genAcclaimed},
 	{KindTopGenre, (*builder).genTopGenre},
+	{KindStudio, (*builder).genStudio},
 	// TV Shows → Recommended lenses (lenses_tv.go).
 	{KindNewSeasons, (*builder).genNewSeasons},
 	{KindFinishShow, (*builder).genFinishShow},
 	{KindStartNew, (*builder).genStartNew},
 	{KindBinge, (*builder).genBinge},
+	{KindSticksLanding, (*builder).genSticksLanding},
 	{KindLimited, (*builder).genLimited},
 	{KindAiringTaste, (*builder).genAiringTaste},
 	{KindNetwork, (*builder).genNetwork},
+	{KindStandalone, (*builder).genStandalone},
 }
 
 func newRow(kind, id, title, reason string, items []candItem) *candRow {
@@ -194,8 +198,14 @@ func (b *builder) pool() []core.Title {
 		return b.browse(core.BrowseQuery{Filter: core.Filter{Type: t}, Sort: core.SortPopularity, Desc: true, Limit: 60})
 	})...)
 	for _, g := range b.taste.TopGenres(3) {
-		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 40})...)
-		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}, MinRating: 7}, Sort: core.SortRating, Desc: true, Limit: 30})...)
+		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 60})...)
+		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Genres: []string{g}, MinRating: 7}, Sort: core.SortRating, Desc: true, Limit: 40})...)
+	}
+	curDecade := b.now.Year() / 10 * 10
+	for _, kv := range sortedByWeight(b.taste.Decade, 2) {
+		if kv.w >= 0.4 && kv.k > 0 && kv.k < curDecade {
+			all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{YearFrom: kv.k, YearTo: kv.k + 9, MinRating: 7}, Sort: core.SortPopularity, Desc: true, Limit: 25})...)
+		}
 	}
 	b.memo["pool"] = all
 	return all
@@ -456,6 +466,12 @@ func (b *builder) genPerson() []*candRow {
 			title = "More from " + name
 		case "writer":
 			title = "More Written by " + name
+		case "creator":
+			title = "Created by " + name
+		case "cinematographer":
+			title = "Shot by " + name
+		case "composer":
+			title = "Scored by " + name
 		}
 		reason := fmt.Sprintf("%s is one of your most-watched %ss", name, roleNoun(info.role))
 		if credits > 1 {
@@ -469,7 +485,7 @@ func (b *builder) genPerson() []*candRow {
 }
 
 func hasPerson(t *core.Title, id int64) bool {
-	for _, ps := range [][]core.Person{t.Directors, t.Writers, t.Cast} {
+	for _, ps := range [][]core.Person{t.Directors, t.Writers, t.Cast, t.Crew} {
 		for _, p := range ps {
 			if p.TMDB == id {
 				return true
@@ -490,15 +506,114 @@ func personVerb(role string, t *core.Title, id int64) string {
 			return "Written by"
 		}
 	}
+	for _, cr := range t.Crew {
+		if cr.TMDB == id {
+			switch strings.ToLower(cr.Role) {
+			case "creator", "showrunner":
+				return "Created by"
+			case "cinematographer", "director of photography":
+				return "Shot by"
+			case "composer", "original music composer":
+				return "Scored by"
+			}
+		}
+	}
 	return "With"
 }
 
 func roleNoun(role string) string {
 	switch role {
-	case "director", "writer":
+	case "director", "writer", "creator", "cinematographer", "composer":
 		return role
 	}
 	return "actor"
+}
+
+// genBridge builds multi-seed intersection rows ("Where <A> Meets <B>") that
+// connect two distinct favourites from the viewer's history.
+func (b *builder) genBridge() []*candRow {
+	if !b.personal() {
+		return nil
+	}
+	seeds := b.seeds(8)
+	if len(seeds) < 2 {
+		return nil
+	}
+	type pair struct {
+		a, c Evidence
+	}
+	var pairs []pair
+	used := map[core.RatingKey]bool{}
+	for i := 0; i < len(seeds) && len(pairs) < 2; i++ {
+		if used[seeds[i].Key] {
+			continue
+		}
+		gi := normGenres(seeds[i].Title.Genres)
+		for j := i + 1; j < len(seeds); j++ {
+			if used[seeds[j].Key] {
+				continue
+			}
+			if seeds[i].Title.CollectionID != 0 && seeds[i].Title.CollectionID == seeds[j].Title.CollectionID {
+				continue
+			}
+			gj := normGenres(seeds[j].Title.Genres)
+			// Require disjoint genres so the row genuinely bridges two
+			// distinct worlds in the viewer's taste rather than duplicating
+			// single-genre rows.
+			if len(gi) == 0 || len(gj) == 0 || anyShared(gi, gj) {
+				continue
+			}
+			used[seeds[i].Key], used[seeds[j].Key] = true, true
+			pairs = append(pairs, pair{seeds[i], seeds[j]})
+			break
+		}
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	g := b.crowd()
+	var rows []*candRow
+	for idx, p := range pairs {
+		simA := map[core.RatingKey]float64{}
+		simB := map[core.RatingKey]float64{}
+		listA := b.similar(p.a.Key, 35)
+		listB := b.similar(p.c.Key, 35)
+		for i, t := range listA {
+			simA[t.Key] = 0.35 + 0.65*rankScore(i, len(listA))
+		}
+		for i, t := range listB {
+			simB[t.Key] = 0.35 + 0.65*rankScore(i, len(listB))
+		}
+		src := append(append([]core.Title{}, listA...), listB...)
+		if g != nil {
+			src = append(src, g.titles()...)
+		}
+		src = append(src, b.pool()...)
+		items := b.rank(src, func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
+			sa := math.Max(simA[t.Key], titleSimilarity(&p.a.Title, t))
+			sb := math.Max(simB[t.Key], titleSimilarity(&p.c.Title, t))
+			if sa < 0.15 || sb < 0.15 {
+				return math.NaN(), ""
+			}
+			bridge := math.Sqrt(sa * sb)
+			r := fmt.Sprintf("Bridges %s and %s", p.a.Title.Title, p.c.Title.Title)
+			if why != "" {
+				r += " · " + why
+			}
+			return 0.45*bridge + 0.30*clamp(fit, -1, 1) + 0.25*quality(t), r
+		})
+		if len(items) < 5 {
+			continue
+		}
+		id := fmt.Sprintf("bridge.%d.%d", int64(p.a.Key), int64(p.c.Key))
+		title := fmt.Sprintf("Where %s Meets %s", p.a.Title.Title, p.c.Title.Title)
+		reason := fmt.Sprintf("Titles that connect what you loved about %s and %s.", p.a.Title.Title, p.c.Title.Title)
+		r := withTyped(newRow(KindBridge, id, title, reason, capItems(items, 40)), items)
+		r.minItems = 5
+		r.scale = 0.92 - 0.06*float64(idx)
+		rows = append(rows, r)
+	}
+	return rows
 }
 
 func (b *builder) genTrendingTaste() []*candRow {
@@ -862,6 +977,12 @@ type llmSync interface {
 	ThemedRowsSync(ctx context.Context, user *core.User, seeds []core.Title, limit int) ([]core.Hub, error)
 }
 
+// llmContrastiveSync is optionally implemented by internal/llm.Service to
+// incorporate negative evidence (abandoned/ignored titles and disliked genres).
+type llmContrastiveSync interface {
+	ThemedRowsContrastiveSync(ctx context.Context, user *core.User, seeds, dislikes []core.Title, vetoGenres []string, limit int) ([]core.Hub, error)
+}
+
 func (b *builder) genLLM() []*candRow {
 	if b.e.llm == nil || !b.personal() {
 		return nil
@@ -873,13 +994,29 @@ func (b *builder) genLLM() []*candRow {
 	if len(seeds) == 0 {
 		return nil
 	}
+	var dislikes []core.Title
+	for _, e := range b.taste.Evidence {
+		if e.Weight <= -0.15 && len(dislikes) < 5 {
+			dislikes = append(dislikes, e.Title)
+		}
+	}
+	var vetoGenres []string
+	for g, w := range b.taste.Genre {
+		if w <= -0.35 {
+			vetoGenres = append(vetoGenres, g)
+		}
+	}
+	sort.Strings(vetoGenres)
 	ctx, cancel := context.WithTimeout(b.ctx, b.e.opts.LLMTimeout)
 	defer cancel()
 	var hubs []core.Hub
 	var err error
-	if s, ok := b.e.llm.(llmSync); ok {
+	switch s := b.e.llm.(type) {
+	case llmContrastiveSync:
+		hubs, err = s.ThemedRowsContrastiveSync(ctx, &b.user, seeds, dislikes, vetoGenres, 30)
+	case llmSync:
 		hubs, err = s.ThemedRowsSync(ctx, &b.user, seeds, 30)
-	} else {
+	default:
 		hubs, err = b.e.llm.ThemedRows(ctx, &b.user, seeds, 30)
 	}
 	if err != nil {

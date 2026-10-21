@@ -60,6 +60,15 @@ func hubItemsKey(h core.Hub, hc hubCtx) string {
 func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
 	h := hs.Hub
 	items := s.filterAllowed(pr.User, h.Items)
+	if strings.HasSuffix(h.ID, ".ondeck") || h.ID == "tv.upnext" {
+		kept := items[:0:0]
+		for i := range items {
+			if !s.sameDayUnavailable(ctx, pr, &items[i]) {
+				kept = append(kept, items[i])
+			}
+		}
+		items = kept
+	}
 	// Related hubs (detail pages, postplay) carry Guid children and omit the
 	// items' library section and the hub's promoted flag, like PMS.
 	related := hc.related != 0

@@ -523,6 +523,30 @@ func (c *fakeCatalog) fetchedPages() int {
 	return c.crowdPages
 }
 
+func (c *fakeCatalog) CrowdGraphBatch(_ context.Context, keys []core.RatingKey, maxPerKey, maxTargets int) (map[core.RatingKey][]core.RatingKey, map[core.RatingKey]core.Title, error) {
+	c.dataMu.RLock()
+	defer c.dataMu.RUnlock()
+	edges := map[core.RatingKey][]core.RatingKey{}
+	titles := map[core.RatingKey]core.Title{}
+	for _, k := range keys {
+		tk := tasteKey(k)
+		recs, ok := c.recs[tk]
+		if !ok || len(recs) == 0 {
+			continue
+		}
+		if maxPerKey > 0 && len(recs) > maxPerKey {
+			recs = recs[:maxPerKey]
+		}
+		edges[tk] = append([]core.RatingKey(nil), recs...)
+		for _, rk := range recs {
+			if t, ok := c.titles[rk]; ok {
+				titles[rk] = t
+			}
+		}
+	}
+	return edges, titles, nil
+}
+
 func (c *fakeCatalog) Collection(_ context.Context, id int64) (string, []core.Title, error) {
 	if id == sagaCollection {
 		c.dataMu.RLock()

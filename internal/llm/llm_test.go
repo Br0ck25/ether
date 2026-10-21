@@ -156,3 +156,43 @@ func TestServiceMoreLikeThisAndRows(t *testing.T) {
 		t.Fatalf("disabled: %v %v", out, err)
 	}
 }
+
+func TestThemedRowsContrastiveSyncExcludesDislikes(t *testing.T) {
+	var calls atomic.Int32
+	var seenPrompt string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var req struct {
+			Messages []Message `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Messages) > 1 {
+			seenPrompt = req.Messages[1].Content
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{
+				"role":    "assistant",
+				"content": `{"rows":[{"title":"Cerebral Sci-Fi","titles":[{"title":"Arrival","year":2016},{"title":"Bounced Trash","year":2020}]}]}`,
+			}}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	cat := fakeCatalog{byTitle: map[string][]core.Title{
+		"arrival":       {{Key: core.MovieKey(329865), Type: core.TypeMovie, Title: "Arrival", Year: 2016}},
+		"bounced trash": {{Key: core.MovieKey(999999), Type: core.TypeMovie, Title: "Bounced Trash", Year: 2020}},
+	}}
+	client := NewClient(ClientOptions{Config: config.LLM{Enabled: true, BaseURL: srv.URL + "/v1", Model: "test-model"}})
+	svc := New(ServiceOptions{Client: client, Catalog: cat})
+	seed := core.Title{Key: core.MovieKey(1), Type: core.TypeMovie, Title: "Dune", Year: 2021, Genres: []string{"Sci-Fi"}}
+	disliked := core.Title{Key: core.MovieKey(999999), Type: core.TypeMovie, Title: "Bounced Trash", Year: 2020, Genres: []string{"Horror"}}
+	hubs, err := svc.ThemedRowsContrastiveSync(context.Background(), &core.User{ID: 9}, []core.Title{seed}, []core.Title{disliked}, []string{"Horror"}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(seenPrompt, "Bounced Trash") || !strings.Contains(seenPrompt, "Horror") {
+		t.Fatalf("contrastive prompt missing negative evidence: %s", seenPrompt)
+	}
+	if len(hubs) != 1 || len(hubs[0].Items) != 1 || hubs[0].Items[0].Title != "Arrival" {
+		t.Fatalf("expected disliked title excluded from resolved items, got %+v", hubs)
+	}
+}

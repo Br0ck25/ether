@@ -365,6 +365,12 @@ func (b *builder) typedPool(t core.MediaType) []core.Title {
 		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Type: t, Genres: []string{g}}, Sort: core.SortPopularity, Desc: true, Limit: 80})...)
 		all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Type: t, Genres: []string{g}, MinRating: 7}, Sort: core.SortRating, Desc: true, Limit: 40})...)
 	}
+	curDecade := b.now.Year() / 10 * 10
+	for _, kv := range sortedByWeight(b.taste.Decade, 3) {
+		if kv.w >= 0.4 && kv.k > 0 && kv.k < curDecade {
+			all = append(all, b.browse(core.BrowseQuery{Filter: core.Filter{Type: t, YearFrom: kv.k, YearTo: kv.k + 9, MinRating: 7}, Sort: core.SortPopularity, Desc: true, Limit: 30})...)
+		}
+	}
 	b.memo[key] = all
 	return all
 }

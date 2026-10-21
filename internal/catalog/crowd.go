@@ -244,16 +244,40 @@ func keyList(titles []core.Title) []core.RatingKey {
 }
 
 // titlesByKeys loads mirrored titles in the given order (released, not
-// adult), in batches.
+// adult), in batches, consulting the in-memory movie cache first.
 func (c *Catalog) titlesByKeys(ctx context.Context, keys []core.RatingKey) ([]core.Title, error) {
 	out := make([]core.Title, 0, len(keys))
 	if len(keys) == 0 {
 		return out, nil
 	}
+	gen := c.writeGen.Load()
+	minBucket := c.minuteBucket()
 	byKey := make(map[core.RatingKey]core.Title, len(keys))
+	var missing []core.RatingKey
+	seenMissing := map[core.RatingKey]bool{}
+	c.cacheMu.RLock()
+	for _, k := range keys {
+		if _, ok := byKey[k]; ok {
+			continue
+		}
+		if k.Kind() == core.KindMovie {
+			if ent, ok := c.titleCache[k]; ok && ent.gen == gen && ent.minute == minBucket {
+				if !ent.st.t.Adult && ent.st.t.IsReleased(c.now()) {
+					byKey[k] = cloneTitle(ent.st.t)
+				}
+				continue
+			}
+		}
+		if !seenMissing[k] {
+			seenMissing[k] = true
+			missing = append(missing, k)
+		}
+	}
+	c.cacheMu.RUnlock()
+
 	const batch = 200
-	for i := 0; i < len(keys); i += batch {
-		part := keys[i:min(i+batch, len(keys))]
+	for i := 0; i < len(missing); i += batch {
+		part := missing[i:min(i+batch, len(missing))]
 		args := make([]any, len(part))
 		for j, k := range part {
 			args[j] = int64(k)
@@ -261,6 +285,18 @@ func (c *Catalog) titlesByKeys(ctx context.Context, keys []core.RatingKey) ([]co
 		ts, err := c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE key IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
+		}
+		if c.writeGen.Load() == gen {
+			c.cacheMu.Lock()
+			if len(c.titleCache) >= 8192 {
+				c.titleCache = map[core.RatingKey]cachedStoredTitle{}
+			}
+			for _, t := range ts {
+				if t.Key.Kind() == core.KindMovie {
+					c.titleCache[t.Key] = cachedStoredTitle{st: storedTitle{t: cloneTitle(t)}, gen: gen, minute: minBucket}
+				}
+			}
+			c.cacheMu.Unlock()
 		}
 		for _, t := range ts {
 			byKey[t.Key] = t
@@ -272,4 +308,76 @@ func (c *Catalog) titlesByKeys(ctx context.Context, keys []core.RatingKey) ([]co
 		}
 	}
 	return out, nil
+}
+
+// CrowdGraphBatch reads stored co-engagement lists from catalog_crowd for a
+// batch of keys without contacting TMDB, and resolves up to maxTargets of the
+// referenced titles from the local mirror. Used for 2-hop crowd expansion.
+func (c *Catalog) CrowdGraphBatch(ctx context.Context, keys []core.RatingKey, maxPerKey, maxTargets int) (map[core.RatingKey][]core.RatingKey, map[core.RatingKey]core.Title, error) {
+	edges := make(map[core.RatingKey][]core.RatingKey, len(keys))
+	if len(keys) == 0 {
+		return edges, nil, nil
+	}
+	if maxPerKey <= 0 {
+		maxPerKey = 20
+	}
+	if maxTargets <= 0 {
+		maxTargets = 300
+	}
+	args := make([]any, 0, len(keys))
+	seen := map[core.RatingKey]bool{}
+	for _, k := range keys {
+		if ck, ok := crowdKey(k); ok && !seen[ck] {
+			seen[ck] = true
+			args = append(args, int64(ck))
+		}
+	}
+	if len(args) == 0 {
+		return edges, nil, nil
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT key, recs FROM catalog_crowd WHERE key IN (`+placeholders(len(args))+`)`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	var targetKeys []core.RatingKey
+	seenTarget := map[core.RatingKey]bool{}
+	for rows.Next() {
+		var k int64
+		var recs string
+		if err := rows.Scan(&k, &recs); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		src := core.RatingKey(k)
+		var list []core.RatingKey
+		for _, s := range strings.Split(recs, ",") {
+			if len(list) >= maxPerKey {
+				break
+			}
+			if n, perr := strconv.ParseInt(s, 10, 64); perr == nil && n != 0 {
+				tk := core.RatingKey(n)
+				list = append(list, tk)
+				if !seenTarget[tk] && len(targetKeys) < maxTargets {
+					seenTarget[tk] = true
+					targetKeys = append(targetKeys, tk)
+				}
+			}
+		}
+		if len(list) > 0 {
+			edges[src] = list
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	loaded, err := c.titlesByKeys(ctx, targetKeys)
+	if err != nil {
+		return edges, nil, err
+	}
+	titles := make(map[core.RatingKey]core.Title, len(loaded))
+	for _, t := range loaded {
+		titles[t.Key] = t
+	}
+	return edges, titles, nil
 }

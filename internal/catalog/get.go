@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,11 +12,38 @@ import (
 	"github.com/braedonsaunders/ether/internal/tmdb"
 )
 
+// settledReleaseAge is how long after theatrical/series release a movie or an
+// ended TV show's detailed metadata (credits, keywords, runtime, certification)
+// is treated as immutable and kept forever without re-querying TMDB.
+const (
+	settledReleaseAge  = 90 * 24 * time.Hour
+	activeSeasonTTL    = time.Hour
+	caughtUpRefreshTTL = 15 * time.Minute
+)
+
 func (c *Catalog) fresh(st *storedTitle) bool {
 	// detailAt, not fetchedAt: summary upserts from sync, lists and search
 	// refresh fetchedAt and would otherwise keep popular titles' details
 	// (seasons, credits, release dates) from ever being refetched.
-	return st != nil && st.detail && !st.detailAt.IsZero() && c.now().Sub(st.detailAt) < c.staleAfter
+	if st == nil || !st.detail || st.detailAt.IsZero() {
+		return false
+	}
+	now := c.now()
+	if now.Sub(st.detailAt) < c.staleAfter {
+		return true
+	}
+	switch st.t.Type {
+	case core.TypeMovie:
+		if !st.t.Released.IsZero() && now.Sub(st.t.Released) > settledReleaseAge {
+			return true
+		}
+	case core.TypeShow:
+		if (strings.EqualFold(st.t.Status, "Ended") || strings.EqualFold(st.t.Status, "Canceled")) &&
+			!st.t.Released.IsZero() && now.Sub(st.t.Released) > settledReleaseAge {
+			return true
+		}
+	}
+	return false
 }
 
 // Get returns a title from the mirror, fetching on demand when missing/stale.
@@ -144,9 +172,27 @@ func (c *Catalog) getSeason(ctx context.Context, key core.RatingKey) (*core.Titl
 	return &st.t, nil
 }
 
+// seasonFresh uses a shorter TTL (1h) for the latest season of an active
+// Returning Series so shows airing multiple times a week (e.g. Sun/Wed/Thu)
+// pick up same-day TMDB episode/air-date additions without waiting 24h.
+func (c *Catalog) seasonFresh(st *storedTitle, show *core.Title) bool {
+	if !c.fresh(st) {
+		return false
+	}
+	if show != nil && strings.EqualFold(show.Status, "Returning Series") && st.t.Season >= show.ChildCount {
+		ttl := min(c.staleAfter, activeSeasonTTL)
+		return c.now().Sub(st.detailAt) < ttl
+	}
+	return true
+}
+
 // fetchSeason ensures season+episodes are in the mirror, fetching TMDB when
 // missing or stale. Returns the season title.
 func (c *Catalog) fetchSeason(ctx context.Context, showID int64, season int) (*core.Title, error) {
+	return c.fetchSeasonOpts(ctx, showID, season, false)
+}
+
+func (c *Catalog) fetchSeasonOpts(ctx context.Context, showID int64, season int, force bool) (*core.Title, error) {
 	key := core.SeasonKey(showID, season)
 	show, err := c.ensureShow(ctx, showID)
 	if err != nil {
@@ -155,9 +201,11 @@ func (c *Catalog) fetchSeason(ctx context.Context, showID int64, season int) (*c
 	// If season row is fresh-detailed and episodes exist, skip network.
 	// Mirrored, not aired: a fresh season whose episodes are all still
 	// to air must not refetch on every read.
-	if st, lerr := c.loadByKey(ctx, key); lerr == nil && c.fresh(st) {
-		if ok, qerr := c.seasonMirrored(ctx, showID, season); qerr == nil && ok {
-			return &st.t, nil
+	if !force {
+		if st, lerr := c.loadByKey(ctx, key); lerr == nil && c.seasonFresh(st, show) {
+			if ok, qerr := c.seasonMirrored(ctx, showID, season); qerr == nil && ok {
+				return &st.t, nil
+			}
 		}
 	}
 	if c.client == nil {
@@ -235,7 +283,7 @@ func (c *Catalog) getEpisode(ctx context.Context, key core.RatingKey) (*core.Tit
 			// Nil facets so the upsert keeps the stored rows. Keywords
 			// especially: the loaded episode carries its show's (inherited
 			// on read), which must not be saved as the episode's own.
-			t.Cast, t.Directors, t.Writers = nil, nil, nil
+			t.Cast, t.Directors, t.Writers, t.Crew = nil, nil, nil, nil
 			t.Genres, t.Studios, t.Countries, t.Keywords = nil, nil, nil, nil
 			_ = c.upsert(ctx, t, upsertOpts{detail: true})
 			st.t.IDs.IMDB = ext.IMDBID
@@ -452,7 +500,8 @@ func (c *Catalog) NextEpisode(ctx context.Context, episode core.RatingKey) (*cor
 		return nil, core.ErrNotFound
 	}
 	showID, curSeason, curEp := episode.TMDB(), episode.Season(), episode.Episode()
-	if _, err := c.ensureShow(ctx, showID); err != nil {
+	show, err := c.ensureShow(ctx, showID)
+	if err != nil {
 		return nil, err
 	}
 	// Same season, higher episode number (only for regular seasons).
@@ -466,6 +515,24 @@ func (c *Catalog) NextEpisode(ctx context.Context, episode core.RatingKey) (*cor
 				if e.Episode > curEp {
 					ep := e
 					return &ep, nil
+				}
+			}
+			// Caught up to the end of the mirrored episodes on a Returning
+			// Series: if the season has not been re-checked in the last 15
+			// minutes, poll TMDB in case tonight's episode was just added.
+			if show != nil && strings.EqualFold(show.Status, "Returning Series") {
+				sKey := core.SeasonKey(showID, curSeason)
+				if st, lerr := c.loadByKey(ctx, sKey); lerr == nil && c.now().Sub(st.detailAt) >= min(c.staleAfter, caughtUpRefreshTTL) {
+					if _, ferr := c.fetchSeasonOpts(ctx, showID, curSeason, true); ferr == nil {
+						if eps2, eerr := c.episodesOfSeason(ctx, showID, curSeason); eerr == nil {
+							for _, e := range eps2 {
+								if e.Episode > curEp {
+									ep := e
+									return &ep, nil
+								}
+							}
+						}
+					}
 				}
 			}
 		}

@@ -223,10 +223,17 @@ func (c *Client) cacheGet(ctx context.Context, key string) ([]core.Release, bool
 	return c.decodeCached(raw)
 }
 
+// emptySearchCacheTTL bounds how long a 0-result indexer search is cached, so
+// an episode checked at 8 PM before its upload is re-searched once it drops.
+const emptySearchCacheTTL = 3 * time.Minute
+
 func (c *Client) cachePut(ctx context.Context, key string, results []core.Release) {
 	ttl := c.ttl()
 	if ttl <= 0 {
 		return
+	}
+	if len(results) == 0 && ttl > emptySearchCacheTTL {
+		ttl = emptySearchCacheTTL
 	}
 	exp := c.now().Add(ttl)
 	if c.db == nil {

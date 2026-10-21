@@ -88,9 +88,9 @@ func logoPath(img *tmdb.Images) string {
 	return img.Logos[0].FilePath
 }
 
-func creditsToPeople(cr *tmdb.Credits) (cast, directors, writers []core.Person) {
+func creditsToPeople(cr *tmdb.Credits) (cast, directors, writers, crew []core.Person) {
 	if cr == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	for _, m := range cr.Cast {
 		role := m.Character
@@ -102,6 +102,14 @@ func creditsToPeople(cr *tmdb.Credits) (cast, directors, writers []core.Person) 
 			break
 		}
 	}
+	seenCrew := map[[2]any]bool{}
+	addCrew := func(id int64, name, role, thumb string) {
+		if id == 0 || name == "" || seenCrew[[2]any{id, role}] {
+			return
+		}
+		seenCrew[[2]any{id, role}] = true
+		crew = append(crew, core.Person{TMDB: id, Name: name, Role: role, ThumbPath: thumb})
+	}
 	for _, m := range cr.Crew {
 		job := m.Job
 		if job == "" && len(m.Jobs) > 0 {
@@ -111,11 +119,17 @@ func creditsToPeople(cr *tmdb.Credits) (cast, directors, writers []core.Person) 
 		switch strings.ToLower(job) {
 		case "director":
 			directors = append(directors, p)
-		case "writer", "screenplay", "author", "novel", "story":
+		case "writer", "screenplay", "author", "novel", "story", "teleplay":
 			writers = append(writers, p)
+		case "director of photography", "cinematography":
+			addCrew(m.ID, m.Name, "Cinematographer", m.ProfilePath)
+		case "original music composer", "music", "composer":
+			addCrew(m.ID, m.Name, "Composer", m.ProfilePath)
+		case "creator", "series composition", "showrunner":
+			addCrew(m.ID, m.Name, "Creator", m.ProfilePath)
 		}
 	}
-	return cast, directors, writers
+	return cast, directors, writers, crew
 }
 
 func companies(cs []tmdb.Company) []string {
@@ -188,7 +202,7 @@ func (c *Catalog) movieDetailsToTitle(ctx context.Context, d *tmdb.MovieDetails)
 	}
 	t.Studios = companies(d.ProductionCompany)
 	t.Countries = countryNames(d.ProductionCountry)
-	t.Cast, t.Directors, t.Writers = creditsToPeople(d.Credits)
+	t.Cast, t.Directors, t.Writers, t.Crew = creditsToPeople(d.Credits)
 	t.LogoPath = logoPath(d.Images)
 	if d.BelongsTo != nil {
 		t.CollectionID = d.BelongsTo.ID
@@ -269,8 +283,18 @@ func (c *Catalog) tvDetailsToTitle(ctx context.Context, d *tmdb.TVDetails) core.
 		t.IDs.TVDB = d.ExternalIDs.TVDBID
 	}
 	t.Studios = companies(d.ProductionCompany)
-	if len(d.Networks) > 0 && len(t.Studios) == 0 {
-		for _, n := range d.Networks {
+	for _, n := range d.Networks {
+		if n.Name == "" {
+			continue
+		}
+		dup := false
+		for _, s := range t.Studios {
+			if strings.EqualFold(s, n.Name) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
 			t.Studios = append(t.Studios, n.Name)
 		}
 	}
@@ -281,10 +305,26 @@ func (c *Catalog) tvDetailsToTitle(ctx context.Context, d *tmdb.TVDetails) core.
 	if credits == nil || (len(credits.Cast) == 0 && d.AggregateCredits != nil) {
 		credits = d.AggregateCredits
 	}
-	t.Cast, t.Directors, t.Writers = creditsToPeople(credits)
+	t.Cast, t.Directors, t.Writers, t.Crew = creditsToPeople(credits)
 	// Aggregate credits supplement cast when regular credits are sparse.
 	if d.AggregateCredits != nil && len(t.Cast) == 0 {
-		t.Cast, _, _ = creditsToPeople(d.AggregateCredits)
+		t.Cast, _, _, _ = creditsToPeople(d.AggregateCredits)
+	}
+	if len(d.CreatedBy) > 0 {
+		var creators []core.Person
+		seen := map[int64]bool{}
+		for _, cb := range d.CreatedBy {
+			if cb.ID != 0 && cb.Name != "" && !seen[cb.ID] {
+				seen[cb.ID] = true
+				creators = append(creators, core.Person{TMDB: cb.ID, Name: cb.Name, Role: "Creator", ThumbPath: cb.ProfilePath})
+			}
+		}
+		for _, p := range t.Crew {
+			if !(p.Role == "Creator" && seen[p.TMDB]) {
+				creators = append(creators, p)
+			}
+		}
+		t.Crew = creators
 	}
 	t.LogoPath = logoPath(d.Images)
 	t.ChildCount = d.NumberOfSeasons

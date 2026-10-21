@@ -81,6 +81,7 @@ type Title struct {
 	Cast      []Person `json:"cast,omitempty"`
 	Directors []Person `json:"directors,omitempty"`
 	Writers   []Person `json:"writers,omitempty"`
+	Crew      []Person `json:"crew,omitempty"` // creators, cinematographers, composers (additive)
 
 	CollectionID   int64  `json:"collectionId,omitempty"` // TMDB franchise
 	CollectionName string `json:"collectionName,omitempty"`
@@ -89,6 +90,16 @@ type Title struct {
 	LeafCount  int `json:"leafCount,omitempty"`  // episodes of a show
 
 	UpdatedAt time.Time `json:"updatedAt,omitempty"`
+}
+
+// ShowTrajectory summarizes a series' season/episode rating arc (additive).
+type ShowTrajectory struct {
+	ShowKey       RatingKey `json:"showKey"`
+	EarlyRating   float64   `json:"earlyRating,omitempty"`
+	FinaleRating  float64   `json:"finaleRating,omitempty"`
+	PeakRating    float64   `json:"peakRating,omitempty"`
+	RatedSeasons  int       `json:"ratedSeasons,omitempty"`
+	SticksLanding bool      `json:"sticksLanding,omitempty"`
 }
 
 // Released reports whether the title has a release/air date in the past.

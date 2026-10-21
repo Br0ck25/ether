@@ -758,6 +758,67 @@ func (b *builder) genTopGenre() []*candRow {
 	return rows
 }
 
+// genStudio builds "More from <Studio>" film shelves when the viewer has
+// finished at least two films from a studio or boutique label (A24, Neon,
+// Studio Ghibli, etc.).
+func (b *builder) genStudio() []*candRow {
+	if !b.personal() {
+		return nil
+	}
+	weight := map[string]float64{}
+	films := map[string]int{}
+	for _, e := range b.likedOfType(core.TypeMovie) {
+		for i, s := range e.Title.Studios {
+			if i >= 2 || s == "" {
+				break
+			}
+			weight[s] += e.Weight
+			films[s]++
+		}
+	}
+	var studios []string
+	for s, n := range films {
+		if n >= 2 && b.taste.Studio[s] >= 0.25 {
+			studios = append(studios, s)
+		}
+	}
+	sort.Slice(studios, func(i, j int) bool {
+		if weight[studios[i]] != weight[studios[j]] {
+			return weight[studios[i]] > weight[studios[j]]
+		}
+		return studios[i] < studios[j]
+	})
+	var rows []*candRow
+	for _, s := range studios {
+		if len(rows) >= 3 {
+			break
+		}
+		src := b.browse(core.BrowseQuery{Filter: core.Filter{Type: core.TypeMovie, Studio: s}, Sort: core.SortPopularity, Desc: true, Limit: 100})
+		var in []core.Title
+		for i := range src {
+			for _, x := range src[i].Studios {
+				if strings.EqualFold(x, s) {
+					in = append(in, src[i])
+					break
+				}
+			}
+		}
+		studio := s
+		items := b.rankType(in, core.TypeMovie, func(t *core.Title, _, _ int, fit float64, why string) (float64, string) {
+			return 0.55*fit + 0.3*quality(t) + 0.15*popularity(t), withWhy("From "+studio, why)
+		})
+		if len(items) < 4 {
+			continue
+		}
+		r := newRow(KindStudio, "studio."+genreSlug(s), "More from "+s,
+			fmt.Sprintf("You've enjoyed %d %s films; more from them you haven't seen.", films[s], s), items)
+		r.minItems = 4
+		r.scale = 0.85 + 0.15*clamp(weight[s]/3, 0, 1)
+		rows = append(rows, r)
+	}
+	return rows
+}
+
 // anyShared reports whether two string lists share an element.
 func anyShared(a, c []string) bool {
 	for _, x := range a {

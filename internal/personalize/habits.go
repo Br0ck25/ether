@@ -179,7 +179,8 @@ func ctxBucket(weekend bool, daypart string) string {
 }
 
 // learnContext learns when the viewer watches what: genre lifts per
-// daypart, and the film share per weekday/weekend × daypart bucket.
+// daypart, per weekday/weekend × daypart sub-persona, and the film share per
+// weekday/weekend × daypart bucket.
 func (ts *Taste) learnContext(views []viewing, titles map[core.RatingKey]core.Title) {
 	n := 0
 	genreAll := map[string]float64{}
@@ -188,6 +189,7 @@ func (ts *Taste) learnContext(views []viewing, titles map[core.RatingKey]core.Ti
 	movies := 0.0
 	bucketN := map[string]float64{}
 	bucketMovies := map[string]float64{}
+	bucketGenre := map[string]map[string]float64{}
 	for _, v := range views {
 		t, ok := titles[v.tk]
 		if !ok {
@@ -199,12 +201,16 @@ func (ts *Taste) learnContext(views []viewing, titles map[core.RatingKey]core.Ti
 		if dpGenre[dp] == nil {
 			dpGenre[dp] = map[string]float64{}
 		}
+		b := ctxBucket(core.IsWeekend(v.at), dp)
+		bucketN[b]++
+		if bucketGenre[b] == nil {
+			bucketGenre[b] = map[string]float64{}
+		}
 		for _, g := range normGenres(t.Genres) {
 			genreAll[g]++
 			dpGenre[dp][g]++
+			bucketGenre[b][g]++
 		}
-		b := ctxBucket(core.IsWeekend(v.at), dp)
-		bucketN[b]++
 		if v.key.Kind() == core.KindMovie {
 			movies++
 			bucketMovies[b]++
@@ -227,6 +233,20 @@ func (ts *Taste) learnContext(views []viewing, titles map[core.RatingKey]core.Ti
 		}
 		ts.DaypartGenre[dp] = lifts
 	}
+	for b, nb := range bucketN {
+		if nb < 6 {
+			continue
+		}
+		lifts := map[string]float64{}
+		for g, c := range bucketGenre[b] {
+			share := (c + 0.5) / (nb + 1)
+			base := (genreAll[g] + 0.5) / (float64(n) + 1)
+			if v := clamp(math.Log(share/base)*0.5, -0.5, 0.5); math.Abs(v) >= 0.02 {
+				lifts[g] = round3(v)
+			}
+		}
+		ts.ContextGenre[b] = lifts
+	}
 	overall := (movies + 1) / (float64(n) + 2)
 	for _, wk := range []bool{false, true} {
 		for _, dp := range []string{core.DaypartMorning, core.DaypartAfternoon, core.DaypartEvening, core.DaypartLate} {
@@ -234,6 +254,76 @@ func (ts *Taste) learnContext(views []viewing, titles map[core.RatingKey]core.Ti
 			ts.MovieShare[b] = round3((bucketMovies[b] + 3*overall) / (bucketN[b] + 3))
 		}
 	}
+}
+
+// learnDeviceContext learns device-specific genre affinities (e.g. TV vs mobile).
+func (ts *Taste) learnDeviceContext(plays []playRecord, titles map[core.RatingKey]core.Title) {
+	n := 0.0
+	genreAll := map[string]float64{}
+	devN := map[string]float64{}
+	devGenre := map[string]map[string]float64{}
+	for _, p := range plays {
+		if p.abandoned || p.device == "" {
+			continue
+		}
+		t, ok := titles[p.tasteKey]
+		if !ok {
+			continue
+		}
+		n++
+		devN[p.device]++
+		if devGenre[p.device] == nil {
+			devGenre[p.device] = map[string]float64{}
+		}
+		for _, g := range normGenres(t.Genres) {
+			genreAll[g]++
+			devGenre[p.device][g]++
+		}
+	}
+	if n < 4 {
+		return
+	}
+	for dev, nd := range devN {
+		if nd < 3 {
+			continue
+		}
+		lifts := map[string]float64{}
+		for g, c := range devGenre[dev] {
+			share := (c + 0.5) / (nd + 1)
+			base := (genreAll[g] + 0.5) / (n + 1)
+			if v := clamp(math.Log(share/base)*0.5, -0.5, 0.5); math.Abs(v) >= 0.02 {
+				lifts[g] = round3(v)
+			}
+		}
+		ts.DeviceGenre[dev] = lifts
+	}
+}
+
+// ContextGenreLift returns the viewer's contextual persona lift (-0.5..0.5)
+// for a title's normalized genres in hc, blending the specific
+// (weekend × daypart) mode, daypart lift, and device mode.
+func (ts *Taste) ContextGenreLift(hc core.HubContext, gs []string) float64 {
+	if ts == nil || len(gs) == 0 {
+		return 0
+	}
+	dpLifts := ts.DaypartGenre[hc.Daypart]
+	ctxLifts := ts.ContextGenre[ctxBucket(hc.Weekend, hc.Daypart)]
+	devLifts := ts.DeviceGenre[hc.Device]
+	if len(dpLifts) == 0 && len(ctxLifts) == 0 && len(devLifts) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, g := range gs {
+		v := dpLifts[g]
+		if cv, ok := ctxLifts[g]; ok {
+			v = 0.45*v + 0.55*cv
+		}
+		if dv, ok := devLifts[g]; ok {
+			v = 0.7*v + 0.3*dv
+		}
+		sum += v
+	}
+	return clamp(sum/float64(len(gs)), -0.5, 0.5)
 }
 
 // movieShareFor is the viewer's expected film share in a context (0.5

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -208,6 +209,38 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 	return md
 }
 
+// sameDayUnavailable reports whether t is a same-day episode (<36h since its
+// nominal date) that the resolver has confirmed is not yet uploaded on
+// Usenet/debrid. When unknown, it triggers a non-blocking PreResolve probe so
+// the 3-minute availability window is populated for the next refresh.
+func (s *Server) sameDayUnavailable(ctx context.Context, pr *Request, t *core.Title) bool {
+	if t == nil || t.Type != core.TypeEpisode || t.Released.IsZero() {
+		return false
+	}
+	age := s.now().Sub(t.Released)
+	if age < 0 || age > 36*time.Hour {
+		return false
+	}
+	av, ok := s.d.Variants.(interface {
+		Available(context.Context, core.RatingKey) (bool, bool)
+	})
+	if !ok {
+		return false
+	}
+	known, available := av.Available(ctx, t.Key)
+	if known {
+		return !available
+	}
+	if pr != nil && s.d.Playback != nil {
+		if warm, ok := s.d.Playback.(interface {
+			PreResolve(context.Context, *core.User, core.RatingKey, core.ClientCaps) bool
+		}); ok {
+			warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+		}
+	}
+	return false
+}
+
 // showOnDeck picks the episode to resume or start next.
 func (s *Server) showOnDeck(ctx context.Context, pr *Request, show core.RatingKey, memo showEpisodes) (*core.Title, map[core.RatingKey]core.WatchStatus) {
 	eps, err := s.episodesOfShow(ctx, pr, memo, show)
@@ -226,13 +259,13 @@ func (s *Server) showOnDeck(ctx context.Context, pr *Request, show core.RatingKe
 		}
 	}
 	for i := lastWatched + 1; i < len(eps); i++ {
-		if eps[i].Season > 0 && st[eps[i].Key].ViewCount == 0 {
+		if eps[i].Season > 0 && st[eps[i].Key].ViewCount == 0 && !s.sameDayUnavailable(ctx, pr, &eps[i]) {
 			return &eps[i], st
 		}
 	}
 	if lastWatched < 0 {
 		for i := range eps {
-			if eps[i].Season > 0 {
+			if eps[i].Season > 0 && !s.sameDayUnavailable(ctx, pr, &eps[i]) {
 				return &eps[i], st
 			}
 		}

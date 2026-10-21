@@ -35,6 +35,11 @@ func (a *App) buildDiscovery() {
 				tags = append(tags, strings.ToLower(person.Name))
 			}
 		}
+		for _, kw := range p.Keywords {
+			if kw.Weight > 0 {
+				tags = append(tags, strings.ToLower(kw.Name))
+			}
+		}
 		return tags
 	}})
 	a.plexDiscovery = &plex.DiscoveryFeatures{Watchlist: a.watchlist, Ratings: a.ratings, Overlays: a.overlays, Personal: a.discoveryPersonal, LLM: a.llm, Localize: a.tmdb.Localized}

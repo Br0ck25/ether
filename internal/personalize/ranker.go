@@ -499,14 +499,8 @@ func (p *rankPass) features(a *assembly, it *candItem) [numRaw]float32 {
 	if t.Type == core.TypeMovie {
 		f[fMovie] = 1
 	}
-	if lifts := a.model.taste.DaypartGenre[a.hc.Daypart]; len(lifts) > 0 {
-		if gs := normGenres(t.Genres); len(gs) > 0 {
-			sum := 0.0
-			for _, g := range gs {
-				sum += lifts[g]
-			}
-			f[fDaypartGenre] = sum / float64(len(gs))
-		}
+	if gs := normGenres(t.Genres); len(gs) > 0 {
+		f[fDaypartGenre] = a.model.taste.ContextGenreLift(a.hc, gs)
 	}
 	if a.intent.active() {
 		f[fIntent] = a.intent.boostFor(t) / intentMaxBoost

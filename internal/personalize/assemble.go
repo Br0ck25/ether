@@ -511,16 +511,9 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 	adj := 0.0
 	// Shown repeatedly without a play: demote so Home never goes stale.
 	adj -= 0.12 * a.model.fatigue[t.Key]
-	// What this viewer watches at this time of day.
-	if lifts := a.model.taste.DaypartGenre[a.hc.Daypart]; len(lifts) > 0 {
-		gs := normGenres(t.Genres)
-		if len(gs) > 0 {
-			sum := 0.0
-			for _, g := range gs {
-				sum += lifts[g]
-			}
-			adj += 0.08 * sum / float64(len(gs))
-		}
+	// What this viewer watches in this context (sub-persona mode).
+	if gs := normGenres(t.Genres); len(gs) > 0 {
+		adj += 0.08 * a.model.taste.ContextGenreLift(a.hc, gs)
 	}
 	// Runtime fit to the time the viewer has.
 	if m := minutes(t); m > 0 && target > 0 {

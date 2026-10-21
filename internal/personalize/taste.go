@@ -28,6 +28,7 @@ type Taste struct {
 	Decade    map[int]float64
 	Language  map[string]float64
 	Franchise map[int64]float64
+	Studio    map[string]float64
 
 	// Evidence is the per-title evidence the model was built from, by
 	// descending |weight|.
@@ -37,6 +38,10 @@ type Taste struct {
 	// DaypartGenre is a learned genre lift per daypart (-0.5..0.5): what
 	// this viewer watches more of in the morning than at night.
 	DaypartGenre map[string]map[string]float64
+	// ContextGenre and DeviceGenre disentangle sub-personas across
+	// (weekday|weekend × daypart) and device class (TV vs mobile).
+	ContextGenre map[string]map[string]float64
+	DeviceGenre  map[string]map[string]float64
 	// MovieShare is the smoothed share of films (vs episodes) the viewer
 	// watches per "weekday|weekend/daypart" bucket.
 	MovieShare map[string]float64
@@ -95,6 +100,7 @@ const (
 	floorDecade   = 3.0
 	floorLanguage = 3.0
 	floorFranch   = 1.5
+	floorStudio   = 2.5
 )
 
 // tasteKey maps an episode or season key onto its show.
@@ -349,7 +355,9 @@ func buildTaste(in tasteInput) *Taste {
 		UserID: in.userID, BuiltAt: in.now,
 		Genre: map[string]float64{}, Keyword: map[string]float64{}, Person: map[int64]float64{},
 		People: map[int64]personInfo{}, Decade: map[int]float64{}, Language: map[string]float64{},
-		Franchise: map[int64]float64{}, DaypartGenre: map[string]map[string]float64{}, MovieShare: map[string]float64{},
+		Franchise: map[int64]float64{}, Studio: map[string]float64{},
+		DaypartGenre: map[string]map[string]float64{}, ContextGenre: map[string]map[string]float64{},
+		DeviceGenre: map[string]map[string]float64{}, MovieShare: map[string]float64{},
 		evidenceByKey: map[core.RatingKey]*Evidence{},
 	}
 	mass := 0.0
@@ -384,11 +392,13 @@ func buildTaste(in tasteInput) *Taste {
 	normalize(ts.Decade, floorDecade)
 	normalize(ts.Language, floorLanguage)
 	normalize(ts.Franchise, floorFranch)
+	normalize(ts.Studio, floorStudio)
 	ts.Confidence = 1 - math.Exp(-mass/5)
 
 	views := viewingsFrom(in)
 	ts.Habits = habitsFrom(views, in, ts.Evidence)
 	ts.learnContext(views, in.titles)
+	ts.learnDeviceContext(in.plays, in.titles)
 	ts.applyOverrides(in.overrides)
 	return ts
 }
@@ -435,6 +445,25 @@ func (ts *Taste) spread(t core.Title, w float64) {
 			break
 		}
 		addPerson(c, "actor", castMult[i])
+	}
+	for i, cr := range t.Crew {
+		if i >= 6 {
+			break
+		}
+		switch strings.ToLower(cr.Role) {
+		case "creator", "showrunner":
+			addPerson(cr, "creator", 0.9)
+		case "cinematographer", "director of photography":
+			addPerson(cr, "cinematographer", 0.65)
+		case "composer", "original music composer":
+			addPerson(cr, "composer", 0.6)
+		}
+	}
+	for i, st := range t.Studios {
+		if i >= 2 || st == "" {
+			break
+		}
+		ts.Studio[st] += w * 0.7
 	}
 	if t.Year > 0 {
 		ts.Decade[t.Year/10*10] += w
@@ -612,6 +641,19 @@ func (ts *Taste) Fit(t *core.Title) (float64, string) {
 		for i, c := range t.Cast {
 			if i < 5 {
 				add(c, 0.9-0.1*float64(i), "With")
+			}
+		}
+		for i, cr := range t.Crew {
+			if i >= 6 {
+				break
+			}
+			switch strings.ToLower(cr.Role) {
+			case "creator", "showrunner":
+				add(cr, 0.95, "Created by")
+			case "cinematographer", "director of photography":
+				add(cr, 0.75, "Shot by")
+			case "composer", "original music composer":
+				add(cr, 0.70, "Scored by")
 			}
 		}
 		if len(contribs) > 0 {

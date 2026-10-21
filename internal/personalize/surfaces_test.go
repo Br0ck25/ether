@@ -74,8 +74,8 @@ func preview(t *testing.T, h *harness, u core.User, hc core.HubContext, section 
 }
 
 var lensKinds = map[string]bool{KindTasteCluster: true, KindEra: true, KindWorld: true, KindOccasion: true, KindAcclaimed: true,
-	KindTopGenre: true, KindNewSeasons: true, KindFinishShow: true, KindStartNew: true, KindBinge: true, KindLimited: true,
-	KindAiringTaste: true, KindNetwork: true, KindPerson: true, KindFranchise: true, KindHiddenGems: true, KindTrendingTaste: true, KindDifferent: true}
+	KindTopGenre: true, KindBridge: true, KindStudio: true, KindNewSeasons: true, KindFinishShow: true, KindStartNew: true, KindBinge: true, KindSticksLanding: true, KindLimited: true,
+	KindAiringTaste: true, KindNetwork: true, KindStandalone: true, KindPerson: true, KindFranchise: true, KindHiddenGems: true, KindTrendingTaste: true, KindDifferent: true}
 
 func TestRecommendedPagesDifferFromHome(t *testing.T) {
 	h := newHarness(t, nil)

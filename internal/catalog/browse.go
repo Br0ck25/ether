@@ -9,15 +9,12 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
-// Browse queries the browsable mirror entirely in SQL.
+// Browse queries the browsable mirror entirely in SQL, with generation-stamped
+// in-memory count and page caching so repeated library/recommendation reads
+// return without hitting disk.
 func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, error) {
-	where, args, err := c.browseWhere(q.Filter)
-	if err != nil {
-		return core.Page{}, err
-	}
-	var total int
-	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalog_titles t WHERE `+where, args...).Scan(&total); err != nil {
-		return core.Page{}, err
+	if q.Filter.Person > 0 {
+		c.ensurePersonCredits(ctx, q.Filter.Person)
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -30,6 +27,54 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 	if offset < 0 {
 		offset = 0
 	}
+	gen := c.writeGen.Load()
+	minBucket := c.minuteBucket()
+	ckey := fmt.Sprintf("%+v", q.Filter)
+	bkey := fmt.Sprintf("%s|%s|%v|%d|%d", ckey, q.Sort, q.Desc, offset, limit)
+	c.cacheMu.RLock()
+	if ent, ok := c.browseCache[bkey]; ok && ent.gen == gen && ent.minute == minBucket {
+		items := make([]core.Title, len(ent.page.Items))
+		for i := range ent.page.Items {
+			items[i] = cloneTitle(ent.page.Items[i])
+		}
+		c.cacheMu.RUnlock()
+		return core.Page{Items: items, Total: ent.page.Total}, nil
+	}
+	cntEnt, hasCnt := c.countCache[ckey]
+	c.cacheMu.RUnlock()
+
+	where, args, err := c.browseWhere(q.Filter)
+	if err != nil {
+		return core.Page{}, err
+	}
+	var total int
+	if hasCnt && cntEnt.gen == gen && cntEnt.minute == minBucket {
+		total = cntEnt.total
+	} else {
+		if err := c.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM catalog_titles t WHERE `+where, args...).Scan(&total); err != nil {
+			return core.Page{}, err
+		}
+		if c.writeGen.Load() == gen {
+			c.cacheMu.Lock()
+			if len(c.countCache) >= 1024 {
+				c.countCache = map[string]cachedCount{}
+			}
+			c.countCache[ckey] = cachedCount{total: total, gen: gen, minute: minBucket}
+			c.cacheMu.Unlock()
+		}
+	}
+	if total == 0 || offset >= total {
+		page := core.Page{Items: []core.Title{}, Total: total}
+		if c.writeGen.Load() == gen {
+			c.cacheMu.Lock()
+			if len(c.browseCache) >= 512 {
+				c.browseCache = map[string]cachedBrowse{}
+			}
+			c.browseCache[bkey] = cachedBrowse{page: page, gen: gen, minute: minBucket}
+			c.cacheMu.Unlock()
+		}
+		return page, nil
+	}
 	order := browseOrder(q)
 	query := `SELECT ` + prefixedCols("t") + ` FROM catalog_titles t WHERE ` + where + ` ORDER BY ` + order + `, t.key ASC LIMIT ? OFFSET ?`
 	items, err := c.queryTitles(ctx, query, append(append([]any{}, args...), limit, offset)...)
@@ -38,6 +83,18 @@ func (c *Catalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, er
 	}
 	if items == nil {
 		items = []core.Title{}
+	}
+	if c.writeGen.Load() == gen {
+		cachedItems := make([]core.Title, len(items))
+		for i := range items {
+			cachedItems[i] = cloneTitle(items[i])
+		}
+		c.cacheMu.Lock()
+		if len(c.browseCache) >= 512 {
+			c.browseCache = map[string]cachedBrowse{}
+		}
+		c.browseCache[bkey] = cachedBrowse{page: core.Page{Items: cachedItems, Total: total}, gen: gen, minute: minBucket}
+		c.cacheMu.Unlock()
 	}
 	return core.Page{Items: items, Total: total}, nil
 }
@@ -170,6 +227,17 @@ func escapeLike(s string) string {
 
 // Facet returns value counts over the browsable set.
 func (c *Catalog) Facet(ctx context.Context, t core.MediaType, facet string) ([]core.FacetValue, error) {
+	gen := c.writeGen.Load()
+	minBucket := c.minuteBucket()
+	fkey := string(t) + "|" + facet
+	c.cacheMu.RLock()
+	if ent, ok := c.facetCache[fkey]; ok && ent.gen == gen && ent.minute == minBucket {
+		out := append([]core.FacetValue(nil), ent.vals...)
+		c.cacheMu.RUnlock()
+		return out, nil
+	}
+	c.cacheMu.RUnlock()
+
 	typeCond := "t.type IN ('movie','show')"
 	var args []any
 	if t == core.TypeMovie || t == core.TypeShow {
@@ -194,6 +262,8 @@ func (c *Catalog) Facet(ctx context.Context, t core.MediaType, facet string) ([]
 		q = `SELECT CAST((t.year/10)*10 AS TEXT), COUNT(*) FROM catalog_titles t WHERE ` + base + ` AND t.year>0 GROUP BY (t.year/10)*10 ORDER BY (t.year/10)*10 DESC`
 	case "contentRating":
 		q = `SELECT t.content_rating, COUNT(*) FROM catalog_titles t WHERE ` + base + ` AND t.content_rating<>'' GROUP BY t.content_rating ORDER BY MIN(t.content_rating_rank) ASC, t.content_rating ASC`
+	case "firstCharacter":
+		q = `SELECT CASE WHEN UPPER(SUBSTR(t.sort_title, 1, 1)) BETWEEN 'A' AND 'Z' THEN UPPER(SUBSTR(t.sort_title, 1, 1)) ELSE '#' END, COUNT(*) FROM catalog_titles t WHERE ` + base + ` AND t.sort_title<>'' GROUP BY 1 ORDER BY 1 ASC`
 	default:
 		return nil, fmt.Errorf("catalog: unknown facet %q", facet)
 	}
@@ -217,5 +287,13 @@ func (c *Catalog) Facet(ctx context.Context, t core.MediaType, facet string) ([]
 	if out == nil {
 		out = []core.FacetValue{}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if c.writeGen.Load() == gen {
+		c.cacheMu.Lock()
+		c.facetCache[fkey] = cachedFacet{vals: append([]core.FacetValue(nil), out...), gen: gen, minute: minBucket}
+		c.cacheMu.Unlock()
+	}
+	return out, nil
 }

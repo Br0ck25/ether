@@ -95,6 +95,14 @@ CREATE INDEX catalog_keywords_keyword ON catalog_keywords(keyword, key);
 	// decide when details are stale.
 	store.Register("catalog", 5, `ALTER TABLE catalog_titles ADD COLUMN detail_at INTEGER NOT NULL DEFAULT 0;`)
 	store.Register("catalog", 6, dropUnkeyableEpisodes)
+	store.Register("catalog", 7, `
+CREATE INDEX catalog_titles_type_browse_sort ON catalog_titles(type, browsable, adult, sort_title ASC, key ASC);
+CREATE INDEX catalog_titles_browse_warm ON catalog_titles(browsable, detail, adult, popularity DESC, vote_count DESC);
+CREATE INDEX catalog_titles_type_browse_year ON catalog_titles(type, browsable, adult, year DESC, popularity DESC);
+CREATE INDEX catalog_titles_type_browse_lang ON catalog_titles(type, browsable, adult, language, popularity DESC);
+CREATE INDEX catalog_titles_type_browse_runtime ON catalog_titles(type, browsable, adult, runtime_sec, popularity DESC);
+CREATE INDEX catalog_credits_person_kind ON catalog_credits(person_tmdb, kind, key);
+`)
 }
 
 // dropUnkeyableEpisodes removes mirrored seasons and episodes whose numbers
@@ -162,6 +170,41 @@ type Catalog struct {
 	progress   SyncProgress
 	progressMu sync.RWMutex
 	syncYears  [2]int // 0,0 = 1900..now+2
+
+	// High-speed in-memory read caches, invalidated atomically on writes.
+	writeGen    atomic.Uint64
+	cacheMu     sync.RWMutex
+	titleCache  map[core.RatingKey]cachedStoredTitle
+	countCache  map[string]cachedCount
+	browseCache map[string]cachedBrowse
+	facetCache  map[string]cachedFacet
+
+	personMu       sync.Mutex
+	personHydrated map[int64]time.Time
+}
+
+type cachedStoredTitle struct {
+	st     storedTitle
+	gen    uint64
+	minute int64
+}
+
+type cachedCount struct {
+	total  int
+	gen    uint64
+	minute int64
+}
+
+type cachedBrowse struct {
+	page   core.Page
+	gen    uint64
+	minute int64
+}
+
+type cachedFacet struct {
+	vals   []core.FacetValue
+	gen    uint64
+	minute int64
 }
 
 type listEntry struct {
@@ -202,7 +245,10 @@ func New(db *sql.DB, client TMDB, cfg config.Catalog, log *slog.Logger, opts ...
 	}
 	c := &Catalog{db: db, client: client, cfg: cfg, log: log, now: time.Now,
 		staleAfter: stale, listTTL: 15 * time.Minute,
-		genres: map[string]map[int]string{}, listCache: map[string]listEntry{}}
+		genres: map[string]map[int]string{}, listCache: map[string]listEntry{},
+		titleCache: map[core.RatingKey]cachedStoredTitle{}, countCache: map[string]cachedCount{},
+		browseCache: map[string]cachedBrowse{}, facetCache: map[string]cachedFacet{},
+		personHydrated: map[int64]time.Time{}}
 	for _, fn := range opts {
 		fn(c)
 	}
