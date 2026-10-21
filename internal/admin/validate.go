@@ -295,6 +295,27 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	if cfg.Transcode.RemoteMaxBitrateKbps < 0 {
 		v.add("transcode.remoteMaxBitrateKbps", "must be >= 0")
 	}
+	rtx := cfg.Transcode.RTXVideo
+	if rtx.Mode != "" {
+		v.oneOf("transcode.rtxVideo.mode", rtx.Mode, "off", "auto", "on")
+	}
+	for _, limit := range []struct {
+		name            string
+		value, min, max int
+	}{
+		{"sourceMaxHeight", rtx.SourceMaxHeight, 144, 2160},
+		{"targetMaxHeight", rtx.TargetMaxHeight, 144, 2160},
+		{"maxConcurrent", rtx.MaxConcurrent, 1, 8},
+	} {
+		if limit.value != 0 && (limit.value < limit.min || limit.value > limit.max) {
+			v.add("transcode.rtxVideo."+limit.name, "must be between %d and %d (0 uses the default)", limit.min, limit.max)
+		}
+	}
+	switch rtx.Quality {
+	case 0, 1, 2, 3, 4, 21, 23:
+	default:
+		v.add("transcode.rtxVideo.quality", "must be 1, 2, 3, 4, 21 or 23 (0 uses the default)")
+	}
 
 	if p, ok := config.LookupLLMProvider(cfg.LLM.Provider); !ok {
 		v.add("llm.provider", "is not a supported provider")

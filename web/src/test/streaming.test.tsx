@@ -223,6 +223,7 @@ describe("Playback", () => {
     const { fake } = renderApp("/playback");
     await screen.findByRole("button", { name: "RTX Video Super Resolution" }, WAIT);
     await choose("RTX Video Super Resolution", "Automatic · local streams");
+    await choose("Enhancement quality", "Streaming ultra");
     fireEvent.change(screen.getByLabelText("Enhanced resolution limit"), {
       target: { value: "1440" },
     });
@@ -234,7 +235,7 @@ describe("Playback", () => {
         mode: "auto",
         targetMaxHeight: 1440,
         sourceMaxHeight: 720,
-        quality: 2,
+        quality: 23,
         maxConcurrent: 1,
       },
     });

@@ -94,7 +94,7 @@ func (a *App) buildAdmin() http.Handler {
 			if a.transcoder == nil {
 				return map[string]string{"error": "ffmpeg not found"}
 			}
-			return map[string]any{"hwaccel": a.transcoder.HWAccel(), "ffmpeg": a.transcoder.Version()}
+			return map[string]any{"hwaccel": a.transcoder.HWAccel(), "ffmpeg": a.transcoder.Version(), "enhancement": a.transcoder.EnhancementStatus()}
 		},
 		ExtraStatus: map[string]admin.StatusFunc{
 			"stream":   func(context.Context) any { return a.engine.Stats() },

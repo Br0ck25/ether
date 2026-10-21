@@ -41,6 +41,7 @@ export type FieldDef =
       help?: ReactNode;
       kind: "select";
       options: { value: string; label: string }[];
+      numeric?: boolean;
     }
   | {
       key: string;
@@ -189,7 +190,7 @@ export function SchemaField({
             <div className="w-48">
               <SearchSelect
                 value={String(value ?? "")}
-                onChange={onChange}
+                onChange={(v) => onChange(def.numeric ? Number(v) : v)}
                 options={def.options}
                 ariaLabel={def.label}
                 searchable={def.options.length > 7}

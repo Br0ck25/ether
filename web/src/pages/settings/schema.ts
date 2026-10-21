@@ -430,11 +430,17 @@ export const TRANSCODE: FieldGroup[] = [
           {
             key: "quality",
             label: "Enhancement quality",
-            kind: "number",
-            min: 1,
-            max: 4,
-            step: 1,
-            help: "1 uses the least GPU capacity; 4 uses the most. Start with 2.",
+            kind: "select",
+            numeric: true,
+            options: [
+              { value: "1", label: "Low" },
+              { value: "2", label: "Medium" },
+              { value: "3", label: "High" },
+              { value: "4", label: "Ultra" },
+              { value: "21", label: "Streaming medium" },
+              { value: "23", label: "Streaming ultra" },
+            ],
+            help: "Higher quality uses more GPU resources. Streaming modes require an Ampere or newer GPU. Start with Medium.",
           },
           {
             key: "maxConcurrent",
