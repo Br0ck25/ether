@@ -7,10 +7,11 @@ import "github.com/braedonsaunders/ether/internal/core"
 // copyts disables FFmpeg's discontinuity correction and can leave video minutes
 // ahead of audio, so let FFmpeg normalize the initial live run instead.
 func inputTimestampArgs(s runSpec) []string {
-	if s.Protocol != core.ProtocolDASH && s.Decision.Container == ContainerMatroska {
+	if s.Protocol != core.ProtocolDASH && s.Decision.Container == ContainerMatroska && !s.jellyfinMatroskaChunks() {
 		// The stream-segment muxer cuts in a run-relative clock. Preserve
-		// the title's clock in the inner Matroska muxer instead; retaining
-		// absolute input timestamps can prevent all cuts after a seek.
+		// the title's clock in the inner Matroska muxer instead. Chunked
+		// runs use a positive absolute clock and cut at every keyframe
+		// (see matroskaHLSMuxArgs), then regroup onto the session plan.
 		return nil
 	}
 	if s.Info.Duration <= 0 && s.Start == 0 {

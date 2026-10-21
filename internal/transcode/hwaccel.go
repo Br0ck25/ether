@@ -29,9 +29,11 @@ const DefaultVAAPIDevice = "/dev/dri/renderD128"
 
 // features is what the ffmpeg build offers: encoders, hwaccels, filters.
 type features struct {
-	encoders map[string]bool
-	hwaccels map[string]bool
-	filters  map[string]bool
+	// Jellyfin patches the segment muxer's origin and first-entry duration.
+	jellyfinSegmentClock bool
+	encoders             map[string]bool
+	hwaccels             map[string]bool
+	filters              map[string]bool
 }
 
 func (f features) hasEncoder(n string) bool { return f.encoders[n] }
