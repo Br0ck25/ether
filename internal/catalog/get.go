@@ -345,8 +345,11 @@ func (c *Catalog) Grandchildren(ctx context.Context, key core.RatingKey) ([]core
 const seasonLoads = 6
 
 // loadSeasons brings a show's listed seasons into the mirror for a whole-show
-// read. Missing seasons are fetched, and stale ones that can still change:
-// the latest season, or one with episodes yet to air. A finished season stays
+// read. A season is fetched unless a season fetch has mirrored it: its season
+// record is detailed and it has episodes. A mirrored season is refetched when
+// stale only if it can still change: it is the latest season, it has episodes
+// yet to air, or the show's refreshed summary counts more episodes than the
+// mirror holds (a former latest season's final episodes). Otherwise it stays
 // as mirrored until its own page or episodes are opened (fetchSeason), so a
 // long-running show does not refetch every past season once its details go
 // stale. Fetches run concurrently.
@@ -371,15 +374,19 @@ func (c *Catalog) loadSeasons(ctx context.Context, showID int64, seasons []core.
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	fresh := map[int]bool{}
-	rows, err = c.db.QueryContext(ctx, `SELECT season,detail,detail_at FROM catalog_titles WHERE type='season' AND show_key=?`, int64(core.ShowKey(showID)))
+	type record struct {
+		detailed, fresh bool
+		episodes        int // the latest season summary's or fetch's count
+	}
+	records := map[int]record{}
+	rows, err = c.db.QueryContext(ctx, `SELECT season,detail,detail_at,child_count FROM catalog_titles WHERE type='season' AND show_key=?`, int64(core.ShowKey(showID)))
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var season, detail int
+		var season, detail, child int
 		var detailAt int64
-		if err := rows.Scan(&season, &detail, &detailAt); err != nil {
+		if err := rows.Scan(&season, &detail, &detailAt, &child); err != nil {
 			rows.Close()
 			return err
 		}
@@ -387,7 +394,7 @@ func (c *Catalog) loadSeasons(ctx context.Context, showID int64, seasons []core.
 		if detailAt != 0 {
 			st.detailAt = time.Unix(detailAt, 0).UTC()
 		}
-		fresh[season] = c.fresh(&st)
+		records[season] = record{detailed: st.detail && detailAt != 0, fresh: c.fresh(&st), episodes: child}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -400,9 +407,15 @@ func (c *Catalog) loadSeasons(ctx context.Context, showID int64, seasons []core.
 	var load []int
 	for _, s := range seasons {
 		m, ok := have[s.Season]
-		if !ok || !fresh[s.Season] && (s.Season == latest || m.pending > 0) {
-			load = append(load, s.Season)
+		r := records[s.Season]
+		switch {
+		case !ok || !r.detailed:
+		case r.fresh:
+			continue
+		case s.Season != latest && m.pending == 0 && r.episodes <= m.episodes:
+			continue
 		}
+		load = append(load, s.Season)
 	}
 	if len(load) == 0 {
 		return nil
