@@ -38,6 +38,11 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		if res != nil && s.prefer != "" && res.Release.ID != s.prefer {
 			res = nil // a picked version wins over the remembered release
 		}
+		if res != nil && cached == nil {
+			// A restart drops the in-memory warm probe, but the resume
+			// record's persisted probe and keyframe index survive it.
+			cached = m.persistedProbe(ctx, s.ident.userID, s.ident.key, res.Release.ID, res.NZB)
+		}
 	}
 	if res != nil && !releaseMatchesTitle(res.Release, s.title) {
 		// An older stored/warmed selection may predate the series identity
@@ -168,7 +173,8 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	var perr error
 	var facts *probeCache
 	prober := "cache"
-	if len(cached) > 0 && cached[0] != nil && cached[0].releaseID == res.Release.ID && cached[0].info.Size == src.Size() {
+	if len(cached) > 0 && cached[0] != nil && cached[0].releaseID == res.Release.ID && cached[0].info.Size == src.Size() &&
+		(cached[0].nzbHash == "" || (len(res.NZB) > 0 && cached[0].nzbHash == nzbHash(res.NZB))) {
 		facts = cached[0]
 		copy := facts.info
 		info = &copy
@@ -212,9 +218,11 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 		mi.Container = containerFromName(src.Name())
 	}
 	// A cached warm probe was already augmented when it was made; running
-	// AugmentMedia again would put its cost back on the Play path.
+	// AugmentMedia again would put its cost back on the Play path. Facts
+	// rebuilt from the persisted probe had their per-viewer sidecars
+	// stripped before they reached disk, so they augment again.
 	augmentStarted := time.Now()
-	if facts == nil && m.deps.AugmentMedia != nil {
+	if (facts == nil || facts.needsAugment) && m.deps.AugmentMedia != nil {
 		m.deps.AugmentMedia(ctx, s.title, &s.user, res, src, &mi)
 	}
 	m.log.Info("media preparation completed", "session", s.id, "release", res.Release.ID,
@@ -243,7 +251,9 @@ func (m *Manager) probeGeneration(ctx context.Context, s *session, res *core.Res
 	} else {
 		g.markIndexReady()
 	}
-	if prober == "native" {
+	if prober == "native" || (facts != nil && facts.needsAugment) {
+		// Persisted facts predate any tail fill; it only fills facts
+		// that are still unknown, so a published decision never changes.
 		m.startTrailerFill(g)
 	}
 	return g, nil
@@ -891,8 +901,10 @@ func (m *Manager) saveResume(ctx context.Context, s *session, g *generation) {
 		updatedAt: m.now(),
 	}
 	// A clustered node holds the record through a database outage (put
-	// returns at once), so a start or failover never waits on it.
-	if err := m.resume.put(ctx, rec, g.res.NZB, info.Keyframes); err != nil {
+	// returns at once), so a start or failover never waits on it. The
+	// probed facts ride in the same write, so the first Play after a
+	// restart skips the probe the warm path would have skipped.
+	if err := m.resume.putWithProbe(ctx, rec, g.res.NZB, info.Keyframes, info); err != nil {
 		m.log.Warn("save resume record failed", "key", s.ident.key, "err", err)
 	}
 }
