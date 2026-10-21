@@ -609,9 +609,9 @@ func TestLiveSharesTransmittedSpeculativeBody(t *testing.T) {
 			if n := s.BodyRequests("shared@test"); n != 1 {
 				t.Fatalf("active hedge downloaded %d copies", n)
 			}
-			if st := p.bodyAdmission.stats(); st.InUse != 0 {
-				t.Fatalf("admission leaked %+v", st)
-			}
+			// Completion publishes the BODY before releasing worker admission.
+			// Observe that release rather than racing the worker's cleanup.
+			waitPipeline(t, func() bool { return p.bodyAdmission.stats().InUse == 0 })
 		})
 	}
 }

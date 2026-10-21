@@ -26,13 +26,15 @@ func TestReconcileSkipsAbandonedInProgressTitles(t *testing.T) {
 	h := newHarness(t, nil, nil)
 	ctx := context.Background()
 	now := h.clock.Now()
-	h.saveResume(owner.ID, movieKey, "recent", 100, now.Add(-24*time.Hour))
-	h.saveResume(owner.ID, movie2, "abandoned", 100, now.Add(-40*24*time.Hour))
-	h.saveResume(owner.ID, movie3, "rewatched", 100, now.Add(-40*24*time.Hour))
 	h.state.set(owner.ID, movieKey, time.Minute)
 	h.state.set(owner.ID, movie2, time.Minute)
 	// Watch state activity counts even when the resume record is old.
 	h.state.setStatus(owner.ID, core.WatchStatus{Key: movie3, ViewOffset: time.Minute, UpdatedAt: now.Add(-2 * time.Hour)})
+	// Seed watch state first: the manager's initial background reconcile can
+	// otherwise legitimately expire old records before this fixture is ready.
+	h.saveResume(owner.ID, movieKey, "recent", 100, now.Add(-24*time.Hour))
+	h.saveResume(owner.ID, movie2, "abandoned", 100, now.Add(-40*24*time.Hour))
+	h.saveResume(owner.ID, movie3, "rewatched", 100, now.Add(-40*24*time.Hour))
 	if err := h.m.ReconcilePins(ctx); err != nil {
 		t.Fatal(err)
 	}

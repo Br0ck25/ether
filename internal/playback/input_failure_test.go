@@ -40,7 +40,7 @@ func TestExhaustedEncoderRecoveryClosesPlayback(t *testing.T) {
 	if _, ok := h.m.Session(ps.ID); ok {
 		t.Fatal("exhausted session retained phantom playback")
 	}
-	if !h.engine.sources[0].closed.Load() {
-		t.Fatal("exhausted source remained open")
-	}
+	// Retirement cancels background index/read work, but the source closes
+	// only after those readers release their generation references.
+	eventually(t, "exhausted source closed", func() bool { return h.engine.sources[0].closed.Load() })
 }
