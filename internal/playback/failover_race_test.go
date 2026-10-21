@@ -18,12 +18,30 @@ func TestFailoverRacesAlternates(t *testing.T) {
 	c.setFail(0, c.Size, nil)
 	d := slow(mkv("D", 100_000, time.Minute))
 	h := newHarness(t, []*fakeRelease{mkv("A", 100_000, time.Minute), b, c, d}, []string{"A", "B", "C", "D"})
+	failures := make(chan string, 8)
+	h.m.deps.Resolver = &observedFailureResolver{Resolver: h.resolver, failures: failures}
 	var mu sync.Mutex
 	var fetched []string
 	h.m.deps.FetchNZB = func(ctx context.Context, r core.Release) ([]byte, error) {
 		mu.Lock()
 		fetched = append(fetched, r.ID)
 		mu.Unlock()
+		if r.ID == "D" {
+			// A winning probe cancels its unfinished siblings. Observe both
+			// failures before allowing D to win, rather than depending on
+			// equal-delay timers firing in a particular order.
+			waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			seen := map[string]bool{}
+			for !seen["B"] || !seen["C"] {
+				select {
+				case id := <-failures:
+					seen[id] = true
+				case <-waitCtx.Done():
+					return nil, waitCtx.Err()
+				}
+			}
+		}
 		return []byte("nzb-" + r.ID), nil
 	}
 	ps := h.prepare(owner, movieKey, "race")
@@ -56,4 +74,20 @@ func TestFailoverRacesAlternates(t *testing.T) {
 			t.Fatalf("retried %s", id)
 		}
 	}
+}
+
+type observedFailureResolver struct {
+	core.Resolver
+	failures chan string
+}
+
+func (r *observedFailureResolver) MarkBad(ctx context.Context, id, reason string) error {
+	if err := r.Resolver.MarkBad(ctx, id, reason); err != nil {
+		return err
+	}
+	select {
+	case r.failures <- id:
+	default:
+	}
+	return nil
 }

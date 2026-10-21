@@ -185,6 +185,10 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 func compatibilityScore(r core.Release, c core.ClientCaps, t *core.Title) (float64, string) {
 	score := 0.0
 	var notes []string
+	if r.Info.VideoCodec != "" && len(c.VideoCodecs) > 0 && !c.SupportsVideo(r.Info.VideoCodec) {
+		score -= 20
+		notes = append(notes, "video transcode required")
+	}
 	if r.Info.AudioCodec != "" && len(c.AudioCodecs) > 0 {
 		if c.SupportsAudio(r.Info.AudioCodec) {
 			score += 10

@@ -103,6 +103,162 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	}
 	cacheDuration, hashCount = time.Since(cacheStart), len(torrents)
 	kept := out[:0]
+	anyCached := false
+	for _, r := range out {
+		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
+			continue
+		}
+		if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
+			anyCached = true
+		}
+		kept = append(kept, r)
+	}
+	// When an episode search returned only uncached single-episode torrents
+	// (preventing the indexer's own empty-result fallback from querying
+	// season packs), search for season packs (Episode = 0) and keep cached
+	// packs so older shows whose episodes live only in cached season packs
+	// still resolve.
+	if enabled && !anyCached && len(torrents) > 0 && req.Type == core.TypeEpisode && req.Season > 0 && req.Episode > 0 && ctx.Err() == nil {
+		packCached, packs := x.searchSeasonPacks(ctx, req)
+		for h, ok := range packCached {
+			if ok {
+				if cached == nil {
+					cached = map[string]bool{}
+				}
+				cached[h] = true
+			}
+		}
+		seenID := make(map[string]bool, len(kept))
+		for _, r := range kept {
+			seenID[r.ID] = true
+		}
+		for _, r := range packs {
+			if !seenID[r.ID] {
+				seenID[r.ID] = true
+				kept = append(kept, r)
+			}
+		}
+	}
+	rank := func(r core.Release) int {
+		if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
+			return 0
+		}
+		return 1
+	}
+	sort.SliceStable(kept, func(i, j int) bool { return rank(kept[i]) < rank(kept[j]) })
+	return kept, nil
+}
+
+// searchSeasonPacks queries inner for season-level releases (Episode = 0)
+// and bulk-checks their debrid cache availability.
+func (x *Indexer) searchSeasonPacks(ctx context.Context, req core.SearchRequest) (map[string]bool, []core.Release) {
+	packReq := req
+	packReq.Episode = 0
+	early := x.earlyCacheChecks(ctx)
+	if early != nil {
+		defer early.cancel()
+	}
+	var results []core.Release
+	var err error
+	if streaming, ok := x.inner.(interface {
+		SearchWith(context.Context, core.SearchRequest, func([]core.Release)) ([]core.Release, error)
+	}); ok && early != nil {
+		results, err = streaming.SearchWith(ctx, packReq, early.add)
+	} else {
+		results, err = x.inner.Search(ctx, packReq)
+	}
+	if err != nil || len(results) == 0 {
+		return nil, nil
+	}
+	var hashes []string
+	var packs []core.Release
+	for _, r := range results {
+		if r.Protocol != core.ProtocolTorrent {
+			continue
+		}
+		if r.InfoHash != "" {
+			hashes = append(hashes, r.InfoHash)
+		}
+		packs = append(packs, r)
+	}
+	if len(packs) == 0 {
+		return nil, nil
+	}
+	var cached map[string]bool
+	var definitive bool
+	if len(hashes) > 0 {
+		if early != nil {
+			cached, definitive = early.finish(ctx, hashes)
+		} else {
+			cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			cached, definitive = x.svc.CheckCached(cctx, hashes)
+			cancel()
+		}
+	}
+	kept := packs[:0]
+	for _, r := range packs {
+		if r.InfoHash != "" && definitive && !cached[r.InfoHash] {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	return cached, kept
+}
+
+// SearchRescue implements second-pass rescue search through the inner
+// indexer, annotating discovered torrent releases with debrid cache status.
+func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	rs, ok := x.inner.(interface {
+		SearchRescue(context.Context, core.SearchRequest) ([]core.Release, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	early := x.earlyCacheChecks(ctx)
+	if early != nil {
+		defer early.cancel()
+	}
+	var results []core.Release
+	var err error
+	if streaming, ok := x.inner.(interface {
+		SearchRescueWith(context.Context, core.SearchRequest, func([]core.Release)) ([]core.Release, error)
+	}); ok && early != nil {
+		results, err = streaming.SearchRescueWith(ctx, req, early.add)
+	} else {
+		results, err = rs.SearchRescue(ctx, req)
+	}
+	if err != nil || len(results) == 0 {
+		return results, err
+	}
+	enabled := x.svc.Enabled()
+	var torrents []string
+	out := results[:0:0]
+	for _, r := range results {
+		if r.Protocol != core.ProtocolTorrent {
+			out = append(out, r)
+			continue
+		}
+		if !enabled {
+			continue
+		}
+		if r.InfoHash != "" {
+			torrents = append(torrents, r.InfoHash)
+		}
+		out = append(out, r)
+	}
+	if len(torrents) == 0 {
+		return out, nil
+	}
+	var cached map[string]bool
+	var definitive bool
+	if early != nil {
+		cached, definitive = early.finish(ctx, torrents)
+	} else {
+		cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		cached, definitive = x.svc.CheckCached(cctx, torrents)
+		cancel()
+	}
+	kept := out[:0]
 	for _, r := range out {
 		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
 			continue

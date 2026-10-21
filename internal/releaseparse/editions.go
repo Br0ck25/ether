@@ -35,10 +35,12 @@ var editionPatterns = []struct {
 // editions match.
 func NormalizeEdition(name string) string { return ParseEdition(name) }
 
+var editionReplacer = strings.NewReplacer(".", " ", "_", " ", "’", "'", "-", " ", "(", " ", ")", " ", "[", " ", "]", " ")
+
 // ParseEdition identifies explicit cut labels without guessing from runtime.
 func ParseEdition(name string) string {
 	s := strings.ToLower(name)
-	s = strings.NewReplacer(".", " ", "_", " ", "’", "'", "-", " ", "(", " ", ")", " ", "[", " ", "]", " ").Replace(s)
+	s = editionReplacer.Replace(s)
 	s = " " + strings.Join(strings.Fields(s), " ") + " "
 	for _, p := range editionPatterns {
 		for _, n := range p.needles {

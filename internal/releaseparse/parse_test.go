@@ -255,3 +255,71 @@ func TestExplicitRegionalAudioTags(t *testing.T) {
 		}
 	}
 }
+
+func TestObscureAndLegacyReleaseParsing(t *testing.T) {
+	cases := []struct {
+		name string
+		e    expect
+	}{
+		{"The.Twilight.Zone.S01.E02.DVDRip.XviD-GRP", expect{title: "The Twilight Zone", seasons: []int{1}, episodes: []int{2}, full: false, source: core.SourceDVD, codec: "xvid", group: "GRP"}},
+		{"Classic_Show_S03_E09_PDTV_XviD-FOV", expect{title: "Classic Show", seasons: []int{3}, episodes: []int{9}, full: false, source: core.SourceHDTV, codec: "xvid", group: "FOV"}},
+		{"Fawlty.Towers.Season.2.Episode.5.The.Anniversary.576p.PAL.DVDRip.x264-GRP", expect{title: "Fawlty Towers", seasons: []int{2}, episodes: []int{5}, full: false, height: 576, source: core.SourceDVD, codec: "h264"}},
+		{"Babylon.5.S01-05.COMPLETE.480p.DVDRip.x264-GRP", expect{title: "Babylon 5", seasons: []int{1, 2, 3, 4, 5}, full: true, height: 480, source: core.SourceDVD}},
+		{"Babylon.5.Seasons.1-5.COMPLETE.DVDRip-GRP", expect{title: "Babylon 5", seasons: []int{1, 2, 3, 4, 5}, full: true, source: core.SourceDVD}},
+		{"Band.of.Brothers.E01.Currahee.1080p.BluRay.x264-GRP", expect{title: "Band of Brothers", episodes: []int{1}, full: false, height: 1080, source: core.SourceBluRay}},
+		{"Chernobyl.2019.Ep.02.1080p.BluRay.x265-GRP", expect{title: "Chernobyl", year: 2019, episodes: []int{2}, full: false, height: 1080}},
+		{"[SubsPlease] Cowboy Bebop - 05 (1080p) [ABCDEF12].mkv", expect{title: "Cowboy Bebop", group: "SubsPlease", episodes: []int{5}, height: 1080, cont: "mkv"}},
+		{"Roundhay.Garden.Scene.1888.1080p.BluRay.x264-GRP", expect{title: "Roundhay Garden Scene", year: 1888, height: 1080}},
+		{"Obscure.Film.1974.VHSRip.XviD.MP3-GRP", expect{title: "Obscure Film", year: 1974, source: core.SourceDVD, codec: "xvid", audio: "mp3"}},
+		{"Classic.Film.2006.1080p.HDDVD.VC-1.DD5.1-GRP", expect{title: "Classic Film", year: 2006, height: 1080, source: core.SourceBluRay, codec: "vc1", audio: "ac3"}},
+		{"Pal.Joey.1957.1080p.BluRay.x264-GRP", expect{title: "Pal Joey", year: 1957, height: 1080}},
+	}
+	for _, c := range cases {
+		check(t, c.name, c.e)
+	}
+	if !EpisodeTitleMatches("Obscure.Show.S01E01.The.Pilot.PDTV.XviD.AC3-GRP", "The Pilot") {
+		t.Fatal("legacy PDTV.XviD.AC3 tags polluted episode title matching")
+	}
+	if title, part, ok := MiniseriesPart("Band.of.Brothers.Part.3.Carentan.1080p.BluRay.x264-GRP"); !ok || title != "Band of Brothers" || part != 3 {
+		t.Fatalf("MiniseriesPart = (%q, %d, %v)", title, part, ok)
+	}
+	if !EpisodeTitleMatches("Band.of.Brothers.Part.3.Carentan.1080p.BluRay.x264-GRP", "Carentan") {
+		t.Fatal("miniseries episode title mismatch")
+	}
+	if !EpisodeTitleMatches("Band.of.Brothers.Part.3.Carentan.1080p.BluRay.x264-GRP", "Part 3") {
+		t.Fatal("miniseries generic Part N title mismatch")
+	}
+}
+
+func TestObscureTitleEquivalenceAndAliases(t *testing.T) {
+	pairs := [][2]string{
+		{"L.A. Confidential", "LA Confidential"},
+		{"M*A*S*H", "MASH"},
+		{"S.W.A.T.", "SWAT"},
+		{"A.I. Artificial Intelligence", "AI Artificial Intelligence"},
+		{"The Man from U.N.C.L.E.", "The Man from UNCLE"},
+		{"Le Samouraï AKA The Godson", "Le Samourai"},
+		{"Le Samouraï AKA The Godson", "The Godson"},
+		{"Sen to Chihiro no Kamikakushi A.K.A. Spirited Away", "Spirited Away"},
+		{"Dr. Strangelove or: How I Learned to Stop Worrying and Love the Bomb", "Dr Strangelove"},
+		{"Birdman or (The Unexpected Virtue of Ignorance)", "Birdman"},
+		{"The Godfather Part II", "The Godfather Part 2"},
+		{"Dune: Part Two", "Dune Part 2"},
+		{"Rocky IV", "Rocky 4"},
+		{"The Office (US)", "The Office US"},
+		{"The Office", "The Office US"},
+		{"Ghosts (UK)", "Ghosts"},
+	}
+	for _, p := range pairs {
+		if !TitlesMatch(p[0], p[1]) || !TitlesMatch(p[1], p[0]) {
+			t.Errorf("TitlesMatch(%q, %q) = false, want true", p[0], p[1])
+		}
+	}
+	aliases := TitleAliases("L.A. Confidential")
+	if len(aliases) == 0 || aliases[0] != "LA Confidential" {
+		t.Fatalf("TitleAliases(L.A. Confidential) = %v", aliases)
+	}
+	if got := TitleAliases("The Signal"); len(got) != 0 {
+		t.Fatalf("ordinary title produced extra aliases: %v", got)
+	}
+}

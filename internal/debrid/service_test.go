@@ -48,6 +48,31 @@ func TestPayloadRoundTripAndFileChoice(t *testing.T) {
 	if f, err := ChooseFile(seasonDirs, &core.ReleaseTarget{Season: 2, Episode: 6}); err != nil || f.ID != "y" {
 		t.Fatalf("NxNN %+v %v", f, err)
 	}
+	if f, err := ChooseFile(seasonDirs, &core.ReleaseTarget{Season: 2, Episode: 5}); err != nil || f.ID != "x" {
+		t.Fatalf("Season/Episode dir %+v %v", f, err)
+	}
+	multiSeason := []File{
+		{ID: "s1e5", Path: "Show/Season 1/Episode 05.mkv", Size: 20},
+		{ID: "s2e5", Path: "Show/Season 2/Episode 05.mkv", Size: 15},
+		{ID: "s2e7", Path: "Show/Season 2/07 - Classic Numbering.mkv", Size: 14},
+		{ID: "s2e8", Path: "Show/Season 2/208 - Production Code.mkv", Size: 13},
+	}
+	if f, err := ChooseFile(multiSeason, &core.ReleaseTarget{Season: 2, Episode: 5}); err != nil || f.ID != "s2e5" {
+		t.Fatalf("multi-season directory disambiguation: got %+v err=%v", f, err)
+	}
+	if f, err := ChooseFile(multiSeason, &core.ReleaseTarget{Season: 2, Episode: 7}); err != nil || f.ID != "s2e7" {
+		t.Fatalf("classic leading episode number: got %+v err=%v", f, err)
+	}
+	if f, err := ChooseFile(multiSeason, &core.ReleaseTarget{Season: 2, Episode: 8}); err != nil || f.ID != "s2e8" {
+		t.Fatalf("classic 3-digit SEE number: got %+v err=%v", f, err)
+	}
+	miniseries := []File{
+		{ID: "p1", Path: "Band.of.Brothers/Part 01 - Currahee.mkv", Size: 30},
+		{ID: "p2", Path: "Band.of.Brothers/Part 02 - Day of Days.mkv", Size: 25},
+	}
+	if f, err := ChooseFile(miniseries, &core.ReleaseTarget{Season: 1, Episode: 2}); err != nil || f.ID != "p2" {
+		t.Fatalf("miniseries Part N: got %+v err=%v", f, err)
+	}
 	if _, err := ChooseFile([]File{{Path: "x.rar", Size: 9}}, nil); !errors.Is(err, core.ErrReleaseRejected) {
 		t.Fatal("rar accepted")
 	}
