@@ -228,6 +228,15 @@ func (s *Session) ServeMedia(w http.ResponseWriter, r *http.Request, rep, n int)
 	s.serveSegment(w, r, rep, n)
 }
 
+// dashCollectBatch bounds the chunks one collectDASH pass consumes per
+// track while ffmpeg is still running. Without a bound the pass chases a
+// fast producer — a copy/remux emits chunk files as fast as the filesystem
+// allows, and where each file operation is slow (Windows) the collector
+// stays permanently one chunk behind — and nothing, not even the init
+// segment, is published until it catches up. The final pass after ffmpeg
+// exits is unbounded.
+const dashCollectBatch = 32
+
 // collectDASH picks up the chunks a DASH run has finished, regroups them
 // into numbered segments and publishes those. exited is true for the final
 // pass after ffmpeg exited.
@@ -262,7 +271,10 @@ func (s *Session) collectDASH(r *run, exited bool) {
 		if t < len(dr.sessionTrack) {
 			st = dr.sessionTrack[t]
 		}
-		for {
+		for consumed := 0; ; consumed++ {
+			if !exited && consumed >= dashCollectBatch {
+				break
+			}
 			chunk := filepath.Join(dr.dir, dashChunkFile(tr.rep, tr.next))
 			if _, err := os.Stat(chunk); err != nil {
 				break

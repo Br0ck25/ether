@@ -68,6 +68,13 @@ type Fault struct {
 	// Truncate sends the 222 line and roughly half of the body, then drops
 	// the connection (BODY/ARTICLE only).
 	Truncate bool
+	// BodyDelay stalls mid-body (BODY/ARTICLE only): the status line and
+	// the first body line go out and are flushed, then nothing is sent
+	// for BodyDelay — or until the client disconnects, whichever comes
+	// first — and the rest of the body follows. This models an upstream
+	// that stops sending without closing the connection, unlike Delay,
+	// which stalls before the status line.
+	BodyDelay time.Duration
 }
 
 // FaultFunc decides a fault per command. cmd is the upper-case verb
@@ -607,6 +614,23 @@ func (s *Server) command(w *bufio.Writer, c net.Conn, sess *session, verb, arg s
 			} else {
 				s.reply(w, 222, "0 "+arg)
 			}
+			if f.BodyDelay > 0 && len(body) > 0 {
+				// Flush the status line (and ARTICLE head) plus the
+				// first body line, then go silent mid-body.
+				cut := bytes.Index(body, []byte("\r\n"))
+				if cut < 0 {
+					cut = 0
+				} else {
+					cut += 2
+				}
+				w.Write(body[:cut])
+				if w.Flush() != nil || !waitBodyDelay(c, f.BodyDelay) {
+					return false
+				}
+				w.Write(body[cut:])
+				w.WriteString(".\r\n")
+				break
+			}
 			if f.Truncate {
 				w.Write(body[:len(body)/2])
 				_ = w.Flush()
@@ -619,6 +643,32 @@ func (s *Server) command(w *bufio.Writer, c net.Conn, sess *session, verb, arg s
 		s.reply(w, 500, "unknown command")
 	}
 	return true
+}
+
+// waitBodyDelay blocks for d, returning false early if the client goes
+// away. A client waiting on a body never sends, so a short-deadline read
+// probe on the raw connection only ever observes a disconnect; buffered
+// pipelined input would be consumed by the probe, which NNTP clients do
+// not produce mid-body.
+func waitBodyDelay(c net.Conn, d time.Duration) bool {
+	defer c.SetReadDeadline(time.Time{})
+	end := time.Now().Add(d)
+	buf := make([]byte, 1)
+	for {
+		remain := time.Until(end)
+		if remain <= 0 {
+			return true
+		}
+		_ = c.SetReadDeadline(time.Now().Add(min(remain, 5*time.Millisecond)))
+		_, err := c.Read(buf)
+		if err == nil {
+			return false // unexpected input mid-body: treat as gone
+		}
+		var ne net.Error
+		if !errors.As(err, &ne) || !ne.Timeout() {
+			return false
+		}
+	}
 }
 
 // selfSigned makes an ECDSA certificate for 127.0.0.1/::1/localhost.

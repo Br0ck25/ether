@@ -628,6 +628,105 @@ func TestDASHConcurrentRequests(t *testing.T) {
 	}
 }
 
+// The ffmpeg DASH muxer finds the directory for its init and chunk
+// files by scanning the manifest output path for '/'. The output path
+// must therefore use forward slashes on every platform; with Windows
+// backslashes the muxer wrote every chunk into its working directory
+// and the session's run directory stayed empty.
+func TestDASHMuxOutputPathUsesForwardSlashes(t *testing.T) {
+	info := mustParse(t, "mp4_h264_aac.json")
+	s := baseSpec(info, Decide(info, plexWeb, allow(), Policy{}))
+	s.Protocol = core.ProtocolDASH
+	s.Dir = filepath.Join("root", "session", "run-1")
+	s.Playlist = "manifest.mpd"
+	args := buildArgs(s)
+	out := args[len(args)-1]
+	if strings.Contains(out, "\\") || !strings.HasSuffix(out, "root/session/run-1/manifest.mpd") {
+		t.Fatalf("DASH output path %q must use forward slashes", out)
+	}
+}
+
+// A collect pass must publish what it has instead of chasing a fast
+// producer until it catches up: with far more chunk files already on
+// disk than one pass may consume, the init segment and the first
+// segments are published after a single bounded pass, and the final
+// pass after ffmpeg exits consumes the remainder. Without the bound
+// nothing was published while the producer kept pace — on Windows,
+// where each chunk file operation is slower, that starved every DASH
+// request into a timeout.
+func TestDASHCollectPublishesAfterBoundedPass(t *testing.T) {
+	dir := t.TempDir()
+	runDir := filepath.Join(dir, "run-1")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, dashInitFile(0)), testVideoInit(1280, 720), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, dashInitFile(1)), testAudioInit(2, 48000), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const chunks = 200 // 1s chunks, 5s segments: 40 segments per track
+	for n := 1; n <= chunks; n++ {
+		v := testChunk(uint32(n), int64(n-1)*90000, 3750, 24, []byte("v"))
+		a := testChunk(uint32(n), int64(n-1)*48000, 960, 50, []byte("a"))
+		if err := os.WriteFile(filepath.Join(runDir, dashChunkFile(0, n)), v, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(runDir, dashChunkFile(1, n)), a, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Session{
+		proto:   core.ProtocolDASH,
+		m:       &Manager{opts: options{}},
+		dir:     dir,
+		segDur:  5 * time.Second,
+		total:   40,
+		log:     testLogger(t),
+		done:    []map[int]bool{{}, {}},
+		changed: make(chan struct{}),
+		dash:    newDASHState([]dashRep{{ID: 0, Kind: "video"}, {ID: 1, Kind: "audio"}}, nil, "bounded"),
+	}
+	proc := &fakeProc{done: make(chan struct{})}
+	close(proc.done) // Err() == nil: a clean EOF exit for the final pass
+	r := &run{seq: 1, proc: proc, maxDone: -1, started: time.Now(),
+		dash: newDASHRun(runDir, []int{0, 1}, 0, s.segDur, s.total, 0)}
+	s.cur = r
+
+	s.collectDASH(r, false)
+	for tr, track := range r.dash.tracks {
+		if want := 1 + dashCollectBatch; track.next != want {
+			t.Fatalf("track %d consumed to chunk %d, want bounded pass to stop at %d", tr, track.next, want)
+		}
+		if _, err := os.Stat(filepath.Join(runDir, dashChunkFile(tr, track.next))); err != nil {
+			t.Fatalf("track %d: unconsumed chunk should still exist: %v", tr, err)
+		}
+	}
+	if s.dash.inits[0] == "" || s.dash.inits[1] == "" {
+		t.Fatal("init segments not published by bounded pass")
+	}
+	// 32 one-second chunks complete segments 0-5; segment 6 is pending.
+	for _, track := range []int{0, 1} {
+		if !s.done[track][0] || !s.done[track][5] || s.done[track][6] {
+			t.Fatalf("track %d published segments wrong after bounded pass: %v", track, s.done[track])
+		}
+		if _, err := os.Stat(s.trackSegPath(track, 0)); err != nil {
+			t.Fatalf("track %d segment 0 file missing: %v", track, err)
+		}
+	}
+
+	s.collectDASH(r, true)
+	for tr, track := range r.dash.tracks {
+		if track.next != chunks+1 {
+			t.Fatalf("track %d final pass consumed to %d, want %d", tr, track.next, chunks+1)
+		}
+		if len(s.done[tr]) != 40 || !s.done[tr][39] {
+			t.Fatalf("track %d final pass published %d segments, want all 40", tr, len(s.done[tr]))
+		}
+	}
+}
+
 func TestLiveMPDOnlyAdvertisesCompletedWindow(t *testing.T) {
 	start := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	init, media := PlexDASHURLs("live")

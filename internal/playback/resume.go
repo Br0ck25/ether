@@ -104,6 +104,11 @@ type resumeWrite struct {
 	rec    resumeRecord
 	hash   string
 	points []core.KeyframePoint
+	// probe travels in the same write as the record, so the persisted
+	// probe can never land before (or outlive a queued replacement of)
+	// the resume row it describes.
+	probe core.MediaInfo
+	nzb   []byte
 }
 
 // maxHeldResumes bounds resume records held through an outage (each may
@@ -119,7 +124,10 @@ func (s *resumeStore) hold(avail *store.Availability, log *slog.Logger) {
 			if err := s.saveRow(ctx, w.rec, w.hash); err != nil {
 				return err
 			}
-			return s.saveIndex(ctx, w.rec.userID, w.rec.key, w.rec.release.ID, w.points)
+			if err := s.saveIndex(ctx, w.rec.userID, w.rec.key, w.rec.release.ID, w.points); err != nil {
+				return err
+			}
+			return s.saveProbe(ctx, w.rec.userID, w.rec.key, w.rec.release.ID, w.nzb, w.probe, w.rec.updatedAt)
 		},
 	})
 }
@@ -136,6 +144,12 @@ func (s *resumeStore) close(ctx context.Context) error {
 // node that cannot reach the database — when the database is back. The
 // NZB is written to local disk first either way.
 func (s *resumeStore) put(ctx context.Context, rec resumeRecord, nzb []byte, points []core.KeyframePoint) error {
+	return s.putWithProbe(ctx, rec, nzb, points, core.MediaInfo{})
+}
+
+// putWithProbe is put plus the probed facts of the serving generation,
+// persisted in the same (possibly held) write as the resume row.
+func (s *resumeStore) putWithProbe(ctx context.Context, rec resumeRecord, nzb []byte, points []core.KeyframePoint, probe core.MediaInfo) error {
 	if len(nzb) == 0 {
 		return errors.New("playback: empty nzb")
 	}
@@ -144,7 +158,7 @@ func (s *resumeStore) put(ctx context.Context, rec resumeRecord, nzb []byte, poi
 		return fmt.Errorf("playback: store nzb: %w", err)
 	}
 	if s.held != nil {
-		queued, err := s.held.Write(ctx, resumeKey{rec.userID, rec.key}, resumeWrite{rec: rec, hash: hash, points: points})
+		queued, err := s.held.Write(ctx, resumeKey{rec.userID, rec.key}, resumeWrite{rec: rec, hash: hash, points: points, probe: probe, nzb: nzb})
 		if !queued {
 			s.releaseNZB(hash)
 		}
@@ -157,7 +171,10 @@ func (s *resumeStore) put(ctx context.Context, rec resumeRecord, nzb []byte, poi
 	if err != nil {
 		return err
 	}
-	return s.saveIndex(ctx, rec.userID, rec.key, rec.release.ID, points)
+	if err := s.saveIndex(ctx, rec.userID, rec.key, rec.release.ID, points); err != nil {
+		return err
+	}
+	return s.saveProbe(ctx, rec.userID, rec.key, rec.release.ID, nzb, probe, rec.updatedAt)
 }
 
 func newResumeStore(db *sql.DB, dataDir string) (*resumeStore, error) {
@@ -291,6 +308,9 @@ func (s *resumeStore) saveRow(ctx context.Context, rec resumeRecord, hash string
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_index WHERE user_id=? AND rating_key=? AND release_id<>?`, rec.userID, int64(rec.key), rec.release.ID); err != nil {
 		return err
 	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_probe WHERE user_id=? AND rating_key=? AND release_id<>?`, rec.userID, int64(rec.key), rec.release.ID); err != nil {
+		return err
+	}
 	var oldHash string
 	err = s.db.QueryRowContext(ctx, `SELECT nzb_hash FROM playback_resume WHERE user_id=? AND rating_key=?`,
 		rec.userID, int64(rec.key)).Scan(&oldHash)
@@ -385,6 +405,9 @@ func (s *resumeStore) delete(ctx context.Context, userID int64, key core.RatingK
 	// The record expired: nothing prunes its keyframe index any more (a
 	// later save only replaces other releases' indexes for a live record).
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_index WHERE user_id=? AND rating_key=?`, userID, int64(key)); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM playback_probe WHERE user_id=? AND rating_key=?`, userID, int64(key)); err != nil {
 		return err
 	}
 	s.gcNZB(ctx, hash)

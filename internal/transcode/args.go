@@ -208,6 +208,13 @@ func buildCodecArgs(s runSpec) []string {
 	if a != nil {
 		if d.AudioCopy {
 			args = append(args, "-c:a", "copy")
+			if s.Protocol == core.ProtocolDASH && s.Start > 0 {
+				// Input seeking retains copied packets from the preceding
+				// video keyframe. Drop audio preroll without re-encoding or
+				// discarding the video keyframe required to decode a copy
+				// rendition. amount=0 explicitly leaves retained bytes intact.
+				args = append(args, "-bsf:a", "noise=amount=0:drop='lt(pts*tb,"+secs(s.Start)+")'")
+			}
 			if container == ContainerFMP4 {
 				tag := "0"
 				if a.Codec == "aac" {
@@ -330,7 +337,12 @@ func dashMuxArgs(s runSpec) []string {
 		"-adaptation_sets", strings.Join(sets, " "),
 		"-init_seg_name", dashInitPattern,
 		"-media_seg_name", dashChunkPattern,
-		filepath.Join(s.Dir, s.Playlist),
+		// The dash muxer places segment files in the manifest's
+		// directory, which it finds by scanning the output path for
+		// '/'. A Windows path with backslashes has none, so segments
+		// landed in ffmpeg's working directory instead of the run
+		// directory. Forward slashes work in Windows paths too.
+		filepath.ToSlash(filepath.Join(s.Dir, s.Playlist)),
 	}
 }
 
