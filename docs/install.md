@@ -131,6 +131,14 @@ outside your LAN:
   port 443 with *Secure connections* set to *Required*) at your `https://`
   domain; Ether publishes that HTTPS endpoint directly to plex.tv without
   requiring a `plex.direct` certificate.
+  A proxy on the Ether host must set `X-Forwarded-For` to the connecting
+  client's address (or append it to the existing chain). If using
+  `X-Real-IP` instead, overwrite it and remove incoming `X-Forwarded-For`.
+  Never pass client-supplied forwarding headers unchanged.
+  Ether considers forwarded addresses only from loopback peers and treats
+  any public hop in the trusted suffix as remote for playback restrictions.
+  Keep the owner UI path `/ether/` private at the proxy; complete initial
+  setup before exposing the server.
 
 ## Running a cluster
 
