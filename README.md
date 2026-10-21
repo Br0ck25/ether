@@ -2,10 +2,10 @@
   <img src=".github/assets/ether-logo.svg" alt="Ether" width="360" />
 </p>
 
-<h2 align="center">Every movie and TV show ever released. Already inside the Plex app your family uses.<br />Zero downloads. Zero mounts. One binary.</h2>
+<h2 align="center">The whole TMDB catalogue, inside the Plex app your family already uses.<br />No downloads. No mounts. One binary.</h2>
 
 <p align="center">
-  Press <b>Play</b> on any title in any official Plex app. Ether resolves the best release across <b>your Usenet providers</b> and <b>your debrid accounts</b>, verifies it in milliseconds, and streams the exact byte ranges straight to the screen.
+  Press <b>Play</b> on a title in any official Plex app. Ether resolves the best release across <b>your Usenet providers</b> and <b>your debrid accounts</b>, health-checks it, and streams the exact byte ranges the player asks for.
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
   <a href="#why-ether-exists">Why Ether Exists</a> ·
   <a href="#under-the-hood">Under the Hood</a> ·
   <a href="#the-owner-experience">Product Tour</a> ·
-  <a href="#what-you-can-shut-down">What It Replaces</a> ·
+  <a href="#what-it-can-replace">What It Replaces</a> ·
   <a href="#install-in-five-minutes">Install in 5 Minutes</a> ·
   <a href="#questions-youre-about-to-ask">FAQ</a>
 </p>
@@ -33,32 +33,26 @@
 
 ## Why Ether exists
 
-Look at what it actually takes to run a "modern" automated Plex stack today:
+A typical automated Plex setup is built from several excellent projects—Sonarr, Radarr, Prowlarr, SABnzbd, Overseerr, Kometa, Tautulli and more—each of them very good at its job. Wiring them together still means download clients, path mappings, webhooks and, for debrid users, FUSE/WebDAV mounts that Plex Media Server has to scan. A new title still has to download, unpack and be scanned before anyone can press Play.
 
-> **Plex Media Server + Sonarr + Radarr + Prowlarr + Bazarr + SABnzbd + zurg/rclone + Overseerr + Kometa (PMM) + Tautulli + Recyclarr + Maintainerr + Unpackerr + ErsatzTV**
+Ether takes a different approach to the on-demand case. Instead of presenting files for Plex Media Server to scan, **Ether speaks the PMS protocol itself.** It talks directly to official Plex clients (Apple TV, iOS, Android TV, Shield, Fire TV, Roku, Smart TVs, Web) and backs the library with the live TMDB catalogue and an on-demand byte-range streaming engine.
 
-That is **14 separate processes** written in five languages, glued together by brittle webhooks, cron jobs, hardlink gymnastics, 3,000-line YAML files, and FUSE/WebDAV mounts that lock up your host the moment an upstream provider hiccups—all so someone on the couch can request a movie, wait ten minutes for it to download, unpack, and scan, and finally press Play.
-
-**Ether deletes the entire Rube Goldberg machine by collapsing the protocol boundary.**
-
-Instead of faking a filesystem with FUSE or symlink farms and hoping a real Plex Media Server doesn't choke scanning 50,000 virtual files, **Ether *is* the Plex Media Server.** It speaks the native PMS protocol directly to official Plex clients (Apple TV, iOS, Android TV, Shield, Fire TV, Roku, Smart TVs, Web) while backing the library with the live TMDB catalogue and an on-demand byte-range streaming engine.
-
-When you open Plex, **everything ever released is already there.** When you press **Play**, Ether resolves, health-checks, and streams the bytes on the fly. When you scrub to `01:14:22`, Ether jumps to the exact keyframe offset inside a remote Usenet RAR5 set or debrid HTTPS stream and serves those bytes in milliseconds.
+When you open Plex, **the catalogue is already there.** When you press **Play**, Ether resolves, health-checks, and streams the bytes on the fly. When you scrub to `01:14:22`, Ether seeks to the matching keyframe offset inside a remote Usenet RAR5 set or debrid HTTPS stream and serves just those bytes.
 
 | What your family experiences | What you stop maintaining |
 | :--- | :--- |
-| **Instant gratification.** Every released movie and show is already browsable, searchable, and playable inside the stock Plex app. | No request portals. No *"Can you add this to Plex?"* texts. No waiting for downloads, extractions, or library scans. |
-| **A Home screen that actually knows them.** Every viewer gets their own taste model, row ordering, and runtime-aware picks. | No static library hubs where everyone stares at the same *Recently Added* row. |
-| **It just plays.** Automatic provider backfill, mid-stream release failover, synced subtitles, and Skip Intro / Skip Credits. | No dead mounts, stuck queues, out-of-sync `.srt` files, or broken archives waking you up on Friday night. |
-| **Zero storage anxiety.** Run in 256 MiB pass-through mode or let a multi-terabyte shelf pre-warm what your household watches next. | No Maintainerr rules deleting movies people still wanted, and no buying 100 TB of spinning rust just to have options. |
+| **Press Play and watch.** Titles are browsable, searchable, and playable inside the stock Plex app. | No request queue. No *"Can you add this to Plex?"* texts. No waiting for downloads, extractions, or library scans. |
+| **A Home screen that knows them.** Every viewer gets their own taste model, row ordering, and runtime-aware picks. | No single *Recently Added* row shared by everyone in the house. |
+| **It just plays.** Automatic provider backfill, mid-stream release failover, synced subtitles, and Skip Intro / Skip Credits. | No dead mounts, stuck queues, out-of-sync `.srt` files, or broken archives to chase on a Friday night. |
+| **Storage you choose.** Run in 256 MiB pass-through mode or let a multi-terabyte shelf pre-warm what your household watches next. | No cleanup rules to tune, and no need to buy storage for everything you might watch. |
 
 ---
 
-## What you can shut down
+## What it can replace
 
-Ether isn't a wrapper around the `*arr` stack. It replaces the entire pipeline inside a single `CGO_ENABLED=0` Go binary with an embedded React control plane and SQLite (or PostgreSQL) storage.
+The projects below are mature, well-loved, and still the right tools for curating a local library on disk. For on-demand streaming, Ether covers the same ground inside a single `CGO_ENABLED=0` Go binary with an embedded React control plane and SQLite (or PostgreSQL) storage.
 
-| Legacy Stack Component | How Ether Replaces It Natively |
+| If you run today | What Ether does instead |
 | :--- | :--- |
 | **Plex Media Server** *(for streaming)* | Clean-room implementation of the PMS HTTP/HLS/DASH/GDM protocol, `*.plex.direct` TLS, and `plex.tv` sharing. *(Keep PMS only if you also curate local files on disk.)* |
 | **Sonarr & Radarr** | Resolution happens at **Play** time (or during detail-page warmup) using your quality profiles, custom formats, edition rules, and release pins. |
@@ -66,7 +60,7 @@ Ether isn't a wrapper around the `*arr` stack. It replaces the entire pipeline i
 | **SABnzbd, NZBGet, NzbDAV, AltMount** | Native NNTP connection pools, wire-pipelined `BODY` fetching, SWAR yEnc decoding, and direct byte-range seeking inside store-mode RAR4, RAR5, and 7z sets (including password-protected stored archives). |
 | **zurg, rclone, Riven, plex_debrid** | Native HTTPS range streaming for **Real-Debrid, TorBox, AllDebrid, and Premiumize**—including single-episode extraction from torrent season packs without mounts. |
 | **Overseerr & Jellyseerr** | Released titles need no requests. Viewers' Plex and Trakt Watchlists sync automatically and notify them the moment newly released titles become playable. |
-| **Kometa (Plex Meta Manager)** | Live visual poster studio and rule-based collection builder in the browser. Renders `4K / DV / Atmos` and rating badges in pure Go on demand—no YAML, no cron jobs. |
+| **Kometa (Plex Meta Manager)** | Live visual poster studio and rule-based collection builder in the browser. Renders `4K / DV / Atmos` and rating badges in pure Go on demand, configured in the browser. |
 | **Bazarr** | Automatic OpenSubtitles matching plus **piecewise dialogue-timing alignment** that syncs subtitles and skip markers across different cuts without downloading video. |
 | **Tautulli & Notifiarr** | Built-in real-time session monitor, 30-day analytics, provider throughput graphs, weekly HTML digests, and rule-filtered alerts (Discord, Slack, Telegram, Push, Email, ntfy, Gotify). |
 | **Maintainerr** | Self-evicting segment cache with repeat-watch retention credit and rolling TV episode preloading that automatically slides forward as your household watches. |
@@ -74,7 +68,7 @@ Ether isn't a wrapper around the `*arr` stack. It replaces the entire pipeline i
 
 ---
 
-## Under the hood: engineering that feels like magic
+## Under the hood
 
 ```
                        Official Plex Apps (Apple TV · iOS · Android TV · Web · Roku)
@@ -101,7 +95,7 @@ Ether isn't a wrapper around the `*arr` stack. It replaces the entire pipeline i
 * **Surgical Matroska damage concealment & live failover:** Priority semaphores strictly protect `PriorityLive` reads over read-ahead and background prefetch. If an article is genuinely missing mid-stream inside an unlaced Matroska frame payload, Ether conceals the gap while warming an alternate release in the background—and if a release stalls or breaks, fails over to another release at the exact same scene.
 
 ### 2. Server-side NVIDIA RTX Video Super Resolution (`nvenc-ngx-vsr`) & GPU pipelines
-Watching 90s sitcoms, classic anime, or DVD-era 480p/576p/720p shows on a 4K OLED usually looks like Vaseline. Client-side upscalers only exist on a handful of devices.
+90s sitcoms, classic anime, and DVD-era 480p/576p/720p shows tend to look soft on a 4K TV, and client-side upscalers only exist on a handful of devices.
 * **Tensor-Core neural upscaling on the server:** On Windows hosts with an NVIDIA RTX GPU and `NVEncC64` (with NVIDIA NGX VSR runtime DLLs), Ether can run **NVIDIA RTX Video Super Resolution** directly inside the server's HLS/DASH transcode pipeline—cleaning compression artifacts and reconstructing crisp edges on SDR H.264 streams before they ever reach an Apple TV, Roku, iPad, or browser.
 * **Self-protecting ABR & fallback:** RTX VSR is opt-in (off by default) with owner-configurable source/target resolution caps (e.g. `≤720p → 1080p`), quality tiers, and concurrency limits. Enhancement is reserved for the top ABR rendition; if measured client bandwidth dips or the GPU concurrency limit is reached, Ether seamlessly drops to ordinary hardware/software ABR renditions without interrupting playback or mislabeling an ordinary scaler as RTX VSR.
 * **Zero-copy GPU surface transcoding:** For standard transcodes across NVIDIA NVENC, Intel QuickSync, VAAPI, and Apple VideoToolbox, Ether keeps decode, scaling, and encode on GPU hardware surfaces end-to-end and bounds software fallback worker threads.
@@ -111,7 +105,7 @@ What happens when a stream fails over at `00:52:18` from a Theatrical WEB-DL to 
 * Ether aligns the **subtitle dialogue timelines** of the two releases using a piecewise-linear solver—**without downloading a single byte of video**—accounting for studio logo offsets, PAL 25fps speedup, and inserted/removed scenes.
 * That same dialogue engine inspects subtitle cues inside closing credits to **detect mid- and post-credits stinger scenes**, automatically ending the *Skip Credits* marker right before the stinger begins.
 
-### 4. Netflix-grade personalization inside stock Plex apps
+### 4. Personalization inside stock Plex apps
 Viewers never leave the official Plex client, yet every person's Home screen is dynamically assembled for *them*, *their device*, and *the current hour*:
 * **Per-viewer taste models:** Tracks affinities across genres, keywords, directors, actors, decades, and languages with exponential time decay—separating completions and comfort rewatches from early abandons and unplayed impressions.
 * **Hierarchical Thompson-sampling bandits:** Row ordering uses a Beta-Bernoulli bandit that blends hand-tuned priors → server-wide evidence → the viewer's own play rate, seeded deterministically per `(viewer, day, row)` so Home explores daily without jumping around on every refresh.
