@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse, hashlib, json, os, re, signal, subprocess, sys, time, uuid
 import concurrent.futures, threading, urllib.error, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path
 
 SENSITIVE = re.compile(r'(?i)(x-plex-token|plexonline token|authorization|token|password|secret)(["\'=:\s]+)([^\s"\'&,;]+)')
@@ -185,7 +185,11 @@ def http_get(url: str, timeout: float, headers=None):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, dict(r.headers), r.read()
     except urllib.error.HTTPError as e:
-        raise BenchError(f"HTTP {e.code} for {sanitize(url)}: {sanitize(e.read().decode(errors='replace')[:500])}")
+        try:
+            detail=sanitize(e.read().decode(errors='replace')[:500])
+        finally:
+            e.close()
+        raise BenchError(f"HTTP {e.code} for {sanitize(url)}: {detail}")
     except Exception as e:
         raise BenchError(f"HTTP error for {sanitize(url)}: {e}")
 
@@ -237,12 +241,16 @@ class PmsProcess:
 # ---------- one transcode session ----------
 def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dict:
     session=uuid.uuid4().hex
-    prof=cfg.profile; params=prof.decision_params(cfg.rating_key, session)
+    # PMS replaces the previous transcode for the same client identifier,
+    # even when the URL's session GUID differs. Model independent viewers.
+    prof=replace(cfg.profile, client_identifier=f"{cfg.profile.client_identifier}-{session}")
+    params=prof.decision_params(cfg.rating_key, session)
     qs=urllib.parse.urlencode(params)
     result={"session_index":idx,"session_id":session,"profile":asdict(prof),
             "requested_duration_s":cfg.duration_s,"mode":cfg.mode}
     stop_url=f"{cfg.base_url}/video/:/transcode/universal/stop?{urllib.parse.urlencode({'session':session})}"
     t_setup=time.monotonic()
+    argv_stop=None; argv_thread=None
     try:
         # decision (setup phase, not encode)
         s,_,body=http_get(f"{cfg.base_url}/video/:/transcode/universal/decision?{qs}", timeout=min(30,cfg.timeout_s), headers=prof.headers())
@@ -263,7 +271,8 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
         result["setup_s"]=time.monotonic()-t_setup
 
         # encode phase; capture authentic argv early/often (encoder can be short-lived)
-        t_enc=time.monotonic(); first_latency=None
+        cpu_start=sample_tree(root_pid) if root_pid else None
+        t_enc=time.monotonic(); first_latency=None; last_delivery=None
         argv_by_key={}; argv_stop=threading.Event()
         def argv_poller():
             while not argv_stop.is_set():
@@ -284,13 +293,13 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
         else: playlist_url=start_url
 
         downloaded={}  # uri -> (bytes, extinf)
-        seen=set(); order={}; peak_rss=None; cpu_start=sample_tree(root_pid) if root_pid else None
+        seen=set(); order={}; peak_rss=None
         samples=[]; deadline=t_enc+cfg.timeout_s
         media_dir=out_dir/f"session-{idx}"
         if cfg.preserve_media: media_dir.mkdir(parents=True, exist_ok=True)
         lock=threading.Lock()
         def fetch(item):
-            nonlocal first_latency
+            nonlocal first_latency, last_delivery
             uri, extinf = item; ordinal=order[uri]
             # PMS lists segments before they are fully written; retry 404s briefly.
             deadline_seg=time.monotonic()+15.0; data=None
@@ -305,7 +314,8 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
             if not data: raise BenchError(f"empty segment {sanitize(uri)}")
             with lock:
                 downloaded[uri]=(len(data),extinf)
-                if ordinal==0 and first_latency is None: first_latency=time.monotonic()-t_enc  # first segment body complete
+                last_delivery=time.monotonic()
+                if ordinal==0 and first_latency is None: first_latency=last_delivery-t_enc  # first segment body complete
             if cfg.preserve_media:  # stable playlist-order name, not completion order
                 (media_dir/f"seg-{ordinal:05d}.ts").write_bytes(data)
             return len(data)
@@ -329,7 +339,13 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
                     seen.add(uri); new.append((uri,extinf)); queued_media+=extinf
                 if new:
                     if cfg.mode=="paced":
-                        for item in new: fetch(item); time.sleep(min(item[1],2.0))
+                        for item in new:
+                            # Request the next segment at its playback boundary;
+                            # the first segment is requested immediately.
+                            elapsed_media=sum(v[1] for v in downloaded.values())
+                            delay=t_enc+elapsed_media-time.monotonic()
+                            if delay>0: time.sleep(min(delay,max(0,deadline-time.monotonic())))
+                            fetch(item)
                     else:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8,len(new))) as ex:
                             list(ex.map(fetch,new))
@@ -342,6 +358,7 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
                 time.sleep(cfg.poll_interval_s)
             else:
                 raise BenchError(f"session timeout after {cfg.timeout_s}s")
+            cpu_end=sample_tree(root_pid) if root_pid else None
         finally:
             argv_stop.set(); argv_thread.join(timeout=2)
         cmdlines=list(argv_by_key.values())
@@ -351,7 +368,8 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
         actual_media=sum(v[1] for v in downloaded.values())
         if not downloaded: raise BenchError("no segments downloaded")
         if actual_media<=0: raise BenchError("unknown media duration: EXTINF total is zero")
-        result.update({"encode_s":time.monotonic()-t_enc,"first_segment_latency_s":first_latency,
+        result.update({"encode_s":last_delivery-t_enc,"first_segment_latency_s":first_latency,
+            "measurement_finished_monotonic_s":last_delivery,
             "first_segment_latency_definition":"seconds from encode start until segment 0 body fully downloaded",
             "actual_media_s":round(actual_media,3),"segment_count":len(downloaded),
             "output_bytes":sum(v[0] for v in downloaded.values()),
@@ -359,7 +377,6 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
             "cpu_sampling":"available" if samples else "unavailable",
             "transcoder_cmdlines":cmdlines,"playlist_endlist":end})
         if cpu_start and root_pid and samples:
-            cpu_end=sample_tree(root_pid)
             delta, io_delta, valid = compute_tree_delta(cpu_start, cpu_end)
             if valid:
                 result["tree_cpu_delta_s"]=delta; result["tree_io_delta"]=io_delta
@@ -381,6 +398,8 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
             "transcoder_used_hw": any(("vaapi" in c["cmdline"] or "nvenc" in c["cmdline"]) for c in cmdlines)}
         return result
     finally:
+        if argv_stop is not None: argv_stop.set()
+        if argv_thread is not None: argv_thread.join(timeout=2)
         # stop request each session in finally; reflect actual success
         try:
             stop_status,_,_ = http_get(stop_url, timeout=5)
@@ -480,9 +499,13 @@ def main(argv=None):
                 futs=[ex.submit(run_session,cfg,root_pid,out_dir,wave*cfg.concurrency+i) for i in range(cfg.concurrency)]
                 for f in futs: wave_sessions.append(f.result())
             wall=time.monotonic()-t_wave
+            completed=[s.get("measurement_finished_monotonic_s") for s in wave_sessions]
+            delivery_wall=max(completed)-t_wave if completed and all(v is not None for v in completed) else None
             media_total=round(sum(s.get("actual_media_s") or 0 for s in wave_sessions),3)
             wall_r=round(wall,3)
             waves.append({"wave":wave,"wall_s":wall_r,"concurrency":cfg.concurrency,
+                          "delivery_wall_s":round(delivery_wall,3) if delivery_wall is not None else None,
+                          "aggregate_media_per_delivery_s":round(media_total/delivery_wall,3) if delivery_wall and delivery_wall>0 else None,
                           "sessions":len(wave_sessions),"actual_media_total_s":media_total,
                           "aggregate_media_per_wall_s": round(media_total/wall_r,3) if wall_r>0 else None})
             sessions.extend(wave_sessions)

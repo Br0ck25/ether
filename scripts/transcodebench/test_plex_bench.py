@@ -25,8 +25,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # negotiation must carry a real transcode target, not Generic
             assert "add-transcode-target" in p or "add-transcode-target" in (self.headers.get("X-Plex-Client-Profile-Extra") or ""), "missing profile extra"
             return self._send(200, DECISION, "text/xml")
-        if "start.m3u8" in p: return self._send(200, MASTER.encode())
-        if "media.m3u8" in p: return self._send(200, (MEDIA_SHORT if self.mode=="short" else MEDIA).encode())
+        if "start.m3u8" in p:
+            if self.mode == "start500": return self._send(500,b"start failed")
+            return self._send(200, MASTER.encode())
+        if "media.m3u8" in p:
+            media=MEDIA_SHORT if self.mode=="short" else MEDIA
+            if self.mode == "unfinished": media=media.replace("#EXT-X-ENDLIST\n", "")
+            return self._send(200, media.encode())
         if "seg" in p and p.endswith(".ts"):
             idx = int(p.split("seg")[1].split(".")[0])
             if self.mode == "order" and idx == 0:
@@ -61,7 +66,55 @@ class TestFakeServer(unittest.TestCase):
         cls.port = cls.srv.server_address[1]
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
     @classmethod
-    def tearDownClass(cls): cls.srv.shutdown()
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+    def test_sessions_use_independent_client_identities(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg=self.cfg()
+            a=pb.run_session(cfg,None,Path(d),0)
+            b=pb.run_session(cfg,None,Path(d),1)
+            self.assertNotEqual(a["profile"]["client_identifier"],b["profile"]["client_identifier"])
+            self.assertEqual(cfg.profile.client_identifier,"ether-lab-bench")
+    def test_duration_boundary_does_not_wait_for_endlist(self):
+        import tempfile
+        Handler.mode="unfinished"
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                result=pb.run_session(self.cfg(4),None,Path(d),0)
+            self.assertEqual(result["actual_media_s"],4)
+            self.assertEqual(result["segment_count"],1)
+            self.assertFalse(result["playlist_endlist"])
+        finally: Handler.mode="ok"
+    def test_capture_cleanup_does_not_inflate_encode_time(self):
+        import tempfile,time
+        from unittest import mock
+        Handler.mode="ok"
+        def slow_capture(pid):
+            time.sleep(.3)
+            return [{"pid":pid,"cmdline":"Plex Transcoder -codec libx264","argv":[]}]
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(pb,"capture_transcoder_cmdlines",side_effect=slow_capture), mock.patch.object(pb,"sample_tree",return_value={"cpu_seconds":0,"rss_bytes":1,"read_bytes":0,"write_bytes":0,"processes":[{"pid":1}]}):
+            start=time.monotonic()
+            result=pb.run_session(self.cfg(4),1,Path(d),0)
+            elapsed=time.monotonic()-start
+        self.assertGreaterEqual(elapsed,.3)
+        self.assertLess(result["encode_s"],elapsed-.15)
+        self.assertLessEqual(result["measurement_finished_monotonic_s"],time.monotonic())
+    def test_start_failure_stops_argv_poller(self):
+        import tempfile
+        from unittest import mock
+        seen=[]
+        def capture(pid):
+            seen.append(threading.current_thread())
+            return []
+        Handler.mode="start500"
+        try:
+            with tempfile.TemporaryDirectory() as d, mock.patch.object(pb,"capture_transcoder_cmdlines",side_effect=capture), mock.patch.object(pb,"sample_tree",return_value={}):
+                with self.assertRaises(pb.BenchError): pb.run_session(self.cfg(),1,Path(d),0)
+            self.assertTrue(seen)
+            self.assertTrue(all(not t.is_alive() for t in seen))
+        finally: Handler.mode="ok"
     def cfg(self, dur=10.0):
         return pb.Config(lab_root="/nonexistent", base_url=f"http://127.0.0.1:{self.port}",
                          duration_s=dur, timeout_s=20, launch=False)
