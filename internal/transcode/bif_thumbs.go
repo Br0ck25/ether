@@ -396,14 +396,14 @@ func planFrames(duration, interval time.Duration, keyframes []core.KeyframePoint
 func thumbArgs(input string, at time.Duration, width, quality int) []string {
 	ss := strconv.FormatFloat(at.Seconds(), 'f', 3, 64)
 	vf := fmt.Sprintf("scale=%d:-2,format=yuvj420p", width)
-	return []string{
-		"-nostdin", "-hide_banner", "-loglevel", "error",
-		"-threads", "1",
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-threads", "1"}
+	args = append(args, inputSafetyArgs(input, false)...)
+	return append(args,
 		"-ss", ss, "-i", input,
 		"-frames:v", "1", "-vf", vf,
 		"-q:v", strconv.Itoa(quality),
 		"-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
-	}
+	)
 }
 
 // extractFrame decodes one thumbnail at at. An empty result with a nil

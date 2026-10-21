@@ -32,6 +32,7 @@ import (
 // track per representation (video, audio); ffmpeg's dash muxer writes short
 // chunks that the session regroups into numbered segments by timestamp.
 type Session struct {
+	liveInput    bool
 	inputHeaders map[string]string
 	id           string
 	m            *Manager
@@ -1087,6 +1088,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	rp := s.runPlanLocked(seg)
 	s.seekRampSeg = -1
 	spec := runSpec{
+		LiveInput:    s.liveInput,
 		InputHeaders: s.inputHeaders,
 		Input:        s.input,
 		Info:         s.info,

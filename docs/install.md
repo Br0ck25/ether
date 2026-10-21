@@ -221,7 +221,11 @@ The token is shown once and is a secret: it carries the database password and
 credential key. Use it promptly and do not paste it into chats or tickets.
 Checking the connection does not consume it. A successful join consumes it;
 a failed join may require a fresh token. Unused tokens can be revoked from
-the Cluster page.
+the Cluster page. Expiration, use and revocation only prevent Ether enrollment;
+they do not invalidate the embedded database password or credential key. A
+saved copy stays sensitive afterward. If a token leaks, rotate the database
+password on every node and any stored provider or Plex credentials the
+recipient could have read. Revocation alone does not contain that exposure.
 
 The `ether cluster init`, `token` and `join` commands remain available for
 scripted deployments; the web flow performs their operations automatically.

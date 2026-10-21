@@ -510,6 +510,7 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		return nil, fmt.Errorf("transcode: session dir: %w", err)
 	}
 	s := &Session{
+		liveInput:    req.LiveInput,
 		id:           id,
 		m:            m,
 		dir:          dir,

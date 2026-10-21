@@ -19,6 +19,17 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
+// setArtworkHeaders keeps remote SVG (or an upstream HTML error page) from
+// executing on Ether's origin when opened directly. Plex and the owner UI share
+// an origin, and the latter stores its owner credential in localStorage. Image
+// requests can carry a viewer's query token, so viewer authentication alone does
+// not make an active artwork document safe for the owner's browser.
+func setArtworkHeaders(h http.Header, contentType string) {
+	h.Set("Content-Type", contentType)
+	h.Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox")
+	h.Set("X-Content-Type-Options", "nosniff")
+}
+
 // ---------------------------------------------------------------------------
 // Artwork cache: an in-memory LRU of fetched TMDB images, with request
 // coalescing so a grid of posters is fetched once.
@@ -348,7 +359,7 @@ func (s *Server) serveRemoteImage(w http.ResponseWriter, r *http.Request, u stri
 		return
 	}
 	h := w.Header()
-	h.Set("Content-Type", img.contentType)
+	setArtworkHeaders(h, img.contentType)
 	h.Set("Cache-Control", "max-age=604800, private")
 	h.Add("Vary", "X-Plex-Token")
 	h.Set("Content-Length", strconv.Itoa(len(img.data)))

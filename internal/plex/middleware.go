@@ -30,6 +30,14 @@ func (s *Server) commonHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Plex-Protocol", "1.0")
+		// Plex routes serve data and upstream media, never the owner SPA
+		// (which is mounted separately at /ether/). A provider can return
+		// HTML/SVG even from a media URL; direct navigation must not execute
+		// it on the origin that holds the owner's localStorage credential.
+		// Leave media/image sources unrestricted for ordinary playback.
+		// Artwork handlers replace this with their stricter image policy.
+		h.Set("Content-Security-Policy", "script-src 'none'; object-src 'none'; base-uri 'none'; sandbox")
+		h.Set("X-Content-Type-Options", "nosniff")
 		// Like PMS, CORS headers are only sent to cross-origin (browser)
 		// requests.
 		if origin := r.Header.Get("Origin"); origin != "" {

@@ -319,7 +319,7 @@ func (s *Server) handleDiscoveryPoster(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, 404)
 		return
 	}
-	w.Header().Set("Content-Type", ct)
+	setArtworkHeaders(w.Header(), ct)
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(data)
