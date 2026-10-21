@@ -12,11 +12,12 @@ import (
 )
 
 type candidate struct {
-	rel       core.Release
-	trace     int
-	verified  bool
-	bandwidth int             // fits client cap (+1), unknown (0), or exceeds it (-1)
-	prepared  *candidateCheck // validation overlapped with descriptor discovery
+	rel        core.Release
+	trace      int
+	verified   bool
+	bandwidth  int             // fits client cap (+1), unknown (0), or exceeds it (-1)
+	prepared   *candidateCheck // validation overlapped with descriptor discovery
+	graceStart time.Time       // discovery start, set only when preparation overran the grace
 }
 type validation struct {
 	index                         int
