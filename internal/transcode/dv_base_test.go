@@ -28,6 +28,45 @@ func TestNativePlexAppleTVUsesCopyOnlyHDR10Base(t *testing.T) {
 	}
 }
 
+func TestNativePlexAppleTVProfile7RemovesEnhancementLayer(t *testing.T) {
+	info := mustParse(t, "mkv_dv_p8.json")
+	info.Video().DolbyVisionProfile = 7
+	info.Video().DolbyVisionCompatibilityID = 6
+	for _, container := range []string{ContainerMatroska, ContainerFMP4} {
+		t.Run(container, func(t *testing.T) {
+			caps := appleTV
+			caps.HLSContainers = []string{container}
+			d := Decide(info, caps, allow(), Policy{})
+			if d.Kind != core.DecisionRemux || !d.VideoCopy || !d.StripDolbyVision || d.ToneMap || d.MaxHeight != info.Video().Height {
+				t.Fatalf("profile 7 must retain the HDR10 base: %+v", d)
+			}
+			args := buildArgs(baseSpec(info, d))
+			mustContain(t, args, "-c:v copy -bsf:v dovi_rpu=strip=1,filter_units=remove_types=62|63")
+			mustNotContain(t, args, "libx265", "libx264", "-filter_complex", "tonemap")
+			attrs := HLSVariantAttributes(info, d)
+			if strings.Contains(attrs, "dvh1") || strings.Contains(attrs, "SUPPLEMENTAL-CODECS") || !strings.Contains(attrs, "VIDEO-RANGE=PQ") {
+				t.Fatalf("profile 7 advertised as DV after stripping: %s", attrs)
+			}
+			// A replacement profile 7 source must retain the stripping plan.
+			next := adaptDecision(d, info, info, container)
+			if !next.VideoCopy || !next.StripDolbyVision {
+				t.Fatalf("profile 7 failover lost base-layer plan: %+v", next)
+			}
+		})
+	}
+	// Do not mistake an unsupported or absent base for HDR10.
+	info.Video().DolbyVisionCompatibilityID = 0
+	if appleTVHDR10Base(info.Video(), appleTV) {
+		t.Fatal("unknown profile 7 base accepted")
+	}
+	info.Video().DolbyVisionCompatibilityID = 6
+	absent := false
+	info.Video().DolbyVisionBLPresent = &absent
+	if appleTVHDR10Base(info.Video(), appleTV) {
+		t.Fatal("missing profile 7 base accepted")
+	}
+}
+
 func TestHDR10BaseQuirkDoesNotAffectOtherPlayersOrFormats(t *testing.T) {
 	base := mustParse(t, "mkv_dv_p8.json")
 	for _, tc := range []struct {

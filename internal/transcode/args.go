@@ -200,7 +200,15 @@ func buildCodecArgs(s runSpec) []string {
 		if d.VideoCopy {
 			args = append(args, "-c:v", "copy")
 			if d.StripDolbyVision {
-				args = append(args, "-bsf:v", "dovi_rpu=strip=1")
+				filter := "dovi_rpu=strip=1"
+				if v.DolbyVisionProfile == 7 {
+					// Profile 7 can carry many enhancement-layer NALs in one
+					// access unit. Remove all of them, not just the trailing
+					// RPU handled by older dovi_rpu implementations. The
+					// HDR10 base NALs remain byte-for-byte unchanged.
+					filter += ",filter_units=remove_types=62|63"
+				}
+				args = append(args, "-bsf:v", filter)
 			}
 			if container == ContainerFMP4 && v.Codec != "hevc" {
 				tag := "0"

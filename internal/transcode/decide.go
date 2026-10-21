@@ -431,10 +431,10 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 	containerOK := len(caps.Containers) == 0 || caps.SupportsContainer(info.Container)
 	name := clientName(caps)
 
-	// Plex's current native tvOS decoder can accept profile 8.1 media in
-	// its decision and then stall before the first frame. Keep its HDR10
-	// base at the original resolution; removing RPU/configuration data
-	// requires a copy-only mux rather than serving the original file.
+	// Plex's native tvOS player can accept profile 8.1 in its decision and
+	// fail to open it. Profile 7 additionally carries Blu-ray enhancement
+	// data this client cannot use. Explicitly deliver the compatible HDR10
+	// base at its original resolution through a copy-only mux.
 	hdr10Base := appleTVHDR10Base(v, caps)
 
 	// 1. Direct play.
@@ -464,7 +464,7 @@ func Decide(info core.MediaInfo, caps core.ClientCaps, opts core.DecideOptions, 
 
 	var why []string
 	if hdr10Base {
-		why = append(why, "native Plex Apple TV compatibility: Dolby Vision 8.1 uses its HDR10 base layer")
+		why = append(why, fmt.Sprintf("native Plex Apple TV compatibility: Dolby Vision profile %d uses its HDR10 base layer", v.DolbyVisionProfile))
 	}
 	if !opts.DirectPlay {
 		why = append(why, "direct play not allowed by client")
@@ -702,8 +702,13 @@ func describeSource(info core.MediaInfo, v, a *core.StreamInfo) string {
 // appleTVHDR10Base is a player quirk, not a hardware certification or a
 // blanket HEVC/HDR limit. Profile 5 has no HDR10 base and must not be stripped.
 func appleTVHDR10Base(v *core.StreamInfo, caps core.ClientCaps) bool {
-	if v == nil || v.Codec != "hevc" || !v.DolbyVision || v.DolbyVisionProfile != 8 ||
-		v.DolbyVisionCompatibilityID != 1 || v.ColorTransfer != "smpte2084" || !caps.HDR10 {
+	if v == nil || v.Codec != "hevc" || !v.DolbyVision || v.ColorTransfer != "smpte2084" || !caps.HDR10 {
+		return false
+	}
+	// Blu-ray profile 7 has an HDR10 base with compatibility id 6; profile
+	// 8.1 uses id 1. Neither requires decoding or reducing that base picture.
+	if !(v.DolbyVisionProfile == 7 && v.DolbyVisionCompatibilityID == 6) &&
+		!(v.DolbyVisionProfile == 8 && v.DolbyVisionCompatibilityID == 1) {
 		return false
 	}
 	if v.DolbyVisionBLPresent != nil && !*v.DolbyVisionBLPresent {
