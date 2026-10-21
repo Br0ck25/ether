@@ -52,7 +52,7 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 	if ok && entry.key == p.key && entry.userID == pr.User.ID {
 		ps, ok = s.d.Playback.Session(entry.playID)
 	}
-	if !ok || ps == nil {
+	if !ok || ps == nil || !p.sameSettings(entry.requested) {
 		if _, ps, _, err = s.prepare(ctx, pr, &p); err != nil {
 			s.log.Info("start DASH playback failed", "key", p.key, "err", err)
 			s.writeErr(w, r, err)

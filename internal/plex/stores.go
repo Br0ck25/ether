@@ -110,6 +110,7 @@ type transcodeEntry struct {
 	userID      int64
 	clientID    string
 	key         core.RatingKey
+	requested   playRequest // original decision/start inputs, before policy refinement
 	decision    core.Decision
 	info        core.MediaInfo
 	caps        core.ClientCaps

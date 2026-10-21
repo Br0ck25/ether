@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,16 @@ type playRequest struct {
 	// mde: the client runs its own media decision engine (hasMDE=1, sent
 	// by current Plex Web, iOS and Apple TV apps).
 	mde bool
+}
+
+// sameSettings compares playback controls, excluding the seek position (DASH
+// spans the title) and device capabilities (clients may omit their profile on
+// subsequent starts). Quality limits from the query are also in opts. Keep the
+// original options since prepare adds owner limits and track preferences.
+func (p playRequest) sameSettings(other playRequest) bool {
+	p.offset, other.offset = 0, 0
+	p.caps, other.caps = core.ClientCaps{}, core.ClientCaps{}
+	return reflect.DeepEqual(p, other)
 }
 
 func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
@@ -216,6 +227,7 @@ func applySelections(p *playRequest, info core.MediaInfo, langs []string) {
 
 // prepare resolves the title for this client and makes the decision.
 func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*core.Title, *core.PlaySession, core.Decision, error) {
+	requested := *p
 	if s.d.Playback == nil {
 		return nil, nil, core.Decision{}, errors.New("playback not configured")
 	}
@@ -293,7 +305,8 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	}
 	s.transcodes.put(&transcodeEntry{
 		id: p.sessionID, playID: ps.ID, userID: pr.User.ID, clientID: pr.ClientID, key: p.key,
-		decision: dec, info: ps.Info, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
+		requested: requested,
+		decision:  dec, info: ps.Info, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
 	})
 	return t, ps, dec, nil
 }
@@ -643,7 +656,10 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 	if ok && entry.key == p.key && entry.userID == pr.User.ID {
 		ps, ok = s.d.Playback.Session(entry.playID)
 	}
-	if !ok || ps == nil {
+	if !ok || ps == nil || !p.sameSettings(entry.requested) {
+		// A client can change quality or tracks in start itself, without a
+		// preceding decision request. Reapply the normal policy and decision
+		// path before deciding whether a running encoder can be reused.
 		if _, ps, _, err = s.prepare(ctx, pr, &p); err != nil {
 			s.log.Info("start playback failed", "key", p.key, "err", err)
 			s.writeErr(w, r, err)
