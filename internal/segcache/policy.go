@@ -44,6 +44,10 @@ func (c *Cache) SetPolicy(p Policy) {
 // RecordPlay counts actual playback admissions, never speculative reads. The
 // metadata is local, contains no viewer identity, and survives restarts.
 func (c *Cache) RecordPlay(id, title string, size int64) {
+	if c.shared != nil {
+		c.shared.describe(id, title, size, true)
+		return
+	}
 	c.mu.Lock()
 	if c.closed || c.policy.Mode == "off" {
 		c.mu.Unlock()
@@ -72,6 +76,10 @@ func (c *Cache) RecordPlay(id, title string, size int64) {
 
 // Describe records a source's display metadata without counting a play.
 func (c *Cache) Describe(id, title string, size int64) {
+	if c.shared != nil {
+		c.shared.describe(id, title, size, false)
+		return
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -101,6 +109,10 @@ func (c *Cache) Describe(id, title string, size int64) {
 // Dropping entries and choosing victims happen under the index lock; unlinking
 // uses the same striped locks as budget eviction, so concurrent Puts survive.
 func (c *Cache) Sweep() {
+	if c.shared != nil {
+		c.shared.sweep(true)
+		return
+	}
 	prot, _ := c.protected()
 	c.mu.Lock()
 	if c.closed {
@@ -139,6 +151,9 @@ func (c *Cache) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if c.shared != nil {
+				c.shared.heartbeat()
+			}
 			c.Sweep()
 		}
 	}

@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -67,6 +68,23 @@ func (v *validator) clock(field, s string) {
 // strict about structurally broken values.
 func ValidateConfig(cfg config.Config) []FieldError {
 	v := &validator{}
+	if cfg.SharedCache != nil {
+		shared := cfg
+		shared.Cache, shared.SharedCache = *cfg.SharedCache, nil
+		shared.Cache.Dir = cfg.Cache.Dir
+		shared.Cache.Storage = ""
+		for _, e := range ValidateConfig(shared) {
+			if strings.HasPrefix(e.Field, "cache.") {
+				v.add("sharedCache."+strings.TrimPrefix(e.Field, "cache."), "%s", e.Message)
+			}
+		}
+	}
+	if cfg.Cache.Storage != "" && cfg.Cache.Storage != "local" && cfg.Cache.Storage != "shared" {
+		v.add("cache.storage", "must be local or shared")
+	}
+	if cfg.Cache.Storage == "shared" && (!filepath.IsAbs(cfg.Cache.Dir) || strings.Contains(cfg.Cache.Dir, "://")) {
+		v.add("cache.dir", "use an absolute path to an already mounted NAS directory")
+	}
 
 	v.port("server.port", cfg.Server.Port, false)
 	if strings.TrimSpace(cfg.Server.FriendlyName) == "" {

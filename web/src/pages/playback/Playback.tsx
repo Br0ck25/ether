@@ -49,7 +49,7 @@ export default function Playback() {
           <p className="max-w-3xl text-sm text-fg-muted">
             Missing subtitles are fetched from OpenSubtitles. The account is set up in{" "}
             <Link to="/services" className="text-primary underline">
-              Connected services
+              Integrations
             </Link>
             .
           </p>

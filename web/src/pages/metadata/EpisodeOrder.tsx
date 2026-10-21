@@ -1,6 +1,8 @@
 import { Badge, Button, Input, Spinner, toast } from "@braedonsaunders/appkit-ui";
-import { Search } from "lucide-react";
+import { Search, Tv, ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Artwork } from "../../components/Artwork";
+import { MetadataWorkspace } from "./MetadataWorkspace";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel } from "../../components/feedback";
 import { Section } from "../../components/layout";
@@ -57,40 +59,93 @@ export function EpisodeOrders() {
   };
   return (
     <>
-      <Section
-        title="Episode order"
-        description="Present a show in DVD, absolute or story order in Plex. Playback, release matching and watch history always use TMDB's original numbering."
-      >
-        <form
-          className="flex max-w-xl gap-2"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void search();
-          }}
-        >
-          <Input
-            aria-label="Find a show"
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
-            placeholder="Show title"
-          />
-          <Button type="submit" variant="outline" disabled={busy || !query.trim()}>
-            <Search size={14} /> Search
-          </Button>
-        </form>
-        {results === null ? null : results.length ? (
-          <div className="flex flex-wrap gap-2">
-            {results.map((item) => (
-              <Button key={item.key} variant="outline" size="sm" onClick={() => setShow(item)}>
-                {item.title}
-                {item.year ? ` (${item.year})` : ""}
-              </Button>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-fg-muted">No shows match “{query}”.</p>
-        )}
-      </Section>
+      <MetadataWorkspace
+        aside={
+          <>
+            <Section
+              title="Episode order"
+              description="Present a show in DVD, absolute or story order in Plex. Playback, release matching and watch history always use TMDB's original numbering."
+            >
+              <form
+                className="flex max-w-xl gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void search();
+                }}
+              >
+                <Input
+                  aria-label="Find a show"
+                  value={query}
+                  onChange={(e) => setQuery(e.currentTarget.value)}
+                  placeholder="Show title"
+                />
+                <Button type="submit" variant="outline" disabled={busy || !query.trim()}>
+                  <Search size={14} /> Search
+                </Button>
+              </form>
+            </Section>
+            <div className="metadata-note">
+              <Tv size={17} />
+              <p>
+                Orders change how episodes appear in Plex. Watch history and playback keep their
+                original identities.
+              </p>
+            </div>
+          </>
+        }
+        main={
+          results === null ? (
+            <div className="metadata-empty">
+              <Tv size={24} />
+              <h2>Select a show</h2>
+              <p>Search for a series to manage its default episode order and viewer overrides.</p>
+              <div className="metadata-empty-options">
+                <span>Aired order</span>
+                <span>DVD order</span>
+                <span>Story order</span>
+                <span>Viewer overrides</span>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="metadata-preview-toolbar">
+                <div>
+                  <h2>{results.length} series found</h2>
+                </div>
+              </div>
+              {results.length ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {results.map((item) => (
+                    <button
+                      type="button"
+                      key={item.key}
+                      aria-label={`${item.title}${item.year ? ` (${item.year})` : ""}`}
+                      onClick={() => setShow(item)}
+                      className="flex items-center gap-4 rounded-xl border border-border bg-surface p-3 text-left hover:bg-surface-hover"
+                    >
+                      <Artwork
+                        src={item.poster}
+                        alt=""
+                        title={item.title}
+                        className="aspect-[2/3] w-16 shrink-0 rounded-md"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <strong className="block text-sm font-medium">{item.title}</strong>
+                        <span className="text-xs text-fg-muted">{item.year || "TV series"}</span>
+                        <span className="mt-2 flex items-center gap-1 text-xs text-fg-muted">
+                          Explore orders <ArrowRight size={12} />
+                        </span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-fg-muted">No shows match “{query}”.</p>
+              )}
+            </div>
+          )
+        }
+      />
       <ShowOrderDrawer show={show} onClose={() => setShow(null)} />
     </>
   );

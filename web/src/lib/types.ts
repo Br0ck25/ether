@@ -228,7 +228,9 @@ export interface EtherConfig {
   indexerSites?: IndexerSitesConfig;
   /** Absent on servers without debrid support. */
   debrid?: DebridConfig;
+  sharedCache?: EtherConfig["cache"];
   cache: {
+    storage?: "local" | "shared";
     preloadEnabled?: boolean;
     preloadBudgetBytes?: number;
     preloadMaxTitles?: number;

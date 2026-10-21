@@ -124,6 +124,7 @@ type App struct {
 	subtitles   *subtitles.Service
 	fetcher     *usenet.Fetcher
 	cache       *segcache.Cache
+	cacheConfig atomic.Pointer[config.Cache]
 	engine      *stream.Engine
 	indexers    *newznab.Manager
 	sites       *cardigann.Service // built-in indexer sites from owner-installed definitions
@@ -202,7 +203,11 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		})
 		cfg = a.cfg.Get()
 	}
-	for _, dir := range []string{cfg.Cache.Dir, cfg.Transcode.TempDir} {
+	dirs := []string{cfg.Transcode.TempDir}
+	if cfg.Cache.Storage != "shared" {
+		dirs = append(dirs, cfg.Cache.Dir)
+	}
+	for _, dir := range dirs {
 		if dir != "" {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return nil, err
@@ -276,6 +281,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 }
 
 func (a *App) build(ctx context.Context, cfg config.Config) error {
+	cfg.Cache = cfg.EffectiveCache()
 	log := a.log
 	dataDir := a.opts.DataDir
 	var err error
@@ -360,7 +366,15 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// Usenet, cache, stream engine.
 	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet"), MinIdle: cfg.Usenet.MinIdle})
 	a.closers = append(a.closers, func() { a.fetcher.Close() })
-	if a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log); err != nil {
+	if cfg.Cache.Storage == "shared" {
+		if cfg.SharedCache == nil {
+			return errors.New("configure the shared cache policy in Server → Cache before starting a NAS-backed node")
+		}
+		a.cache, err = segcache.OpenShared(cfg.Cache.Dir, cfg.Cache.BudgetBytes, a.db, a.cacheNodeID(), log)
+	} else {
+		a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log)
+	}
+	if err != nil {
 		return fmt.Errorf("segment cache: %w", err)
 	}
 	a.closers = append(a.closers, func() { a.cache.Close() })
@@ -554,11 +568,26 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	}
 	a.closers = append(a.closers, func() { a.prefetch.Close() })
 
+	var sharedShelf *cachefill.SharedStore
+	if a.cache.Shared() {
+		sharedShelf = cachefill.NewSharedStore(a.db, a.cacheNodeID())
+	}
 	a.cachefill, err = cachefill.New(a.cache.Directory(), cachefill.Deps{
+		Shared:  sharedShelf,
 		Catalog: a.catalog, Resolver: a.resolver, Engine: a.media, Cache: a.cache,
 		State: a.state, Household: a.cacheHousehold,
-		Config: func() config.Cache { return a.cfg.Get().Cache }, Owner: a.users.Owner,
-		Active:    func() bool { return len(a.playback.Sessions()) > 0 },
+		Config: a.runningCacheConfig, Owner: a.users.Owner,
+		Active: func() bool {
+			if len(a.playback.Sessions()) > 0 {
+				return true
+			}
+			if a.cache.Shared() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				return len(a.playback.RemoteSessions(ctx)) > 0
+			}
+			return false
+		},
 		FreeBytes: func() (int64, error) { return admin.DiskFree(a.cache.Directory()) },
 		Remember:  a.playback.Remember, Logger: a.log,
 	})
@@ -591,6 +620,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 
 // applyConfig pushes an edited config into the running components.
 func (a *App) applyConfig(c config.Config) {
+	c.Cache = c.EffectiveCache()
 	a.tmdb.UpdateConfig(c.Catalog)
 	a.llm.UpdateConfig(c.LLM)
 	a.fetcher.UpdateConfig(c.Usenet)
@@ -600,6 +630,7 @@ func (a *App) applyConfig(c config.Config) {
 	a.resolver.UpdateConfig(c)
 	a.catalog.UpdateConfig(c.Catalog)
 	a.configureCache(c.Cache)
+	c.Cache = a.runningCacheConfig()
 	if a.cachefill != nil {
 		a.cachefill.Wake()
 	}

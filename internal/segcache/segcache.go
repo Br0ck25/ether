@@ -50,6 +50,7 @@ var (
 
 // Cache implements core.SegmentCache.
 type Cache struct {
+	shared  *sharedCache
 	dir     string
 	dataDir string
 	logger  *slog.Logger
@@ -164,6 +165,9 @@ func (c *Cache) segCountSafe() int {
 // Get returns the cached payload (a fresh buffer owned by the caller) and marks it as
 // recently used. A missing, vanished or corrupt file is a miss.
 func (c *Cache) Get(releaseID string, segment int) ([]byte, bool) {
+	if c.shared != nil {
+		return c.shared.get(releaseID, segment)
+	}
 	st := c.stripe(releaseID, segment)
 	st.RLock()
 	defer st.RUnlock()
@@ -241,6 +245,9 @@ func (c *Cache) Get(releaseID string, segment int) ([]byte, bool) {
 
 // Has reports whether the segment is indexed. No disk IO, no recency update.
 func (c *Cache) Has(releaseID string, segment int) bool {
+	if c.shared != nil {
+		return c.shared.has(releaseID, segment)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -255,6 +262,9 @@ func (c *Cache) Has(releaseID string, segment int) bool {
 // rejected with ErrTooLarge and nothing is stored. Note that a stored segment
 // may be evicted again immediately if everything else is pinned/protected.
 func (c *Cache) Put(releaseID string, segment int, data []byte) error {
+	if c.shared != nil {
+		return c.shared.put(releaseID, segment, data)
+	}
 	if err := validKey(releaseID, segment); err != nil {
 		return err
 	}
@@ -315,6 +325,9 @@ func (c *Cache) Put(releaseID string, segment int, data []byte) error {
 // least one pin reason. Pins are persisted to pins.json. If persisting fails
 // the pin still applies in memory and the error is returned.
 func (c *Cache) Pin(releaseID string, reason string) error {
+	if c.shared != nil {
+		return c.shared.pin(releaseID, reason, true)
+	}
 	if releaseID == "" || reason == "" {
 		return errors.New("segcache: pin: empty release id or reason")
 	}
@@ -340,6 +353,9 @@ func (c *Cache) Pin(releaseID string, reason string) error {
 // Unpin removes one pin reason. When the last reason goes the release becomes
 // evictable again and the cache is evicted down to budget immediately.
 func (c *Cache) Unpin(releaseID string, reason string) error {
+	if c.shared != nil {
+		return c.shared.pin(releaseID, reason, false)
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -363,6 +379,9 @@ func (c *Cache) Unpin(releaseID string, reason string) error {
 
 // Pins returns a copy: releaseID -> sorted pin reasons.
 func (c *Cache) Pins() map[string][]string {
+	if c.shared != nil {
+		return c.shared.pins()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.pinsSnapshotLocked()
@@ -370,6 +389,9 @@ func (c *Cache) Pins() map[string][]string {
 
 // Usage returns the payload bytes stored and the budget (0 = unlimited).
 func (c *Cache) Usage() (used, budget int64) {
+	if c.shared != nil {
+		return c.shared.usage()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.used, c.budget
@@ -377,6 +399,9 @@ func (c *Cache) Usage() (used, budget int64) {
 
 // ReleaseBytes reports how many bytes of a release are currently cached.
 func (c *Cache) ReleaseBytes(releaseID string) int64 {
+	if c.shared != nil {
+		return c.shared.releaseBytes(releaseID)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if r := c.rels[releaseID]; r != nil {
@@ -413,6 +438,9 @@ func (c *Cache) Protect(fn func() map[string]bool) {
 // Remove drops all segments of a release from the index and disk. Pins are
 // kept.
 func (c *Cache) Remove(releaseID string) error {
+	if c.shared != nil {
+		return c.shared.remove(releaseID)
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -440,6 +468,9 @@ func (c *Cache) Remove(releaseID string) error {
 // Releases lists every release that has cached segments or pins, most
 // recently used first.
 func (c *Cache) Releases() []ReleaseUsage {
+	if c.shared != nil {
+		return c.shared.releases()
+	}
 	c.mu.Lock()
 	out := make([]ReleaseUsage, 0, len(c.rels))
 	seen := make(map[string]bool, len(c.rels))
@@ -579,6 +610,10 @@ func (c *Cache) pinnedLocked(releaseID string) bool { return len(c.pins[releaseI
 // releases. Skipped entries are parked so later passes do not rescan them;
 // they are merged back (by recency) when protection may have shrunk.
 func (c *Cache) evict() {
+	if c.shared != nil {
+		c.shared.sweep(false)
+		return
+	}
 	c.mu.Lock()
 	if c.closed || !c.overBudgetLocked() {
 		c.mu.Unlock()

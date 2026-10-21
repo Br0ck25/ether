@@ -48,9 +48,9 @@ async function setStatus(title: string, value: "Always" | "Eligible" | "Off") {
   await closeEditor();
 }
 
-describe("HomeScreen", () => {
+describe("Home", () => {
   it("previews the typical viewer's Home with each row's provenance", async () => {
-    const { fake } = renderApp("/home-screens");
+    const { fake } = renderApp("/home");
     const cw = await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     expect(within(cw).getByText(/Anchored for everyone/)).toBeInTheDocument();
     expect(within(cw).getByText(/global anchor at slot 1/)).toBeInTheDocument();
@@ -76,7 +76,7 @@ describe("HomeScreen", () => {
   });
 
   it("edits Global: the server previews the draft and reports the impact across viewers", async () => {
-    const { fake } = renderApp("/home-screens");
+    const { fake } = renderApp("/home");
     await screen.findByRole("region", { name: /Top 10 on Living Room Ether Today/ }, WAIT);
     await setStatus("Top 10 Today", "Off");
 
@@ -136,7 +136,7 @@ describe("HomeScreen", () => {
   });
 
   it("overrides a Global setting for one viewer and resets it to global", async () => {
-    const { fake } = renderApp("/home-screens");
+    const { fake } = renderApp("/home");
     await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     await pickLayer(/Sam Rivera/);
     await screen.findByRole("region", { name: /Hidden Gems for You/ }, WAIT);
@@ -203,7 +203,7 @@ describe("HomeScreen", () => {
   });
 
   it("anchors a row from the preview and limits the page length", async () => {
-    const { fake } = renderApp("/home-screens");
+    const { fake } = renderApp("/home");
     const row = await screen.findByRole("region", { name: /Slot \d+: New Releases/ }, WAIT);
     const slot = row.getAttribute("aria-label")!.match(/^Slot (\d+)/)![1];
     fireEvent.click(
@@ -241,7 +241,7 @@ describe("HomeScreen", () => {
   });
 
   it("tunes a page with dials, keeps Home's picks off it, and shows what the model learned", async () => {
-    const { fake } = renderApp("/home-screens");
+    const { fake } = renderApp("/home");
     await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     // Switch to the TV page: its catalogue has series rows, not Home-only ones.
     fireEvent.click(screen.getByRole("button", { name: "Page" }));
@@ -272,8 +272,8 @@ describe("HomeScreen", () => {
   });
 
   it("adds a custom row pattern from a drawer", async () => {
-    renderApp("/home-screens");
-    expect(await screen.findByRole("heading", { name: "HomeScreen" }, WAIT)).toBeInTheDocument();
+    renderApp("/home");
+    expect(await screen.findByRole("heading", { name: "Home" }, WAIT)).toBeInTheDocument();
     await screen.findByRole("region", { name: "Slot 1: Continue Watching" }, WAIT);
     fireEvent.click(screen.getByRole("tab", { name: "Rows" }));
     fireEvent.click(screen.getByRole("button", { name: "Add custom pattern" }));
@@ -290,7 +290,7 @@ describe("HomeScreen", () => {
   });
 
   it("discards unsaved edits", async () => {
-    const { fake } = renderApp("/home-screens");
+    const { fake } = renderApp("/home");
     await screen.findByRole("region", { name: /Top 10 on Living Room Ether Today/ }, WAIT);
     await setStatus("New Releases", "Off");
     expect(await screen.findByText("Unsaved changes")).toBeInTheDocument();

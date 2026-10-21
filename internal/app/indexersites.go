@@ -7,11 +7,18 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/segcache"
 )
 
 // validateExtra is the app-level config validation.
 func (a *App) validateExtra(c config.Config) []admin.FieldError {
-	return append(validatePlaybackConfig(c), a.validateIndexerSites(c)...)
+	errs := append(validatePlaybackConfig(c), a.validateIndexerSites(c)...)
+	if c.Cache.Storage == "shared" {
+		if err := segcache.ValidateSharedMount(c.Cache.Dir, a.db); err != nil {
+			errs = append(errs, admin.FieldError{Field: "cache.dir", Message: err.Error()})
+		}
+	}
+	return errs
 }
 
 // validateIndexerSites keeps password-type settings of built-in sites out

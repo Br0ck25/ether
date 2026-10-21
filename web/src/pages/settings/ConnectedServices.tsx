@@ -31,7 +31,7 @@ type Obj = Record<string, unknown>;
 export type ServiceTab = "overview" | "trakt" | "llm" | "opensubtitles";
 
 interface Service {
-  /** The Connected services tab the form lives on. */
+  /** The Integrations tab the form lives on. */
   tab: Exclude<ServiceTab, "overview">;
   configKey: "trakt" | "llm" | "openSubtitles";
   endpoint: string;
@@ -89,7 +89,7 @@ const SERVICES: Service[] = [
 ];
 
 /**
- * Connected services: an overview of every integration with its live status,
+ * Integrations: an overview of every integration with its live status,
  * then one tab per credential Ether owns here (Trakt, language model,
  * OpenSubtitles). The three forms share one draft and one save bar, so edits
  * on several tabs save together.
@@ -300,7 +300,7 @@ function ServiceOverview({ cfg }: { cfg: EtherConfig }) {
           <Badge variant="warning">Not signed in</Badge>
         ),
       href: "/remote-access",
-      action: "Plex & remote access",
+      action: "Connectivity",
     },
     {
       name: "TMDB",

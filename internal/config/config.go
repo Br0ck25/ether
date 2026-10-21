@@ -19,6 +19,8 @@ import (
 )
 
 type Config struct {
+	// SharedCache is the cluster-wide NAS policy. Mount paths stay in Cache.
+	SharedCache   *Cache        `json:"sharedCache,omitempty"`
 	Server        Server        `json:"server"`
 	Plex          Plex          `json:"plex"`
 	Usenet        Usenet        `json:"usenet"`
@@ -157,6 +159,8 @@ func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
 func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
 
 type Cache struct {
+	Storage string `json:"storage,omitempty"` // local (default) or shared; restart required
+
 	PreloadEnabled         bool   `json:"preloadEnabled,omitempty"`
 	PreloadBudgetBytes     int64  `json:"preloadBudgetBytes,omitempty"`
 	PreloadMaxTitles       int    `json:"preloadMaxTitles,omitempty"`
@@ -582,4 +586,23 @@ func (s *Store) save() error {
 		return err
 	}
 	return writeFileAtomic(s.path, b, 0o600)
+}
+
+// EffectiveCache combines the shared pool policy with this node's mount path.
+func (c Config) EffectiveCache() Cache {
+	if c.Cache.Storage == "shared" && c.SharedCache != nil {
+		p := *c.SharedCache
+		p.Dir, p.Storage = c.Cache.Dir, "shared"
+		return p
+	}
+	return c.Cache
+}
+
+// SetCachePolicy updates the shared policy only when this node joins the NAS pool.
+func (c *Config) SetCachePolicy(p Cache) {
+	c.Cache = p
+	if p.Storage == "shared" {
+		p.Dir, p.Storage = "", ""
+		c.SharedCache = &p
+	}
 }

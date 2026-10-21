@@ -766,3 +766,36 @@ func TestSetupRejectsRebindingHost(t *testing.T) {
 		t.Fatalf("owner token under a public name: %d", rec.Code)
 	}
 }
+
+func TestSharedCacheSectionEditsEffectivePolicy(t *testing.T) {
+	s := newStore(t, func(c *config.Config) {
+		seededConfig(c)
+		c.Cache.Storage = "shared"
+		c.Cache.Dir = "/mnt/nas"
+		p := c.Cache
+		p.Dir = ""
+		p.Storage = ""
+		p.BudgetBytes = 100 << 30
+		c.SharedCache = &p
+	})
+	h := admin.New(admin.Deps{Config: s, IsOwnerToken: storedOwner(s)})
+	rec := serve(h, req(http.MethodPatch, "/ether/api/config/cache", `{"retentionDays":21}`))
+	if rec.Code != 200 {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	got := s.Get()
+	if got.SharedCache.RetentionDays != 21 || got.SharedCache.BudgetBytes != 100<<30 || got.SharedCache.Dir != "" || got.Cache.Dir != "/mnt/nas" {
+		t.Fatalf("bad shared policy: %+v", got.SharedCache)
+	}
+	rec = serve(h, req(http.MethodGet, "/ether/api/config/cache", ""))
+	if !strings.Contains(rec.Body.String(), `"budgetBytes":107374182400`) {
+		t.Fatalf("GET did not expose effective policy: %s", rec.Body)
+	}
+	rec = serve(h, req(http.MethodPatch, "/ether/api/config/cache", `{"storage":"local","budgetBytes":1024}`))
+	if rec.Code != 200 {
+		t.Fatalf("local: %d %s", rec.Code, rec.Body)
+	}
+	if s.Get().SharedCache.BudgetBytes != 100<<30 {
+		t.Fatal("leaving shared storage changed the pool budget")
+	}
+}

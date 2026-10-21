@@ -564,8 +564,8 @@ function RowsPanel({
       className={className}
       bodyClassName={scrollBody}
       actions={
-        <Link to="/home-screens" className="text-xs font-medium text-primary hover:underline">
-          HomeScreen
+        <Link to="/home" className="text-xs font-medium text-primary hover:underline">
+          Home
         </Link>
       }
     >

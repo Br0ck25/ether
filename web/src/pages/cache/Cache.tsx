@@ -1,5 +1,15 @@
 import { Badge, Button, Input, Spinner, SubtabNav, cn, toast } from "@braedonsaunders/appkit-ui";
-import { ArrowUpRight, Check, HardDrive, Leaf, Settings2, Sparkles, Zap } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Network,
+  Check,
+  HardDrive,
+  Leaf,
+  Settings2,
+  Sparkles,
+  Zap,
+} from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useRouteTab } from "../../components/layout";
@@ -55,6 +65,11 @@ type PreloadStatus = {
   items: { key: number; title: string; releaseId: string; size: number; complete: boolean }[];
 };
 export type CacheSnapshot = {
+  policy?: Policy;
+  shared?: boolean;
+  clustered?: boolean;
+  restartRequired?: boolean;
+  storageError?: string;
   preload: PreloadStatus;
   used: number;
   budget: number;
@@ -259,7 +274,8 @@ export default function Cache() {
   const navigate = useNavigate();
   const [unit, setUnit] = useState<"GiB" | "TiB">("GiB");
   const [busy, setBusy] = useState<string | null>(null);
-  const disk = useAsync(() => api.disk(config.data?.cache.dir ?? ""), [config.data?.cache.dir]);
+  const activeDirectory = live.data?.directory ?? config.data?.cache.dir ?? "";
+  const disk = useAsync(() => api.disk(activeDirectory), [activeDirectory]);
   const patch = (v: Partial<Policy>) => setDraft((d) => (d ? { ...d, ...v } : d));
   async function save() {
     if (!draft) return;
@@ -322,7 +338,9 @@ export default function Cache() {
       actions={
         <>
           {dirty && <Badge variant="warning">Unsaved policy</Badge>}
-          <Badge variant="secondary">This node</Badge>
+          <Badge variant="secondary">
+            {snap?.shared ? (snap.clustered ? "Shared cluster pool" : "NAS storage") : "This node"}
+          </Badge>
           <Button size="sm" onClick={() => setEditor("policy")}>
             <Settings2 size={14} /> {dirty ? "Resume editing" : "Edit policy"}
           </Button>
@@ -330,6 +348,24 @@ export default function Cache() {
       }
     >
       <div className="@container flex min-h-0 flex-1 flex-col">
+        {snap?.restartRequired && (
+          <div
+            role="status"
+            className="shrink-0 border-b border-warning/20 bg-warning/10 px-5 py-2 text-xs text-warning"
+          >
+            Storage change saved. Restart this node to use the new backend or folder. The overview
+            shows the currently active cache.
+          </div>
+        )}
+        {snap?.storageError && (
+          <div
+            role="alert"
+            className="shrink-0 border-b border-danger/20 bg-danger/10 px-5 py-2 text-xs text-danger"
+          >
+            {snap.storageError}. Cache writes are suspended until the mount and database are
+            available.
+          </div>
+        )}
         <div className="shrink-0 border-b border-border bg-surface px-4 sm:px-6">
           <SubtabNav
             ariaLabel="Cache sections"
@@ -363,8 +399,18 @@ export default function Cache() {
             <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-5 cockpit:min-h-0 cockpit:flex-1">
               <CacheOverview
                 snapshot={snap}
-                policy={saved}
-                name={policyName}
+                policy={snap?.policy ?? saved}
+                name={
+                  snap?.policy
+                    ? snap.policy.mode === "off"
+                      ? "Pass-through"
+                      : (PRESETS.find((p) =>
+                          Object.entries(p.values).every(
+                            ([k, v]) => snap.policy?.[k as keyof Policy] === v,
+                          ),
+                        )?.name ?? "Custom policy")
+                    : policyName
+                }
                 freeBytes={disk.data?.freeBytes}
                 busy={busy !== null}
                 onProfile={() => {
@@ -670,15 +716,101 @@ export default function Cache() {
           </div>
         ) : (
           <div className="space-y-6">
-            {profileChoice && (
-              <div className="flex items-center justify-between gap-2 rounded-lg bg-primary/5 p-3">
-                <span className="text-sm font-medium">2 / Review · {profileChoice.name}</span>
-                <Button variant="ghost" size="sm" onClick={() => setEditor("profiles")}>
-                  Change profile
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-primary">
+                    {profileChoice ? "Review your preset" : "Your starting point"}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold">{profileChoice?.name ?? policyName}</p>
+                </div>
+                <Button variant="secondary" size="sm" onClick={() => setEditor("profiles")}>
+                  <ArrowLeft size={14} /> Back to presets
                 </Button>
               </div>
-            )}
+              <p className="mt-2 text-xs leading-relaxed text-fg-muted">
+                Choose a different preset at any time, then customize it here. Your current policy
+                stays active until you save.
+              </p>
+            </div>
             {error ? <ErrorPanel error={error} /> : null}
+            <section aria-label="Cache storage" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Where your cache lives</h3>
+                <Badge variant="secondary">
+                  {draft.storage === "shared" && snap?.clustered
+                    ? "Cluster policy"
+                    : "Server policy"}
+                </Badge>
+              </div>
+              <div
+                className="grid grid-cols-2 gap-3"
+                role="radiogroup"
+                aria-label="Storage backend"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.storage !== "shared"}
+                  onClick={() => patch({ storage: "local" })}
+                  className={cn(
+                    "rounded-xl border p-3 text-left transition",
+                    draft.storage !== "shared"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40",
+                  )}
+                >
+                  <HardDrive size={18} className="mb-2 text-primary" />
+                  <span className="block text-sm font-medium">Local disk</span>
+                  <span className="mt-1 block text-xs text-fg-muted">
+                    An independent cache on this node.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.storage === "shared"}
+                  onClick={() =>
+                    patch({ ...config.data?.sharedCache, storage: "shared", dir: draft.dir })
+                  }
+                  className={cn(
+                    "rounded-xl border p-3 text-left transition disabled:opacity-50",
+                    draft.storage === "shared"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40",
+                  )}
+                >
+                  <Network size={18} className="mb-2 text-primary" />
+                  <span className="block text-sm font-medium">Shared NAS</span>
+                  <span className="mt-1 block text-xs text-fg-muted">
+                    {snap?.clustered
+                      ? "One library and budget across your cluster."
+                      : "Keep your cache on a mounted network share."}
+                  </span>
+                </button>
+              </div>
+              {draft.storage === "shared" && (
+                <p className="rounded-lg bg-primary/5 p-3 text-xs leading-relaxed text-fg-muted">
+                  {snap?.clustered
+                    ? "Mount the same NAS share on every participating node. Each node may use a different mount path. Budgets, retention, pins, and preloading are shared; saving this policy updates all members of the pool."
+                    : "Mount your NAS share on this server and choose a dedicated folder. Your media cache lives on the NAS; its database stays on this server. No cluster is required. To let multiple Ether servers use the same cache folder, connect them in a cluster first."}
+                </p>
+              )}
+              <Field
+                label={
+                  draft.storage === "shared" ? "NAS mount path on this node" : "Cache directory"
+                }
+                htmlFor="cache-dir"
+                hint="Changing storage or its folder requires a node restart. Existing cache bytes stay in their original folder."
+              >
+                <Input
+                  id="cache-dir"
+                  value={draft.dir}
+                  onChange={(e) => patch({ dir: e.target.value })}
+                  placeholder={draft.storage === "shared" ? "/mnt/media-cache" : undefined}
+                />
+              </Field>
+            </section>
             <Field
               label="Media disk budget"
               hint="Zero means unlimited, not disabled. Choose No persistent media below to turn disk caching off."
@@ -705,13 +837,14 @@ export default function Cache() {
                 </select>
               </div>
             </Field>
-            {disk.data && (
+            {disk.data && draft.dir === activeDirectory && (
               <p className="flex items-center gap-2 text-xs text-fg-muted">
                 <HardDrive size={13} />
                 {formatBytes(disk.data.freeBytes)} currently free
               </p>
             )}
             {disk.data &&
+              draft.dir === activeDirectory &&
               enabled &&
               draft.budgetBytes > 0 &&
               draft.budgetBytes - used > disk.data.freeBytes && (
@@ -1059,17 +1192,6 @@ export default function Cache() {
                     id="cache-age"
                     value={draft.inProgressPinMaxAge || "720h"}
                     onChange={(e) => patch({ inProgressPinMaxAge: e.target.value })}
-                  />
-                </Field>
-                <Field
-                  label="Cache directory"
-                  hint="Changing the folder requires a server restart. Existing bytes are not moved. The live overview shows the active folder."
-                  htmlFor="cache-dir"
-                >
-                  <Input
-                    id="cache-dir"
-                    value={draft.dir}
-                    onChange={(e) => patch({ dir: e.target.value })}
                   />
                 </Field>
                 <p className="text-xs leading-relaxed text-fg-muted">

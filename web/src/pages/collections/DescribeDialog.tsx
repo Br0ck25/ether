@@ -156,7 +156,7 @@ export function DescribeDialog({
             <AlertDescription>
               Connect an OpenAI-compatible endpoint (a local Ollama works) in{" "}
               <Link to="/services" className="font-medium underline" onClick={close}>
-                Connected services
+                Integrations
               </Link>
               , then try again. You can still build collections by hand or from a template.
             </AlertDescription>
