@@ -327,7 +327,9 @@ type Related struct {
 }
 
 type OnDeck struct {
-	Metadata []Metadata `plex:"Metadata"`
+	// PMS uses a single object here in JSON, unlike the Metadata arrays
+	// in Children and MediaContainer. XML still renders one Video child.
+	Metadata Metadata `plex:"Metadata,object"`
 }
 
 type Children struct {

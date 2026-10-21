@@ -175,7 +175,9 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 	}
 	if onDeck && t.Type == core.TypeShow {
 		if ep, st := s.showOnDeck(ctx, pr, t.Key, memo); ep != nil {
-			md.OnDeck = &model.OnDeck{Metadata: s.renderTitles(ctx, pr, []core.Title{*ep}, renderOpts{media: true, state: st})}
+			if items := s.renderTitles(ctx, pr, []core.Title{*ep}, renderOpts{media: true, state: st}); len(items) > 0 {
+				md.OnDeck = &model.OnDeck{Metadata: items[0]}
+			}
 			// The show page's Play button plays this episode: resolve,
 			// open and probe it while the viewer reads the page.
 			if warm, ok := s.d.Playback.(interface {

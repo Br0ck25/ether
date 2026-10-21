@@ -153,7 +153,7 @@ type pageItem struct {
 	ViewedLeafCount *int   `json:"viewedLeafCount"`
 	ChildCount      *int   `json:"childCount"`
 	OnDeck          *struct {
-		Metadata []pageItem `json:"Metadata"`
+		Metadata pageItem `json:"Metadata"`
 	} `json:"OnDeck"`
 }
 
@@ -269,7 +269,7 @@ func TestLongShowPageLoadsSeasonsOnce(t *testing.T) {
 		}
 		show := detail.Metadata[0]
 		wantLeaves(t, step.name+" show", show, 50*14+3, 15)
-		if show.OnDeck == nil || len(show.OnDeck.Metadata) != 1 || show.OnDeck.Metadata[0].RatingKey != core.EpisodeKey(14658, 51, 2).String() {
+		if show.OnDeck == nil || show.OnDeck.Metadata.RatingKey != core.EpisodeKey(14658, 51, 2).String() {
 			t.Fatalf("%s: onDeck %+v, want S51E02", step.name, show.OnDeck)
 		}
 		if len(children.Metadata) != 52 {
