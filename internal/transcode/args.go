@@ -12,6 +12,7 @@ import (
 
 // runSpec is everything needed to build one ffmpeg HLS run.
 type runSpec struct {
+	LiveInput    bool
 	InputHeaders map[string]string
 	Input        string
 	Info         core.MediaInfo
@@ -130,6 +131,7 @@ func buildCodecArgs(s runSpec) []string {
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "warning", "-nostats", "-progress", "pipe:1", "-y"}
 
 	// ---- input
+	args = append(args, inputSafetyArgs(s.Input, s.LiveInput)...)
 	args = append(args, httpInputArgs(s.Input, true)...)
 	args = appendInputHeaders(args, s.InputHeaders)
 	if s.BigProbe {
@@ -721,6 +723,7 @@ func appendScaleFormat(chain []string, scaling bool, w, h int, swFmt, accel stri
 // stdout.
 func subtitleArgs(input string, streamIndex int) []string {
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "error"}
+	args = append(args, inputSafetyArgs(input, false)...)
 	args = append(args, httpInputArgs(input, true)...)
 	return append(args, "-i", input, "-map", fmt.Sprintf("0:%d", streamIndex), "-c:s", "webvtt", "-f", "webvtt", "pipe:1")
 }

@@ -49,10 +49,15 @@ func httpInputArgs(input string, reconnect bool) []string {
 }
 
 func probeArgs(input string, a probeAttempt) []string {
+	return probeArgsMode(input, a, false)
+}
+
+func probeArgsMode(input string, a probeAttempt, live bool) []string {
 	args := []string{"-hide_banner", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", "-show_chapters", "-show_data",
 		"-probesize", strconv.FormatInt(a.probesize, 10),
 		"-analyzeduration", strconv.FormatInt(a.analyzeDuration.Microseconds(), 10),
 	}
+	args = append(args, inputSafetyArgs(input, live)...)
 	args = append(args, httpInputArgs(input, false)...)
 	return append(args, "-i", input)
 }
@@ -67,7 +72,7 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 	var best *core.MediaInfo
 	var lastErr error
 	for i, a := range probeAttempts {
-		info, err := probeOnce(ctx, r, ffprobe, input, a)
+		info, err := probeOnceMode(ctx, r, ffprobe, input, a, live)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -90,10 +95,14 @@ func probeMode(ctx context.Context, r Runner, ffprobe, input string, live bool) 
 }
 
 func probeOnce(ctx context.Context, r Runner, ffprobe, input string, a probeAttempt) (*core.MediaInfo, error) {
+	return probeOnceMode(ctx, r, ffprobe, input, a, false)
+}
+
+func probeOnceMode(ctx context.Context, r Runner, ffprobe, input string, a probeAttempt, live bool) (*core.MediaInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	err := r.Run(ctx, Command{Path: ffprobe, Args: probeArgs(input, a), Stdout: &stdout, Stderr: &stderr})
+	err := r.Run(ctx, Command{Path: ffprobe, Args: probeArgsMode(input, a, live), Stdout: &stdout, Stderr: &stderr})
 	if err != nil {
 		return nil, fmt.Errorf("transcode: ffprobe: %w: %s", err, tail(stderr.String(), 400))
 	}

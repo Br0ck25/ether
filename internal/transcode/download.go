@@ -92,8 +92,9 @@ func (m *Manager) NewDownloadRemuxer(cfg config.Downloads) (*DownloadRemuxer, er
 // downloadArgs builds the ffmpeg argument list for a copy remux.
 func downloadArgs(input string, video, audio *core.StreamInfo, out string) []string {
 	args := []string{"-hide_banner", "-nostdin", "-loglevel", "warning", "-nostats",
-		"-progress", "pipe:1", "-y", "-i", input,
-		"-map", fmt.Sprintf("0:%d", video.Index)}
+		"-progress", "pipe:1", "-y"}
+	args = append(args, inputSafetyArgs(input, false)...)
+	args = append(args, "-i", input, "-map", fmt.Sprintf("0:%d", video.Index))
 	if audio != nil {
 		args = append(args, "-map", fmt.Sprintf("0:%d", audio.Index))
 	}

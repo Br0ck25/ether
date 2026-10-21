@@ -172,6 +172,7 @@ type Service struct {
 	ownerPlexID int64
 
 	membershipMu sync.Mutex // serializes validation writes with authoritative revocation
+	reloadMu     sync.Mutex // orders database snapshots through publication; acquired before mu
 	seenMu       sync.Mutex
 	seen         map[int64]time.Time // pending last_seen_at writes
 
@@ -309,6 +310,11 @@ func (s *Service) applyRemote(ctx context.Context, hints []string, all bool) {
 
 // reload rebuilds the in-memory users and token maps from the database.
 func (s *Service) reload(ctx context.Context) error {
+	// An older reload must publish before a newer one reads the database.
+	// Otherwise it can restore revoked users and tokens after SyncFriends
+	// has already published their removal and returned successfully.
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
 	rows, err := s.db.QueryContext(ctx, `SELECT `+userCols+` FROM auth_users`)
 	if err != nil {
 		return fmt.Errorf("auth: load users: %w", err)

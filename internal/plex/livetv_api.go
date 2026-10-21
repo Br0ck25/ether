@@ -537,7 +537,7 @@ func (s *Server) handleLiveLogo(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, c := range cs {
 		if c.ID == id {
-			w.Header().Set("Content-Type", "image/svg+xml")
+			setArtworkHeaders(w.Header(), "image/svg+xml")
 			w.Header().Set("Cache-Control", "private, max-age=300")
 			if r.Method != "HEAD" {
 				fmt.Fprintf(w, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" rx="24" fill="#182d45"/><text x="40" y="125" fill="#64dfc7" font-size="68" font-family="sans-serif">%s</text><text x="40" y="220" fill="white" font-size="30" font-family="sans-serif">%s</text></svg>`, html.EscapeString(c.Number), html.EscapeString(c.Name))

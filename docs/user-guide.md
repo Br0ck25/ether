@@ -248,7 +248,11 @@ To add a node, choose **Create join token**. The drawer shows the token
 once. On the new machine, open **Cluster › Join cluster**, paste it and follow
 the wizard. Fresh installs also offer **Join a cluster instead** during setup.
 No terminal commands are required. Keep the token secret and revoke unused
-tokens you no longer need.
+tokens you no longer need. Expiration, use and revocation only prevent Ether
+enrollment; the embedded database password and credential key remain
+sensitive. If a token leaks, rotate the database password on every node and
+any stored provider or Plex credentials the recipient could have read.
+Revocation alone does not contain a leak.
 
 **Manage this node** adjusts its provider capacity weight or pauses/resumes new
 streams while existing streams keep playing. A pause ends after a restart.

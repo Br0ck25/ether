@@ -277,4 +277,4 @@ func NewToken(ctx context.Context, db *sql.DB, cfg *config.Store, databaseURL st
 }
 
 // TokenWarning is shown with every new token.
-const TokenWarning = "This token is a secret: it contains the cluster database password and the credential key that decrypts every stored credential. Use it once, within the hour, and do not paste it into chats or tickets."
+const TokenWarning = "This token contains the cluster database password and the key that decrypts every stored credential. Keep it secret permanently: expiration, use and revocation only stop Ether enrollment; they do not invalidate the embedded credentials. If exposed, rotate the database password and any stored credentials the recipient could have read. Do not paste it into chats or tickets."

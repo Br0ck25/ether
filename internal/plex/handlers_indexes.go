@@ -120,7 +120,7 @@ func (s *Server) handleIndexFrame(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
+	setArtworkHeaders(w.Header(), "image/jpeg")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(frame)

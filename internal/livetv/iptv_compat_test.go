@@ -72,6 +72,9 @@ func TestIPTVHLSChecksDecoderCompatibilityBeforePassthrough(t *testing.T) {
 				t.Fatalf("relay requests = %d", len(tc.requests))
 			}
 			r := tc.requests[0]
+			if !r.LiveInput {
+				t.Fatal("owner-configured IPTV relay must explicitly permit live playlist input")
+			}
 			if r.Info.Duration != 0 || r.Info.Video().Codec != tt.video || r.Decision.VideoCopy != tt.videoCopy || r.Decision.AudioCopy || r.Decision.AudioStream != 5 || r.Decision.Container != "mpegts" || r.Decision.VideoCodec != "h264" || r.Decision.AudioCodec != "aac" {
 				t.Fatalf("wrong conversion plan: %+v", r.Decision)
 			}

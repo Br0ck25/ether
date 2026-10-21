@@ -284,6 +284,9 @@ func TestVirtualPlayoutJoinContinuityAndOwnership(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if tc.requests[0].LiveInput {
+		t.Fatal("virtual-channel VOD must not permit live playlist input")
+	}
 	if tc.requests[0].StartOffset != 4*time.Second || tc.requests[0].Info.Duration != 12*time.Second {
 		t.Fatalf("join seek wrong %+v", tc.requests[0])
 	}

@@ -80,7 +80,7 @@ func (s *Service) ensureDASH(ctx context.Context, ss *session, id string) (core.
 		dec.VideoCopy = true
 		dec.AudioCopy = true
 	}
-	hs, err := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: ss.inputURL, InputHeaders: flattenInputHeaders(ss.inputHeaders), Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
+	hs, err := s.o.Transcoder.StartHLS(s.ctx, core.HLSRequest{SessionID: "livetv-dash-" + id, InputURL: ss.inputURL, LiveInput: true, InputHeaders: flattenInputHeaders(ss.inputHeaders), Info: *info, Decision: dec, Protocol: core.ProtocolDASH, SegmentDuration: segmentDuration})
 	if err != nil {
 		return nil, err
 	}
