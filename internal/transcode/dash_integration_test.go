@@ -375,7 +375,10 @@ func (e *realEnv) playMPD(t *testing.T, mpdURL string, wantSeconds float64) {
 		var spans []span
 		lo, hi := math.Inf(1), math.Inf(-1)
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			f := strings.Split(line, ",")
+			// Windows ffprobe ends lines with CRLF; a trailing \r would
+			// make the duration unparseable and drop every packet but
+			// the last.
+			f := strings.Split(strings.TrimSpace(line), ",")
 			if len(f) < 2 {
 				continue
 			}

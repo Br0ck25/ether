@@ -833,6 +833,13 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			} else {
 				restarted = true
 				start := s.lastReq
+				// The rounded final DASH slot may contain only trailing
+				// audio. An init-only rendition switch still needs video
+				// headers, so start one slot earlier and let the slotter
+				// publish the tail alias from that run.
+				if s.isDASH() && s.total > 1 && start >= s.total-1 {
+					start = s.total - 2
+				}
 				if start < 0 {
 					start = 0
 				}

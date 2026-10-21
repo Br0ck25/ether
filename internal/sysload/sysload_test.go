@@ -44,9 +44,24 @@ func (f *fakeSource) calls() int {
 	return f.gpuCalls
 }
 
-type clock struct{ t time.Time }
+// clock is a fake time source. Snapshot and Sample can launch a background
+// GPU read that calls now, so t is guarded for concurrent use.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *clock) now() time.Time { return c.t }
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 func TestSamplerDerivesRates(t *testing.T) {
 	src := &fakeSource{counters: []Counters{
@@ -63,7 +78,7 @@ func TestSamplerDerivesRates(t *testing.T) {
 	if snap := s.Snapshot(); snap.Current != nil || len(snap.History) != 0 {
 		t.Fatalf("one reading has no rates yet: %+v", snap)
 	}
-	clk.t = clk.t.Add(2 * time.Second)
+	clk.add(2 * time.Second)
 	s.Sample(ctx)
 	snap := s.Snapshot()
 	c := snap.Current
@@ -73,9 +88,9 @@ func TestSamplerDerivesRates(t *testing.T) {
 	if snap.MemTotal != 16<<30 || snap.IntervalSeconds != 2 {
 		t.Fatalf("snapshot: %+v", snap)
 	}
-	clk.t = clk.t.Add(2 * time.Second)
+	clk.add(2 * time.Second)
 	s.Sample(ctx)
-	clk.t = clk.t.Add(2 * time.Second)
+	clk.add(2 * time.Second)
 	s.Sample(ctx)
 	snap = s.Snapshot()
 	if len(snap.History) != 2 {
@@ -84,6 +99,9 @@ func TestSamplerDerivesRates(t *testing.T) {
 	if r := snap.History[0]; r.NetRxBps != 0 || r.NetTxBps != 0 {
 		t.Fatalf("counter reset produced a rate: %+v", r)
 	}
+	// A background GPU read launched by Sample/Snapshot must not outlive
+	// the test.
+	waitFor(t, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return !s.gpuBusy })
 }
 
 func TestSamplerReportsErrors(t *testing.T) {
@@ -102,7 +120,7 @@ func TestGPUReadOnlyWhileViewed(t *testing.T) {
 	s := New(Options{Source: src, Interval: time.Second, GPUInterval: 5 * time.Second, GPUIdle: time.Minute, Now: clk.now})
 	ctx := context.Background()
 	s.Sample(ctx)
-	clk.t = clk.t.Add(2 * time.Minute)
+	clk.add(2 * time.Minute)
 	s.Sample(ctx)
 	if src.calls() != 0 {
 		t.Fatal("GPU read while nobody was looking")
@@ -110,19 +128,19 @@ func TestGPUReadOnlyWhileViewed(t *testing.T) {
 	s.Snapshot() // someone opens the Overview
 	waitFor(t, func() bool { return src.calls() == 1 })
 	waitFor(t, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return !s.gpuBusy })
-	clk.t = clk.t.Add(time.Second)
+	clk.add(time.Second)
 	s.Sample(ctx)
 	if src.calls() != 1 {
 		t.Fatal("GPU read again before GPUInterval")
 	}
-	clk.t = clk.t.Add(5 * time.Second)
+	clk.add(5 * time.Second)
 	s.Sample(ctx)
 	waitFor(t, func() bool { return src.calls() == 2 })
 	snap := s.Snapshot()
 	if len(snap.GPUs) != 1 || snap.Current == nil || snap.Current.GPU == nil || *snap.Current.GPU != 40 {
 		t.Fatalf("snapshot: %+v", snap)
 	}
-	clk.t = clk.t.Add(2 * time.Minute)
+	clk.add(2 * time.Minute)
 	waitFor(t, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return !s.gpuBusy })
 	s.Sample(ctx)
 	if src.calls() != 2 {

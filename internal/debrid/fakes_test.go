@@ -27,25 +27,36 @@ type mediaServer struct {
 	data    []byte
 	latency time.Duration // per request, before headers
 
-	mu       sync.Mutex
-	valid    map[string]bool
-	status   map[string]int // forced status per token
-	stall    map[string]time.Duration
-	size     int64 // advertised total (0 = real)
-	requests atomic.Int64
-	ranges   []string
+	mu     sync.Mutex
+	valid  map[string]bool
+	status map[string]int // forced status per token
+	stall  map[string]time.Duration
+	// stallAfter, keyed token+"|"+Range like stall, stalls one ranged
+	// response mid-body: headers and that many bytes go out, then the
+	// handler blocks until the client disconnects.
+	stallAfter map[string]int64
+	size       int64 // advertised total (0 = real)
+	requests   atomic.Int64
+	ranges     []string
+	// stallEvery, when > 0, stalls every ranged response mid-body after
+	// that many bytes, until the client disconnects.
+	stallEvery atomic.Int64
+	// inflight counts handlers currently running, for leak assertions.
+	inflight atomic.Int32
 }
 
 func newMediaServer(t testing.TB, size int) *mediaServer {
 	data := make([]byte, size)
 	rand.New(rand.NewSource(1)).Read(data)
-	m := &mediaServer{data: data, valid: map[string]bool{}, status: map[string]int{}, stall: map[string]time.Duration{}}
+	m := &mediaServer{data: data, valid: map[string]bool{}, status: map[string]int{}, stall: map[string]time.Duration{}, stallAfter: map[string]int64{}}
 	m.Server = httptest.NewServer(http.HandlerFunc(m.serve))
 	t.Cleanup(m.Close)
 	return m
 }
 
 func (m *mediaServer) serve(w http.ResponseWriter, r *http.Request) {
+	m.inflight.Add(1)
+	defer m.inflight.Add(-1)
 	m.requests.Add(1)
 	token := strings.TrimPrefix(r.URL.Path, "/m/")
 	m.mu.Lock()
@@ -57,7 +68,14 @@ func (m *mediaServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, status, stall, size := m.valid[token], m.status[token], m.stall[key], m.size
 	delete(m.stall, key)
+	stallAfter, stallOnce := m.stallAfter[token+"|"+r.Header.Get("Range")]
+	if stallOnce {
+		delete(m.stallAfter, token+"|"+r.Header.Get("Range"))
+	}
 	m.mu.Unlock()
+	if n := m.stallEvery.Load(); n > 0 && !stallOnce {
+		stallAfter, stallOnce = n, true
+	}
 	if m.latency > 0 {
 		time.Sleep(m.latency)
 	}
@@ -74,6 +92,26 @@ func (m *mediaServer) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	if stallOnce {
+		// A real upstream stall over the socket: valid 206 headers and
+		// the first stallAfter bytes, flushed, then silence — the
+		// connection stays open until the client gives up on it.
+		var a, b int64
+		fmt.Sscanf(r.Header.Get("Range"), "bytes=%d-%d", &a, &b)
+		total := int64(len(m.data))
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", a, b, total))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", b-a+1))
+		w.WriteHeader(http.StatusPartialContent)
+		end := min(a+stallAfter, b+1, total)
+		if end > a {
+			w.Write(m.data[a:end])
+		}
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
+		<-r.Context().Done()
 		return
 	}
 	if size > 0 {

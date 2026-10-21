@@ -45,6 +45,11 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 			// Reusing the check must not restart that grace period.
 			startedAt[i] = prepared.started
 		}
+		if gs := cands[i].graceStart; !gs.IsZero() && gs.Before(startedAt[i]) {
+			// Descriptor discovery for this source overran the grace while
+			// an equivalent was already healthy; that time counts too.
+			startedAt[i] = gs
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

@@ -11,7 +11,8 @@ async function chooseProfile(name: RegExp) {
 describe("Cache management", () => {
   it("keeps a preset as a draft until saved and discards it without a request", async () => {
     const { fake } = renderApp("/cache");
-    expect(await screen.findByRole("main", { name: "Cache operations" }, WAIT)).toBeInTheDocument();
+    expect(await screen.findByRole("main", { name: "Cache overview" }, WAIT)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Search cached releases")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Encore/ })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Media disk budget")).not.toBeInTheDocument();
     await chooseProfile(/Encore/);
@@ -39,7 +40,7 @@ describe("Cache management", () => {
     await waitFor(() => expect(fake.state.config.cache.mode).toBe("off"));
   });
   it("filters retained titles and updates an owner pin", async () => {
-    const { fake } = renderApp("/cache");
+    const { fake } = renderApp("/cache/explorer");
     expect(await screen.findByText("Arrival", {}, WAIT)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Search cached releases"), {
       target: { value: "Interstellar" },
@@ -67,8 +68,22 @@ describe("Cache management", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Save policy" })).not.toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Why these titles?" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Preloading" }));
     expect(await screen.findByText(/Severance · S02E04/)).toBeInTheDocument();
     expect(screen.getByText(/next in a household viewing sequence/)).toBeInTheDocument();
+  });
+  it("navigates between compact overview and the dedicated explorer", async () => {
+    renderApp("/cache");
+    expect(await screen.findByRole("tab", { name: "Overview" }, WAIT)).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /Explorer/ }));
+    expect(await screen.findByRole("main", { name: "Cache explorer" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Search cached releases")).toBeInTheDocument();
+    expect(screen.queryByText("Playback readiness")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(await screen.findByText("Playback readiness")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Search cached releases")).not.toBeInTheDocument();
   });
 });

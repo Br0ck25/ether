@@ -206,6 +206,7 @@ func New(cfg config.Transcode, logger *slog.Logger, opts ...Option) (*Manager, e
 	if m.feat, err = probeFeatures(ctx, m.runner, m.ffmpeg); err != nil {
 		return nil, err
 	}
+	m.feat.jellyfinSegmentClock = strings.Contains(strings.ToLower(m.version), "jellyfin")
 	if !m.feat.hasEncoder("libx264") {
 		m.log.Warn("ffmpeg has no libx264; CPU transcoding unavailable", "ffmpeg", m.ffmpeg)
 	}
@@ -386,26 +387,6 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 	} else if d.Container != ContainerFMP4 && d.Container != ContainerMPEGTS && d.Container != ContainerMatroska {
 		d.Container = segmentContainer(d.VideoCodec, d.AudioCodec)
 	}
-	segDur := req.SegmentDuration
-	if segDur <= 0 {
-		segDur = DefaultSegmentDuration
-		if proto == core.ProtocolDASH {
-			segDur = DefaultDASHSegmentDuration
-			if !d.VideoCopy {
-				segDur = encodedDASHSegmentDuration
-			}
-		}
-	}
-	offset := req.StartOffset
-	if offset < 0 {
-		offset = 0
-	}
-	if req.Info.Duration > 0 && offset >= req.Info.Duration {
-		offset = req.Info.Duration - segDur
-		if offset < 0 {
-			offset = 0
-		}
-	}
 	m.mu.Lock()
 	adapt := adaptiveFromConfig(m.cfg)
 	atCap := m.cfg.MaxTranscodes > 0 && m.encodingLocked(req.SessionID) >= m.cfg.MaxTranscodes
@@ -427,6 +408,35 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		rungs = rungs[:1]
 	}
 
+	if proto == core.ProtocolDASH && len(rungs) > 1 && findStream(req.Info, d.AudioStream, "audio") == nil {
+		// Ladder track IDs reserve track 1 for audio.
+		rungs = rungs[:1]
+	}
+
+	segDur := req.SegmentDuration
+	if segDur <= 0 {
+		segDur = DefaultSegmentDuration
+		if proto == core.ProtocolDASH {
+			segDur = DefaultDASHSegmentDuration
+			// A copy primary may advertise encoded lower rungs. They share
+			// the primary's clock, so give the whole ladder the short grid.
+			// Copy GOPs spanning slots keep using the existing aliases.
+			if !d.VideoCopy || len(rungs) > 1 {
+				segDur = encodedDASHSegmentDuration
+			}
+		}
+	}
+	offset := req.StartOffset
+	if offset < 0 {
+		offset = 0
+	}
+	if req.Info.Duration > 0 && offset >= req.Info.Duration {
+		offset = req.Info.Duration - segDur
+		if offset < 0 {
+			offset = 0
+		}
+	}
+
 	// HLS playlists start at the offset; a DASH MPD always spans the whole
 	// title and the first run starts at the offset's segment.
 	base, startSeg, total := offset, 0, 0
@@ -439,12 +449,6 @@ func (m *Manager) StartHLS(ctx context.Context, req core.HLSRequest) (core.HLSSe
 		total = dashSegmentCount(req.Info.Duration, segDur)
 		if total > 0 && startSeg >= total {
 			startSeg = total - 1
-		}
-		if len(rungs) > 1 && findStream(req.Info, d.AudioStream, "audio") == nil {
-			// Ladder reps are numbered after an audio track 1
-			// (dashTrackForRung). Without audio their IDs would not match
-			// their session tracks and the last one could never be served.
-			rungs = rungs[:1]
 		}
 		reps = dashRepsLadder(req.Info, d, rungs)
 		if len(reps) == 0 {

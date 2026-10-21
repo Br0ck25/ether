@@ -17,7 +17,8 @@ const DefaultDASHSegmentDuration = 5 * time.Second
 
 // Encoded video can force short GOPs. Shorter segments also lower the MPD's
 // minimum buffer, reducing bytes needed before startup and a seek on weak links.
-// Copy/remux retains the source-keyframe-friendly PMS default above.
+// Adaptive copy sessions use this grid too, so their encoded lower rungs
+// get the same benefit. Standalone copy retains the PMS default above.
 const encodedDASHSegmentDuration = 2 * time.Second
 
 // dashChunkDuration is the length ffmpeg's dash muxer cuts chunks at. Chunks

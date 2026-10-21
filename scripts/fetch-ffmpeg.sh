@@ -15,7 +15,8 @@
 #   scripts/fetch-ffmpeg.sh all
 # Env: FFMPEG_OUT (default dist/ffmpeg), FFMPEG_LOCK (default packaging/ffmpeg.lock.json)
 #
-# Requires: curl, tar (xz), unzip (windows targets), python3 or jq, shasum/sha256sum.
+# Requires: curl, tar (xz), unzip or python (windows targets), a working
+# python3/python or jq, shasum/sha256sum.
 # The builds are GPL builds of FFmpeg from jellyfin/jellyfin-ffmpeg; Ether is
 # GPLv3 so redistribution with source offer is fine — see THIRD_PARTY_NOTICES.md.
 set -eu
@@ -24,6 +25,16 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 LOCK=${FFMPEG_LOCK:-"$ROOT/packaging/ffmpeg.lock.json"}
 OUT=${FFMPEG_OUT:-"$ROOT/dist/ffmpeg"}
+
+# PY is a python that really runs. On Windows runners `python3` can be the
+# Microsoft Store stub: present on PATH, but it does not execute code.
+PY=
+for cand in python3 python; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import json' >/dev/null 2>&1; then
+    PY=$cand
+    break
+  fi
+done
 
 host_platform() {
   os=$(uname -s)
@@ -44,8 +55,8 @@ host_platform() {
 
 # lock_field <platform> <url|sha256> — read from the lock JSON.
 lock_field() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$LOCK" "$1" "$2" <<'PY'
+  if [ -n "$PY" ]; then
+    "$PY" - "$LOCK" "$1" "$2" <<'PY'
 import json, sys
 lock, plat, field = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(lock) as f:
@@ -58,14 +69,14 @@ PY
   elif command -v jq >/dev/null 2>&1; then
     jq -er --arg p "$1" --arg f "$2" '.artifacts[$p][$f]' "$LOCK"
   else
-    echo "fetch-ffmpeg: need python3 or jq to read $LOCK" >&2
+    echo "fetch-ffmpeg: need a working python3/python or jq to read $LOCK" >&2
     exit 1
   fi
 }
 
 all_platforms() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["artifacts"]))' "$LOCK"
+  if [ -n "$PY" ]; then
+    "$PY" -c 'import json,sys; print(" ".join(json.load(open(sys.argv[1]))["artifacts"]))' "$LOCK"
   else
     jq -r '.artifacts | keys | join(" ")' "$LOCK"
   fi
@@ -109,7 +120,16 @@ fetch_one() {
   case "$url" in
     *.tar.xz|*.txz) tar -xJf "$archive" -C "$tmp/unpacked" ;;
     *.tar.gz|*.tgz) tar -xzf "$archive" -C "$tmp/unpacked" ;;
-    *.zip) unzip -q "$archive" -d "$tmp/unpacked" ;;
+    *.zip)
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$archive" -d "$tmp/unpacked"
+      elif [ -n "$PY" ]; then
+        "$PY" -m zipfile -e "$archive" "$tmp/unpacked"
+      else
+        echo "fetch-ffmpeg: need unzip or python to unpack $url" >&2
+        exit 1
+      fi
+      ;;
     *) echo "fetch-ffmpeg: unknown archive type: $url" >&2; exit 1 ;;
   esac
   # Find the binaries (top level in jellyfin-ffmpeg portable builds, but be

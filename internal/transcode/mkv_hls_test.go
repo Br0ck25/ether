@@ -168,3 +168,17 @@ func TestIntegrationMatroskaHLSDecodeSeekAndSwap(t *testing.T) {
 	}
 	decode(2, "swap.mkv", 18)
 }
+
+func TestMatroskaChunkArgsKeepPositiveTitleClock(t *testing.T) {
+	d := core.Decision{Kind: core.DecisionRemux, Container: ContainerMatroska, VideoCopy: true, AudioCopy: true, AudioStream: 1}
+	s := baseSpec(mustParse(t, "mkv_hevc_hdr10.json"), d)
+	s.ChunkDir = "chunks"
+	s.Features.jellyfinSegmentClock = true
+	args := buildArgs(s)
+	mustContain(t, args, "-copyts", "-start_at_zero", "-output_ts_offset 10.000", "-segment_time_delta 210.000")
+	mustNotContain(t, args, "-segment_format_options output_ts_offset=")
+	s.Features.jellyfinSegmentClock = false
+	args = buildArgs(s)
+	mustContain(t, args, "-segment_format_options output_ts_offset=210.000")
+	mustNotContain(t, args, "-copyts", "-segment_time_delta")
+}

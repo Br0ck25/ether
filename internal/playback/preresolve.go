@@ -33,6 +33,15 @@ type probeCache struct {
 	releaseID string
 	info      core.MediaInfo
 	points    []IndexPoint
+	// needsAugment marks facts rebuilt from the persisted probe, which
+	// strips per-viewer sidecar enrichment: AugmentMedia must run again
+	// before the generation is published. Warm in-memory facts were
+	// already augmented when they were probed.
+	needsAugment bool
+	// nzbHash binds persisted facts to the exact NZB payload they were
+	// probed from; release ID and file size alone do not prove the
+	// opened source is the same media. Empty for in-memory warm facts.
+	nzbHash string
 }
 
 // PreResolve schedules detail-page warming; it is the core.PrewarmDetail

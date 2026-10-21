@@ -29,12 +29,14 @@ const DefaultVAAPIDevice = "/dev/dri/renderD128"
 
 // features is what the ffmpeg build offers: encoders, hwaccels, filters.
 type features struct {
-	encoders map[string]bool
-	hwaccels map[string]bool
-	filters  map[string]bool
 	// scaleVTFormat is a build capability, not an FFmpeg version guess:
 	// upstream builds can expose scale_vt without its format option.
 	scaleVTFormat bool
+	// Jellyfin patches the segment muxer's origin and first-entry duration.
+	jellyfinSegmentClock bool
+	encoders             map[string]bool
+	hwaccels             map[string]bool
+	filters              map[string]bool
 }
 
 func (f features) hasEncoder(n string) bool { return f.encoders[n] }

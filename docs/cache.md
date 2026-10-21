@@ -1,10 +1,13 @@
 # Cache management
 
-Open **Server → Cache** for storage, the current saved policy, preload activity,
-playback warming and retained media. **Edit policy** opens the settings drawer.
+Open **Server → Cache**. **Overview** is a compact storage and playback-readiness
+view. **Explorer** is a searchable, filtered table of retained releases, paginated
+20 at a time. **Preloading** shows active work and explains ranked selections.
+Tabs have their own URLs and the overview fits the desktop viewport, following
+the server Overview layout. **Edit policy** opens the settings drawer.
 **Choose a cache profile** opens the preset cards, followed by a review step;
 selecting a card does not change the policy or start a job. Save after reviewing
-the controls. Selection explanations are available under **Why these titles?**.
+the controls.
 Storage settings apply to this node. Existing settings retain their previous behaviour until you change them.
 
 ## Choose a footprint

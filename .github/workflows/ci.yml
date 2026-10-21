@@ -22,6 +22,74 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # Stage the pinned ffmpeg/ffprobe (packaging/ffmpeg.lock.json,
+      # SHA-256 verified by scripts/fetch-ffmpeg.sh) and put them first on
+      # PATH so the real integration tests in internal/transcode run
+      # instead of skipping on exec.LookPath("ffmpeg").
+      - name: Resolve pinned ffmpeg platform
+        id: ffmpeg
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) goos=linux ;;
+            macOS) goos=darwin ;;
+            Windows) goos=windows ;;
+            *) echo "::error::unsupported runner OS $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          case "$RUNNER_ARCH" in
+            X64) goarch=amd64 ;;
+            ARM64) goarch=arm64 ;;
+            *) echo "::error::unsupported runner arch $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          echo "platform=$goos-$goarch" >> "$GITHUB_OUTPUT"
+          echo "dir=dist/ffmpeg/$goos-$goarch" >> "$GITHUB_OUTPUT"
+      - name: Cache pinned ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.ffmpeg.outputs.dir }}
+          # Exact key only (no restore-keys): a lock bump must re-fetch,
+          # never revive the previous pin.
+          key: ffmpeg-${{ steps.ffmpeg.outputs.platform }}-${{ hashFiles('packaging/ffmpeg.lock.json') }}
+      - name: Stage pinned ffmpeg/ffprobe
+        shell: bash
+        env:
+          FFMPEG_PLATFORM: ${{ steps.ffmpeg.outputs.platform }}
+          FFMPEG_DIR: ${{ steps.ffmpeg.outputs.dir }}
+        run: |
+          bash scripts/fetch-ffmpeg.sh "$FFMPEG_PLATFORM"
+          # GITHUB_PATH must hold a native Windows path on Windows, where
+          # later steps run under pwsh but this one runs under Git Bash.
+          staged="$GITHUB_WORKSPACE/$FFMPEG_DIR"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            staged=$(cygpath -w "$staged")
+          fi
+          echo "$staged" >> "$GITHUB_PATH"
+          echo "Staged $FFMPEG_PLATFORM ffmpeg/ffprobe at $staged"
+      - name: Verify ffmpeg/ffprobe resolve to the staged pins
+        # A fresh shell, so PATH reflects GITHUB_PATH exactly as the test
+        # steps will see it. Fails hard: a broken stage must never let the
+        # integration tests quietly skip back to green.
+        shell: bash
+        env:
+          FFMPEG_DIR: ${{ steps.ffmpeg.outputs.dir }}
+        run: |
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=.exe; fi
+          staged="$GITHUB_WORKSPACE/$FFMPEG_DIR"
+          test -f "$staged/.sha256" || { echo "::error::staged ffmpeg missing .sha256 marker" >&2; exit 1; }
+          show_version() { out=$("$1" -hide_banner -version); echo "${out%%$'\n'*}"; }
+          show_version "$staged/ffmpeg$ext"
+          show_version "$staged/ffprobe$ext"
+          for tool in ffmpeg ffprobe; do
+            found=$(command -v "$tool") || { echo "::error::$tool not on PATH" >&2; exit 1; }
+            echo "PATH $tool -> $found"
+            case "$found" in
+              *"/$FFMPEG_DIR/"*) ;;
+              *) echo "::error::$tool resolves outside the staged pin: $found" >&2; exit 1 ;;
+            esac
+          done
+          show_version ffmpeg
+          show_version ffprobe
       - name: gofmt
         if: runner.os != 'Windows'
         run: |
