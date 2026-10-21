@@ -1,4 +1,5 @@
 import {
+  Badge,
   Button,
   EmptyState,
   Input,
@@ -14,6 +15,8 @@ import {
   EyeOff,
   Globe2,
   Layers,
+  LayoutGrid,
+  PanelLeft,
   LayoutTemplate,
   Pencil,
   Plus,
@@ -23,7 +26,7 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ActionMenu } from "../../components/ActionMenu";
 import { Artwork } from "../../components/Artwork";
@@ -43,8 +46,15 @@ import { newCollectionHref } from "./links";
 type Tab = "mine" | "templates" | "builtin";
 type Filter = "all" | "live" | "draft";
 
-export default function CollectionsGallery() {
-  const [params, setParams] = useSearchParams();
+export default function CollectionsGallery({
+  browseSearch,
+  active = true,
+}: {
+  browseSearch?: string;
+  active?: boolean;
+}) {
+  const [routeParams, setParams] = useSearchParams();
+  const params = browseSearch === undefined ? routeParams : new URLSearchParams(browseSearch);
   const rawTab = params.get("tab");
   const tab: Tab = rawTab === "templates" || rawTab === "builtin" ? rawTab : "mine";
   const [q, setQ] = useState("");
@@ -58,6 +68,14 @@ export default function CollectionsGallery() {
   const [drafts, setDrafts] = useState(() =>
     listDrafts<CollectionSpec>("collection").filter((d) => d.id.startsWith("new-")),
   );
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) {
+      void collections.reload();
+      setDrafts(listDrafts<CollectionSpec>("collection").filter((d) => d.id.startsWith("new-")));
+    }
+    wasActive.current = active;
+  }, [active, collections.reload]);
   const mine = (collections.data ?? []).filter((c) => !c.builtIn);
   const builtIn = (collections.data ?? []).filter((c) => c.builtIn);
   const needle = q.trim().toLowerCase();
@@ -79,6 +97,13 @@ export default function CollectionsGallery() {
       ? (items.find((c) => c.id === params.get("collection")) ?? items[0])
       : undefined;
   const state = tab === "templates" ? templates : collections;
+  const posterView = tab !== "templates" && params.get("view") === "posters";
+  const setView = (posters: boolean) => {
+    const p = new URLSearchParams(params);
+    if (posters) p.set("view", "posters");
+    else p.delete("view");
+    setParams(p);
+  };
   const setTab = (next: Tab) => {
     const p = new URLSearchParams(params);
     p.set("tab", next);
@@ -87,16 +112,18 @@ export default function CollectionsGallery() {
     setParams(p);
     setQ("");
   };
-  const select = (key: "collection" | "template", id: string) => {
+  const select = (key: "collection" | "template", id: string, openPreview = false) => {
     const p = new URLSearchParams(params);
     p.set(key, id);
+    if (openPreview) p.delete("view");
     setParams(p);
     if (window.matchMedia("(max-width: 1023px)").matches)
       document
         .querySelector('[aria-label="Collection preview"]')
         ?.scrollIntoView({ block: "start", behavior: "smooth" });
   };
-  const edit = (c: CollectionSpec) => navigate(`/collections/${encodeURIComponent(c.id!)}`);
+  const edit = (c: CollectionSpec, section?: "artwork") =>
+    navigate(`/collections/${encodeURIComponent(c.id!)}${section ? `?section=${section}` : ""}`);
   const duplicate = (c: CollectionSpec) =>
     navigate(newCollectionHref(), {
       state: {
@@ -151,6 +178,34 @@ export default function CollectionsGallery() {
         subtitle="Curate what shows up in Plex."
         actions={
           <>
+            {tab !== "templates" ? (
+              <div
+                role="group"
+                aria-label="Collection layout"
+                className="flex rounded-lg border border-border bg-bg-subtle p-0.5"
+              >
+                <Button
+                  variant={posterView ? "ghost" : "secondary"}
+                  size="icon"
+                  className="size-7"
+                  aria-label="Show collection preview"
+                  aria-pressed={!posterView}
+                  onClick={() => setView(false)}
+                >
+                  <PanelLeft size={14} />
+                </Button>
+                <Button
+                  variant={posterView ? "secondary" : "ghost"}
+                  size="icon"
+                  className="size-7"
+                  aria-label="Show poster gallery"
+                  aria-pressed={posterView}
+                  onClick={() => setView(true)}
+                >
+                  <LayoutGrid size={14} />
+                </Button>
+              </div>
+            ) : null}
             <Button variant="outline" size="sm" onClick={() => setDescribe(true)}>
               <Sparkles size={14} /> Describe it
             </Button>
@@ -369,6 +424,64 @@ export default function CollectionsGallery() {
               <Skeleton className="h-56 w-full rounded-xl" />
               <Skeleton className="h-60 w-full rounded-xl" />
             </div>
+          ) : posterView && items.length ? (
+            <section className="p-5 sm:p-6" aria-label="Collection posters">
+              <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-sm font-semibold text-fg">
+                  {tab === "builtin" ? "Built-in collections" : "Your collections"}
+                </h2>
+                <span className="text-xs text-fg-muted">
+                  {items.length} collections · Artwork shown in Plex
+                </span>
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6">
+                {items.map((c) => (
+                  <article key={c.id} className="group min-w-0">
+                    <button
+                      type="button"
+                      aria-label={`Open ${c.name} preview`}
+                      onClick={() => select("collection", c.id!, true)}
+                      className="block w-full rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                      <div className="relative aspect-[2/3] overflow-hidden rounded-lg ring-1 ring-border transition group-hover:ring-primary/50">
+                        <Artwork
+                          src={api.artworkUrl(
+                            c.id!,
+                            450,
+                            [c.updatedAt, c.lastBuiltAt].filter(Boolean).join("-"),
+                          )}
+                          alt={`${c.name} collection poster`}
+                          title={c.name}
+                          className="size-full"
+                        />
+                        <span className="absolute left-2 top-2">
+                          <Badge variant={c.enabled ? "success" : "secondary"}>
+                            {c.enabled ? "Published" : "Draft"}
+                          </Badge>
+                        </span>
+                      </div>
+                      <span className="mt-2 block truncate text-sm font-medium text-fg">
+                        {c.name}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-fg-muted">
+                        {c.itemCount === undefined
+                          ? "Not built yet"
+                          : `${c.itemCount.toLocaleString()} titles`}
+                      </span>
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-1 h-7 px-0 text-xs text-fg-muted"
+                      aria-label={`Customise ${c.name} artwork`}
+                      onClick={() => edit(c, "artwork")}
+                    >
+                      <Pencil size={12} /> Customise artwork
+                    </Button>
+                  </article>
+                ))}
+              </div>
+            </section>
           ) : selected || template ? (
             <CollectionDetail
               key={`${tab}-${template?.id ?? selected?.id}`}
@@ -394,13 +507,20 @@ export default function CollectionsGallery() {
                 ) : (
                   <>
                     {selected?.builtIn ? (
-                      <Button size="sm" onClick={() => duplicate(selected)}>
-                        <Copy size={14} /> Duplicate to edit
+                      <Button size="sm" onClick={() => edit(selected, "artwork")}>
+                        <Pencil size={14} /> Customise collection
                       </Button>
                     ) : (
                       <>
                         <Button size="sm" onClick={() => edit(selected!)}>
                           <Pencil size={14} /> Edit collection
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => edit(selected!, "artwork")}
+                        >
+                          <LayoutGrid size={14} /> Artwork
                         </Button>
                         <Button
                           variant="outline"

@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { CollectionSpec, Rule } from "../lib/contract";
 import { calls, renderApp } from "./harness";
+import { renderAppWith } from "./routes";
 
 const WAIT = { timeout: 4000 };
 
@@ -124,6 +125,32 @@ describe("Collection Studio editor", () => {
 });
 
 describe("Collection Studio gallery", () => {
+  it("keeps the library mounted and its selection unchanged while opening a new drawer", async () => {
+    const { fake } = renderApp("/collections?view=posters&collection=c3");
+    const library = await screen.findByRole("complementary", { name: "Collection library" }, WAIT);
+    const gallery = await screen.findByRole("region", { name: "Collection posters" }, WAIT);
+    const count = calls(fake, "GET", "/collections").filter(
+      (c) => c.path === "/collections",
+    ).length;
+    fireEvent.click(screen.getByRole("button", { name: "New collection" }));
+    const drawer = await screen.findByRole("dialog", { name: "New collection" }, WAIT);
+    await within(drawer).findByLabelText("Collection name", {}, WAIT);
+    expect(library.isConnected).toBe(true);
+    expect(gallery.isConnected).toBe(true);
+    expect(library.closest("[inert]")).not.toBeNull();
+    expect(
+      calls(fake, "GET", "/collections").filter((c) => c.path === "/collections"),
+    ).toHaveLength(count);
+    fireEvent.click(within(drawer).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), WAIT);
+    expect(screen.getByRole("region", { name: "Collection posters" })).toBe(gallery);
+    expect(screen.getByRole("complementary", { name: "Collection library" })).toBe(library);
+    expect(screen.getByRole("button", { name: "Preview Family movie night" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+  });
+
   it("previews a selected collection in place and publishes it", async () => {
     const { fake } = renderApp("/collections?collection=c3");
     expect(
@@ -166,17 +193,74 @@ describe("Collection Studio gallery", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps built-in collections read-only and duplicates them as editable drafts", async () => {
-    renderApp("/collections?tab=builtin");
+  it("customises built-in artwork while preserving the managed definition", async () => {
+    const { fake } = renderApp("/collections?tab=builtin");
     await screen.findByRole("heading", { name: "Recently added" }, WAIT);
-    expect(screen.queryByRole("button", { name: "Edit collection" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Unpublish" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Duplicate to edit" }));
-    const drawer = await screen.findByRole("dialog", { name: "New collection" }, WAIT);
-    expect(await within(drawer).findByLabelText("Collection name", {}, WAIT)).toHaveValue(
-      "Recently added (copy)",
+    fireEvent.click(screen.getByRole("button", { name: "Customise collection" }));
+    const drawer = await screen.findByRole("dialog", { name: "Edit collection" }, WAIT);
+    expect(await within(drawer).findByLabelText("Collection name", {}, WAIT)).toBeDisabled();
+    fireEvent.click(await within(drawer).findByRole("radio", { name: "Custom image" }, WAIT));
+    fireEvent.change(within(drawer).getByLabelText("Custom image URL"), {
+      target: { value: "https://example.com/collection.jpg" },
+    });
+    fireEvent.click(within(drawer).getByRole("button", { name: /^Save$/ }));
+    await waitFor(
+      () => expect(calls(fake, "PUT", "/collections/builtin-recent")).toHaveLength(1),
+      WAIT,
     );
-    expect(within(drawer).getByLabelText("Collection name")).toBeEnabled();
+    const saved = fake.state.collections.find((c) => c.id === "builtin-recent")!;
+    expect(saved.artwork).toMatchObject({
+      mode: "custom",
+      url: "https://example.com/collection.jpg",
+    });
+    expect(saved.name).toBe("Recently added");
+    expect(saved.builtIn).toBe(true);
+  });
+
+  it("browses native collection posters and opens a selected preview", async () => {
+    renderApp("/collections?view=posters");
+    const gallery = await screen.findByRole("region", { name: "Collection posters" }, WAIT);
+    expect(within(gallery).getAllByRole("button", { name: /Open .+ preview/ })).toHaveLength(4);
+    fireEvent.click(
+      within(gallery).getByRole("button", { name: "Open Family movie night preview" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Family movie night" }, WAIT),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show collection preview" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("saves a chosen title poster as the original TMDB image path", async () => {
+    const { fake } = renderAppWith("/collections/c1?section=artwork", (method, path) => {
+      if (method === "POST" && path === "/collections/preview")
+        return {
+          total: 1,
+          warnings: [],
+          tookMs: 1,
+          items: [
+            {
+              key: "m603",
+              type: "movie",
+              title: "The Matrix",
+              year: 1999,
+              poster: "/ether/api/image?path=%2Fmatrix.jpg&w=342",
+            },
+          ],
+        };
+    });
+    const drawer = await screen.findByRole("dialog", { name: "Edit collection" }, WAIT);
+    fireEvent.click(
+      await within(drawer).findByRole("button", { name: "Use The Matrix poster" }, WAIT),
+    );
+    expect(within(drawer).getByLabelText("Custom image URL")).toHaveValue("/matrix.jpg");
+    fireEvent.click(within(drawer).getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(calls(fake, "PUT", "/collections/c1")).toHaveLength(1), WAIT);
+    expect(
+      (calls(fake, "PUT", "/collections/c1")[0]!.body as CollectionSpec).artwork,
+    ).toMatchObject({ mode: "custom", url: "/matrix.jpg" });
   });
 
   it("lists collections and starts a new one from a template", async () => {
@@ -191,7 +275,11 @@ describe("Collection Studio gallery", () => {
     const card = await screen.findByRole("button", { name: "Use template Hidden gems" }, WAIT);
     fireEvent.click(card);
     expect(await screen.findByDisplayValue("Hidden gems", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText("Rating is at least 7.5")).toBeInTheDocument();
+    expect(
+      within(await screen.findByRole("dialog", { name: "New collection" }, WAIT)).getByText(
+        "Rating is at least 7.5",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("drafts a collection from a plain-English description", async () => {

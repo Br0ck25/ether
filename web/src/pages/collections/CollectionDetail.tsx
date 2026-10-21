@@ -65,7 +65,20 @@ export function CollectionDetail({
         ) : null}
         <div className="flex items-start gap-5 p-5 sm:gap-6 sm:p-6 xl:p-8">
           <div className="hidden w-28 shrink-0 sm:block xl:w-32">
-            <ArtworkPreview spec={spec} items={items} />
+            {!template && spec.id ? (
+              <Artwork
+                src={api.artworkUrl(
+                  spec.id,
+                  300,
+                  [spec.updatedAt, spec.lastBuiltAt].filter(Boolean).join("-"),
+                )}
+                alt={`${spec.name} collection poster`}
+                title={spec.name}
+                className="aspect-[2/3] w-full rounded-md shadow-md ring-1 ring-border"
+              />
+            ) : (
+              <ArtworkPreview spec={spec} items={items} />
+            )}
           </div>
           <div className="min-w-0 flex-1 py-1">
             <div className="mb-3 flex flex-wrap items-center gap-2">
