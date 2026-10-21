@@ -92,12 +92,12 @@ func (s *Service) resolution(key core.RatingKey, cands []candidate, winner int, 
 // equivalent can then bypass a stalled preferred source without losing quality.
 // Every worker is cancelled and joined before this function returns.
 func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr *Trace, race int) (int, []byte, error) {
+	if race <= 0 {
+		return s.validateRanked(ctx, cands, tr)
+	}
 	ctx, cancelBudget := context.WithTimeout(ctx, validationBudget)
 	defer cancelBudget()
-	width := 2
-	if race > 0 {
-		width = min(max(race, 1), 4)
-	}
+	width := min(race, 4)
 	limit := min(len(cands), maxHealthAttempts)
 	var transient error
 	for base := 0; base < limit; {
@@ -109,10 +109,8 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 		}
 		workCtx, cancel := context.WithCancel(ctx)
 		results := make(chan validation, count)
-		ordered := make([]chan validation, count)
 		var wg sync.WaitGroup
 		for j := 0; j < count; j++ {
-			ordered[j] = make(chan validation, 1)
 			wg.Add(1)
 			go func(j int) {
 				defer wg.Done()
@@ -126,26 +124,13 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 					v = s.validateOne(checkCtx, cands[i].rel)
 				}
 				v.index = i
-				ordered[j] <- v
 				results <- v
 			}(j)
 		}
-		margin := s.resolverCfg().SourceScoreMargin
-		if margin <= 0 {
-			margin = defaultSourceScoreMargin
-		}
-		hedge := race == 0 && count == 2 && equivalentHedge(cands[base], cands[base+1], margin)
 		winner := -1
 		var nzb []byte
 		for j := 0; j < count; j++ {
-			var v validation
-			if race > 0 {
-				v = <-results
-			} else if hedge && j == 0 {
-				v = waitRankedValidation(ordered[0], ordered[1], rankedSourceGrace)
-			} else {
-				v = <-ordered[j]
-			}
+			v := <-results
 			ct := &tr.Candidates[cands[v.index].trace]
 			ct.Attempted = true
 			ct.FetchDuration = v.fetchDuration
@@ -158,11 +143,6 @@ func (s *Service) validateCandidates(ctx context.Context, cands []candidate, tr 
 				return -1, nil, ctx.Err()
 			}
 			if ct.Healthy {
-				if hedge && j == 0 && v.index == base+1 {
-					ct.Route = strings.TrimSpace(ct.Route + "; healthy equivalent after preferred source exceeded grace")
-					ct.Route = strings.TrimPrefix(ct.Route, "; ")
-					tr.Candidates[cands[base].trace].Attempted = true
-				}
 				if v.healthChecked && !v.healthCached {
 					// A real check always counts, even when a coarse clock
 					// (Windows) measured it as taking no time.
