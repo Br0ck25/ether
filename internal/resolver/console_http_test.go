@@ -280,3 +280,51 @@ func itoa(n int64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+// NZB links carry the indexer API key and magnet links can carry tracker
+// passkeys: neither reaches the browser, in search results or in pins,
+// while the stored pin keeps them for playback.
+func TestConsoleHTTPHidesReleaseLinks(t *testing.T) {
+	releases := movieReleases()
+	for i := range releases {
+		releases[i].NZBURL = "https://idx.example.com/api?t=get&id=" + releases[i].ID + "&apikey=SECRET-KEY"
+		releases[i].MagnetURL = "magnet:?xt=urn:btih:abc&tr=https%3A%2F%2Ftracker.example.com%2FPASSKEY%2Fannounce"
+	}
+	svc := New(&fakeIndexer{releases: releases}, fakeHealth{}, openTestDB(t), testCfg(), Options{})
+	srv := httptest.NewServer(svc.ConsoleHandler(ConsoleDeps{
+		Catalog: fakeCatalog{titles: map[core.RatingKey]*core.Title{matrixTitle().Key: matrixTitle()}},
+		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}))
+	t.Cleanup(srv.Close)
+	key := matrixTitle().Key.String()
+	raw := func(method, path, body string) string {
+		t.Helper()
+		var r io.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		}
+		req, _ := http.NewRequest(method, srv.URL+path, r)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		if res.StatusCode != 200 {
+			t.Fatalf("%s %s: %d %s", method, path, res.StatusCode, b)
+		}
+		return string(b)
+	}
+	for _, body := range []string{
+		raw("GET", "/search?key="+key+"&profile=1080p", ""),
+		raw("POST", "/pins", `{"key":"`+key+`","releaseId":"hd"}`),
+		raw("GET", "/pins", ""),
+	} {
+		if strings.Contains(body, "SECRET-KEY") || strings.Contains(body, "PASSKEY") || strings.Contains(body, "magnet:") || !strings.Contains(body, `"id":"hd"`) {
+			t.Fatalf("release links reached the browser: %s", body)
+		}
+	}
+	if pins := svc.Pins(); len(pins) != 1 || !strings.Contains(pins[0].Release.NZBURL, "SECRET-KEY") {
+		t.Fatalf("stored pin lost its NZB link: %+v", pins)
+	}
+}

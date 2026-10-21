@@ -659,6 +659,15 @@ func TestLLMProvidersAndModels(t *testing.T) {
 		Models []admin.LLMModel `json:"models"`
 		Error  string           `json:"error"`
 	}
+	// The stored key belongs to the stored provider: switching provider
+	// with the placeholder must not send it to the new one.
+	rec = serve(h, auth(req(http.MethodPost, "/ether/api/llm/models", `{"provider":"anthropic","apiKey":"`+admin.RedactedSecret+`"}`)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "secret_required") || got.APIKey != "" {
+		t.Fatalf("placeholder followed a provider change: %d %s %+v", rec.Code, rec.Body, got)
+	}
+	if err := store.Update(func(c *config.Config) error { c.LLM.Provider = "anthropic"; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	rec = serve(h, auth(req(http.MethodPost, "/ether/api/llm/models", `{"provider":"anthropic","apiKey":"`+admin.RedactedSecret+`"}`)))
 	decode(t, rec, &res)
 	if rec.Code != 200 || len(res.Models) != 1 || res.Models[0].Label != "Claude X" {

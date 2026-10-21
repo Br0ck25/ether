@@ -1,3 +1,4 @@
+import { ConfirmRoot } from "@braedonsaunders/appkit-ui";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { BackupsAndImport } from "../pages/settings/Backups";
@@ -109,6 +110,80 @@ describe("Backups & import", () => {
     expect(screen.getByLabelText("Back up every")).not.toBeVisible();
     // Switching tabs keeps what was typed.
     expect(screen.getByLabelText("Plex server URL")).toHaveValue("http://half-typed:32400");
+  });
+
+  it("downloads snapshots only encrypted with a password it never stores", async () => {
+    const calls = backend();
+    const { createObjectURL, revokeObjectURL } = URL;
+    URL.createObjectURL = () => "blob:x";
+    URL.revokeObjectURL = () => {};
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    render(<BackupsAndImport />);
+    const download = await screen.findByRole("button", {
+      name: "Download ether-2026-10-18.tar.gz",
+    });
+    expect(download).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Backup password"), { target: { value: "too short" } });
+    expect(download).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Backup password"), {
+      target: { value: "correct horse battery" },
+    });
+    expect(download).toBeEnabled();
+    fireEvent.click(download);
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/backups/export/"))).toBe(true));
+    const exp = calls.find((c) => c.url.includes("/backups/export/"))!;
+    expect(exp.init?.method).toBe("POST");
+    expect(JSON.parse(String(exp.init?.body))).toEqual({ password: "correct horse battery" });
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(setItem.mock.calls.some((c) => String(c[1]).includes("correct horse"))).toBe(false);
+    setItem.mockRestore();
+    click.mockRestore();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+  });
+
+  it("restores an encrypted download with its password", async () => {
+    const calls = backend();
+    render(<BackupsAndImport />);
+    fireEvent.change(await screen.findByLabelText("Backup password"), {
+      target: { value: "pässword horse battery" },
+    });
+    const file = new File(["ETHERBK1rest-of-file"], "ether-1.etherbackup");
+    fireEvent.change(screen.getByLabelText("Choose backup bundle"), { target: { files: [file] } });
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/backups/restore"))).toBe(true));
+    const headers = calls.find((c) => c.url.endsWith("/backups/restore"))!.init!.headers as Record<
+      string,
+      string
+    >;
+    expect(headers["Content-Type"]).toBe("application/octet-stream");
+    expect(headers["X-Ether-Request"]).toBe("1");
+    const sent = Uint8Array.from(atob(headers["X-Ether-Backup-Password"] ?? ""), (c) =>
+      c.charCodeAt(0),
+    );
+    expect(new TextDecoder().decode(sent)).toBe("pässword horse battery");
+    expect(headers["X-Ether-Backup-Legacy"]).toBeUndefined();
+  });
+
+  it("asks before restoring an unencrypted bundle from an older version", async () => {
+    const calls = backend();
+    render(
+      <>
+        <BackupsAndImport />
+        <ConfirmRoot />
+      </>,
+    );
+    const file = new File(["\x1f\x8b-old-bundle"], "ether-1.tar.gz");
+    fireEvent.change(await screen.findByLabelText("Choose backup bundle"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/backups/restore"))).toBe(true));
+    const headers = calls.find((c) => c.url.endsWith("/backups/restore"))!.init!.headers as Record<
+      string,
+      string
+    >;
+    expect(headers["X-Ether-Backup-Legacy"]).toBe("plaintext");
+    expect(headers["X-Ether-Backup-Password"]).toBeUndefined();
   });
 
   it("has no local library tools", async () => {

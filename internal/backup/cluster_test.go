@@ -70,13 +70,12 @@ func TestClusterBackupsListEveryNode(t *testing.T) {
 	}
 
 	// Downloading another node's bundle explains where it is.
-	w := httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/export/"+sb.Name, nil))
+	api, _ := backupAPI(t, a, true)
+	w := call{method: "POST", path: "/export/" + sb.Name, body: exportBody(testPassword), owner: true}.do(api)
 	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), `node \"b\"`) {
 		t.Fatalf("export of b's bundle on a: %d %s", w.Code, w.Body.String())
 	}
-	w = httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/export/"+sa.Name, nil))
+	w = call{method: "POST", path: "/export/" + sa.Name, body: exportBody(testPassword), owner: true}.do(api)
 	if w.Code != http.StatusOK {
 		t.Fatalf("export of a's own bundle: %d", w.Code)
 	}
@@ -99,14 +98,13 @@ func TestClusterBackupsSharedDirectory(t *testing.T) {
 	a, b := clusterNodes(t)
 	shared := t.TempDir()
 	// Settings are shared (one database): set on a, used by b.
-	w := httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/settings", strings.NewReader(`{"intervalHours":24,"retain":2,"sharedDir":`+strconv.Quote(shared)+`}`)))
+	api, _ := backupAPI(t, a, true)
+	w := call{method: "POST", path: "/settings", body: []byte(`{"intervalHours":24,"retain":2,"sharedDir":` + strconv.Quote(shared) + `}`), owner: true}.do(api)
 	if w.Code != 200 {
 		t.Fatalf("settings: %d %s", w.Code, w.Body.String())
 	}
 	// A client that does not know the field leaves it alone.
-	w = httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("POST", "/settings", strings.NewReader(`{"intervalHours":12,"retain":2}`)))
+	w = call{method: "POST", path: "/settings", body: []byte(`{"intervalHours":12,"retain":2}`), owner: true}.do(api)
 	if st, _ := b.Settings(ctx); w.Code != 200 || st.SharedDir != shared || st.IntervalHours != 12 {
 		t.Fatalf("settings after partial update: %+v (%d)", st, w.Code)
 	}
@@ -140,16 +138,14 @@ func TestClusterBackupsSharedDirectory(t *testing.T) {
 		t.Fatalf("shared bundle %+v", got)
 	}
 	// Any node can serve a shared bundle.
-	w = httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/export/"+names[2], nil))
+	w = call{method: "POST", path: "/export/" + names[2], body: exportBody(testPassword), owner: true}.do(api)
 	if w.Code != http.StatusOK {
 		t.Fatalf("export of a shared bundle on a: %d", w.Code)
 	}
 	var body struct {
 		Settings Settings `json:"settings"`
 	}
-	w = httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	w = call{method: "GET", path: "/", owner: true}.do(api)
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Settings.SharedDir != shared {
 		t.Fatalf("settings in listing: %+v %v", body.Settings, err)
 	}

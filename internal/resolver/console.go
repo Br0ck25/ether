@@ -286,6 +286,21 @@ type SearchOptions struct {
 	Fresh bool
 }
 
+// browserRelease is rel as the owner's browser may see it. NZB links carry
+// the indexer's API key and magnet links can carry tracker passkeys; the
+// console never needs either (pins and health checks look releases up by
+// ID in the server's own results), so both are dropped.
+func browserRelease(rel core.Release) core.Release {
+	rel.NZBURL, rel.MagnetURL = "", ""
+	return rel
+}
+
+// browserPin is p with its release made safe for the browser.
+func browserPin(p Pin) Pin {
+	p.Release = browserRelease(p.Release)
+	return p
+}
+
 // ConsoleRelease is one search result as Resolve would judge it.
 type ConsoleRelease struct {
 	Release       core.Release  `json:"release"`
@@ -384,7 +399,7 @@ func (s *Service) SearchReleases(ctx context.Context, t *core.Title, opts Search
 	// rankCandidates writes one trace row per result, in result order.
 	for i, ct := range trace.Candidates {
 		rel := results[i]
-		cr := ConsoleRelease{Release: rel, Score: ct.Score, CustomFormats: ct.CustomFormats,
+		cr := ConsoleRelease{Release: browserRelease(rel), Score: ct.Score, CustomFormats: ct.CustomFormats,
 			Compatibility: ct.CompatibilityReason, Rejected: ct.Rejected, Reason: ct.Reason,
 			Rank: rank[rel.ID], Winner: rel.ID == out.Winner && !ct.Rejected, Pinned: ct.Pinned, Route: ct.Route}
 		// Rejected releases are scored too, so the owner can compare.

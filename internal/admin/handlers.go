@@ -1,8 +1,11 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -187,13 +190,53 @@ func (h *Handler) runTest(w http.ResponseWriter, r *http.Request, fn func(ctx co
 	writeJSON(w, http.StatusOK, res)
 }
 
+// Testers take unsaved settings. A secret the UI sent back as the
+// placeholder is replaced by the stored one only while it is bound to the
+// same entry and destination (UnredactConfig); otherwise the request is
+// refused, so a test can never send a stored secret somewhere new. Single
+// settings objects are decoded onto the redacted stored value, so leaving
+// a secret out behaves like sending the placeholder.
+
+// decodeTestBody decodes optional tester settings onto dst: an empty body
+// keeps dst, a malformed one is an error (so a half-parsed request never
+// runs a test with stored secrets).
+func decodeTestBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+	if err != nil || len(body) > maxBodyBytes {
+		writeError(w, http.StatusBadRequest, "bad_json", "could not read request body")
+		return false
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return true
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	if err := dec.Decode(dst); err != nil || dec.More() {
+		writeError(w, http.StatusBadRequest, "bad_json", "invalid JSON body")
+		return false
+	}
+	return true
+}
+
+func writeSecretRequired(w http.ResponseWriter, errs []FieldError) {
+	writeJSON(w, http.StatusBadRequest, map[string]any{
+		"error": map[string]any{
+			"code": "secret_required", "message": "enter the secret again to test changed connection settings", "fields": errs,
+		},
+	})
+}
+
 func (h *Handler) handleTestUsenet(w http.ResponseWriter, r *http.Request) {
 	var p config.UsenetProvider
 	if err := decodeJSONLenient(r, &p); err != nil {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	p = unredactProvider(p, h.deps.Config.Get())
+	var perrs placeholderErrors
+	p = perrs.unredactProvider("password", p, h.deps.Config.Get().Usenet.Providers)
+	if len(perrs) > 0 {
+		writeSecretRequired(w, perrs)
+		return
+	}
 	if errs := ValidateConfig(withProvider(p)); len(errs) > 0 {
 		writeValidationError(w, errs)
 		return
@@ -213,7 +256,13 @@ func (h *Handler) handleTestIndexer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	ix = unredactIndexer(ix, h.deps.Config.Get())
+	prev := h.deps.Config.Get()
+	var perrs placeholderErrors
+	ix = perrs.unredactIndexer("indexer", ix, prev.IndexerSites.FlareSolverrURL, prev)
+	if len(perrs) > 0 {
+		writeSecretRequired(w, perrs)
+		return
+	}
 	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestIndexer(ctx, ix) })
 }
 
@@ -223,7 +272,12 @@ func (h *Handler) handleTestDebrid(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_json", err.Error())
 		return
 	}
-	p = unredactDebridProvider(p, h.deps.Config.Get())
+	var perrs placeholderErrors
+	p = perrs.unredactDebrid("apiKey", p, h.deps.Config.Get().Debrid.Providers)
+	if len(perrs) > 0 {
+		writeSecretRequired(w, perrs)
+		return
+	}
 	c := config.Defaults(os.TempDir())
 	c.Debrid.Providers = []config.DebridProvider{p}
 	if errs := ValidateConfig(c); len(errs) > 0 {
@@ -237,8 +291,12 @@ func (h *Handler) handleTestTMDB(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Key string `json:"key"`
 	}
-	_ = decodeJSONLenient(r, &body)
+	if !decodeTestBody(w, r, &body) {
+		return
+	}
 	key := body.Key
+	// TMDB is a fixed destination: an empty or placeholder key tests the
+	// stored (or bundled) key.
 	if isRedacted(key) || key == "" {
 		key = h.deps.Config.Get().Catalog.TMDBKey
 	}
@@ -246,18 +304,42 @@ func (h *Handler) handleTestTMDB(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleTestOpenSubtitles(w http.ResponseWriter, r *http.Request) {
-	cfg := h.deps.Config.Get().OpenSubtitles
-	_ = decodeJSONLenient(r, &cfg)
-	prev := h.deps.Config.Get()
-	cfg.APIKey = preserve(cfg.APIKey, prev.OpenSubtitles.APIKey)
-	cfg.Password = preserve(cfg.Password, prev.OpenSubtitles.Password)
+	prev := h.deps.Config.Get().OpenSubtitles
+	cfg := redactOpenSubtitles(prev)
+	if !decodeTestBody(w, r, &cfg) {
+		return
+	}
+	var perrs placeholderErrors
+	cfg = perrs.unredactOpenSubtitles(cfg, prev)
+	if len(perrs) > 0 {
+		writeSecretRequired(w, perrs)
+		return
+	}
 	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestOpenSubtitles(ctx, cfg) })
 }
 
+// llmSettings decodes posted (unsaved) language-model settings onto the
+// stored ones and restores a bound API key.
+func (h *Handler) llmSettings(w http.ResponseWriter, r *http.Request) (config.LLM, bool) {
+	prev := h.deps.Config.Get().LLM
+	cfg := redactLLM(prev)
+	if !decodeTestBody(w, r, &cfg) {
+		return cfg, false
+	}
+	var perrs placeholderErrors
+	cfg = perrs.unredactLLM(cfg, prev)
+	if len(perrs) > 0 {
+		writeSecretRequired(w, perrs)
+		return cfg, false
+	}
+	return cfg, true
+}
+
 func (h *Handler) handleTestLLM(w http.ResponseWriter, r *http.Request) {
-	cfg := h.deps.Config.Get().LLM
-	_ = decodeJSONLenient(r, &cfg)
-	cfg.APIKey = preserve(cfg.APIKey, h.deps.Config.Get().LLM.APIKey)
+	cfg, ok := h.llmSettings(w, r)
+	if !ok {
+		return
+	}
 	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestLLM(ctx, cfg) })
 }
 
@@ -275,11 +357,12 @@ func (h *Handler) handleLLMProviders(w http.ResponseWriter, r *http.Request) {
 // testers, a provider failure is a successful call carrying the provider's
 // message, so the model picker can show it inline.
 func (h *Handler) handleLLMModels(w http.ResponseWriter, r *http.Request) {
-	cfg := h.deps.Config.Get().LLM
-	_ = decodeJSONLenient(r, &cfg)
-	cfg.APIKey = preserve(cfg.APIKey, h.deps.Config.Get().LLM.APIKey)
 	if h.deps.LLMModels == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented", "model listing is not available")
+		return
+	}
+	cfg, ok := h.llmSettings(w, r)
+	if !ok {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.deps.TestTimeout)
@@ -299,9 +382,17 @@ func (h *Handler) handleLLMModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleTestTrakt(w http.ResponseWriter, r *http.Request) {
-	cfg := h.deps.Config.Get().Trakt
-	_ = decodeJSONLenient(r, &cfg)
-	cfg.ClientSecret = preserve(cfg.ClientSecret, h.deps.Config.Get().Trakt.ClientSecret)
+	prev := h.deps.Config.Get().Trakt
+	cfg := redactTrakt(prev)
+	if !decodeTestBody(w, r, &cfg) {
+		return
+	}
+	var perrs placeholderErrors
+	cfg = perrs.unredactTrakt(cfg, prev)
+	if len(perrs) > 0 {
+		writeSecretRequired(w, perrs)
+		return
+	}
 	h.runTest(w, r, func(ctx context.Context) error { return h.deps.TestTrakt(ctx, cfg) })
 }
 

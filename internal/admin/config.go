@@ -80,7 +80,11 @@ func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		next = env.Config
 	}
-	next = UnredactConfig(next, prev)
+	next, perrs := UnredactConfig(next, prev)
+	if len(perrs) > 0 {
+		writeValidationError(w, perrs)
+		return
+	}
 	next.SetCachePolicy(next.Cache)
 	errs, err := h.saveConfig(next)
 	switch {
@@ -146,9 +150,11 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	prev := h.deps.Config.Get()
-	effective := prev
-	effective.Cache = prev.EffectiveCache()
-	prevRaw, _ := json.Marshal(effective)
+	// Merge onto the redacted config: a stored secret the patch leaves out
+	// then comes back as a placeholder and is restored only if still bound
+	// to its destination (UnredactConfig), so a patch that repoints an
+	// endpoint cannot carry the old secret along by omitting it.
+	prevRaw, _ := json.Marshal(effectiveRedacted(prev))
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(prevRaw, &all); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "could not encode config")
@@ -166,7 +172,11 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_json", "section value does not match the config schema: "+err.Error())
 		return
 	}
-	next = UnredactConfig(next, prev)
+	next, perrs := UnredactConfig(next, prev)
+	if len(perrs) > 0 {
+		writeValidationError(w, perrs)
+		return
+	}
 	if field == "cache" {
 		next.SetCachePolicy(next.Cache)
 	} else {

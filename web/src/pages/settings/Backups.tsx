@@ -6,6 +6,7 @@ import {
   PagedTable,
   SearchSelect,
   SettingsSection,
+  confirmDialog,
   toast,
 } from "@braedonsaunders/appkit-ui";
 import { Download, FileUp, Plus } from "lucide-react";
@@ -58,8 +59,7 @@ const base = "/adoption";
 const post = <T,>(path: string, body: unknown = {}) =>
   apiFetch<T>(base + path, { method: "POST", body: JSON.stringify(body) });
 
-async function download(path: string, name: string) {
-  const blob = await apiBlob(API_BASE + base + path);
+function saveBlob(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -68,15 +68,95 @@ async function download(path: string, name: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function upload(path: string, file: File, contentType: string) {
+async function download(path: string, name: string) {
+  saveBlob(await apiBlob(API_BASE + base + path), name);
+}
+
+async function failure(res: Response): Promise<Error> {
+  const data = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+  return new Error(data.error?.message ?? `Request failed (${res.status})`);
+}
+
+async function upload(
+  path: string,
+  file: File,
+  contentType: string,
+  headers: Record<string, string> = {},
+) {
   const res = await fetch(API_BASE + base + path, {
     method: "POST",
     body: file,
-    headers: { "X-Plex-Token": getToken(), "X-Ether-Request": "1", "Content-Type": contentType },
+    headers: {
+      ...headers,
+      "X-Plex-Token": getToken(),
+      "X-Ether-Request": "1",
+      "Content-Type": contentType,
+    },
   });
-  const data = (await res.json()) as { error?: { message?: string } };
-  if (!res.ok) throw new Error(data.error?.message ?? `Request failed (${res.status})`);
-  return data;
+  if (!res.ok) throw await failure(res);
+  return (await res.json()) as unknown;
+}
+
+/** Backups leave the server encrypted with a password of at least this length. */
+export const MIN_BACKUP_PASSWORD = 12;
+const ENCRYPTED_MAGIC = "ETHERBK1";
+
+/** Downloads a snapshot encrypted with password (never stored). */
+async function exportBackup(name: string, password: string) {
+  const res = await fetch(API_BASE + base + "/backups/export/" + encodeURIComponent(name), {
+    method: "POST",
+    body: JSON.stringify({ password }),
+    headers: {
+      "X-Plex-Token": getToken(),
+      "X-Ether-Request": "1",
+      "Content-Type": "application/json",
+    },
+  });
+  if (!res.ok) throw await failure(res);
+  saveBlob(await res.blob(), name.replace(/\.tar\.gz$/, "") + ".etherbackup");
+}
+
+function readHead(file: File, n: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve(String.fromCharCode(...new Uint8Array(reader.result as ArrayBuffer)));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the file"));
+    reader.readAsArrayBuffer(file.slice(0, n));
+  });
+}
+
+/** Header values are Latin-1 only, so the password travels as base64 of UTF-8. */
+function base64Utf8(s: string): string {
+  let bin = "";
+  for (const b of new TextEncoder().encode(s)) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+/**
+ * Restores an uploaded bundle: an encrypted download with its password, or
+ * (after an explicit confirmation) an unencrypted bundle from an older
+ * version. Returns the staged folder, or null when the owner cancelled.
+ */
+async function restoreBackup(file: File, password: string): Promise<string | null> {
+  const headers: Record<string, string> = {};
+  if ((await readHead(file, ENCRYPTED_MAGIC.length)) === ENCRYPTED_MAGIC) {
+    if (!password) throw new Error("Enter the backup password first.");
+    headers["X-Ether-Backup-Password"] = base64Utf8(password);
+  } else {
+    const ok = await confirmDialog({
+      title: "Restore an unencrypted backup?",
+      message:
+        "This bundle is from an older version and is not password protected. Restore it only if it came straight from your own server.",
+      confirmLabel: "Restore",
+    });
+    if (!ok) return null;
+    headers["X-Ether-Backup-Legacy"] = "plaintext";
+  }
+  const result = (await upload("/backups/restore", file, "application/octet-stream", headers)) as {
+    path?: string;
+  };
+  return result.path ?? "";
 }
 
 /** Runs one action at a time, reporting failures as toasts. */
@@ -158,6 +238,9 @@ export function BackupsAndImport({ tab = "backups" }: { tab?: "backups" | "impor
   const [data, setData] = useState<Backups | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [restored, setRestored] = useState("");
+  // Held in memory only: never saved, and gone when the page closes.
+  const [password, setPassword] = useState("");
+  const passwordOK = password.length >= MIN_BACKUP_PASSWORD;
   const [saveError, setSaveError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
   const { busy, run } = useBusy();
@@ -266,7 +349,7 @@ export function BackupsAndImport({ tab = "backups" }: { tab?: "backups" | "impor
 
             <Section
               title="Snapshots"
-              description="Downloads include account credentials. Keep them private."
+              description="Snapshots hold your settings, database and the key that unlocks saved credentials. Ones kept on this server are readable only by Ether's account; downloads are encrypted with the password below."
               actions={
                 <Button
                   size="sm"
@@ -282,6 +365,20 @@ export function BackupsAndImport({ tab = "backups" }: { tab?: "backups" | "impor
                   <AlertDescription>{data.warning}</AlertDescription>
                 </Alert>
               ) : null}
+              <SettingsRow
+                stacked
+                title={<label htmlFor="backup-password">Backup password</label>}
+                description={`Downloads are encrypted with it and restoring one asks for it again. At least ${MIN_BACKUP_PASSWORD} characters; Ether does not keep it.`}
+              >
+                <Input
+                  id="backup-password"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={password}
+                  onChange={(e) => setPassword(e.currentTarget.value)}
+                />
+              </SettingsRow>
               {data ? (
                 <PagedTable
                   rows={data.snapshots ?? []}
@@ -326,18 +423,16 @@ export function BackupsAndImport({ tab = "backups" }: { tab?: "backups" | "impor
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={busy || s.remote}
+                          disabled={busy || s.remote || !passwordOK}
                           title={
                             s.remote
                               ? `Stored on ${s.node || "another node"}: download it from that node's admin page`
-                              : undefined
+                              : !passwordOK
+                                ? "Enter a backup password to download"
+                                : undefined
                           }
                           aria-label={`Download ${s.name}`}
-                          onClick={() =>
-                            void run(() =>
-                              download("/backups/export/" + encodeURIComponent(s.name), s.name),
-                            )
-                          }
+                          onClick={() => void run(() => exportBackup(s.name, password))}
                         >
                           <Download size={14} /> Download
                         </Button>
@@ -352,18 +447,17 @@ export function BackupsAndImport({ tab = "backups" }: { tab?: "backups" | "impor
 
             <Section
               title="Restore a backup"
-              description="Ether checks the bundle's checksums and database, then prepares it in a separate data folder. Nothing changes until you stop Ether and start it from that folder."
+              description="Ether decrypts the download with the backup password, checks its checksums and database, then prepares it in a separate data folder. Nothing changes until you stop Ether and start it from that folder."
             >
               <FilePick
                 label="Choose backup bundle"
-                accept=".tar.gz,.gz,application/gzip"
+                accept=".etherbackup,.tar.gz,.gz"
                 disabled={busy}
                 onFile={(file) =>
                   void run(async () => {
-                    const result = (await upload("/backups/restore", file, "application/gzip")) as {
-                      path?: string;
-                    };
-                    setRestored(result.path ?? "");
+                    const path = await restoreBackup(file, password);
+                    if (path === null) return;
+                    setRestored(path);
                     toast.success("Restore validated and staged");
                   })
                 }

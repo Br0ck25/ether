@@ -20,7 +20,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/store"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -64,6 +63,8 @@ type Service struct {
 	mu              sync.Mutex
 	// node is set on a clustered server (SetCluster).
 	node atomic.Pointer[Node]
+	// restoring serialises uploaded restores (Handler).
+	restoring sync.Mutex
 }
 
 // Node identifies the cluster node a Service runs on.
@@ -309,7 +310,7 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 		names = append(names, config.CredentialKeyFile)
 	} else if !os.IsNotExist(keyErr) {
 		return out, keyErr
-	} else if strings.Contains(string(conf), "ether-sealed:v1:") {
+	} else if strings.Contains(string(conf), sealedPrefix) {
 		return out, errors.New("encrypted config has no credential key")
 	}
 	manifest := Manifest{Version: 1, Created: time.Now().UTC(), SHA256: map[string]string{}, Dialect: dialect}
@@ -401,9 +402,66 @@ func (s *Service) Create(ctx context.Context) (Snapshot, error) {
 	return out, nil
 }
 
+// sealedPrefix starts every value sealed with the credential key, in
+// config.json and in database columns, whatever its format version.
+const sealedPrefix = "ether-sealed:"
+
+// fileContains reports whether the file at path contains needle, reading
+// it as a stream.
+func fileContains(path, needle string) (bool, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return false, e
+	}
+	defer f.Close()
+	buf := make([]byte, 1<<20)
+	carry := 0
+	for {
+		n, e := f.Read(buf[carry:])
+		if strings.Contains(string(buf[:carry+n]), needle) {
+			return true, nil
+		}
+		if e == io.EOF {
+			return false, nil
+		}
+		if e != nil {
+			return false, e
+		}
+		// Keep a needle-length tail so a match across reads is found.
+		keep := min(len(needle)-1, carry+n)
+		copy(buf, buf[carry+n-keep:carry+n])
+		carry = keep
+	}
+}
+
 // RestoreBundle validates all content before atomically installing into a new directory.
 // It deliberately refuses existing destinations and never replaces a running database.
 func RestoreBundle(ctx context.Context, r io.Reader, destination string) error {
+	return restore(ctx, r, destination, nil)
+}
+
+// RestoreEncrypted is RestoreBundle for a password-encrypted bundle
+// (NewEncryptWriter). Nothing is installed unless the whole file
+// authenticates, including its final chunk and the absence of anything
+// after it.
+func RestoreEncrypted(ctx context.Context, r io.Reader, password, destination string) error {
+	if _, e := os.Lstat(destination); e == nil {
+		return errors.New("restore destination already exists")
+	}
+	dec, e := NewDecryptReader(r, password)
+	if e != nil {
+		return e
+	}
+	return restore(ctx, dec, destination, func() error {
+		_, e := io.Copy(io.Discard, dec)
+		return e
+	})
+}
+
+// restore validates a plaintext bundle from r into a staging directory and
+// renames it to destination. finish, when set, runs before the rename and
+// must succeed for anything to be installed.
+func restore(ctx context.Context, r io.Reader, destination string, finish func() error) error {
 	if _, e := os.Lstat(destination); e == nil {
 		return errors.New("restore destination already exists")
 	} else if !os.IsNotExist(e) {
@@ -498,18 +556,38 @@ func RestoreBundle(ctx context.Context, r io.Reader, destination string) error {
 	if e = validateConfig(raw); e != nil {
 		return e
 	}
-	if strings.Contains(string(raw), "ether-sealed:v1:") {
+	hasKey := m.Version == 2
+	if strings.Contains(string(raw), sealedPrefix) {
+		if !hasKey {
+			return errors.New("bundle has encrypted settings but no credential key")
+		}
 		if _, e = config.Open(stage); e != nil {
 			return e
 		}
 	}
+	dbPath := filepath.Join(stage, dbEntry(m.Dialect))
 	if m.Dialect != "" {
-		e = validateLogical(filepath.Join(stage, LogicalDumpFile))
+		e = validateLogical(dbPath)
 	} else {
-		e = validateDB(ctx, filepath.Join(stage, "ether.db"))
+		e = validateDB(ctx, dbPath)
 	}
 	if e != nil {
 		return e
+	}
+	if !hasKey {
+		// Sealed database columns are unreadable without the key.
+		sealed, e := fileContains(dbPath, sealedPrefix)
+		if e != nil {
+			return e
+		}
+		if sealed {
+			return errors.New("bundle has encrypted data but no credential key")
+		}
+	}
+	if finish != nil {
+		if e = finish(); e != nil {
+			return e
+		}
 	}
 	if e = ctx.Err(); e != nil {
 		return e
@@ -573,86 +651,6 @@ func FilesystemWarning(ctx context.Context, dataDir string) string {
 		return "Data directory is on " + kind + "; keep the live SQLite database on a local filesystem and copy backup bundles to network storage."
 	}
 	return ""
-}
-func (s *Service) Handler() http.Handler {
-	m := http.NewServeMux()
-	reply := func(w http.ResponseWriter, v any, e error) {
-		w.Header().Set("Content-Type", "application/json")
-		if e != nil {
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "invalid_request", "message": e.Error()}})
-			return
-		}
-		json.NewEncoder(w).Encode(v)
-	}
-	m.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		snaps, e := s.Snapshots(r.Context())
-		v, se := s.Settings(r.Context())
-		if e == nil {
-			e = se
-		}
-		reply(w, map[string]any{"snapshots": snaps, "settings": v, "warning": FilesystemWarning(r.Context(), filepath.Dir(s.configPath))}, e)
-	})
-	m.HandleFunc("POST /settings", func(w http.ResponseWriter, r *http.Request) {
-		var q struct {
-			Settings
-			SharedDir *string `json:"sharedDir"` // absent: unchanged
-		}
-		e := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192)).Decode(&q)
-		if e == nil {
-			if q.SharedDir != nil {
-				q.Settings.SharedDir = *q.SharedDir
-			} else if cur, ce := s.Settings(r.Context()); ce == nil {
-				q.Settings.SharedDir = cur.SharedDir
-			}
-			e = s.Configure(r.Context(), q.Settings)
-		}
-		reply(w, map[string]bool{"ok": e == nil}, e)
-	})
-	m.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) { v, e := s.Create(r.Context()); reply(w, v, e) })
-	m.HandleFunc("GET /export/{name}", func(w http.ResponseWriter, r *http.Request) {
-		name := r.PathValue("name")
-		if filepath.Base(name) != name || !strings.HasPrefix(name, "ether-") || !strings.HasSuffix(name, ".tar.gz") {
-			http.NotFound(w, r)
-			return
-		}
-		path, e := s.locate(r.Context(), name)
-		var elsewhere errElsewhere
-		if errors.As(e, &elsewhere) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "on_other_node", "message": elsewhere.Error()}})
-			return
-		}
-		if e != nil {
-			http.NotFound(w, r)
-			return
-		}
-		f, e := os.Open(path)
-		if e != nil {
-			http.NotFound(w, r)
-			return
-		}
-		defer f.Close()
-		st, e := f.Stat()
-		if e != nil || !st.Mode().IsRegular() {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/gzip")
-		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
-		http.ServeContent(w, r, name, st.ModTime(), f)
-	})
-	m.HandleFunc("POST /restore", func(w http.ResponseWriter, r *http.Request) {
-		dest := filepath.Join(filepath.Dir(s.configPath), "restored-"+time.Now().UTC().Format("20060102T150405.000000000"))
-		e := RestoreBundle(r.Context(), http.MaxBytesReader(w, r.Body, maxBundleFile+32<<20), dest)
-		msg := "Validated restore staged. Stop Ether and start it with ETHER_DATA_DIR pointing to this directory."
-		if _, se := os.Stat(filepath.Join(dest, LogicalDumpFile)); se == nil {
-			msg = "Validated restore staged. Stop Ether and start it with ETHER_DATA_DIR pointing to this directory and ETHER_DATABASE_URL pointing to an empty PostgreSQL database (or none, for a standalone server); the data is imported on first start."
-		}
-		reply(w, map[string]string{"path": dest, "message": msg}, e)
-	})
-	return m
 }
 
 // ImportPending imports a restored logical dump (LogicalDumpFile in

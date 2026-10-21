@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -75,9 +76,16 @@ func isMutating(r *http.Request) bool {
 	return true
 }
 
+// binaryUploads are the endpoints that take a raw file body
+// (application/octet-stream) instead of JSON.
+var binaryUploads = map[string]bool{
+	"/api/adoption/backups/restore": true,
+}
+
 // csrfOK guards mutating requests: state changes require the custom
 // X-Ether-Request header (which cross-site forms cannot set) and, when a
-// body is present, a JSON content type. Authentication itself uses the
+// body is present, a JSON content type, or for the binaryUploads a raw
+// octet stream from a same-origin page. Authentication itself uses the
 // X-Plex-Token header, never cookies, so there is no ambient credential
 // for a CSRF attack to ride on.
 func csrfOK(r *http.Request) bool {
@@ -92,9 +100,23 @@ func csrfOK(r *http.Request) bool {
 		if i := strings.IndexByte(ct, ';'); i >= 0 {
 			ct = ct[:i]
 		}
-		if !strings.EqualFold(strings.TrimSpace(ct), "application/json") {
-			return false
+		ct = strings.TrimSpace(ct)
+		if strings.EqualFold(ct, "application/json") {
+			return true
 		}
+		return r.Method == http.MethodPost && binaryUploads[r.URL.Path] &&
+			strings.EqualFold(ct, "application/octet-stream") && sameOrigin(r)
 	}
 	return true
+}
+
+// sameOrigin reports whether a browser request's Origin, when it sent
+// one, is this server as the browser addressed it.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
 }

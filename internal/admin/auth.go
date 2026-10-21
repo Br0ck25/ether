@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -93,13 +94,14 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		token := tokenFromRequest(r)
+		setupComplete := h.deps.Config.Get().SetupComplete
 		if h.isOwner(r, token) {
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, withAccess(r, Access{Owner: true, SetupComplete: setupComplete}))
 			return
 		}
-		if setupComplete := h.deps.Config.Get().SetupComplete; !setupComplete {
+		if !setupComplete {
 			if setupOpen(setupComplete, r) {
-				next.ServeHTTP(w, r)
+				next.ServeHTTP(w, withAccess(r, Access{}))
 				return
 			}
 			if isLocalOrLAN(r) {
@@ -112,6 +114,29 @@ func (h *Handler) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="ether-admin"`)
 		writeError(w, http.StatusUnauthorized, "unauthorized", "a valid owner X-Plex-Token is required")
 	}
+}
+
+// Access is how requireAuth admitted a request: with a validated owner
+// token, or (Owner false) through tokenless local-network setup access.
+type Access struct {
+	Owner         bool
+	SetupComplete bool
+}
+
+type accessKey struct{}
+
+func withAccess(r *http.Request, a Access) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), accessKey{}, a))
+}
+
+// RequestAccess reports how the admin API admitted the request whose
+// context is ctx. Only requireAuth sets it, from its own checks, so
+// extension handlers can demand more than admission (an owner token, a
+// finished setup); ok is false for a request that did not pass through
+// requireAuth.
+func RequestAccess(ctx context.Context) (a Access, ok bool) {
+	a, ok = ctx.Value(accessKey{}).(Access)
+	return a, ok
 }
 
 // handleBootstrap is intentionally public and minimal: version, whether

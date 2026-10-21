@@ -289,7 +289,11 @@ func (h *consoleAPI) forget(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *consoleAPI) listPins(w http.ResponseWriter, r *http.Request) {
-	consoleJSON(w, http.StatusOK, map[string]any{"pins": h.s.Pins()})
+	pins := h.s.Pins()
+	for i := range pins {
+		pins[i] = browserPin(pins[i])
+	}
+	consoleJSON(w, http.StatusOK, map[string]any{"pins": pins})
 }
 
 func (h *consoleAPI) pin(w http.ResponseWriter, r *http.Request) {
@@ -332,7 +336,7 @@ func (h *consoleAPI) pin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.invalidate(key)
-	consoleJSON(w, http.StatusOK, p)
+	consoleJSON(w, http.StatusOK, browserPin(p))
 }
 
 func (h *consoleAPI) unpin(w http.ResponseWriter, r *http.Request) {
