@@ -20,8 +20,9 @@ import (
 //
 // Upgrade. Releases before v2 read these columns as plaintext and would
 // send a sealed value to the provider (Trakt then drops the link as
-// revoked). Until UpgradeCredentials is called SealField therefore returns
-// its input unchanged and config.json keeps the v1 format; the app calls
+// revoked). Until UpgradeCredentials is called (or, on a cluster node,
+// shared settings another node upgraded are loaded) SealField therefore
+// returns its input unchanged and config.json keeps the v1 format; the app calls
 // it once no rollback to an older release can happen and, in a cluster,
 // every live node runs a release that reads v2. It then rewrites
 // config.json and the cluster's shared settings in v2, and the components
@@ -39,7 +40,8 @@ type FieldSealer interface {
 var ErrSealedWithoutKey = errors.New("config: sealed value but no credential key")
 
 // SealField protects plain for storage, bound to context. Empty values
-// stay empty. Before UpgradeCredentials it returns plain unchanged.
+// stay empty. Until the store seals fields (SealsFields) it returns plain
+// unchanged.
 func (s *Store) SealField(plain string, context ...string) (string, error) {
 	if plain == "" || !s.bound.Load() {
 		return plain, nil
@@ -112,8 +114,14 @@ func fieldName(context []string) string {
 // FieldContext joins an int64 row identity for a field context.
 func FieldContext(id int64) string { return strconv.FormatInt(id, 10) }
 
-// CredentialsUpgraded reports whether the store writes v2 credentials.
-func (s *Store) CredentialsUpgraded() bool { return s.bound.Load() }
+// CredentialsUpgraded reports whether this node completed
+// UpgradeCredentials (config.json is written in v2).
+func (s *Store) CredentialsUpgraded() bool { return s.localBound.Load() }
+
+// SealsFields reports whether SealField seals (database fields and shared
+// settings are written in v2), which can precede CredentialsUpgraded on a
+// cluster node that loaded settings another node upgraded.
+func (s *Store) SealsFields() bool { return s.bound.Load() }
 
 // KeyCreated reports whether Open generated this data directory's
 // credential key, i.e. nothing stored before this start was sealed with
@@ -132,9 +140,10 @@ func (s *Store) UpgradeCredentials(ctx context.Context) error {
 	defer s.writeMu.Unlock()
 	s.mu.Lock()
 	var err error
-	if !s.bound.Swap(true) {
+	s.bound.Store(true)
+	if !s.localBound.Swap(true) {
 		if err = s.save(); err != nil {
-			s.bound.Store(false)
+			s.localBound.Store(false)
 		}
 	}
 	b, o := s.shared, s.sharedOpts

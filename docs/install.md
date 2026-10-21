@@ -377,7 +377,9 @@ logins, the ratings key), with the credential key `.credentials-key` in the
 data directory. Each one is bound to its setting and to where it is sent, so
 a credential copied to another setting, or left behind when a host is
 changed by editing the files, no longer works. Backups include the key and
-restore only with it; keep them private.
+restore only with it; keep them private. If the key file is lost while the
+database still holds sealed credentials, Ether refuses to start, on every
+start, until the original `.credentials-key` is restored.
 
 After updating from a release that stored database credentials in plain
 text, Ether converts them once the update is confirmed healthy and, in a

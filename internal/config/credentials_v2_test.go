@@ -463,16 +463,49 @@ func TestSharedCredentialUpgrade(t *testing.T) {
 	if backend.doc.Version != 2 || a.SharedVersion() != 2 {
 		t.Fatalf("version %d/%d", backend.doc.Version, a.SharedVersion())
 	}
-	// A node not yet upgraded reads v2 shared settings with the cluster key.
+	// A node not yet upgraded reads v2 shared settings with the cluster key
+	// and starts sealing database fields at once, while its own config.json
+	// waits for its UpgradeCredentials (its rollback gate).
+	if b.SealsFields() {
+		t.Fatal("node B sealing before the cluster upgraded")
+	}
 	if err := b.RefreshShared(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if !b.SealsFields() || b.CredentialsUpgraded() {
+		t.Fatalf("node B after loading upgraded settings: seals=%v upgraded=%v", b.SealsFields(), b.CredentialsUpgraded())
+	}
+	if v, _ := b.SealField("secret", "t", "c"); !IsSealed(v) {
+		t.Fatal("node B still writes plaintext fields")
+	}
+	if raw, _ := os.ReadFile(b.Path()); strings.Contains(string(raw), sealedPrefixV2) {
+		t.Fatal("node B rewrote config.json in v2 before its own upgrade")
+	}
+	// A node starting against already-upgraded settings seals at attach.
+	dirC := t.TempDir()
+	if err := InstallCredentialKey(dirC, a.CredentialKey()); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(dirC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AttachShared(ctx, backend, SharedOptions{PollInterval: -1, NoSeed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !c.SealsFields() || c.CredentialsUpgraded() {
+		t.Fatal("node C did not adopt field sealing at attach")
 	}
 	if got := b.Get().Usenet.Providers[0]; got.Password != "pass-a" || got.Username != "user-a" {
 		t.Fatalf("node B: %+v", got)
 	}
-	// A second upgrade (another node) finds nothing to do.
+	// A second upgrade (another node) finds nothing to do in the shared
+	// settings and rewrites that node's own config.json.
 	if err := b.UpgradeCredentials(ctx); err != nil || backend.doc.Version != 2 {
 		t.Fatalf("second upgrade: %v version %d", err, backend.doc.Version)
+	}
+	if raw, _ := os.ReadFile(b.Path()); !b.CredentialsUpgraded() || !strings.Contains(string(raw), sealedPrefixV2) || strings.Contains(string(raw), sealedPrefix) {
+		t.Fatal("node B config.json not upgraded by its own UpgradeCredentials")
 	}
 	// A repointed host in the shared document does not open on any node.
 	var m map[string]any

@@ -421,9 +421,15 @@ type Store struct {
 	// keyCreated is set when Open generated the credential key, so data
 	// sealed elsewhere (the database) cannot have been sealed with it.
 	keyCreated bool
-	// bound selects v2 credentials (credentials.go): set by
-	// UpgradeCredentials, or at Open for a configuration already upgraded.
+	// bound seals database fields and writes the shared settings in v2
+	// (credentials.go, fieldseal.go): set by UpgradeCredentials, at Open
+	// for a configuration already upgraded, and on loading shared
+	// settings another node already upgraded.
 	bound atomic.Bool
+	// localBound writes config.json in v2. Only UpgradeCredentials (this
+	// node's own rollback gate) or an upgraded config.json sets it: the
+	// node-local file must stay readable if this node rolls back.
+	localBound atomic.Bool
 
 	// Cluster mode (see shared.go). shared is nil on a standalone server,
 	// where config.json is the only source. writeMu sequences cluster-mode
@@ -501,6 +507,7 @@ func Open(dataDir string) (*Store, error) {
 		}
 		// A configuration already upgraded to v2 credentials stays v2.
 		s.bound.Store(stats.strict)
+		s.localBound.Store(stats.strict)
 		// Seal secrets written in plaintext (by hand, or by a release that
 		// predates sealing).
 		if stats.plaintext > 0 || !ContainsSealed(b) {
@@ -634,7 +641,7 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	b, err = sealDocument(b, s.credentialKey, s.bound.Load())
+	b, err = sealDocument(b, s.credentialKey, s.localBound.Load())
 	if err != nil {
 		return err
 	}

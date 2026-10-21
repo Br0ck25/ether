@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,7 +38,8 @@ func init() {
 	store.Register("credentials", 1, `CREATE TABLE credentials_format (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   version INTEGER NOT NULL,
-  upgraded_at INTEGER NOT NULL
+  upgraded_at INTEGER NOT NULL,
+  key_fingerprint TEXT NOT NULL DEFAULT ''
 );`)
 }
 
@@ -59,12 +63,46 @@ var sealedTables = []struct{ table, column string }{
 	{"clusterconfig_secrets", "value"},
 }
 
-// checkCredentialKey refuses to start when Open generated a new credential
-// key but the database holds values sealed with another one: the key file
-// was lost (a partial restore or copied database) and starting would leave
-// every stored credential unreadable while new ones are sealed with the
-// new key.
+// credentialKeyRejectedFile records, in the data directory, the
+// fingerprint of a credential key that checkCredentialKey refused: Open
+// had generated it while the database held values sealed with another.
+// The key file it wrote is kept (nothing valid is deleted) and the marker
+// keeps refusing it on later starts, until the original key is restored.
+const credentialKeyRejectedFile = ".credentials-key-rejected"
+
+var errCredentialKeyLost = errors.New("credentials: the database holds credentials sealed with a key this data directory does not have; restore the original .credentials-key (from the complete backup) before starting")
+
+// checkCredentialKey refuses to start when this node's credential key is
+// not the one the database's sealed values were written with:
+//
+//   - the database records the fingerprint of the key it was upgraded
+//     with (credentials_format), and this key differs; or
+//   - Open generated a new key (the key file was lost: a partial restore
+//     or a copied database) while the database holds sealed values. The
+//     refusal is recorded in credentialKeyRejectedFile, because the new
+//     key file Open wrote would otherwise pass the next start.
+//
+// Starting would leave every stored credential unreadable while new ones
+// are sealed with the wrong key.
 func (a *App) checkCredentialKey(ctx context.Context) error {
+	fp := a.cfg.KeyFingerprint()
+	var recorded string
+	err := a.db.QueryRowContext(ctx, `SELECT key_fingerprint FROM credentials_format WHERE id=1`).Scan(&recorded)
+	switch {
+	case err == nil && recorded != "" && recorded != fp:
+		return errCredentialKeyLost
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		a.log.Warn("credentials: could not read the database's credential key fingerprint", "err", err)
+	}
+	marker := filepath.Join(filepath.Dir(a.cfg.Path()), credentialKeyRejectedFile)
+	if b, err := os.ReadFile(marker); err == nil {
+		if strings.TrimSpace(string(b)) == fp {
+			return errCredentialKeyLost
+		}
+		// A different key now: the refused one was replaced. Check it
+		// afresh below; the marker no longer applies.
+		defer func() { _ = os.Remove(marker) }()
+	}
 	if !a.cfg.KeyCreated() {
 		return nil
 	}
@@ -76,7 +114,10 @@ func (a *App) checkCredentialKey(ctx context.Context) error {
 			continue
 		}
 		if n > 0 {
-			return errors.New("credentials: the database holds credentials sealed with a key this data directory does not have; restore the original .credentials-key (from the complete backup) before starting")
+			if err := os.WriteFile(marker, []byte(fp+"\n"), 0o600); err != nil {
+				return fmt.Errorf("%w (and recording the refusal failed: %v)", errCredentialKeyLost, err)
+			}
+			return errCredentialKeyLost
 		}
 	}
 	return nil
@@ -147,6 +188,12 @@ func (a *App) credentialPass(ctx context.Context, waitingFor *string) time.Durat
 			return credentialCheckEvery
 		}
 	}
+	// Record which key the database is sealed with before anything is
+	// sealed, so a later start with another key is refused.
+	if err := a.recordCredentialFormat(ctx); err != nil {
+		log.Warn("credentials: record the credential key fingerprint", "err", err)
+		return credentialCheckEvery
+	}
 	// Also when already upgraded: completes a shared-settings rewrite an
 	// earlier run did not finish (a no-op otherwise).
 	if err := a.cfg.UpgradeCredentials(ctx); err != nil {
@@ -156,7 +203,6 @@ func (a *App) credentialPass(ctx context.Context, waitingFor *string) time.Durat
 	if !upgraded {
 		log.Info("credentials: configuration upgraded to path- and destination-bound credentials")
 	}
-	a.recordCredentialFormat(ctx)
 	if n, err := a.migrateStoredSecrets(ctx); err != nil {
 		log.Warn("credentials: some stored secrets were not sealed", "sealed", n, "err", err)
 	} else if n > 0 {
@@ -165,8 +211,14 @@ func (a *App) credentialPass(ctx context.Context, waitingFor *string) time.Durat
 	return credentialPassEvery
 }
 
-func (a *App) recordCredentialFormat(ctx context.Context) {
-	_, _ = a.db.ExecContext(ctx, `INSERT INTO credentials_format(id, version, upgraded_at) VALUES(1, 2, ?) ON CONFLICT(id) DO NOTHING`, time.Now().Unix())
+// recordCredentialFormat records the v2 upgrade and the fingerprint of the
+// key the database is sealed with (the first node to upgrade sets it; all
+// nodes share the key).
+func (a *App) recordCredentialFormat(ctx context.Context) error {
+	_, err := a.db.ExecContext(ctx, `INSERT INTO credentials_format(id, version, upgraded_at, key_fingerprint) VALUES(1, 2, ?, ?)
+ON CONFLICT(id) DO UPDATE SET key_fingerprint=excluded.key_fingerprint WHERE credentials_format.key_fingerprint=''`,
+		time.Now().Unix(), a.cfg.KeyFingerprint())
+	return err
 }
 
 // migrateStoredSecrets runs every component's MigrateSecrets and purges

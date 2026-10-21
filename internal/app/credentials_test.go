@@ -195,25 +195,102 @@ func TestCredentialPassSurfacesUnreadableRows(t *testing.T) {
 func TestCheckCredentialKeyDetectsLostKey(t *testing.T) {
 	ctx := context.Background()
 	a, db := credentialApp(t)
+	dir := filepath.Dir(a.cfg.Path())
 	if !a.cfg.KeyCreated() {
 		t.Fatal("fresh data directory should report a created key")
 	}
 	if err := a.checkCredentialKey(ctx); err != nil {
 		t.Fatalf("plaintext rows with a new key: %v", err)
 	}
+	// The database holds a value sealed with a key this directory lost:
+	// Open generated (and wrote) a new key.
 	if _, err := db.Exec(`UPDATE trakt_tokens SET access_token='ether-sealed:v2:AAAA' WHERE user_id=1`); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.checkCredentialKey(ctx); err == nil {
-		t.Fatal("database sealed with another key accepted with a new key")
+	generated, err := os.ReadFile(filepath.Join(dir, config.CredentialKeyFile))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The same data directory reopened: its key was not just created.
+	if err := a.checkCredentialKey(ctx); err == nil {
+		t.Fatal("first start: database sealed with another key accepted")
+	}
+	// Second start: the generated key file now exists, so Open no longer
+	// reports it as created. The refusal must persist.
+	for start := 2; start <= 3; start++ {
+		reopened, err := config.Open(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reopened.KeyCreated() {
+			t.Fatal("key reported as created again")
+		}
+		a.cfg = reopened
+		if err := a.checkCredentialKey(ctx); err == nil {
+			t.Fatalf("start %d accepted the generated key", start)
+		}
+	}
+	// Nothing was deleted: the generated key and the sealed row remain.
+	if b, err := os.ReadFile(filepath.Join(dir, config.CredentialKeyFile)); err != nil || string(b) != string(generated) {
+		t.Fatal("generated key file changed")
+	}
+	if traktRow(t, db, 1) != "ether-sealed:v2:AAAA" {
+		t.Fatal("sealed row changed")
+	}
+	// Restoring the complete backup (config.json and the original key;
+	// here any other key) lifts the refusal and clears the marker.
+	if err := os.Remove(filepath.Join(dir, config.CredentialKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(a.cfg.Path(), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := make([]byte, 32)
+	original[3] = 9
+	if err := config.InstallCredentialKey(dir, original); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := config.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = restored
+	if err := a.checkCredentialKey(ctx); err != nil {
+		t.Fatalf("restored key refused: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, credentialKeyRejectedFile)); !os.IsNotExist(err) {
+		t.Fatal("refusal marker kept after the key was replaced")
+	}
+}
+
+func TestCheckCredentialKeyComparesRecordedFingerprint(t *testing.T) {
+	ctx := context.Background()
+	a, _ := credentialApp(t)
+	var waiting string
+	if d := a.credentialPass(ctx, &waiting); d != credentialPassEvery {
+		t.Fatalf("pass deferred: %q", waiting)
+	}
+	var recorded string
+	if err := a.db.QueryRow(`SELECT key_fingerprint FROM credentials_format WHERE id=1`).Scan(&recorded); err != nil || recorded != a.cfg.KeyFingerprint() {
+		t.Fatalf("fingerprint not recorded: %q %v", recorded, err)
+	}
 	reopened, err := config.Open(filepath.Dir(a.cfg.Path()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.cfg = reopened
 	if err := a.checkCredentialKey(ctx); err != nil {
-		t.Fatalf("existing key: %v", err)
+		t.Fatalf("same key refused: %v", err)
+	}
+	// Another data directory (another key) pointed at this database is
+	// refused on every start, whether or not its key is new.
+	other, err := config.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = other
+	for i := 0; i < 2; i++ {
+		if err := a.checkCredentialKey(ctx); err == nil {
+			t.Fatal("database sealed with another key accepted")
+		}
 	}
 }
