@@ -577,10 +577,14 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 					}
 					paths[0] = p
 				}
-				if s.mkvDelivery == nil {
-					s.mkvDelivery = make(map[int]mkvDelivery)
+				// HEAD probes deliver no GOP to the decoder and cannot
+				// make the next GET a continuation of this segment.
+				if r.Method != http.MethodHead {
+					if s.mkvDelivery == nil {
+						s.mkvDelivery = make(map[int]mkvDelivery)
+					}
+					s.mkvDelivery[t] = mkvDelivery{segment: n, seek: seek}
 				}
-				s.mkvDelivery[t] = mkvDelivery{segment: n, seek: seek}
 			}
 			if last {
 				// ffmpeg may cut a short final segment past the playlist's
@@ -761,6 +765,12 @@ func (s *Session) serveInit(w http.ResponseWriter, r *http.Request, t int) {
 			// delete) this one as soon as the lock is released, and the
 			// open handle keeps serving the bytes the lookup chose.
 			f, err := os.Open(filepath.Join(s.dir, name))
+			if err == nil && s.container == ContainerMatroska && r.Method != http.MethodHead {
+				// An init GET starts a decoder. Its first media GET needs
+				// a GOP even when it follows the previous decoder's last
+				// segment; metadata-only HEAD probes do not reset it.
+				delete(s.mkvDelivery, t)
+			}
 			s.mu.Unlock()
 			if err == nil {
 				defer f.Close()
