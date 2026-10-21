@@ -21,6 +21,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._send(200, b'<MediaContainer claimed="0" version="1.43.5-fake"/>', "text/xml")
         if "/decision" in p:
             if self.mode == "decision500": return self._send(500, b"boom")
+            if self.mode == "decision_fail": return self._send(200, b'<MediaContainer generalDecisionCode="2000" generalDecisionText="Neither" transcodeDecisionCode="4005" transcodeDecisionText="No conversion profile found for protocol hls"/>', "text/xml")
+            # negotiation must carry a real transcode target, not Generic
+            assert "add-transcode-target" in p or "add-transcode-target" in (self.headers.get("X-Plex-Client-Profile-Extra") or ""), "missing profile extra"
             return self._send(200, DECISION, "text/xml")
         if "start.m3u8" in p: return self._send(200, MASTER.encode())
         if "media.m3u8" in p: return self._send(200, (MEDIA_SHORT if self.mode=="short" else MEDIA).encode())
@@ -73,6 +76,20 @@ class TestFakeServer(unittest.TestCase):
             r = pb.run_session(self.cfg(10.0), None, Path(d), 0)
         self.assertEqual(r["actual_media_s"], 3.0)  # honors actual, never pads to requested 10
         Handler.mode = "ok"
+    def test_decision_4005_rejected_before_start(self):
+        Handler.mode = "decision_fail"
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(pb.BenchError) as cm:
+                pb.run_session(self.cfg(), None, Path(d), 0)
+        self.assertIn("4005", str(cm.exception))
+        Handler.mode = "ok"
+    def test_profile_has_real_transcode_target(self):
+        p = pb.Profile()
+        self.assertNotEqual(p.platform, "Generic")
+        extra = p.client_profile_extra()
+        self.assertIn("add-transcode-target", extra); self.assertIn("protocol=hls", extra)
+        self.assertIn("videoCodec=h264", extra)
     def test_non200_decision_rejected(self):
         Handler.mode = "decision500"
         import tempfile

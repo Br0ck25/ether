@@ -33,8 +33,26 @@ class Profile:
     video_quality: int = 100
     audio_codec: str = "aac"
     protocol: str = "hls"
-    platform: str = "Generic"
+    # Generic.xml ships NO TranscodeTargets -> PMS 4005 "No conversion profile
+    # found for protocol hls". Android.xml ships hls/mpegts/h264/aac.
+    platform: str = "Android"
     client_identifier: str = "ether-lab-bench"
+    def client_profile_extra(self) -> str:
+        w, h = self.video_resolution.lower().split("x", 1)
+        return (
+            "add-transcode-target(type=videoProfile&context=streaming"
+            f"&protocol={self.protocol}&container=mpegts&videoCodec={self.video_codec}"
+            f"&audioCodec={self.audio_codec}&replace=true)"
+            f"+add-limitation(scope=videoCodec&scopeName={self.video_codec}"
+            f"&type=upperBound&name=video.width&value={w})"
+            f"+add-limitation(scope=videoCodec&scopeName={self.video_codec}"
+            f"&type=upperBound&name=video.height&value={h})"
+        )
+    def headers(self) -> dict:
+        return {"X-Plex-Platform": self.platform, "X-Plex-Client-Identifier": self.client_identifier,
+                "X-Plex-Client-Profile-Extra": self.client_profile_extra(),
+                "X-Plex-Product": "EtherLabBench", "X-Plex-Version": "1.0",
+                "X-Plex-Device": "Linux", "X-Plex-Provides": "player"}
     def decision_params(self, rating_key: str, session: str) -> dict:
         return {
             "path": f"/library/metadata/{rating_key}", "mediaIndex": "0", "partIndex": "0",
@@ -43,9 +61,27 @@ class Profile:
             "videoResolution": self.video_resolution, "videoCodec": self.video_codec,
             "audioCodec": self.audio_codec, "session": session,
             "X-Plex-Platform": self.platform, "X-Plex-Client-Identifier": self.client_identifier,
+            "X-Plex-Client-Profile-Extra": self.client_profile_extra(),
             "X-Plex-Product": "EtherLabBench", "X-Plex-Version": "1.0",
             "X-Plex-Device": "Linux", "X-Plex-Provides": "player",
         }
+
+def validate_decision(root) -> None:
+    """Reject transcode failures before start.m3u8. 1000 = success."""
+    general = root.get("generalDecisionCode")
+    if general is not None and general != "1000":
+        raise BenchError(f"decision rejected: generalDecisionCode={general} "
+                         f"text={root.get('generalDecisionText')} "
+                         f"transcodeDecisionCode={root.get('transcodeDecisionCode')} "
+                         f"text={root.get('transcodeDecisionText')}")
+    transcode = root.get("transcodeDecisionCode")
+    if transcode is not None and transcode != "1000":
+        raise BenchError(f"decision transcode failed: transcodeDecisionCode={transcode} "
+                         f"text={root.get('transcodeDecisionText')}")
+    for el in root.iter():
+        for k, v in el.attrib.items():
+            if k == "decision" and v == "none" and el.tag in ("Part", "Media"):
+                raise BenchError(f"decision rejected: <{el.tag} decision='none'>")
 
 @dataclass
 class Config:
@@ -208,13 +244,14 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
     t_setup=time.monotonic()
     try:
         # decision (setup phase, not encode)
-        s,_,body=http_get(f"{cfg.base_url}/video/:/transcode/universal/decision?{qs}", timeout=min(30,cfg.timeout_s))
+        s,_,body=http_get(f"{cfg.base_url}/video/:/transcode/universal/decision?{qs}", timeout=min(30,cfg.timeout_s), headers=prof.headers())
         if s!=200: raise BenchError(f"decision HTTP {s}")
         result["decision_xml_sanitized"]=sanitize(body.decode(errors="replace"))[:8000]
+        result["profile_extra"]=prof.client_profile_extra()
         try:
             root=ET.fromstring(body)
+            validate_decision(root)  # reject 2000/4005 etc before start
             result["decision"]={k:sanitize(v) for k,v in root.attrib.items()}
-            # collect Media/Part/decision descendants of interest
             medias=[]
             for m in root.iter("Media"):
                 medias.append({k:sanitize(v) for k,v in m.attrib.items()})
@@ -227,7 +264,7 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
         # encode phase
         t_enc=time.monotonic(); first_latency=None
         start_url=f"{cfg.base_url}/video/:/transcode/universal/start.m3u8?{qs}"
-        s,_,body=http_get(start_url, timeout=min(30,cfg.timeout_s))
+        s,_,body=http_get(start_url, timeout=min(30,cfg.timeout_s), headers=prof.headers())
         if s!=200: raise BenchError(f"start.m3u8 HTTP {s}")
         is_master, media_url, segs, total, end = parse_playlist(body.decode(errors="replace"), start_url)
         if is_master:
