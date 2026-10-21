@@ -359,8 +359,15 @@ func hlsMuxArgs(s runSpec) []string {
 		// (with -copyts) rather than counted from the run's first packet,
 		// so segments of a run restarted mid-playlist line up with the
 		// init segment the player already holds.
+		// skip_sidx: hlsenc runs the mp4 muxer in dash mode, which (to
+		// keep each fragment's sidx contiguous with the last) rewrites
+		// every fragment's first presentation time to the previous
+		// fragment's end. That only holds for closed GOPs: an open-GOP
+		// keyframe (HEVC CRA) presents after its leading pictures and
+		// was moved before them. HLS does not use sidx, and the chunked
+		// path already drops it from multi-chunk segments.
 		args = append(args, "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", s.InitName,
-			"-hls_segment_options", "movflags=+frag_discont")
+			"-hls_segment_options", "movflags=+frag_discont+skip_sidx")
 	} else {
 		args = append(args, "-hls_segment_type", "mpegts")
 	}

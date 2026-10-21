@@ -92,6 +92,10 @@ type trackInit struct {
 	Width, Height   int
 	SampleRate      int
 	Channels        int
+	// EditShift maps composition times to presentation times (both in
+	// Timescale): a sample presents at its composition time minus this.
+	// It is the edit list's media_time less any leading empty edit.
+	EditShift int64
 }
 
 // parseInit reads the first track of an init segment (ftyp + moov).
@@ -178,6 +182,13 @@ func parseTrak(b []byte, moov, trak mp4Box) (trackInit, error) {
 			ti.Handler = string(p[8:12])
 		}
 	}
+	if elst, ok := path(b, trak, "edts", "elst"); ok {
+		var movieScale uint32
+		if mvhd, ok := child(b, moov, "mvhd"); ok {
+			movieScale, _ = fullBoxTime(mvhd.payload(b))
+		}
+		ti.EditShift = editShift(elst.payload(b), movieScale, ti.Timescale)
+	}
 	if mvex, ok := child(b, moov, "mvex"); ok {
 		kids, _ := readBoxes(b, mvex.start+mvex.hdr, mvex.end)
 		for _, k := range kids {
@@ -205,6 +216,42 @@ func parseTrak(b []byte, moov, trak mp4Box) (trackInit, error) {
 	}
 	describeSampleEntry(b, entries[0], &ti)
 	return ti, nil
+}
+
+// editShift reads an elst payload: the media_time of the first edit that
+// maps media, less the empty edits (durations in the movie timescale)
+// that delay it, in the media timescale. ffmpeg writes one edit whose
+// media_time is the first sample's composition offset.
+func editShift(p []byte, movieScale, mediaScale uint32) int64 {
+	if len(p) < 8 {
+		return 0
+	}
+	var empty uint64
+	for i, at := uint32(0), 8; i < binary.BigEndian.Uint32(p[4:]); i++ {
+		var seg uint64
+		var media int64
+		if p[0] == 1 {
+			if len(p) < at+20 {
+				return 0
+			}
+			seg, media = binary.BigEndian.Uint64(p[at:]), int64(binary.BigEndian.Uint64(p[at+8:]))
+			at += 20
+		} else {
+			if len(p) < at+12 {
+				return 0
+			}
+			seg, media = uint64(binary.BigEndian.Uint32(p[at:])), int64(int32(binary.BigEndian.Uint32(p[at+4:])))
+			at += 12
+		}
+		if media >= 0 {
+			if empty > 0 && movieScale > 0 {
+				media -= int64(empty * uint64(mediaScale) / uint64(movieScale))
+			}
+			return media
+		}
+		empty += seg
+	}
+	return 0
 }
 
 // describeSampleEntry fills the codec, size and audio fields from a sample
@@ -597,6 +644,40 @@ func trunDuration(p []byte, def uint32) int64 {
 		o += per
 	}
 	return total
+}
+
+// trunFirstOffset reads a track run's sample count and its first sample's
+// composition offset: unsigned in version 0, signed in version 1, 0 when
+// the run carries none. ok is false when the payload is shorter than its
+// samples.
+func trunFirstOffset(p []byte) (cto int64, n uint32, ok bool) {
+	if len(p) < 8 {
+		return 0, 0, false
+	}
+	flags := uint32(p[1])<<16 | uint32(p[2])<<8 | uint32(p[3])
+	n = binary.BigEndian.Uint32(p[4:])
+	o, per := 8, 0
+	for _, f := range []uint32{0x001, 0x004} { // data offset, first sample flags
+		if flags&f != 0 {
+			o += 4
+		}
+	}
+	for _, f := range []uint32{0x100, 0x200, 0x400, 0x800} { // duration, size, flags, offset
+		if flags&f != 0 {
+			per += 4
+		}
+	}
+	if uint64(len(p)) < uint64(o)+uint64(n)*uint64(per) {
+		return 0, n, false
+	}
+	if n == 0 || flags&0x800 == 0 {
+		return 0, n, true
+	}
+	v := binary.BigEndian.Uint32(p[o+per-4:])
+	if p[0] == 0 {
+		return int64(v), n, true
+	}
+	return int64(int32(v)), n, true
 }
 
 // stypBox is the segment type box at the start of every DASH segment.

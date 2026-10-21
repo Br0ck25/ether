@@ -64,6 +64,7 @@ type chunkRun struct {
 	sl        *slotter
 	vTrack    uint32 // fMP4 video track and timescale, once read
 	vScale    uint32
+	vShift    int64  // fMP4 video edit list shift (trackInit.EditShift)
 	mkvVideo  uint64 // Matroska video TrackNumber and NAL length size, once read
 	mkvNALLen int
 	mkvRead   bool
@@ -94,15 +95,18 @@ func (cr *chunkRun) chunkStart(path string) (time.Duration, error) {
 			if err != nil {
 				return 0, err
 			}
-			cr.vTrack, cr.vScale = tracks[0].TrackID, tracks[0].Timescale
+			cr.vTrack, cr.vScale, cr.vShift = tracks[0].TrackID, tracks[0].Timescale, tracks[0].EditShift
 			for _, t := range tracks {
 				if t.Handler == "vide" {
-					cr.vTrack, cr.vScale = t.TrackID, t.Timescale
+					cr.vTrack, cr.vScale, cr.vShift = t.TrackID, t.Timescale, t.EditShift
 					break
 				}
 			}
 		}
-		return fmp4ChunkStart(path, cr.vTrack, cr.vScale)
+		// The edit list is the run's own: a restart starting on an
+		// open-GOP keyframe has a larger first composition offset.
+		ct, err := fmp4ChunkStart(path, cr.vTrack, cr.vScale)
+		return ct - ticksToDuration(cr.vShift, cr.vScale), err
 	case ContainerMatroska:
 		if !cr.mkvRead {
 			// Unreadable: Cluster Timestamps, as without a video track.
@@ -172,8 +176,12 @@ func ptsToMedia(pts int64) time.Duration {
 	return time.Duration(pts)*time.Second/90000 - tsMuxDelay
 }
 
-// fmp4ChunkStart reads the earliest decode time of track (any track when
-// 0) in a fragmented MP4 chunk.
+// fmp4ChunkStart reads the composition time of track's first sample (the
+// earliest over all tracks when track is 0) in a fragmented MP4 chunk: its
+// decode time plus its composition offset. A chunk starts on a keyframe,
+// and an open-GOP keyframe (HEVC CRA) decodes before the leading pictures
+// it presents after, so its decode time is early by more than the
+// stream's reorder delay.
 func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error) {
 	if timescale == 0 {
 		return 0, errors.New("fmp4: no timescale")
@@ -218,7 +226,8 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 		if _, err := f.ReadAt(b, off); err != nil && !errors.Is(err, io.EOF) {
 			return 0, err
 		}
-		best := int64(-1)
+		var best int64
+		found := false
 		top, _ := readBoxes(b, 0, len(b))
 		if len(top) == 0 {
 			return 0, errShortBox
@@ -230,6 +239,8 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 			}
 			var id uint32
 			base := int64(-1)
+			var cto int64
+			haveRun, badRun := false, false
 			kids, _ := readBoxes(b, traf.start+traf.hdr, traf.end)
 			for _, k := range kids {
 				p := k.payload(b)
@@ -242,13 +253,24 @@ func fmp4ChunkStart(path string, track, timescale uint32) (time.Duration, error)
 					} else {
 						base = int64(binary.BigEndian.Uint32(p[4:]))
 					}
+				case k.typ == "trun" && !haveRun:
+					var n uint32
+					var ok bool
+					cto, n, ok = trunFirstOffset(p)
+					haveRun, badRun = n > 0, badRun || !ok
 				}
 			}
-			if base >= 0 && (track == 0 || id == track) && (best < 0 || base < best) {
-				best = base
+			if track != 0 && id != track {
+				continue
+			}
+			if badRun {
+				return 0, fmt.Errorf("fmp4: bad trun for track %d in %s", id, filepath.Base(path))
+			}
+			if base >= 0 && (!found || base+cto < best) {
+				best, found = base+cto, true
 			}
 		}
-		if best < 0 {
+		if !found {
 			return 0, fmt.Errorf("fmp4: no decode time for track %d in %s", track, filepath.Base(path))
 		}
 		return ticksToDuration(best, timescale), nil
