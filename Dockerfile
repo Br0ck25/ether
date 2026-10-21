@@ -12,7 +12,7 @@
 # docker buildx per-arch builds pass TARGETARCH automatically.
 
 # ---- build the server (pure Go) -------------------------------------------
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
