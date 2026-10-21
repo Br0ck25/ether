@@ -6,8 +6,10 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -428,8 +430,23 @@ type Store struct {
 	stopWatch  func()
 }
 
+// EnsureDataDir creates dataDir owner-only (0700) when it does not exist:
+// it holds config.json, the credential key and ether.db. Parents are made
+// as usual, and a directory that already exists keeps the mode its owner
+// or a package postinstall gave it.
+func EnsureDataDir(dataDir string) error {
+	if err := os.MkdirAll(filepath.Dir(dataDir), 0o755); err != nil {
+		return err
+	}
+	err := os.Mkdir(dataDir, 0o700)
+	if errors.Is(err, fs.ErrExist) {
+		return os.MkdirAll(dataDir, 0o700) // nil for a directory, an error for a file
+	}
+	return err
+}
+
 func Open(dataDir string) (*Store, error) {
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := EnsureDataDir(dataDir); err != nil {
 		return nil, err
 	}
 	s := &Store{path: filepath.Join(dataDir, "config.json"), cfg: Defaults(dataDir), kick: make(chan struct{}, 1)}

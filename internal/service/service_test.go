@@ -224,6 +224,49 @@ func TestInstallAppliesPostInstall(t *testing.T) {
 	}
 }
 
+func TestInstallSecuresDataDirFirst(t *testing.T) {
+	be := &fakeBackend{}
+	svc := testService(t, nil, be)
+	var got string
+	svc.secureData = func(dir string) error {
+		got = dir
+		if len(be.calls) != 0 {
+			t.Fatalf("backend called before data dir was secured: %v", be.calls)
+		}
+		return nil
+	}
+	if err := svc.Install(); err != nil {
+		t.Fatal(err)
+	}
+	if got != "/var/lib/ether" {
+		t.Fatalf("secureData dir = %q", got)
+	}
+}
+
+func TestInstallFailsClosedWhenDataDirCannotBeSecured(t *testing.T) {
+	be := &fakeBackend{}
+	svc := testService(t, nil, be)
+	svc.secureData = func(string) error { return errors.New("acl denied") }
+	if err := svc.Install(); err == nil {
+		t.Fatal("Install succeeded although the data dir could not be secured")
+	}
+	if len(be.calls) != 0 {
+		t.Fatalf("service registered anyway: %v", be.calls)
+	}
+}
+
+func TestInstallLeavesCustomAccountDataDir(t *testing.T) {
+	be := &fakeBackend{}
+	svc, err := newWithBackend(nil, Options{Executable: "/usr/local/bin/ether", DataDir: "/var/lib/ether", UserName: "ether"}, be)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.secureData = func(string) error { t.Fatal("secureData called for a custom service account"); return nil }
+	if err := svc.Install(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProgramStopTimeout(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)

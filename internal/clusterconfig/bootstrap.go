@@ -176,7 +176,7 @@ func Join(ctx context.Context, o JoinOptions) (JoinResult, error) {
 	}
 
 	// Inspect what is already in the data directory.
-	if err := os.MkdirAll(o.DataDir, 0o755); err != nil {
+	if err := config.EnsureDataDir(o.DataDir); err != nil {
 		return res, err
 	}
 	cfgPath := filepath.Join(o.DataDir, "config.json")

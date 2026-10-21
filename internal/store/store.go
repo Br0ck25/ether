@@ -19,9 +19,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -216,6 +218,8 @@ func openSQLite(ctx context.Context, path string) (*sql.DB, error) {
 		fmt.Sprintf("&_pragma=journal_size_limit(%d)", journalSizeLimit)
 	if path == ":memory:" {
 		dsn = "file::memory:?_pragma=foreign_keys(1)"
+	} else if err := protectDBFiles(path); err != nil {
+		return nil, err
 	}
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -232,6 +236,38 @@ func openSQLite(ctx context.Context, path string) (*sql.DB, error) {
 	// missing or stale, bounded by the 0x10000 analysis limit so it is cheap.
 	_, _ = db.ExecContext(ctx, `PRAGMA optimize=0x10002`)
 	return db, nil
+}
+
+// protectDBFiles keeps a database file and its SQLite sidecars owner-only,
+// since ether.db holds tokens and credentials. SQLite creates -wal, -shm
+// and -journal with the database file's mode, so creating the file 0600
+// first covers new sidecars; existing files lose group and other access.
+// Files owned by another user are left alone. On Windows the data
+// directory's ACL protects them instead.
+func protectDBFiles(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+		fi, err := os.Stat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if m := fi.Mode().Perm(); m&0o077 != 0 {
+			if err := os.Chmod(p, m&^0o077); err != nil && !errors.Is(err, fs.ErrPermission) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // registered returns the migrations sorted by component then version.

@@ -200,6 +200,9 @@ type Service struct {
 	log  *slog.Logger
 	// postInstall finishes the OS registration (Windows recovery policy).
 	postInstall func(name string) error
+	// secureData locks the data directory down before registration
+	// (Windows ACL; a no-op elsewhere).
+	secureData func(dir string) error
 }
 
 // New builds a Service around run. run may be nil for control-only use.
@@ -217,7 +220,7 @@ func New(run RunFunc, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("service: %w", err)
 	}
-	return &Service{opts: opts2, cfg: cfg, prog: prog, svc: ks, log: opts2.Logger, postInstall: applyPlatformRecovery}, nil
+	return &Service{opts: opts2, cfg: cfg, prog: prog, svc: ks, log: opts2.Logger, postInstall: applyPlatformRecovery, secureData: secureDataDir}, nil
 }
 
 // newWithBackend is the test seam.
@@ -281,6 +284,13 @@ func (s *Service) runInteractive() error {
 
 // Install registers the service with the OS. May require elevation.
 func (s *Service) Install() error {
+	// A service with its own account must keep access to the directory,
+	// so only the default LocalSystem service gets the restrictive ACL.
+	if s.secureData != nil && s.opts.UserName == "" {
+		if err := s.secureData(s.opts.DataDir); err != nil {
+			return fmt.Errorf("service: secure data directory: %w", err)
+		}
+	}
 	if err := s.svc.Install(); err != nil {
 		return wrap("install", err)
 	}
