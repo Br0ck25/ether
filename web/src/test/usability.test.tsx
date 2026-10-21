@@ -41,6 +41,12 @@ describe("Owner usability", () => {
   ])("keeps $path mounted while its drawer opens and closes", async ({ path, trigger, dialog }) => {
     const { fake } = renderApp(path);
     const control = await screen.findByRole("button", { name: trigger }, WAIT);
+    // The import action belongs to the page shell and appears before the
+    // indexer list finishes its initial config read. Observe the loaded list
+    // before checking that opening its drawer does not remount/refetch it.
+    if (path === "/sources/indexers") {
+      await screen.findByRole("button", { name: "Add indexer" }, WAIT);
+    }
     const page = control.closest("main")!;
     const configReads = calls(fake, "GET", "/config").length;
     fireEvent.click(control);

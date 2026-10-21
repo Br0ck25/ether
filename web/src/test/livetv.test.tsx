@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import LiveTV from "../pages/livetv/LiveTV";
 import { calls as fakeCalls } from "./harness";
@@ -308,6 +309,7 @@ describe("Live TV studio", () => {
 
 describe("Live TV preview player", () => {
   it("tunes the saved channel in a mini player and stops the session on close", async () => {
+    const user = userEvent.setup();
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     const calls = backend([iptv("c1")], (url, init) => {
       if (url.endsWith("/livetv/channels/c1/play") && init?.method === "POST")
@@ -315,11 +317,11 @@ describe("Live TV preview player", () => {
       return undefined;
     });
     renderLiveTV("/livetv?channel=c1");
-    fireEvent.click(await screen.findByRole("button", { name: "Watch" }, WAIT));
+    await user.click(await screen.findByRole("button", { name: "Watch" }, WAIT));
     const player = await screen.findByRole("dialog", { name: "Watching News 24" });
     await waitFor(() => expect(hlsLoads).toContain("/ether/api/livetv/sessions/s1/index.m3u8"));
     expect(await within(player).findByText("via Samsung")).toBeInTheDocument();
-    fireEvent.click(within(player).getByRole("button", { name: "Stop watching" }));
+    await user.click(within(player).getByRole("button", { name: "Stop watching" }));
     await waitFor(() => expect(sent(calls, "DELETE", /\/livetv\/sessions\/s1$/)).toHaveLength(1));
     expect(screen.queryByRole("dialog", { name: "Watching News 24" })).toBeNull();
   });
