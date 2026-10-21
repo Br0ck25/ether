@@ -298,3 +298,22 @@ func recordedVideoEncoder(ls []Launch) (enc string, hw bool, seen bool) {
 	}
 	return enc, hw, seen
 }
+
+// softwareFallbackEncoders returns every distinct non-hardware encoder used
+// by ANY long-running launch. Hardware verification must inspect all
+// launches: with concurrent sessions one software session can otherwise be
+// masked by a hardware session that happens to be recorded last.
+func softwareFallbackEncoders(ls []Launch) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range ls {
+		if l.Kind != "start" || l.Encoder == "" || l.HWEncoder {
+			continue
+		}
+		if !seen[l.Encoder] {
+			seen[l.Encoder] = true
+			out = append(out, l.Encoder)
+		}
+	}
+	return out
+}

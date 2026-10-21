@@ -27,10 +27,42 @@ type ffprobeDoc struct {
 	} `json:"format"`
 }
 
+// ExpectedDimensions returns the exact output size implied by the source
+// dimensions and the decision, mirroring transcode's outputSize scaling
+// (aspect preserved, even sizes) for encodes and the untouched source size
+// for stream copy. ok is false when the source size is unknown.
+func ExpectedDimensions(dec core.Decision, cfg Config, srcW, srcH int) (w, h int, ok bool) {
+	if srcW <= 0 || srcH <= 0 {
+		return 0, 0, false
+	}
+	if dec.VideoCopy || cfg.Mode == ModeRemux {
+		return srcW, srcH, true // copy never scales, not even to even sizes
+	}
+	maxH := dec.MaxHeight
+	if maxH <= 0 {
+		maxH = cfg.MaxHeight
+	}
+	if maxH <= 0 || maxH >= srcH {
+		return evenDim(srcW), evenDim(srcH), true
+	}
+	nw := int(float64(srcW)*float64(maxH)/float64(srcH) + 0.5)
+	return evenDim(nw), evenDim(maxH), true
+}
+
+func evenDim(n int) int {
+	if n%2 != 0 {
+		n--
+	}
+	if n < 2 {
+		n = 2
+	}
+	return n
+}
+
 // VerifyOutput probes a retained output file and checks the actual video
 // codec/dimensions against the decision. Pure checking lives in checkOutput
 // so it can be unit-tested without ffprobe.
-func verifyOutput(ctx context.Context, ffprobe, path string, dec core.Decision, cfg Config) OutputProbe {
+func verifyOutput(ctx context.Context, ffprobe, path string, dec core.Decision, cfg Config, src *StreamSummary) OutputProbe {
 	op := OutputProbe{}
 	if ffprobe == "" {
 		op.Error = "no ffprobe path from Manager"
@@ -66,13 +98,15 @@ func verifyOutput(ctx context.Context, ffprobe, path string, dec core.Decision, 
 		op.Streams = append(op.Streams, StreamSummary{Type: s.CodecType, Codec: s.CodecName,
 			Profile: s.Profile, Width: s.Width, Height: s.Height, Channels: s.Channels})
 	}
-	op.Verified, op.Detail = checkOutput(op, dec, cfg)
+	op.Verified, op.Detail = checkOutput(op, dec, cfg, src)
 	return op
 }
 
-// checkOutput verifies codec and height against the decision. For a remux
-// the expected codec is the copied source codec carried in the decision.
-func checkOutput(op OutputProbe, dec core.Decision, cfg Config) (bool, string) {
+// checkOutput verifies codec and exact dimensions against the decision.
+// For a remux the expected codec/size are the copied source's. Dimensions
+// must match ExpectedDimensions exactly (source/aspect/cap), not merely
+// stay under a height cap.
+func checkOutput(op OutputProbe, dec core.Decision, cfg Config, src *StreamSummary) (bool, string) {
 	var v *StreamSummary
 	for i := range op.Streams {
 		if op.Streams[i].Type == "video" {
@@ -91,6 +125,20 @@ func checkOutput(op OutputProbe, dec core.Decision, cfg Config) (bool, string) {
 	if want != "" && !strings.EqualFold(v.Codec, want) {
 		return false, fmt.Sprintf("output video codec %q != expected %q", v.Codec, want)
 	}
+	if v.Width <= 0 || v.Height <= 0 {
+		return false, "output video has no dimensions"
+	}
+	if src != nil {
+		if expW, expH, ok := ExpectedDimensions(dec, cfg, src.Width, src.Height); ok {
+			if v.Width != expW || v.Height != expH {
+				return false, fmt.Sprintf("output dimensions %dx%d != expected %dx%d (source %dx%d, maxHeight %d)",
+					v.Width, v.Height, expW, expH, src.Width, src.Height, dec.MaxHeight)
+			}
+			return true, fmt.Sprintf("video %s %dx%d (expected %dx%d) profile=%q", v.Codec, v.Width, v.Height, expW, expH, v.Profile)
+		}
+	}
+	// Source size unknown: cannot compute the exact expectation; fall
+	// back to the cap check rather than inventing dimensions.
 	maxH := dec.MaxHeight
 	if cfg.Mode == ModeTranscode && cfg.MaxHeight > 0 {
 		maxH = cfg.MaxHeight
@@ -98,10 +146,7 @@ func checkOutput(op OutputProbe, dec core.Decision, cfg Config) (bool, string) {
 	if maxH > 0 && v.Height > maxH {
 		return false, fmt.Sprintf("output height %d exceeds max-height %d", v.Height, maxH)
 	}
-	if v.Width <= 0 || v.Height <= 0 {
-		return false, "output video has no dimensions"
-	}
-	return true, fmt.Sprintf("video %s %dx%d profile=%q", v.Codec, v.Width, v.Height, v.Profile)
+	return true, fmt.Sprintf("video %s %dx%d profile=%q (source dimensions unknown; cap-checked only)", v.Codec, v.Width, v.Height, v.Profile)
 }
 
 func ffprobeVersion(ctx context.Context, ffprobe string) string {

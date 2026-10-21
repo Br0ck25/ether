@@ -542,6 +542,15 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) (*Result, error) {
 	// Snapshot now: PID/CPU/argv reflect the measured window only.
 	res.Launches = rec.Snapshot()
 
+	// Source video dimensions for exact output verification.
+	var srcVideo *StreamSummary
+	for i := range res.Probe.Streams {
+		if res.Probe.Streams[i].Type == "video" {
+			srcVideo = &res.Probe.Streams[i]
+			break
+		}
+	}
+
 	// Verification phase (separate from measurement): ffprobe the
 	// retained output of each successful session.
 	verifyStart := time.Now()
@@ -551,7 +560,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) (*Result, error) {
 			continue
 		}
 		if s.Success {
-			op := verifyOutput(ctx, mgr.FFprobePath(), s.retainPath, decision, cfg)
+			op := verifyOutput(ctx, mgr.FFprobePath(), s.retainPath, decision, cfg, srcVideo)
 			s.OutputProbe = &op
 			if !op.Verified {
 				s.Success = false
@@ -568,16 +577,18 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) (*Result, error) {
 	}
 	res.Timing.VerificationMs = time.Since(verifyStart).Milliseconds()
 
-	// Encoder-level fallback check: a transcode that claimed hardware but
-	// whose recorded launches used a software encoder is a fallback.
+	// Encoder-level fallback check: inspect EVERY session launch. A
+	// transcode that claimed hardware but where any launch used a
+	// software encoder is a fallback, even if other (or later) launches
+	// used hardware.
 	if cfg.Mode == ModeTranscode && isExplicitHW(cfg.HWAccel) {
-		if enc, hwEnc, seen := recordedVideoEncoder(res.Launches); seen && !hwEnc {
+		if encs := softwareFallbackEncoders(res.Launches); len(encs) > 0 {
 			res.Runtime.HWFallback = true
 			for i := range res.Sessions {
 				res.Sessions[i].HWFallback = true
 				if res.Sessions[i].Success {
 					res.Sessions[i].Success = false
-					res.Sessions[i].Error = fmt.Sprintf("software encoder %q used despite requested hwaccel %q", enc, cfg.HWAccel)
+					res.Sessions[i].Error = fmt.Sprintf("software encoder(s) %s used despite requested hwaccel %q", strings.Join(encs, ","), cfg.HWAccel)
 				}
 			}
 		}

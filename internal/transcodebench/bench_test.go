@@ -153,27 +153,91 @@ func TestEncoderDetection(t *testing.T) {
 	}
 }
 
+func TestSoftwareFallbackInspectsAllLaunches(t *testing.T) {
+	// Mixed concurrency: a software session must not be masked by a
+	// hardware session recorded after it (the old last-only check).
+	mixed := []Launch{
+		{Kind: "start", Encoder: "h264_nvenc", HWEncoder: true},
+		{Kind: "start", Encoder: "libx264", HWEncoder: false},
+		{Kind: "start", Encoder: "h264_nvenc", HWEncoder: true},
+		{Kind: "run", Encoder: "libx265", HWEncoder: false}, // probe/test runs do not count
+	}
+	if got := softwareFallbackEncoders(mixed); len(got) != 1 || got[0] != "libx264" {
+		t.Fatalf("mixed fallback = %v, want [libx264]", got)
+	}
+	allHW := []Launch{
+		{Kind: "start", Encoder: "h264_nvenc", HWEncoder: true},
+		{Kind: "start", Encoder: "hevc_nvenc", HWEncoder: true},
+	}
+	if got := softwareFallbackEncoders(allHW); len(got) != 0 {
+		t.Fatalf("all-HW fallback = %v, want none", got)
+	}
+	if got := softwareFallbackEncoders(nil); len(got) != 0 {
+		t.Fatalf("empty fallback = %v", got)
+	}
+}
+
 func TestCheckOutput(t *testing.T) {
+	src := &StreamSummary{Type: "video", Codec: "h264", Width: 1920, Height: 1080}
 	dec := core.Decision{Kind: core.DecisionTranscode, VideoCodec: "h264", MaxHeight: 720}
 	good := OutputProbe{Streams: []StreamSummary{{Type: "video", Codec: "h264", Width: 1280, Height: 720, Profile: "High"}}}
-	if ok, _ := checkOutput(good, dec, Config{Mode: ModeTranscode}); !ok {
+	if ok, _ := checkOutput(good, dec, Config{Mode: ModeTranscode}, src); !ok {
 		t.Fatal("matching output should verify")
 	}
 	badCodec := OutputProbe{Streams: []StreamSummary{{Type: "video", Codec: "hevc", Width: 1280, Height: 720}}}
-	if ok, detail := checkOutput(badCodec, dec, Config{Mode: ModeTranscode}); ok || !strings.Contains(detail, "codec") {
+	if ok, detail := checkOutput(badCodec, dec, Config{Mode: ModeTranscode}, src); ok || !strings.Contains(detail, "codec") {
 		t.Fatalf("codec mismatch should fail: %v %q", ok, detail)
 	}
 	tooTall := OutputProbe{Streams: []StreamSummary{{Type: "video", Codec: "h264", Width: 1920, Height: 1080}}}
-	if ok, _ := checkOutput(tooTall, dec, Config{Mode: ModeTranscode}); ok {
+	if ok, _ := checkOutput(tooTall, dec, Config{Mode: ModeTranscode}, src); ok {
 		t.Fatal("height over max should fail")
 	}
+	// Under the cap but not the exact scaled size must also fail.
+	wrongWidth := OutputProbe{Streams: []StreamSummary{{Type: "video", Codec: "h264", Width: 1278, Height: 720}}}
+	if ok, detail := checkOutput(wrongWidth, dec, Config{Mode: ModeTranscode}, src); ok || !strings.Contains(detail, "expected") {
+		t.Fatalf("non-exact width should fail: %v %q", ok, detail)
+	}
+	smallerButCapped := OutputProbe{Streams: []StreamSummary{{Type: "video", Codec: "h264", Width: 640, Height: 360}}}
+	if ok, _ := checkOutput(smallerButCapped, dec, Config{Mode: ModeTranscode}, src); ok {
+		t.Fatal("smaller-than-expected output should fail exact check")
+	}
 	noVideo := OutputProbe{Streams: []StreamSummary{{Type: "audio", Codec: "aac"}}}
-	if ok, _ := checkOutput(noVideo, dec, Config{Mode: ModeTranscode}); ok {
+	if ok, _ := checkOutput(noVideo, dec, Config{Mode: ModeTranscode}, src); ok {
 		t.Fatal("missing video should fail")
 	}
 	remuxDec := core.Decision{Kind: core.DecisionRemux, VideoCopy: true, VideoCodec: "hevc"}
-	if ok, _ := checkOutput(badCodec, remuxDec, Config{Mode: ModeRemux}); !ok {
-		t.Fatal("remux should accept copied source codec")
+	hevcSrc := &StreamSummary{Type: "video", Codec: "hevc", Width: 1280, Height: 720}
+	if ok, _ := checkOutput(badCodec, remuxDec, Config{Mode: ModeRemux}, hevcSrc); !ok {
+		t.Fatal("remux should accept copied source codec/size")
+	}
+	resizedRemux := OutputProbe{Streams: []StreamSummary{{Type: "video", Codec: "hevc", Width: 640, Height: 360}}}
+	if ok, _ := checkOutput(resizedRemux, remuxDec, Config{Mode: ModeRemux}, hevcSrc); ok {
+		t.Fatal("remux must retain exact source dimensions")
+	}
+}
+
+func TestExpectedDimensions(t *testing.T) {
+	cases := []struct {
+		name         string
+		dec          core.Decision
+		cfg          Config
+		sw, sh       int
+		wantW, wantH int
+		wantOK       bool
+	}{
+		{"no scale at cap", core.Decision{MaxHeight: 720}, Config{Mode: ModeTranscode}, 1280, 720, 1280, 720, true},
+		{"scale 1080p to 720p", core.Decision{MaxHeight: 720}, Config{Mode: ModeTranscode}, 1920, 1080, 1280, 720, true},
+		{"no cap keeps source", core.Decision{}, Config{Mode: ModeTranscode}, 640, 360, 640, 360, true},
+		{"odd source encode evens", core.Decision{}, Config{Mode: ModeTranscode}, 641, 361, 640, 360, true},
+		{"odd source copy exact", core.Decision{VideoCopy: true}, Config{Mode: ModeRemux}, 641, 361, 641, 361, true},
+		{"portrait aspect", core.Decision{MaxHeight: 720}, Config{Mode: ModeTranscode}, 1080, 1920, 404, 720, true},
+		{"unknown source", core.Decision{MaxHeight: 720}, Config{Mode: ModeTranscode}, 0, 0, 0, 0, false},
+	}
+	for _, tc := range cases {
+		w, h, ok := ExpectedDimensions(tc.dec, tc.cfg, tc.sw, tc.sh)
+		if w != tc.wantW || h != tc.wantH || ok != tc.wantOK {
+			t.Errorf("%s: ExpectedDimensions=%dx%d,%v want %dx%d,%v", tc.name, w, h, ok, tc.wantW, tc.wantH, tc.wantOK)
+		}
 	}
 }
 
