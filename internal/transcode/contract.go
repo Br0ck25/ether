@@ -85,9 +85,9 @@ type videoContract struct {
 	dv     bool   // Dolby Vision signalled in the header (copied RPU)
 	// dvProfile and dvCompat are the signalled Dolby Vision configuration.
 	dvProfile, dvCompat int
-	width  int
-	height int
-	pic    picture
+	width               int
+	height              int
+	pic                 picture
 }
 
 // contractOf derives the delivered video from the session's opening

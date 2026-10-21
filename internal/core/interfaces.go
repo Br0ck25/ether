@@ -365,13 +365,13 @@ type StreamInfo struct {
 	ColorRange        string `json:"colorRange,omitempty"`        // tv, pc
 	ColorPrimaries    string `json:"colorPrimaries,omitempty"`    // bt709, bt2020, smpte170m...
 	ColorSpace        string `json:"colorSpace,omitempty"`        // matrix: bt709, bt2020nc, smpte170m...
-	DolbyVision   bool    `json:"dolbyVision,omitempty"`
-	Channels      int     `json:"channels,omitempty"`
-	ChannelLayout string  `json:"channelLayout,omitempty"`
-	SampleRate    int     `json:"sampleRate,omitempty"`
-	BitrateKbps   int     `json:"bitrateKbps,omitempty"`
-	External      bool    `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
-	ExternalURL   string  `json:"externalUrl,omitempty"`
+	DolbyVision       bool   `json:"dolbyVision,omitempty"`
+	Channels          int    `json:"channels,omitempty"`
+	ChannelLayout     string `json:"channelLayout,omitempty"`
+	SampleRate        int    `json:"sampleRate,omitempty"`
+	BitrateKbps       int    `json:"bitrateKbps,omitempty"`
+	External          bool   `json:"external,omitempty"` // sidecar subtitle (OpenSubtitles)
+	ExternalURL       string `json:"externalUrl,omitempty"`
 
 	// DolbyVisionProfile is the DV profile (5, 7, 8...) from the DOVI
 	// configuration record; 0 when unknown or not Dolby Vision.
