@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -302,6 +303,34 @@ func (p *fakeProc) wasKilled() bool {
 	return p.killed
 }
 
+// publish models the muxer's completed-file handoff. Windows may briefly
+// refuse replacement while the polling reader holds the previous playlist;
+// never silently discard that update and pretend all segments were published.
+func (p *fakeProc) publish(path string, data []byte) bool {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		p.err = fmt.Errorf("fake muxer write: %w", err)
+		return false
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := os.Rename(tmp, path)
+		if err == nil {
+			return true
+		}
+		if runtime.GOOS != "windows" || time.Now().After(deadline) {
+			p.err = fmt.Errorf("fake muxer publish: %w", err)
+			return false
+		}
+		select {
+		case <-p.kill:
+			p.err = errors.New("signal: killed")
+			return false
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter int, failStart bool, stderr string) {
 	defer close(p.done)
 	args := cmd.Args
@@ -333,7 +362,9 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 	for n, produced := start, 0; ; n, produced = n+1, produced+1 {
 		if lastSeg >= 0 && n > lastSeg {
 			list.WriteString("#EXT-X-ENDLIST\n")
-			_ = os.WriteFile(playlist, []byte(list.String()), 0o644)
+			if !p.publish(playlist, []byte(list.String())) {
+				return
+			}
 			return
 		}
 		if failAfter > 0 && produced >= failAfter {
@@ -359,11 +390,13 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 		case <-time.After(delay):
 		}
 		name := fmt.Sprintf(pattern, n)
-		_ = os.WriteFile(name+".tmp", []byte(fmt.Sprintf("segment %d args-ss=%s input=%s", n, argValue(args, "-ss"), argValue(args, "-i"))), 0o644)
-		_ = os.Rename(name+".tmp", name)
+		if !p.publish(name, []byte(fmt.Sprintf("segment %d args-ss=%s input=%s", n, argValue(args, "-ss"), argValue(args, "-i")))) {
+			return
+		}
 		fmt.Fprintf(&list, "#EXTINF:4.000000,\n%s\n", filepath.Base(name))
-		_ = os.WriteFile(playlist+".tmp", []byte(list.String()), 0o644)
-		_ = os.Rename(playlist+".tmp", playlist)
+		if !p.publish(playlist, []byte(list.String())) {
+			return
+		}
 		if cmd.Stdout != nil {
 			fmt.Fprintf(cmd.Stdout, "frame=%d\nout_time_us=%d\nspeed=4.0x\nprogress=continue\n", n*96, n*4000000)
 		}
@@ -434,7 +467,9 @@ func (p *fakeProc) simulateChunks(cmd Command, delay, gop, end time.Duration, la
 	for n := 0; ; n++ {
 		if end > 0 && t >= end {
 			list.WriteString("#EXT-X-ENDLIST\n")
-			_ = os.WriteFile(playlist, []byte(list.String()), 0o644)
+			if !p.publish(playlist, []byte(list.String())) {
+				return
+			}
 			return
 		}
 		if failAfter > 0 && n >= failAfter {
@@ -474,11 +509,13 @@ func (p *fakeProc) simulateChunks(cmd Command, delay, gop, end time.Duration, la
 		default:
 			b = testTSChunk(t, marker)
 		}
-		_ = os.WriteFile(name+".tmp", b, 0o644)
-		_ = os.Rename(name+".tmp", name)
+		if !p.publish(name, b) {
+			return
+		}
 		fmt.Fprintf(&list, "#EXTINF:%.6f,\n%s\n", d.Seconds(), filepath.Base(name))
-		_ = os.WriteFile(playlist+".tmp", []byte(list.String()), 0o644)
-		_ = os.Rename(playlist+".tmp", playlist)
+		if !p.publish(playlist, []byte(list.String())) {
+			return
+		}
 		if cmd.Stdout != nil {
 			fmt.Fprintf(cmd.Stdout, "frame=%d\nout_time_us=%d\nspeed=4.0x\nprogress=continue\n", n*96, t.Microseconds())
 		}
@@ -602,8 +639,9 @@ func (p *fakeProc) simulateDASH(cmd Command, delay, end time.Duration, failAfter
 				b = testChunk(uint32(n), int64(math.Round(t*90000)), 3750, int(math.Round(chunk*24)), payload)
 			}
 			name := filepath.Join(dir, dashChunkFile(rep, n))
-			_ = os.WriteFile(name+".tmp", b, 0o644)
-			_ = os.Rename(name+".tmp", name)
+			if !p.publish(name, b) {
+				return
+			}
 		}
 		if cmd.Stdout != nil {
 			fmt.Fprintf(cmd.Stdout, "frame=%d\nout_time_us=%d\nspeed=4.0x\nprogress=continue\n", n*24, int64(t*1e6))
