@@ -1,8 +1,11 @@
 # Cache management
 
-Open **Server → Cache**. Storage settings apply to this node. Pick a preset,
-adjust the controls, and save the policy; selecting a preset does not start a
-job. Existing settings retain their previous behaviour until you change them.
+Open **Server → Cache** for storage, the current saved policy, preload activity,
+playback warming and retained media. **Edit policy** opens the settings drawer.
+**Choose a cache profile** opens the preset cards, followed by a review step;
+selecting a card does not change the policy or start a job. Save after reviewing
+the controls. Selection explanations are available under **Why these titles?**.
+Storage settings apply to this node. Existing settings retain their previous behaviour until you change them.
 
 ## Choose a footprint
 

@@ -268,6 +268,12 @@ export default function Cache() {
     [error, setError] = useState<unknown>(null);
   const [advanced, setAdvanced] = useState(false),
     [search, setSearch] = useState("");
+  const [editor, setEditor] = useState<"profiles" | "policy" | null>(null);
+  const [profileChoice, setProfileChoice] = useState<{
+    name: string;
+    values: Partial<Policy>;
+  } | null>(null);
+  const [selectionOpen, setSelectionOpen] = useState(false);
   const [unit, setUnit] = useState<"GiB" | "TiB">("GiB");
   const [filter, setFilter] = useState("all"),
     [busy, setBusy] = useState<string | null>(null);
@@ -281,6 +287,8 @@ export default function Cache() {
       await api.putSection("cache", draft);
       await config.reload();
       await live.reload();
+      setEditor(null);
+      setProfileChoice(null);
       toast.success("Cache policy saved");
     } catch (e) {
       setError(e);
@@ -320,9 +328,11 @@ export default function Cache() {
   const used = snap?.used ?? 0,
     budget = snap?.budget ?? 0;
   const percent = budget > 0 ? Math.min(100, (used / budget) * 100) : 0;
-  const activePreset = PRESETS.find((p) =>
-    Object.entries(p.values).every(([k, v]) => draft[k as keyof Policy] === v),
+  const saved = config.data!.cache;
+  const savedPreset = PRESETS.find((p) =>
+    Object.entries(p.values).every(([k, v]) => saved[k as keyof Policy] === v),
   );
+  const policyName = saved.mode === "off" ? "Pass-through" : savedPreset?.name || "Custom policy";
   const enabled = draft.mode !== "off",
     speculate = enabled && !draft.disableSpeculation;
   const releases = (snap?.releases ?? []).filter(
@@ -334,368 +344,51 @@ export default function Cache() {
   return (
     <Workspace
       title="Cache"
-      subtitle="Make space for a faster next watch."
+      subtitle="Storage, playback readiness, and background activity."
       actions={
         <>
-          <Badge variant={dirty ? "warning" : "secondary"}>
-            {dirty ? "Unsaved changes" : "This node"}
-          </Badge>
-          {dirty && (
-            <Button variant="ghost" size="sm" onClick={reset} disabled={saving}>
-              Discard
-            </Button>
-          )}
-          <Button size="sm" onClick={() => void save()} disabled={!dirty || saving}>
-            {saving ? "Saving…" : "Save policy"}
+          {dirty && <Badge variant="warning">Unsaved policy</Badge>}
+          <Badge variant="secondary">This node</Badge>
+          <Button size="sm" onClick={() => setEditor("policy")}>
+            <Settings2 size={14} /> {dirty ? "Resume editing" : "Edit policy"}
           </Button>
         </>
       }
-      asideLabel="Cache policy"
-      mainLabel="Cache overview"
-      aside={
-        <div className="space-y-6 p-4 sm:p-5">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
-              01 / Your space
-            </p>
-            <h2 className="mt-2 text-lg font-semibold tracking-tight">
-              Small footprint. Or a deep shelf.
-            </h2>
-            <p className="mt-1 text-xs leading-relaxed text-fg-muted">
-              From almost no storage to a managed local library. The two largest presets enable
-              full-title preloading when you save; every budget is yours to change.
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-pressed={!enabled}
-            onClick={() =>
-              patch({
-                mode: "off",
-                budgetBytes: 0,
-                preloadEnabled: false,
-                preloadBudgetBytes: 0,
-                disableSpeculation: true,
-              })
-            }
-            className={cn(
-              "flex w-full items-center gap-3 rounded-xl border p-3 text-left transition hover:border-primary/60",
-              !enabled ? "border-primary bg-primary/10" : "border-border bg-surface",
-            )}
-          >
-            <Leaf size={18} className="text-primary" />
-            <span className="flex-1">
-              <span className="block text-sm font-semibold">Pass-through</span>
-              <span className="block text-xs text-fg-muted">
-                No persistent media. Stream and move on.
-              </span>
-            </span>
-            <span className="text-xs text-primary">0 B</span>
-          </button>
-          <div className="grid grid-cols-2 gap-2">
-            {PRESETS.map((p, i) => (
-              <button
-                key={p.name}
-                type="button"
-                aria-pressed={activePreset?.name === p.name}
-                onClick={() => patch(p.values)}
-                className={cn(
-                  "relative rounded-xl border p-3 text-left transition hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                  activePreset?.name === p.name
-                    ? "border-primary bg-primary/10"
-                    : "border-border bg-surface",
-                )}
-              >
-                <span className="flex items-center justify-between text-fg-muted">
-                  {i === 0 ? (
-                    <Leaf size={16} />
-                  ) : i === 1 ? (
-                    <Zap size={16} />
-                  ) : i === 2 ? (
-                    <Sparkles size={16} />
-                  ) : (
-                    <HardDrive size={16} />
-                  )}
-                  {activePreset?.name === p.name && <Check size={14} className="text-primary" />}
-                </span>
-                <span className="mt-3 block text-sm font-semibold">{p.name}</span>
-                <span className="block text-xs text-primary">{p.space}</span>
-                <span className="mt-2 block text-[11px] leading-relaxed text-fg-muted">
-                  {p.description}
-                </span>
-              </button>
-            ))}
-          </div>
-          <Field
-            label="Media disk budget"
-            hint="Zero means unlimited, not disabled. Choose No persistent media below to turn disk caching off."
-            htmlFor="cache-budget"
-          >
-            <div className="flex items-center gap-2">
-              <NumberInput
-                id="cache-budget"
-                min={0}
-                step={0.25}
-                value={draft.budgetBytes / (unit === "TiB" ? 1024 * GiB : GiB)}
-                onChange={(n) =>
-                  patch({ budgetBytes: Math.round(n * (unit === "TiB" ? 1024 * GiB : GiB)) })
-                }
-              />
-              <select
-                aria-label="Budget unit"
-                value={unit}
-                onChange={(e) => setUnit(e.target.value as "GiB" | "TiB")}
-                className="rounded border border-border bg-surface p-2 text-xs"
-              >
-                <option>GiB</option>
-                <option>TiB</option>
-              </select>
+    >
+      <main
+        aria-label="Cache operations"
+        className="app-scroll min-h-0 flex-1 overflow-y-auto bg-bg"
+      >
+        <div className="mx-auto grid max-w-[1600px] grid-cols-1 gap-5 p-4 sm:p-6 xl:grid-cols-12">
+          {error ? (
+            <div className="xl:col-span-12">
+              <ErrorPanel error={error} />
             </div>
-          </Field>
-          {disk.data && (
-            <p className="flex items-center gap-2 text-xs text-fg-muted">
-              <HardDrive size={13} />
-              {formatBytes(disk.data.freeBytes)} currently free
-            </p>
-          )}
-          {disk.data &&
-            enabled &&
-            draft.budgetBytes > 0 &&
-            draft.budgetBytes - used > disk.data.freeBytes && (
-              <p className="rounded-lg bg-warning/10 p-3 text-xs text-warning">
-                This budget needs more space than is currently free. Choose a smaller budget.
-              </p>
-            )}
-          <div className="border-t border-border pt-5">
-            <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
-              02 / What stays
-            </p>
-            <label className="mt-3 block text-sm font-medium" htmlFor="cache-mode">
-              Retention strategy
-            </label>
-            <select
-              id="cache-mode"
-              value={draft.mode || "demand"}
-              onChange={(e) =>
-                patch({
-                  mode: e.target.value,
-                  ...(e.target.value === "off" ? { preloadEnabled: false } : {}),
-                })
-              }
-              className="mt-2 w-full rounded-lg border border-border bg-surface p-2.5 text-sm"
-            >
-              <option value="off">No persistent media</option>
-              <option value="demand">Keep what is streamed</option>
-              <option value="adaptive">Favour repeat watches</option>
-            </select>
-            <p className="mt-2 text-xs leading-relaxed text-fg-muted">
-              {!enabled
-                ? "New media bytes bypass disk. Unprotected existing bytes are released; playback and pinned bytes remain protected."
-                : draft.mode === "adaptive"
-                  ? "Repeat plays earn extra time before eviction. Popularity is learned from playback, never from background reads."
-                  : "Keep recently used bytes. The oldest unprotected segments make room first."}
-            </p>
-          </div>
-          <Field
-            label="Expire after inactivity"
-            hint="Days since last cache use. Zero keeps bytes until space is needed."
-            htmlFor="cache-retention"
-          >
-            <NumberInput
-              id="cache-retention"
-              min={0}
-              max={3650}
-              value={draft.retentionDays ?? 0}
-              onChange={(n) => patch({ retentionDays: n })}
-            />
-          </Field>
-          <div className="border-t border-border pt-5">
-            <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
-              03 / Think ahead
-            </p>
-            <Toggle
-              title="Allow opening and resume warming"
-              description="Let Ether fetch small windows before Play. Turn off for strictly on-demand media."
-              checked={speculate}
-              disabled={!enabled}
-              onChange={(v) => patch({ disableSpeculation: !v })}
-            />
-            <Toggle
-              title="Warm detail pages"
-              description="Opening a movie or episode prepares its source and opening bytes. Shows warm their On Deck episode when supported."
-              checked={draft.detailWarmup !== "off"}
-              disabled={!speculate}
-              onChange={(v) => patch({ detailWarmup: v ? "on" : "off" })}
-            />
-            <Toggle
-              title="Prepare the next episode"
-              description="Warm the opening near the end of the current episode."
-              checked={draft.prefetchNextEpisode}
-              disabled={!speculate}
-              onChange={(v) => patch({ prefetchNextEpisode: v })}
-            />
-            <Toggle
-              title="Keep resume points warm"
-              description="Periodically refresh a small window around Continue Watching."
-              checked={draft.keepInProgressWarm}
-              disabled={!speculate}
-              onChange={(v) => patch({ keepInProgressWarm: v })}
-            />
-          </div>
-          <div className="border-t border-border pt-5">
-            <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
-              04 / Your local library
-            </p>
-            <Toggle
-              title="Preload movies & TV"
-              description="Proactively fill a dedicated part of your cache from the local catalogue using your sources and quality rules. This downloads complete movie and episode sources."
-              checked={draft.preloadEnabled ?? false}
-              disabled={!enabled}
-              onChange={(v) =>
-                patch({
-                  preloadEnabled: v,
-                  ...(v && !draft.preloadBudgetBytes
-                    ? { preloadBudgetBytes: Math.min(draft.budgetBytes || 100 * GiB, 100 * GiB) }
-                    : {}),
-                })
-              }
-            />
-            {draft.preloadEnabled && (
-              <div className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-3">
-                <Field
-                  label="Preload allocation (GiB)"
-                  hint="Part of the total budget, not additional storage."
-                  htmlFor="preload-budget"
-                >
-                  <NumberInput
-                    id="preload-budget"
-                    min={1}
-                    value={(draft.preloadBudgetBytes ?? 0) / GiB}
-                    onChange={(n) => patch({ preloadBudgetBytes: Math.round(n * GiB) })}
-                  />
-                </Field>
-                <Field label="Include in your shelf" htmlFor="preload-content">
-                  <select
-                    id="preload-content"
-                    className="w-full rounded border border-border bg-surface p-2 text-sm"
-                    value={draft.preloadContent || "mixed"}
-                    onChange={(e) => patch({ preloadContent: e.target.value })}
-                  >
-                    <option value="mixed">Movies & TV episodes</option>
-                    <option value="movies">Movies only</option>
-                    <option value="tv">TV episodes only</option>
-                  </select>
-                </Field>
-                <Field label="Selection strategy" htmlFor="preload-source">
-                  <select
-                    id="preload-source"
-                    className="w-full rounded border border-border bg-surface p-2 text-sm"
-                    value={draft.preloadSource || "smart"}
-                    onChange={(e) => patch({ preloadSource: e.target.value })}
-                  >
-                    <option value="smart">Smart household blend</option>
-                    <option value="popular">Catalogue popularity</option>
-                    <option value="recent">Newest releases</option>
-                  </select>
-                </Field>
-                {(!draft.preloadSource || draft.preloadSource === "smart") && (
-                  <div className="space-y-3 rounded-lg border border-primary/20 bg-surface p-3">
-                    <div className="flex items-center justify-between gap-2 text-xs">
-                      <label htmlFor="household-weight" className="font-medium">
-                        Household influence
-                      </label>
-                      <span className="font-mono text-primary">
-                        {draft.preloadHouseholdWeight ?? 65}%
-                      </span>
-                    </div>
-                    <input
-                      id="household-weight"
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={5}
-                      className="w-full accent-primary"
-                      value={draft.preloadHouseholdWeight ?? 65}
-                      onChange={(e) => patch({ preloadHouseholdWeight: Number(e.target.value) })}
-                    />
-                    <div className="flex justify-between text-[10px] text-fg-subtle">
-                      <span>Catalogue discovery</span>
-                      <span>Your household</span>
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-fg-muted">
-                      Recent repeat viewing, shared favourites and genre interests guide the shelf.
-                      Older viewing fades; no history falls back to catalogue popularity.
-                    </p>
-                  </div>
-                )}
-                <Field
-                  label="Learn from"
-                  htmlFor="household-scope"
-                  hint="Also determines whose TV progress guides episode selection."
-                >
-                  <select
-                    id="household-scope"
-                    className="w-full rounded border border-border bg-surface p-2 text-sm"
-                    value={draft.preloadHouseholdScope || "home"}
-                    onChange={(e) => patch({ preloadHouseholdScope: e.target.value })}
-                  >
-                    <option value="home">Owner & Plex Home members</option>
-                    <option value="all">All active shared viewers</option>
-                  </select>
-                </Field>
-                {draft.preloadContent !== "movies" && (
-                  <Field
-                    label="Episode window per show"
-                    htmlFor="episode-window"
-                    hint="A rolling shelf around current viewing positions. New shows start at episode one; different viewers share this limit."
-                  >
-                    <NumberInput
-                      id="episode-window"
-                      min={1}
-                      max={24}
-                      value={draft.preloadEpisodesAhead || 3}
-                      onChange={(n) => patch({ preloadEpisodesAhead: n })}
-                    />
-                  </Field>
-                )}
-                <p className="text-[11px] text-fg-muted">
-                  Room for roughly {Math.floor((draft.preloadBudgetBytes ?? 0) / (8 * GiB))}{" "}
-                  movie-sized sources at 8 GiB each. Episode sizes vary; both share this allocation.
-                </p>
-              </div>
-            )}
-          </div>
-          <Button variant="secondary" className="w-full" onClick={() => setAdvanced(true)}>
-            <Settings2 size={15} /> Fine tune policy <ArrowUpRight size={14} />
-          </Button>
-          <p className="text-[11px] leading-relaxed text-fg-subtle">
-            Live streams and pinned releases can exceed the budget. Expiry never removes protected
-            bytes. This budget covers media segments; artwork, metadata and transcode output use
-            separate storage.
-          </p>
-        </div>
-      }
-      main={
-        <div className="space-y-6 p-4 sm:p-6 xl:p-8">
-          {error ? <ErrorPanel error={error} /> : null}
-          {live.error ? <ErrorPanel error={live.error} onRetry={() => void live.reload()} /> : null}
-          <section className="relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-surface to-surface p-6 sm:p-8">
+          ) : null}
+          {live.error ? (
+            <div className="xl:col-span-12">
+              <ErrorPanel error={live.error} onRetry={() => void live.reload()} />
+            </div>
+          ) : null}
+          <section className="xl:col-span-8 relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-surface to-surface p-5 sm:p-6">
             <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-primary/10 blur-3xl" />
             <div className="relative flex flex-wrap items-center gap-8">
               <div className="min-w-0 flex-1">
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[.2em] text-primary">
-                  <Sparkles size={13} /> Space, thoughtfully used
+                  <Sparkles size={13} /> Storage overview
                 </span>
-                <h2 className="mt-4 max-w-sm text-3xl font-semibold leading-tight tracking-tight">
-                  The next watch
-                  <br />
-                  starts here.
+                <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+                  {config.data?.cache.mode === "off"
+                    ? "Persistent caching is off"
+                    : "Cache is active"}
                 </h2>
-                <p className="mt-3 max-w-md text-sm leading-relaxed text-fg-muted">
-                  A rolling memory of what gets watched. Keep the useful bytes, prepare the next
-                  moment, and let the rest make room.
+                <p className="mt-2 text-sm text-fg-muted">
+                  {budget > 0
+                    ? `${formatBytes(Math.max(0, budget - used))} available within your budget`
+                    : "No size limit configured"}
+                  {disk.data ? ` · ${formatBytes(disk.data.freeBytes)} free on disk` : ""}
                 </p>
-                <div className="mt-5 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   <Badge variant="secondary">
                     <ShieldCheck size={12} /> Playback protected
                   </Badge>
@@ -709,7 +402,7 @@ export default function Cache() {
                 </div>
               </div>
               <div
-                className="relative grid h-40 w-40 shrink-0 place-items-center"
+                className="relative grid h-32 w-32 shrink-0 place-items-center"
                 role="img"
                 aria-label={
                   snap
@@ -757,7 +450,7 @@ export default function Cache() {
                 </div>
               </div>
             </div>
-            <div className="mt-7 grid grid-cols-2 gap-5 border-t border-primary/10 pt-5 sm:grid-cols-4">
+            <div className="mt-4 grid grid-cols-2 gap-5 border-t border-primary/10 pt-5 sm:grid-cols-4">
               {[
                 ["Stored releases", snap ? String(snap.releases.length) : "—"],
                 ["Protected bytes", snap ? formatBytes(snap.protectedBytes) : "—"],
@@ -777,13 +470,81 @@ export default function Cache() {
               Hit rate and served bytes are disk-cache counters since server startup.
             </p>
           </section>
-          <section className="overflow-hidden rounded-xl border border-primary/20 bg-surface">
+          <section
+            aria-label="Current cache policy"
+            className="flex flex-col rounded-xl border border-border bg-surface p-5 xl:col-span-4"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[.18em] text-fg-subtle">
+                Current policy
+              </p>
+              <Badge variant="secondary">{saved.mode === "off" ? "Off" : "Active"}</Badge>
+            </div>
+            <h2 className="mt-2 text-xl font-semibold">{policyName}</h2>
+            <dl className="my-4 space-y-3 text-xs">
+              {[
+                [
+                  "Retention",
+                  saved.mode === "off"
+                    ? "No persistent media"
+                    : saved.mode === "adaptive"
+                      ? "Adaptive · repeat watches"
+                      : "Recently streamed",
+                ],
+                [
+                  "Expiry",
+                  saved.retentionDays
+                    ? `${saved.retentionDays} inactive days`
+                    : "When space is needed",
+                ],
+                [
+                  "Managed preloading",
+                  saved.preloadEnabled
+                    ? saved.preloadContent === "tv"
+                      ? "TV episodes"
+                      : saved.preloadContent === "movies"
+                        ? "Movies"
+                        : "Movies & TV"
+                    : "Disabled",
+                ],
+                [
+                  "Selection",
+                  !saved.preloadEnabled
+                    ? "—"
+                    : saved.preloadSource === "popular"
+                      ? "Catalogue popularity"
+                      : saved.preloadSource === "recent"
+                        ? "Newest releases"
+                        : `${saved.preloadHouseholdWeight ?? 65}% household blend`,
+                ],
+              ].map(([label, value]) => (
+                <div key={label} className="flex justify-between gap-4">
+                  <dt className="text-fg-muted">{label}</dt>
+                  <dd className="text-right font-medium">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="mt-auto border-t border-border pt-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                className="w-full"
+                onClick={() => {
+                  setProfileChoice(null);
+                  setEditor("profiles");
+                }}
+              >
+                Choose a cache profile <ArrowUpRight size={14} />
+              </Button>
+            </div>
+          </section>
+          <section className="xl:col-span-8 overflow-hidden rounded-xl border border-primary/20 bg-surface">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[.18em] text-primary">
                   Managed local library
                 </p>
-                <h2 className="mt-1 text-lg font-semibold">A shelf that fills itself.</h2>
+                <h2 className="mt-1 text-lg font-semibold">Preload activity</h2>
               </div>
               <Button
                 variant="secondary"
@@ -821,7 +582,13 @@ export default function Cache() {
                       ? snap.preload.title
                       : snap?.preload.state === "resolving"
                         ? `Finding a source for ${snap.preload.title}`
-                        : "Library autopilot"}
+                        : !saved.preloadEnabled
+                          ? "Preloading disabled"
+                          : snap?.preload.state === "selecting"
+                            ? "Selecting titles"
+                            : snap?.preload.state === "ready"
+                              ? "Selection pass complete"
+                              : "Waiting for the next pass"}
                 </p>
                 <p className="mt-1 text-xs text-fg-muted">
                   {snap?.preload.message ||
@@ -849,11 +616,20 @@ export default function Cache() {
                   </>
                 )}
               </div>
-              <p className="text-[11px] leading-relaxed text-fg-muted">
-                One title at a time, with a bandwidth cap and free-space reserve. Pauses for
-                playback by default. Complete sources stay protected inside your allocation; startup
-                may still require a provider link or another release for a different client.
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                <p className="text-xs text-fg-muted">
+                  {config.data?.cache.preloadDuringPlayback
+                    ? "May run during playback"
+                    : "Waits during playback"}{" "}
+                  ·{" "}
+                  {config.data?.cache.preloadRateMiB
+                    ? `${config.data.cache.preloadRateMiB} MiB/s limit`
+                    : "No bandwidth cap"}
+                </p>
+                <Button variant="ghost" size="sm" onClick={() => setSelectionOpen(true)}>
+                  <Sparkles size={14} /> Why these titles?
+                </Button>
+              </div>
               {(snap?.preload.failed ?? 0) > 0 && (
                 <p className="text-xs text-fg-muted">
                   {snap?.preload.failed} attempts skipped or interrupted this run. Unavailable or
@@ -862,65 +638,11 @@ export default function Cache() {
               )}
             </div>
           </section>
-          <section className="overflow-hidden rounded-xl border border-border bg-surface">
-            <div className="flex items-start justify-between gap-3 border-b border-border p-4">
-              <div>
-                <h2 className="flex items-center gap-2 text-sm font-semibold">
-                  <Sparkles size={16} className="text-primary" /> Why these titles?
-                </h2>
-                <p className="mt-1 text-xs text-fg-muted">
-                  Highest-ranked selections from the last pass · {snap?.preload.viewers ?? 0} active
-                  viewers considered
-                </p>
-              </div>
-              <Badge>Explainable selection</Badge>
-            </div>
-            {snap?.preload.selection?.length ? (
-              <div className="divide-y divide-border">
-                {snap.preload.selection.slice(0, 6).map((item, i) => (
-                  <div key={item.key} className="flex items-start gap-3 p-4">
-                    <span className="mt-0.5 w-5 shrink-0 font-mono text-xs text-fg-subtle">
-                      {String(i + 1).padStart(2, "0")}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-sm font-medium">{item.title}</span>
-                        <span className="shrink-0 text-[10px] uppercase text-fg-subtle">
-                          {item.type === "episode" ? "TV" : "Film"}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs text-fg-muted">{item.reason}</p>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-fg-subtle">
-                        <span>Catalogue {Math.round(item.catalogue)}/100</span>
-                        <span>Household {Math.round(item.household)}/100</span>
-                      </div>
-                    </div>
-                    <span
-                      className="shrink-0 rounded-md bg-primary/10 px-2 py-1 font-mono text-xs text-primary"
-                      aria-label={`Selection score ${Math.round(item.score)} out of 100`}
-                    >
-                      {Math.round(item.score)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="p-4 text-sm leading-relaxed text-fg-muted">
-                Enable preloading and save to build your first selection. Movies blend discovery
-                with household favourites; TV keeps a rolling window of episodes ready. Scores
-                appear after the next selection pass.
-              </p>
-            )}
-            <p className="border-t border-border px-4 py-3 text-[10px] text-fg-subtle">
-              Scores rank cache candidates, not predicted viewing probabilities. TV windows taper by
-              episode distance. Selection does not guarantee source availability.
-            </p>
-          </section>
-          <section className="rounded-xl border border-border bg-surface">
+          <section className="xl:col-span-4 rounded-xl border border-border bg-surface">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
               <div>
                 <h2 className="flex items-center gap-2 text-sm font-semibold">
-                  <Zap size={16} className="text-primary" /> Ahead of Play
+                  <Zap size={16} className="text-primary" /> Playback warming
                 </h2>
                 <p className="mt-1 text-xs text-fg-muted">
                   Background prefetch jobs · live playback has priority
@@ -940,7 +662,7 @@ export default function Cache() {
                 <RefreshCw size={13} /> Warm resumes
               </Button>
             </div>
-            <div className="grid grid-cols-3 gap-3 p-4 sm:grid-cols-6">
+            <div className="grid grid-cols-3 gap-3 p-4 sm:grid-cols-3">
               {[
                 ["Queued", snap?.prefetch.queued],
                 ["Running", snap?.prefetch.running],
@@ -956,10 +678,10 @@ export default function Cache() {
               ))}
             </div>
           </section>
-          <section className="overflow-hidden rounded-xl border border-border bg-surface">
+          <section className="xl:col-span-12 overflow-hidden rounded-xl border border-border bg-surface">
             <div className="space-y-3 border-b border-border p-4">
               <div className="flex items-baseline justify-between gap-2">
-                <h2 className="text-sm font-semibold">Your retained media</h2>
+                <h2 className="text-sm font-semibold">Retained media</h2>
                 <span className="text-xs text-fg-subtle">Refreshes every 5 seconds</span>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -1081,165 +803,615 @@ export default function Cache() {
               can still need your source.
             </p>
           </section>
-          <p className="break-all text-[11px] text-fg-subtle">
+          <p className="break-all text-[11px] text-fg-subtle xl:col-span-12">
             <HardDrive size={12} className="mr-1 inline" />
-            {snap?.directory ?? config.data?.cache.dir}
+            {snap?.directory ?? saved.dir}
           </p>
-          <Drawer
-            open={advanced}
-            onClose={() => setAdvanced(false)}
-            title="Fine tune your cache"
-            size="lg"
-          >
-            <div className="space-y-6 p-1">
-              <p className="text-sm text-fg-muted">
-                Changes join your draft. Save the policy when you’re ready.
-              </p>
-              <Field
-                label="Household history window (days)"
-                htmlFor="history-window"
-                hint="Recent views count more; frequency is capped per viewer. Completed watches and reviewed imports contribute, never preload activity."
-              >
-                <NumberInput
-                  id="history-window"
-                  min={1}
-                  max={730}
-                  value={draft.preloadHistoryDays || 90}
-                  onChange={(n) => patch({ preloadHistoryDays: n })}
-                />
-              </Field>
-              <Field
-                label="Maximum preloaded titles"
-                hint="Up to 5,000. The allocation still limits how many fit."
-                htmlFor="preload-count"
-              >
-                <NumberInput
-                  id="preload-count"
-                  min={1}
-                  max={5000}
-                  value={draft.preloadMaxTitles || 200}
-                  onChange={(n) => patch({ preloadMaxTitles: n })}
-                />
-              </Field>
-              <Field
-                label="Preload speed (MiB/s)"
-                hint="Average payload cap, with short bursts for each 16 MiB window. Zero removes the cap."
-                htmlFor="preload-rate"
-              >
-                <NumberInput
-                  id="preload-rate"
-                  min={0}
-                  max={10000}
-                  value={draft.preloadRateMiB ?? 0}
-                  onChange={(n) => patch({ preloadRateMiB: n })}
-                />
-              </Field>
-              <Field
-                label="Keep disk space free (GiB)"
-                hint="Preloading waits below this reserve. Zero uses the 5 GiB default."
-                htmlFor="preload-reserve"
-              >
-                <NumberInput
-                  id="preload-reserve"
-                  min={0}
-                  value={(draft.preloadMinFreeBytes ?? 5 * GiB) / GiB}
-                  onChange={(n) => patch({ preloadMinFreeBytes: Math.round(n * GiB) })}
-                />
-              </Field>
-              <Toggle
-                title="Preload during playback"
-                description="Otherwise, complete-title filling waits while viewers are streaming. Opening and next-episode warming use their separate controls."
-                checked={draft.preloadDuringPlayback ?? false}
-                onChange={(v) => patch({ preloadDuringPlayback: v })}
-              />
-              <Field
-                label="Opening window (MiB)"
-                hint="2–64 MiB for detail pages. Larger windows use more bandwidth; startup still depends on the source and client."
-                htmlFor="cache-opening"
-              >
-                <NumberInput
-                  id="cache-opening"
-                  min={2}
-                  max={64}
-                  value={(draft.detailBytes || 2 * MiB) / MiB}
-                  onChange={(n) => patch({ detailBytes: Math.round(n * MiB) })}
-                />
-              </Field>
-              <Field label="Next episode / resume window (MiB)" htmlFor="cache-prefetch">
-                <NumberInput
-                  id="cache-prefetch"
-                  min={1}
-                  value={draft.prefetchBytes / MiB}
-                  onChange={(n) => patch({ prefetchBytes: Math.round(n * MiB) })}
-                />
-              </Field>
-              <Field label="Prepare next episode at (%)" htmlFor="cache-trigger">
-                <NumberInput
-                  id="cache-trigger"
-                  min={1}
-                  max={99}
-                  value={Math.round(draft.nextEpisodeAt * 100)}
-                  onChange={(n) => patch({ nextEpisodeAt: n / 100 })}
-                />
-              </Field>
-              <Field
-                label="Replay credit (hours per repeat play)"
-                hint="Adaptive mode gives up to eight repeat plays a recency credit. It never overrides expiry or pins. Credit fades out after 30 days without a play."
-                htmlFor="cache-boost"
-              >
-                <NumberInput
-                  id="cache-boost"
-                  min={0}
-                  max={720}
-                  value={draft.replayBoostHours ?? 0}
-                  onChange={(n) => patch({ replayBoostHours: n })}
-                />
-              </Field>
-              <Field
-                label="Resume protection share (%)"
-                hint="Maximum share of the budget assigned to in-progress releases. The most recently watched are considered first."
-                htmlFor="cache-share"
-              >
-                <NumberInput
-                  id="cache-share"
-                  min={1}
-                  max={100}
-                  value={draft.inProgressPinPercent || 50}
-                  onChange={(n) => patch({ inProgressPinPercent: n })}
-                />
-              </Field>
-              <Field
-                label="Resume protection age"
-                hint="A duration such as 720h (30 days). Abandoned titles lose their resume pin after this interval."
-                htmlFor="cache-age"
-              >
-                <Input
-                  id="cache-age"
-                  value={draft.inProgressPinMaxAge || "720h"}
-                  onChange={(e) => patch({ inProgressPinMaxAge: e.target.value })}
-                />
-              </Field>
-              <Field
-                label="Cache directory"
-                hint="Changing the folder requires a server restart. Existing bytes are not moved. The live overview shows the active folder."
-                htmlFor="cache-dir"
-              >
-                <Input
-                  id="cache-dir"
-                  value={draft.dir}
-                  onChange={(e) => patch({ dir: e.target.value })}
-                />
-              </Field>
-              <p className="text-xs leading-relaxed text-fg-muted">
-                Detail warming is rate limited and pauses during active playback. Trailer and
-                post-play warming also require background warming here and their own feature
-                settings.
-              </p>
-              <Button onClick={() => setAdvanced(false)}>Done</Button>
-            </div>
-          </Drawer>
         </div>
-      }
-    />
+      </main>
+      <Drawer
+        open={editor !== null}
+        onClose={() => {
+          setEditor(null);
+          setAdvanced(false);
+        }}
+        title={
+          editor === "profiles"
+            ? "Choose a cache profile"
+            : profileChoice
+              ? "Review your cache profile"
+              : "Edit cache policy"
+        }
+        size="lg"
+        footer={
+          editor === "profiles" ? (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-fg-muted">1 / Choose a starting point</span>
+              <Button
+                disabled={!profileChoice}
+                onClick={() => {
+                  if (profileChoice) {
+                    patch(profileChoice.values);
+                    setEditor("policy");
+                  }
+                }}
+              >
+                Review profile <ArrowUpRight size={14} />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  reset();
+                  setEditor(null);
+                  setProfileChoice(null);
+                }}
+                disabled={saving}
+              >
+                Discard changes
+              </Button>
+              <Button onClick={() => void save()} disabled={!dirty || saving}>
+                {saving ? "Saving…" : "Save policy"}
+              </Button>
+            </div>
+          )
+        }
+      >
+        {editor === "profiles" ? (
+          <div className="space-y-4">
+            <p className="text-sm leading-relaxed text-fg-muted">
+              Pick a starting point, then review the budget and behavior. Nothing changes until you
+              save.
+            </p>
+            <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-fg-muted">
+              Cinema node and Edge library enable full movie and episode preloading. All sizes and
+              limits can be customized in the next step.
+            </p>
+            <button
+              type="button"
+              aria-pressed={profileChoice?.name === "Pass-through"}
+              onClick={() =>
+                setProfileChoice({
+                  name: "Pass-through",
+                  values: {
+                    mode: "off",
+                    budgetBytes: 0,
+                    preloadEnabled: false,
+                    preloadBudgetBytes: 0,
+                    disableSpeculation: true,
+                  },
+                })
+              }
+
+              className={cn(
+                "flex w-full items-center gap-3 rounded-xl border p-3 text-left transition hover:border-primary/60",
+                profileChoice?.name === "Pass-through"
+                  ? "border-primary bg-primary/10"
+                  : "border-border bg-surface",
+              )}
+            >
+              <Leaf size={18} className="text-primary" />
+              <span className="flex-1">
+                <span className="block text-sm font-semibold">Pass-through</span>
+                <span className="block text-xs text-fg-muted">
+                  No persistent media. Stream and move on.
+                </span>
+              </span>
+              <span className="text-xs text-primary">0 B</span>
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+              {PRESETS.map((p, i) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  aria-pressed={profileChoice?.name === p.name}
+                  onClick={() => setProfileChoice(p)}
+                  className={cn(
+                    "relative rounded-xl border p-3 text-left transition hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    profileChoice?.name === p.name
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-surface",
+                  )}
+                >
+                  <span className="flex items-center justify-between text-fg-muted">
+                    {i === 0 ? (
+                      <Leaf size={16} />
+                    ) : i === 1 ? (
+                      <Zap size={16} />
+                    ) : i === 2 ? (
+                      <Sparkles size={16} />
+                    ) : (
+                      <HardDrive size={16} />
+                    )}
+                    {profileChoice?.name === p.name && <Check size={14} className="text-primary" />}
+                  </span>
+                  <span className="mt-3 block text-sm font-semibold">{p.name}</span>
+                  <span className="block text-xs text-primary">{p.space}</span>
+                  <span className="mt-2 block text-[11px] leading-relaxed text-fg-muted">
+                    {p.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {profileChoice && (
+              <div className="flex items-center justify-between gap-2 rounded-lg bg-primary/5 p-3">
+                <span className="text-sm font-medium">2 / Review · {profileChoice.name}</span>
+                <Button variant="ghost" size="sm" onClick={() => setEditor("profiles")}>
+                  Change profile
+                </Button>
+              </div>
+            )}
+            {error ? <ErrorPanel error={error} /> : null}
+            <Field
+              label="Media disk budget"
+              hint="Zero means unlimited, not disabled. Choose No persistent media below to turn disk caching off."
+              htmlFor="cache-budget"
+            >
+              <div className="flex items-center gap-2">
+                <NumberInput
+                  id="cache-budget"
+                  min={0}
+                  step={0.25}
+                  value={draft.budgetBytes / (unit === "TiB" ? 1024 * GiB : GiB)}
+                  onChange={(n) =>
+                    patch({ budgetBytes: Math.round(n * (unit === "TiB" ? 1024 * GiB : GiB)) })
+                  }
+                />
+                <select
+                  aria-label="Budget unit"
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value as "GiB" | "TiB")}
+                  className="rounded border border-border bg-surface p-2 text-xs"
+                >
+                  <option>GiB</option>
+                  <option>TiB</option>
+                </select>
+              </div>
+            </Field>
+            {disk.data && (
+              <p className="flex items-center gap-2 text-xs text-fg-muted">
+                <HardDrive size={13} />
+                {formatBytes(disk.data.freeBytes)} currently free
+              </p>
+            )}
+            {disk.data &&
+              enabled &&
+              draft.budgetBytes > 0 &&
+              draft.budgetBytes - used > disk.data.freeBytes && (
+                <p className="rounded-lg bg-warning/10 p-3 text-xs text-warning">
+                  This budget needs more space than is currently free. Choose a smaller budget.
+                </p>
+              )}
+            <div className="border-t border-border pt-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
+                02 / What stays
+              </p>
+              <label className="mt-3 block text-sm font-medium" htmlFor="cache-mode">
+                Retention strategy
+              </label>
+              <select
+                id="cache-mode"
+                value={draft.mode || "demand"}
+                onChange={(e) =>
+                  patch({
+                    mode: e.target.value,
+                    ...(e.target.value === "off" ? { preloadEnabled: false } : {}),
+                  })
+                }
+                className="mt-2 w-full rounded-lg border border-border bg-surface p-2.5 text-sm"
+              >
+                <option value="off">No persistent media</option>
+                <option value="demand">Keep what is streamed</option>
+                <option value="adaptive">Favour repeat watches</option>
+              </select>
+              <p className="mt-2 text-xs leading-relaxed text-fg-muted">
+                {!enabled
+                  ? "New media bytes bypass disk. Unprotected existing bytes are released; playback and pinned bytes remain protected."
+                  : draft.mode === "adaptive"
+                    ? "Repeat plays earn extra time before eviction. Popularity is learned from playback, never from background reads."
+                    : "Keep recently used bytes. The oldest unprotected segments make room first."}
+              </p>
+            </div>
+            <Field
+              label="Expire after inactivity"
+              hint="Days since last cache use. Zero keeps bytes until space is needed."
+              htmlFor="cache-retention"
+            >
+              <NumberInput
+                id="cache-retention"
+                min={0}
+                max={3650}
+                value={draft.retentionDays ?? 0}
+                onChange={(n) => patch({ retentionDays: n })}
+              />
+            </Field>
+            <div className="border-t border-border pt-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
+                03 / Think ahead
+              </p>
+              <Toggle
+                title="Allow opening and resume warming"
+                description="Let Ether fetch small windows before Play. Turn off for strictly on-demand media."
+                checked={speculate}
+                disabled={!enabled}
+                onChange={(v) => patch({ disableSpeculation: !v })}
+              />
+              <Toggle
+                title="Warm detail pages"
+                description="Opening a movie or episode prepares its source and opening bytes. Shows warm their On Deck episode when supported."
+                checked={draft.detailWarmup !== "off"}
+                disabled={!speculate}
+                onChange={(v) => patch({ detailWarmup: v ? "on" : "off" })}
+              />
+              <Toggle
+                title="Prepare the next episode"
+                description="Warm the opening near the end of the current episode."
+                checked={draft.prefetchNextEpisode}
+                disabled={!speculate}
+                onChange={(v) => patch({ prefetchNextEpisode: v })}
+              />
+              <Toggle
+                title="Keep resume points warm"
+                description="Periodically refresh a small window around Continue Watching."
+                checked={draft.keepInProgressWarm}
+                disabled={!speculate}
+                onChange={(v) => patch({ keepInProgressWarm: v })}
+              />
+            </div>
+            <div className="border-t border-border pt-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
+                04 / Your local library
+              </p>
+              <Toggle
+                title="Preload movies & TV"
+                description="Proactively fill a dedicated part of your cache from the local catalogue using your sources and quality rules. This downloads complete movie and episode sources."
+                checked={draft.preloadEnabled ?? false}
+                disabled={!enabled}
+                onChange={(v) =>
+                  patch({
+                    preloadEnabled: v,
+                    ...(v && !draft.preloadBudgetBytes
+                      ? { preloadBudgetBytes: Math.min(draft.budgetBytes || 100 * GiB, 100 * GiB) }
+                      : {}),
+                  })
+                }
+              />
+              {draft.preloadEnabled && (
+                <div className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-3">
+                  <Field
+                    label="Preload allocation (GiB)"
+                    hint="Part of the total budget, not additional storage."
+                    htmlFor="preload-budget"
+                  >
+                    <NumberInput
+                      id="preload-budget"
+                      min={1}
+                      value={(draft.preloadBudgetBytes ?? 0) / GiB}
+                      onChange={(n) => patch({ preloadBudgetBytes: Math.round(n * GiB) })}
+                    />
+                  </Field>
+                  <Field label="Include in your shelf" htmlFor="preload-content">
+                    <select
+                      id="preload-content"
+                      className="w-full rounded border border-border bg-surface p-2 text-sm"
+                      value={draft.preloadContent || "mixed"}
+                      onChange={(e) => patch({ preloadContent: e.target.value })}
+                    >
+                      <option value="mixed">Movies & TV episodes</option>
+                      <option value="movies">Movies only</option>
+                      <option value="tv">TV episodes only</option>
+                    </select>
+                  </Field>
+                  <Field label="Selection strategy" htmlFor="preload-source">
+                    <select
+                      id="preload-source"
+                      className="w-full rounded border border-border bg-surface p-2 text-sm"
+                      value={draft.preloadSource || "smart"}
+                      onChange={(e) => patch({ preloadSource: e.target.value })}
+                    >
+                      <option value="smart">Smart household blend</option>
+                      <option value="popular">Catalogue popularity</option>
+                      <option value="recent">Newest releases</option>
+                    </select>
+                  </Field>
+                  {(!draft.preloadSource || draft.preloadSource === "smart") && (
+                    <div className="space-y-3 rounded-lg border border-primary/20 bg-surface p-3">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <label htmlFor="household-weight" className="font-medium">
+                          Household influence
+                        </label>
+                        <span className="font-mono text-primary">
+                          {draft.preloadHouseholdWeight ?? 65}%
+                        </span>
+                      </div>
+                      <input
+                        id="household-weight"
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={5}
+                        className="w-full accent-primary"
+                        value={draft.preloadHouseholdWeight ?? 65}
+                        onChange={(e) => patch({ preloadHouseholdWeight: Number(e.target.value) })}
+                      />
+                      <div className="flex justify-between text-[10px] text-fg-subtle">
+                        <span>Catalogue discovery</span>
+                        <span>Your household</span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed text-fg-muted">
+                        Recent repeat viewing, shared favourites and genre interests guide the
+                        shelf. Older viewing fades; no history falls back to catalogue popularity.
+                      </p>
+                    </div>
+                  )}
+                  <Field
+                    label="Learn from"
+                    htmlFor="household-scope"
+                    hint="Also determines whose TV progress guides episode selection."
+                  >
+                    <select
+                      id="household-scope"
+                      className="w-full rounded border border-border bg-surface p-2 text-sm"
+                      value={draft.preloadHouseholdScope || "home"}
+                      onChange={(e) => patch({ preloadHouseholdScope: e.target.value })}
+                    >
+                      <option value="home">Owner & Plex Home members</option>
+                      <option value="all">All active shared viewers</option>
+                    </select>
+                  </Field>
+                  {draft.preloadContent !== "movies" && (
+                    <Field
+                      label="Episode window per show"
+                      htmlFor="episode-window"
+                      hint="A rolling shelf around current viewing positions. New shows start at episode one; different viewers share this limit."
+                    >
+                      <NumberInput
+                        id="episode-window"
+                        min={1}
+                        max={24}
+                        value={draft.preloadEpisodesAhead || 3}
+                        onChange={(n) => patch({ preloadEpisodesAhead: n })}
+                      />
+                    </Field>
+                  )}
+                  <p className="text-[11px] text-fg-muted">
+                    Room for roughly {Math.floor((draft.preloadBudgetBytes ?? 0) / (8 * GiB))}{" "}
+                    movie-sized sources at 8 GiB each. Episode sizes vary; both share this
+                    allocation.
+                  </p>
+                </div>
+              )}
+            </div>
+            <Button variant="secondary" className="w-full" onClick={() => setAdvanced(true)}>
+              <Settings2 size={15} /> Fine tune policy <ArrowUpRight size={14} />
+            </Button>
+            <p className="text-[11px] leading-relaxed text-fg-subtle">
+              Live streams and pinned releases can exceed the budget. Expiry never removes protected
+              bytes. This budget covers media segments; artwork, metadata and transcode output use
+              separate storage.
+            </p>
+            <Drawer
+              open={advanced}
+              onClose={() => setAdvanced(false)}
+              title="Fine tune your cache"
+              size="lg"
+            >
+              <div className="space-y-6 p-1">
+                <p className="text-sm text-fg-muted">
+                  Changes join your draft. Save the policy when you’re ready.
+                </p>
+                <Field
+                  label="Household history window (days)"
+                  htmlFor="history-window"
+                  hint="Recent views count more; frequency is capped per viewer. Completed watches and reviewed imports contribute, never preload activity."
+                >
+                  <NumberInput
+                    id="history-window"
+                    min={1}
+                    max={730}
+                    value={draft.preloadHistoryDays || 90}
+                    onChange={(n) => patch({ preloadHistoryDays: n })}
+                  />
+                </Field>
+                <Field
+                  label="Maximum preloaded titles"
+                  hint="Up to 5,000. The allocation still limits how many fit."
+                  htmlFor="preload-count"
+                >
+                  <NumberInput
+                    id="preload-count"
+                    min={1}
+                    max={5000}
+                    value={draft.preloadMaxTitles || 200}
+                    onChange={(n) => patch({ preloadMaxTitles: n })}
+                  />
+                </Field>
+                <Field
+                  label="Preload speed (MiB/s)"
+                  hint="Average payload cap, with short bursts for each 16 MiB window. Zero removes the cap."
+                  htmlFor="preload-rate"
+                >
+                  <NumberInput
+                    id="preload-rate"
+                    min={0}
+                    max={10000}
+                    value={draft.preloadRateMiB ?? 0}
+                    onChange={(n) => patch({ preloadRateMiB: n })}
+                  />
+                </Field>
+                <Field
+                  label="Keep disk space free (GiB)"
+                  hint="Preloading waits below this reserve. Zero uses the 5 GiB default."
+                  htmlFor="preload-reserve"
+                >
+                  <NumberInput
+                    id="preload-reserve"
+                    min={0}
+                    value={(draft.preloadMinFreeBytes ?? 5 * GiB) / GiB}
+                    onChange={(n) => patch({ preloadMinFreeBytes: Math.round(n * GiB) })}
+                  />
+                </Field>
+                <Toggle
+                  title="Preload during playback"
+                  description="Otherwise, complete-title filling waits while viewers are streaming. Opening and next-episode warming use their separate controls."
+                  checked={draft.preloadDuringPlayback ?? false}
+                  onChange={(v) => patch({ preloadDuringPlayback: v })}
+                />
+                <Field
+                  label="Opening window (MiB)"
+                  hint="2–64 MiB for detail pages. Larger windows use more bandwidth; startup still depends on the source and client."
+                  htmlFor="cache-opening"
+                >
+                  <NumberInput
+                    id="cache-opening"
+                    min={2}
+                    max={64}
+                    value={(draft.detailBytes || 2 * MiB) / MiB}
+                    onChange={(n) => patch({ detailBytes: Math.round(n * MiB) })}
+                  />
+                </Field>
+                <Field label="Next episode / resume window (MiB)" htmlFor="cache-prefetch">
+                  <NumberInput
+                    id="cache-prefetch"
+                    min={1}
+                    value={draft.prefetchBytes / MiB}
+                    onChange={(n) => patch({ prefetchBytes: Math.round(n * MiB) })}
+                  />
+                </Field>
+                <Field label="Prepare next episode at (%)" htmlFor="cache-trigger">
+                  <NumberInput
+                    id="cache-trigger"
+                    min={1}
+                    max={99}
+                    value={Math.round(draft.nextEpisodeAt * 100)}
+                    onChange={(n) => patch({ nextEpisodeAt: n / 100 })}
+                  />
+                </Field>
+                <Field
+                  label="Replay credit (hours per repeat play)"
+                  hint="Adaptive mode gives up to eight repeat plays a recency credit. It never overrides expiry or pins. Credit fades out after 30 days without a play."
+                  htmlFor="cache-boost"
+                >
+                  <NumberInput
+                    id="cache-boost"
+                    min={0}
+                    max={720}
+                    value={draft.replayBoostHours ?? 0}
+                    onChange={(n) => patch({ replayBoostHours: n })}
+                  />
+                </Field>
+                <Field
+                  label="Resume protection share (%)"
+                  hint="Maximum share of the budget assigned to in-progress releases. The most recently watched are considered first."
+                  htmlFor="cache-share"
+                >
+                  <NumberInput
+                    id="cache-share"
+                    min={1}
+                    max={100}
+                    value={draft.inProgressPinPercent || 50}
+                    onChange={(n) => patch({ inProgressPinPercent: n })}
+                  />
+                </Field>
+                <Field
+                  label="Resume protection age"
+                  hint="A duration such as 720h (30 days). Abandoned titles lose their resume pin after this interval."
+                  htmlFor="cache-age"
+                >
+                  <Input
+                    id="cache-age"
+                    value={draft.inProgressPinMaxAge || "720h"}
+                    onChange={(e) => patch({ inProgressPinMaxAge: e.target.value })}
+                  />
+                </Field>
+                <Field
+                  label="Cache directory"
+                  hint="Changing the folder requires a server restart. Existing bytes are not moved. The live overview shows the active folder."
+                  htmlFor="cache-dir"
+                >
+                  <Input
+                    id="cache-dir"
+                    value={draft.dir}
+                    onChange={(e) => patch({ dir: e.target.value })}
+                  />
+                </Field>
+                <p className="text-xs leading-relaxed text-fg-muted">
+                  Detail warming is rate limited and pauses during active playback. Trailer and
+                  post-play warming also require background warming here and their own feature
+                  settings.
+                </p>
+                <Button onClick={() => setAdvanced(false)}>Done</Button>
+              </div>
+            </Drawer>
+          </div>
+        )}
+      </Drawer>
+      <Drawer
+        open={selectionOpen}
+        onClose={() => setSelectionOpen(false)}
+        title="Selection details"
+        size="lg"
+      >
+        <section className="overflow-hidden rounded-xl border border-border bg-surface">
+          <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+            <div>
+              <h2 className="flex items-center gap-2 text-sm font-semibold">
+                <Sparkles size={16} className="text-primary" /> Why these titles?
+              </h2>
+              <p className="mt-1 text-xs text-fg-muted">
+                Highest-ranked selections from the last pass · {snap?.preload.viewers ?? 0} active
+                viewers considered
+              </p>
+            </div>
+            <Badge>Explainable selection</Badge>
+          </div>
+          {snap?.preload.selection?.length ? (
+            <div className="divide-y divide-border">
+              {snap.preload.selection.slice(0, 6).map((item, i) => (
+                <div key={item.key} className="flex items-start gap-3 p-4">
+                  <span className="mt-0.5 w-5 shrink-0 font-mono text-xs text-fg-subtle">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-sm font-medium">{item.title}</span>
+                      <span className="shrink-0 text-[10px] uppercase text-fg-subtle">
+                        {item.type === "episode" ? "TV" : "Film"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-fg-muted">{item.reason}</p>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-fg-subtle">
+                      <span>Catalogue {Math.round(item.catalogue)}/100</span>
+                      <span>Household {Math.round(item.household)}/100</span>
+                    </div>
+                  </div>
+                  <span
+                    className="shrink-0 rounded-md bg-primary/10 px-2 py-1 font-mono text-xs text-primary"
+                    aria-label={`Selection score ${Math.round(item.score)} out of 100`}
+                  >
+                    {Math.round(item.score)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="p-4 text-sm leading-relaxed text-fg-muted">
+              Enable preloading and save to build your first selection. Movies blend discovery with
+              household favourites; TV keeps a rolling window of episodes ready. Scores appear after
+              the next selection pass.
+            </p>
+          )}
+          <p className="border-t border-border px-4 py-3 text-[10px] text-fg-subtle">
+            Scores rank cache candidates, not predicted viewing probabilities. TV windows taper by
+            episode distance. Selection does not guarantee source availability.
+          </p>
+        </section>
+      </Drawer>
+    </Workspace>
   );
 }
