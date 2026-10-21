@@ -66,8 +66,10 @@ func TestIntegrationMatroskaCopyRampNeverReplaysEarlierKeyframes(t *testing.T) {
 	if err := json.Unmarshal(out, &frames); err != nil {
 		t.Fatal(err)
 	}
-	if len(frames.Frames) < 500 {
-		t.Fatalf("only decoded %d frames across three GOPs", len(frames.Frames))
+	// Three 4s segments of 24fps video: segments hold what the playlist
+	// says (a copy cut by time), not ffmpeg's 8s keyframe-bound cuts.
+	if len(frames.Frames) < 3*4*24-2 {
+		t.Fatalf("only decoded %d frames across three segments", len(frames.Frames))
 	}
 	last := -1.0
 	for _, frame := range frames.Frames {

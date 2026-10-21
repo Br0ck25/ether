@@ -1,6 +1,7 @@
 package transcode
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -45,6 +46,11 @@ type fakeRunner struct {
 
 	// DASH simulation: the input ends at this media time (0 = never).
 	dashEnd time.Duration
+
+	// Chunked HLS simulation (keyframe-planned sessions): source keyframe
+	// interval (default 2.5s) and end of input (0 = never).
+	chunkGOP time.Duration
+	chunkEnd time.Duration
 }
 
 func newFakeRunner() *fakeRunner {
@@ -195,6 +201,8 @@ func (f *fakeRunner) Start(cmd Command) (Process, error) {
 	}
 	if argValue(cmd.Args, "-f") == "dash" {
 		go p.simulateDASH(cmd, f.segDelay, f.dashEnd, f.failAfter, fail, stderr)
+	} else if fakeChunked(cmd.Args) {
+		go p.simulateChunks(cmd, f.segDelay, f.chunkGOP, f.chunkEnd, f.lastSeg, f.failAfter, fail, stderr)
 	} else {
 		go p.simulate(cmd, f.segDelay, f.lastSeg, f.failAfter, fail, stderr)
 	}
@@ -353,6 +361,164 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 			fmt.Fprintf(cmd.Stdout, "frame=%d\nout_time_us=%d\nspeed=4.0x\nprogress=continue\n", n*96, n*4000000)
 		}
 	}
+}
+
+// fakeChunked reports whether a run's args write chunks (chunks.go).
+func fakeChunked(args []string) bool {
+	pat := argValue(args, "-hls_segment_filename")
+	if argValue(args, "-segment_format") == "matroska" {
+		pat = args[len(args)-1]
+	}
+	return strings.HasPrefix(filepath.Base(filepath.Dir(pat)), "c-")
+}
+
+// fakeChunkSeg is the fake source's default keyframe interval: one 4s
+// segment, so legacy tests see the segment numbers they expect.
+const fakeChunkSeg = 4 * time.Second
+
+// simulateChunks writes a chunked HLS run like ffmpeg's segmenters with a
+// tiny segment length (chunks.go): each chunk is a GOP of the given length
+// (default fakeChunkSeg) from the keyframe at or before -ss (a remux
+// restart reads the keyframe interval before its seek point). The input ends
+// at end (or after legacy segment lastSeg); failAfter fails the run after
+// that many chunks. Chunks carry real timestamps (MPEG-TS PTS, fMP4 tfdt,
+// Matroska Cluster) and a text marker "segment N args-ss=... input=...".
+func (p *fakeProc) simulateChunks(cmd Command, delay, gop, end time.Duration, lastSeg, failAfter int, failStart bool, stderr string) {
+	defer close(p.done)
+	args := cmd.Args
+	playlist := args[len(args)-1]
+	pattern := argValue(args, "-hls_segment_filename")
+	init := ""
+	if v := argValue(args, "-hls_fmp4_init_filename"); v != "" {
+		init = filepath.Join(filepath.Dir(playlist), v)
+	}
+	mkv := argValue(args, "-segment_format") == "matroska"
+	if mkv {
+		pattern, playlist = playlist, argValue(args, "-segment_list")
+		init = argValue(args, "-segment_header_filename")
+	}
+	if failStart {
+		if cmd.Stderr != nil {
+			_, _ = io.WriteString(cmd.Stderr, stderr+"\n")
+		}
+		p.err = errors.New("exit status 1")
+		return
+	}
+	if init != "" {
+		_ = os.WriteFile(init, testVideoInit(1280, 720), 0o644)
+	}
+	ssf, _ := strconv.ParseFloat(argValue(args, "-ss"), 64)
+	ss := time.Duration(math.Round(ssf*1000)) * time.Millisecond
+	if gop <= 0 {
+		gop = fakeChunkSeg
+	}
+	t := ss / gop * gop
+	if t == ss && t > 0 {
+		t -= gop // ffmpeg's seek lands on the keyframe before
+	}
+	if end <= 0 && lastSeg >= 0 {
+		end = time.Duration(lastSeg+1) * fakeChunkSeg
+	}
+	var list strings.Builder
+	list.WriteString("#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n")
+	for n := 0; ; n++ {
+		if end > 0 && t >= end {
+			list.WriteString("#EXT-X-ENDLIST\n")
+			_ = os.WriteFile(playlist, []byte(list.String()), 0o644)
+			return
+		}
+		if failAfter > 0 && n >= failAfter {
+			if cmd.Stderr != nil {
+				_, _ = io.WriteString(cmd.Stderr, "http: Stream ends prematurely\n")
+			}
+			p.err = errors.New("exit status 1")
+			return
+		}
+		p.mu.Lock()
+		resumed := p.resumed
+		p.mu.Unlock()
+		select {
+		case <-p.kill:
+			p.err = errors.New("signal: killed")
+			return
+		case <-resumed:
+		}
+		select {
+		case <-p.kill:
+			p.err = errors.New("signal: killed")
+			return
+		case <-time.After(delay):
+		}
+		d := gop
+		if end > 0 && t+d > end {
+			d = end - t
+		}
+		name := fmt.Sprintf(pattern, n)
+		marker := fmt.Sprintf("segment %d args-ss=%s input=%s t=%.3f", int(t/fakeChunkSeg), argValue(args, "-ss"), argValue(args, "-i"), t.Seconds())
+		var b []byte
+		switch {
+		case mkv:
+			b = testMKVChunk(t, marker)
+		case strings.HasSuffix(name, ".m4s"):
+			b = testChunk(uint32(n+1), int64(t*90000/time.Second), 3750, int(d*24/time.Second), []byte(marker))
+		default:
+			b = testTSChunk(t, marker)
+		}
+		_ = os.WriteFile(name+".tmp", b, 0o644)
+		_ = os.Rename(name+".tmp", name)
+		fmt.Fprintf(&list, "#EXTINF:%.6f,\n%s\n", d.Seconds(), filepath.Base(name))
+		_ = os.WriteFile(playlist+".tmp", []byte(list.String()), 0o644)
+		_ = os.Rename(playlist+".tmp", playlist)
+		if cmd.Stdout != nil {
+			fmt.Fprintf(cmd.Stdout, "frame=%d\nout_time_us=%d\nspeed=4.0x\nprogress=continue\n", n*96, t.Microseconds())
+		}
+		t += d
+	}
+}
+
+// testMKVChunk is a Matroska Cluster with the Timestamp the segmented
+// Matroska output gives media time t, and a text marker.
+func testMKVChunk(t time.Duration, marker string) []byte {
+	ms := uint64((t + matroskaOrigin) / time.Millisecond)
+	ts := []byte{0xE7, 0x88}
+	for i := 7; i >= 0; i-- {
+		ts = append(ts, byte(ms>>(8*i)))
+	}
+	block := append([]byte{0xA3, 0x40 | byte(len(marker)>>8), byte(len(marker))}, marker...)
+	body := append(ts, block...)
+	return append([]byte{0x1F, 0x43, 0xB6, 0x75, 0x40 | byte(len(body)>>8), byte(len(body))}, body...)
+}
+
+// testTSChunk is one MPEG-TS packet: a video PES with the PTS ffmpeg's
+// muxer would write for media time t, and a text marker as its payload.
+func testTSChunk(t time.Duration, marker string) []byte {
+	pkt := make([]byte, 188)
+	pkt[0], pkt[1], pkt[2], pkt[3] = 0x47, 0x41, 0x00, 0x10 // PUSI, PID 0x100, payload only
+	pts := uint64((t + tsMuxDelay) * 90000 / time.Second)
+	pes := []byte{0, 0, 1, 0xE0, 0, 0, 0x80, 0x80, 5,
+		byte(0x21 | (pts>>29)&0x0E), byte(pts >> 22), byte((pts>>14)&0xFE | 1), byte(pts >> 7), byte((pts<<1)&0xFE | 1)}
+	n := copy(pkt[4:], pes)
+	copy(pkt[4+n:], marker)
+	return pkt
+}
+
+// segText is a fake segment's text: its chunks' markers joined by "|"
+// (chunked runs), or the legacy whole-segment payload.
+func segText(b []byte) string {
+	if len(b) >= 188 && len(b)%188 == 0 && b[0] == 0x47 {
+		return strings.Join(tsChunkMarkers(b), "|")
+	}
+	return string(b)
+}
+
+// tsChunkMarkers lists the markers of a fake chunked segment's packets.
+func tsChunkMarkers(b []byte) []string {
+	var out []string
+	for off := 0; off+188 <= len(b); off += 188 {
+		m := string(bytes.TrimRight(b[off+18:off+188], "\x00"))
+		out = append(out, m)
+	}
+	return out
 }
 
 // simulateDASH writes chunks like ffmpeg's dash muxer: init-<rep>.m4s

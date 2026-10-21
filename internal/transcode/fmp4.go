@@ -116,6 +116,41 @@ func parseInit(b []byte) (trackInit, error) {
 	if !ok {
 		return ti, errors.New("fmp4: init segment has no track")
 	}
+	return parseTrak(b, moov, trak)
+}
+
+// parseInitTracks reads every track of an init segment (an HLS fMP4 init
+// carries video and audio in one moov).
+func parseInitTracks(b []byte) ([]trackInit, error) {
+	top, err := readBoxes(b, 0, len(b))
+	if err != nil && len(top) == 0 {
+		return nil, err
+	}
+	var out []trackInit
+	for _, x := range top {
+		if x.typ != "moov" {
+			continue
+		}
+		kids, _ := readBoxes(b, x.start+x.hdr, x.end)
+		for _, k := range kids {
+			if k.typ != "trak" {
+				continue
+			}
+			if ti, err := parseTrak(b, x, k); err == nil {
+				out = append(out, ti)
+			}
+		}
+		break
+	}
+	if len(out) == 0 {
+		return nil, errors.New("fmp4: init segment has no readable track")
+	}
+	return out, nil
+}
+
+// parseTrak describes one trak box of a moov.
+func parseTrak(b []byte, moov, trak mp4Box) (trackInit, error) {
+	var ti trackInit
 	if tkhd, ok := child(b, trak, "tkhd"); ok {
 		p := tkhd.payload(b)
 		if len(p) >= 24 {

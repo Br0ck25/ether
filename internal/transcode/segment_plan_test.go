@@ -144,11 +144,11 @@ func TestFastStartCopySessionSwitchesToCopy(t *testing.T) {
 	// The chain at the mode boundary starts the copy run at segment 2.
 	waitFor(t, "copy run chained", func() bool { return fr.startCount() >= 2 })
 	second := fr.lastStart()
-	mustContain(t, second, "-c:v copy", "-start_number 2", "-hls_time 4.000")
+	mustContain(t, second, "-c:v copy", "-hls_time 0.500", "-start_number 0")
 	if got := argValue(second, "-ss"); got != "4.000" {
 		t.Errorf("copy run -ss = %q, want segment 2 start 4.000", got)
 	}
-	if r := get(t, s, 2); r.Code != 200 || !strings.HasPrefix(r.Body.String(), "segment 2") {
+	if r := get(t, s, 2); r.Code != 200 || !strings.Contains(segText(r.Body.Bytes()), "args-ss=4.000") {
 		t.Fatalf("segment 2: %d %q", r.Code, r.Body.String())
 	}
 }
@@ -195,7 +195,7 @@ func TestFastStartSwapInputKeepsPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := fr.lastStart()
-	if argValue(last, "-start_number") != "11" || argValue(last, "-ss") != "40.000" {
+	if argValue(last, "-ss") != "40.000" {
 		t.Errorf("swap args ss=%v start=%v", argValue(last, "-ss"), argValue(last, "-start_number"))
 	}
 	if r := get(t, s, 11); r.Code != 200 || !strings.Contains(r.Body.String(), "input=http://127.0.0.1:1/source/b") {

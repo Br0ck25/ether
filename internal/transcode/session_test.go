@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -87,13 +86,13 @@ func TestSessionServesPlaylistAndSegments(t *testing.T) {
 	}
 
 	r := get(t, s, 0)
-	if r.Code != 200 || !strings.HasPrefix(r.Body.String(), "segment 0") {
+	if r.Code != 200 || !strings.HasPrefix(segText(r.Body.Bytes()), "segment 0") {
 		t.Fatalf("segment 0: %d %q", r.Code, r.Body.String())
 	}
 	if ct := r.Header().Get("Content-Type"); ct != "video/mp2t" {
 		t.Errorf("segment content type %q", ct)
 	}
-	if r := get(t, s, 2); r.Code != 200 || !strings.HasPrefix(r.Body.String(), "segment 2") {
+	if r := get(t, s, 2); r.Code != 200 || !strings.HasPrefix(segText(r.Body.Bytes()), "segment 2") {
 		t.Fatalf("segment 2: %d %q", r.Code, r.Body.String())
 	}
 	if fr.startCount() != 1 {
@@ -167,7 +166,7 @@ func TestSessionSeekRestarts(t *testing.T) {
 		t.Error("old ffmpeg not killed on seek")
 	}
 	last := fr.lastStart()
-	if argValue(last, "-start_number") != "100" || argValue(last, "-ss") != "400.000" {
+	if argValue(last, "-ss") != "400.000" {
 		t.Errorf("restart args: %v", last)
 	}
 	// Just ahead of the encoder: wait, no restart.
@@ -208,8 +207,10 @@ func TestSessionStartOffset(t *testing.T) {
 	if n := strings.Count(rec.Body.String(), "#EXTINF:6.000000"); n != 50 {
 		t.Errorf("segments = %d, want 50", n)
 	}
-	if argValue(fr.lastStart(), "-hls_time") != "6.000" {
-		t.Errorf("hls_time %v", fr.lastStart())
+	// A copy without a keyframe index is cut at every keyframe and
+	// regrouped onto the playlist.
+	if argValue(fr.lastStart(), "-hls_time") != "0.500" || argValue(fr.lastStart(), "-start_number") != "0" {
+		t.Errorf("chunked copy args %v", fr.lastStart())
 	}
 }
 
@@ -314,7 +315,7 @@ func TestSessionSwapInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	last := fr.lastStart()
-	if argValue(last, "-i") != "http://127.0.0.1:1/source/b" || argValue(last, "-start_number") != "10" || argValue(last, "-ss") != "40.000" {
+	if argValue(last, "-i") != "http://127.0.0.1:1/source/b" || argValue(last, "-ss") != "40.000" {
 		t.Errorf("swap args: %v", last)
 	}
 	r := get(t, s, 10)
@@ -371,7 +372,7 @@ func TestSessionFMP4Init(t *testing.T) {
 		t.Fatalf("container %s", s.Container())
 	}
 	r := get(t, s, InitSegment)
-	if r.Code != 200 || r.Body.String() != "init" || r.Header().Get("Content-Type") != "video/mp4" {
+	if r.Code != 200 || r.Body.String() != string(testVideoInit(1280, 720)) || r.Header().Get("Content-Type") != "video/mp4" {
 		t.Fatalf("init: %d %q", r.Code, r.Body.String())
 	}
 	if r := get(t, s, 1); r.Code != 200 {
@@ -566,8 +567,8 @@ func TestThrottleStopsWhenPauseUnsupported(t *testing.T) {
 		t.Fatal(r.Code)
 	}
 	waitFor(t, "restart", func() bool { return fr.startCount() == 2 })
-	if got := argValue(fr.lastStart(), "-start_number"); got != strconv.Itoa(resumeAt) {
-		t.Errorf("restarted at %s, want %d", got, resumeAt)
+	if got, want := argValue(fr.lastStart(), "-ss"), secs(time.Duration(resumeAt)*4*time.Second); got != want {
+		t.Errorf("restarted at %s, want segment %d at %s", got, resumeAt, want)
 	}
 	if r := get(t, s, resumeAt+1); r.Code != 200 {
 		t.Fatal(r.Code)

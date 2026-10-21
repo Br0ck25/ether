@@ -100,7 +100,12 @@ func (m *Manager) ProbeLiveWithHeaders(ctx context.Context, input string, header
 	if err != nil {
 		return nil, err
 	}
-	info, err := probeMode(ctx, probeHeaderRunner{Runner: m.runner, headers: normalized}, m.ffprobe, input, true)
+	secrets := make([]string, 0, len(normalized))
+	for _, v := range normalized {
+		secrets = append(secrets, v)
+	}
+	r := redactingRunner{Runner: probeHeaderRunner{Runner: m.runner, headers: normalized}, input: input, secrets: secrets}
+	info, err := probeMode(ctx, r, m.ffprobe, input, true)
 	if err != nil && ctx.Err() == nil {
 		message := strings.ReplaceAll(err.Error(), input, "[source]")
 		for _, value := range normalized {

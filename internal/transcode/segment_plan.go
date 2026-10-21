@@ -19,10 +19,16 @@ import (
 //   - Boundaries are exact for transcoded output (keyframes are forced at
 //     them). For a copy (remux) stream ffmpeg can only cut at source
 //     keyframes, so when MediaInfo.Keyframes is known the timeline is built
-//     FROM those keyframes (each nominal boundary snaps to the next
-//     keyframe) and every rung inherits them; without a keyframe index the
-//     boundaries are nominal and a copy segment may really start at the
-//     next keyframe, exactly as before this abstraction existed.
+//     FROM those keyframes (each nominal boundary moves to the first
+//     keyframe at or after it, up to a few segments away; a fast-start ramp
+//     lasts until a keyframe) and every rung inherits them.
+//     ffmpeg's own segmenters cannot reproduce such a plan (they cut at the
+//     first keyframe past start+k*hls_time, k counting cuts made, and a
+//     restart resets k), so runs of a keyframe-planned session cut at every
+//     keyframe and the session regroups those chunks by timestamp
+//     (chunks.go). Without a keyframe index the boundaries are nominal and
+//     a copy segment may really start at the next keyframe, exactly as
+//     before this abstraction existed.
 //   - The spike governor may re-plan segments the player has not requested
 //     yet (copy -> clamped transcode). That is only visible to clients that
 //     reload the media playlist, so governed sessions serve an EVENT
@@ -100,7 +106,13 @@ type Timeline struct {
 	SwitchSeg int
 	// clamps holds governor-planned clamp bitrates (kbps) per segment.
 	clamps map[int]int
+	// keyframed: the boundaries were placed on source keyframes, so runs
+	// must be regrouped by timestamp to match them (see chunks.go).
+	keyframed bool
 }
+
+// Keyframed reports whether the boundaries come from a keyframe index.
+func (tl *Timeline) Keyframed() bool { return tl != nil && tl.keyframed }
 
 type timelineOptions struct {
 	steadyMode SegMode
@@ -148,10 +160,21 @@ func buildTimeline(span, steady time.Duration, o timelineOptions) *Timeline {
 			}
 		}
 		sort.Slice(kfs, func(i, j int) bool { return kfs[i] < kfs[j] })
+		tl.keyframed = len(kfs) > 0
 	}
-	switchAt := 0 // first segment produced in steady mode
-	if tl.rampSegs > 0 {
-		switchAt = tl.rampSegs
+	// A copy stream after a fast-start ramp can only begin at a keyframe:
+	// the ramp keeps its short segments up to the first keyframe at or
+	// after its nominal end (the last one absorbing a short remainder).
+	rampEnd := time.Duration(-1)
+	if len(kfs) > 0 && tl.rampSegs > 0 {
+		nominal := time.Duration(tl.rampSegs) * tl.rampDur
+		if k := snapBoundary(kfs, nominal, steady, span); k > nominal && k < span {
+			n := int(k / tl.rampDur)
+			if k-time.Duration(n)*tl.rampDur >= tl.rampDur/2 {
+				n++
+			}
+			tl.rampSegs, rampEnd = max(n, tl.rampSegs), k
+		}
 	}
 	bounds := []time.Duration{0}
 	for i := 0; bounds[len(bounds)-1] < span; i++ {
@@ -161,12 +184,13 @@ func buildTimeline(span, steady time.Duration, o timelineOptions) *Timeline {
 			dur = tl.rampDur
 		}
 		next := last + dur
-		// Snap boundaries a copy stream must cut at: every boundary of a
-		// pure copy timeline, and the ramp->copy switch onward.
-		if len(kfs) > 0 && i >= switchAt-1 && next < span {
-			if sn, ok := snapBoundary(kfs, next, last, steady); ok {
-				next = sn
-			}
+		switch {
+		case i == tl.rampSegs-1 && rampEnd > 0:
+			next = rampEnd
+		case len(kfs) > 0 && i >= tl.rampSegs-1 && next < span:
+			// Snap boundaries a copy stream must cut at: every boundary of
+			// a pure copy timeline, and the ramp->copy switch onward.
+			next = snapBoundary(kfs, next, steady, span)
 		}
 		if next >= span || span-next < steady/4 {
 			next = span
@@ -189,19 +213,32 @@ func buildTimeline(span, steady time.Duration, o timelineOptions) *Timeline {
 	return tl
 }
 
-// snapBoundary moves a nominal boundary to the first keyframe at or after
-// it, when that keeps the segment sane (at least 200ms of new media, at
-// most one steady segment of drift).
-func snapBoundary(kfs []time.Duration, next, last, steady time.Duration) (time.Duration, bool) {
+// snapDriftSegments bounds how far past a nominal boundary (in steady
+// segments) snapBoundary looks for an indexed keyframe. A longer gap is
+// more likely an index that lists only some keyframes, or stops early,
+// than a GOP that long: the nominal boundary is kept and chunk regrouping
+// cuts at the source's real keyframe nearest after it.
+const snapDriftSegments = 3
+
+// snapBoundary moves a nominal boundary to the first indexed keyframe at
+// or after it. Unlike ffmpeg's segmenters it does not give up on a
+// keyframe more than a segment away: a copy stream cannot cut anywhere
+// else, and a boundary between keyframes advertises a segment no run
+// makes. Past the last indexed keyframe the rest of the span is one
+// segment when it is short (the source's last GOP), nominal otherwise.
+func snapBoundary(kfs []time.Duration, next, steady, span time.Duration) time.Duration {
+	limit := snapDriftSegments * steady
 	i := sort.Search(len(kfs), func(i int) bool { return kfs[i] >= next })
 	if i >= len(kfs) {
-		return 0, false
+		if len(kfs) > 0 && span-kfs[len(kfs)-1] <= limit {
+			return span
+		}
+		return next
 	}
-	sn := kfs[i]
-	if sn-last < 200*time.Millisecond || sn-next > steady {
-		return 0, false
+	if kfs[i]-next > limit {
+		return next
 	}
-	return sn, true
+	return kfs[i]
 }
 
 // Total is the number of segments; 0 when the duration is unknown.
@@ -394,7 +431,7 @@ func fastStartDecision(d core.Decision, info core.MediaInfo, a adaptiveSettings)
 	if info.BitrateKbps > 0 && info.BitrateKbps < out.BitrateKbps {
 		out.BitrateKbps = info.BitrateKbps
 	}
-	if v != nil && isHDR(v) && codec == "h264" {
+	if v != nil && encodedRange(v) != rangeSDR && codec == "h264" {
 		out.ToneMap = true
 	}
 	out.Reason = d.Reason + "; fast-start ramp encode"
@@ -420,7 +457,7 @@ func clampDecision(d core.Decision, info core.MediaInfo, kbps int) core.Decision
 		kbps = 300
 	}
 	out.BitrateKbps = kbps
-	if v != nil && isHDR(v) && out.VideoCodec == "h264" {
+	if v != nil && encodedRange(v) != rangeSDR && out.VideoCodec == "h264" {
 		out.ToneMap = true
 	}
 	out.Reason = d.Reason + "; VBR spike clamp"

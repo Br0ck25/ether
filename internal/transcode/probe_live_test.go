@@ -31,3 +31,39 @@ func TestLiveProbeStillRetriesMissingCodecParameters(t *testing.T) {
 		t.Fatalf("incomplete audio was accepted: info=%+v err=%v calls=%d", info, err, len(fr.probeCalls))
 	}
 }
+
+// ffprobe's stderr names the live URL, which can carry account
+// credentials. The error keeps only the tail of stderr; redaction must
+// happen before that cut, or a URL split by it survives.
+func TestLiveProbeErrorsNeverCarryCredentials(t *testing.T) {
+	const input = "http://provider.invalid/live/user/SECRETPASS/123.ts"
+	const header = "Bearer SECRETTOKEN"
+	for _, headers := range []map[string]string{nil, {"Authorization": header}} {
+		fr := newFakeRunner()
+		fr.runFunc = func(ctx context.Context, cmd Command) error {
+			// Long enough that the 400-byte tail starts inside the URL.
+			h := strings.Repeat("h", len(header))
+			if headers != nil {
+				h = header
+			}
+			msg := strings.Repeat("x", 1000) + " " + input + " " + h + " " + strings.Repeat("y", 320) + ": Server returned 403 Forbidden"
+			_, _ = cmd.Stderr.Write([]byte(msg))
+			return context.DeadlineExceeded
+		}
+		m := &Manager{runner: fr, ffprobe: "ffprobe"}
+		var err error
+		if headers == nil {
+			_, err = m.ProbeLive(context.Background(), input)
+		} else {
+			_, err = m.ProbeLiveWithHeaders(context.Background(), input, headers)
+		}
+		if err == nil {
+			t.Fatal("no error")
+		}
+		for _, secret := range []string{"SECRETPASS", "SECRETTOKEN", "/123.ts"} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("headers %v: error carries %q: %v", headers, secret, err)
+			}
+		}
+	}
+}

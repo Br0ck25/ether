@@ -61,7 +61,7 @@ func rungCodecs(info core.MediaInfo, d core.Decision, outHeight int) string {
 			codec = "h264"
 		}
 		profile, depth = "", 8
-		if codec == "hevc" && isHDR(v) && !d.ToneMap {
+		if codec == "hevc" && keepsHDR(v) && !d.ToneMap {
 			depth = 10
 		}
 	}
@@ -83,25 +83,14 @@ func rungCodecs(info core.MediaInfo, d core.Decision, outHeight int) string {
 	return c
 }
 
-// decisionTotalKbps is a decision's total (video+audio) average bitrate.
+// decisionTotalKbps is a decision's total (video+audio) average bitrate:
+// what the stream carries, not the source file (which may hold more audio
+// tracks, or audio the decision re-encodes).
 func decisionTotalKbps(info core.MediaInfo, d core.Decision) int {
-	audio := 0
-	if a := findStream(info, d.AudioStream, "audio"); a != nil {
-		if d.AudioCopy {
-			audio = copiedAudioKbps(a)
-		} else {
-			audio = audioBitrateKbps(d.AudioCodec, outputChannels(d.AudioCodec, a))
-		}
-	}
+	audio := decisionAudioKbps(info, d)
 	v := info.Video()
 	if d.VideoCopy {
-		if info.BitrateKbps > 0 {
-			return info.BitrateKbps
-		}
-		video := 0
-		if v != nil {
-			video = v.BitrateKbps
-		}
+		video := sourceVideoKbps(info, v, nil)
 		if video <= 0 && v != nil {
 			video = bitrateCeiling(v.Height, v.Codec)
 		}
@@ -112,6 +101,22 @@ func decisionTotalKbps(info core.MediaInfo, d core.Decision) int {
 	}
 	return videoBitrate(info, d) + audio
 }
+
+// decisionAudioKbps is the bitrate of a decision's audio output.
+func decisionAudioKbps(info core.MediaInfo, d core.Decision) int {
+	a := findStream(info, d.AudioStream, "audio")
+	switch {
+	case a == nil:
+		return 0
+	case d.AudioCopy:
+		return copiedAudioKbps(a)
+	default:
+		return audioBitrateKbps(d.AudioCodec, outputChannels(d.AudioCodec, a))
+	}
+}
+
+// minRungVideoKbps is the floor videoBitrate gives an encode's video.
+const minRungVideoKbps = 200
 
 // buildRungs plans a session's ladder from its primary decision. Rungs at
 // or above the primary's output height or average bitrate are omitted, so
@@ -143,23 +148,29 @@ func buildRungs(info core.MediaInfo, primary core.Decision, adapt adaptiveSettin
 	if !adapt.Ladder || v == nil {
 		return rungs
 	}
+	audio := decisionAudioKbps(info, primary) // rungs carry the primary's audio
+	below := avg
 	for _, step := range ladderSteps {
 		if ph > 0 && step.height >= ph {
 			continue
 		}
-		if avg > 0 && step.kbps >= avg {
+		// Advertise what the rung really sends: its video never drops
+		// below the encoder floor, so copied lossless or surround audio can
+		// make a "lower" rung no cheaper than the one above it.
+		total := max(step.kbps, minRungVideoKbps+audio)
+		if below > 0 && total >= below {
 			continue
 		}
 		d := primary
 		d.Kind = core.DecisionTranscode
 		d.VideoCopy = false
 		d.MaxHeight = step.height
-		d.BitrateKbps = step.kbps
+		d.BitrateKbps = total
 		// Keep HDR only when the primary keeps it in HEVC; otherwise the
 		// cheap, universally decoded SDR H.264 encode.
 		d.VideoCodec = "h264"
-		d.ToneMap = primary.ToneMap || isHDR(v)
-		if isHDR(v) && !primary.ToneMap && (primary.VideoCodec == "hevc" || (primary.VideoCopy && v.Codec == "hevc")) {
+		d.ToneMap = primary.ToneMap || encodedRange(v) != rangeSDR
+		if keepsHDR(v) && !primary.ToneMap && (primary.VideoCodec == "hevc" || (primary.VideoCopy && v.Codec == "hevc")) {
 			d.VideoCodec = "hevc"
 			d.ToneMap = false
 		}
@@ -167,9 +178,10 @@ func buildRungs(info core.MediaInfo, primary core.Decision, adapt adaptiveSettin
 		w, h := outputSize(v.Width, v.Height, step.height)
 		rungs = append(rungs, rung{
 			id: step.id, decision: d, width: w, height: h,
-			avgKbps: step.kbps, peakKbps: peakKbps(step.kbps),
+			avgKbps: total, peakKbps: peakKbps(total),
 			videoCodec: d.VideoCodec, codecs: rungCodecs(info, d, h),
 		})
+		below = total
 	}
 	return rungs
 }
