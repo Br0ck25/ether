@@ -41,8 +41,8 @@ func TestIntegrationMatroskaFailoverKeepsOpenDecoder(t *testing.T) {
 		{"h264-copy", x264(), x264("-bf", "0", "-profile:v", "baseline"), false, true},
 		// A replacement that cannot be copied is re-encoded to the stream's codec.
 		{"hevc-x265", hdr10x265("ctu=64:open-gop=0"), x264(), false, false},
-		{"hevc-videotoolbox", hdr10x265("ctu=64:open-gop=0"), x264(), true, false},
-		{"h264-videotoolbox", x264(), hdr10x265("ctu=32"), true, false},
+		{"hevc-hardware", hdr10x265("ctu=64:open-gop=0"), x264(), true, false},
+		{"h264-hardware", x264(), hdr10x265("ctu=32"), true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var opt []Option
@@ -96,7 +96,10 @@ func TestIntegrationMatroskaFailoverKeepsOpenDecoder(t *testing.T) {
 				t.Fatal("replacement Cluster carries no in-band SPS")
 			}
 			joined = append(joined, swapped...)
-			for n := 3; n < 5; n++ {
+			// Consume the complete fixture. A nonterminal segment may end
+			// with reordered video whose corresponding audio is in the next
+			// segment; truncating the playlist there is not an A/V gap.
+			for n := 3; n < 6; n++ {
 				joined = append(joined, fetch(t, hs, n)...)
 			}
 			path := e.writeTemp(t, "open-decoder.mkv", joined)
@@ -104,8 +107,8 @@ func TestIntegrationMatroskaFailoverKeepsOpenDecoder(t *testing.T) {
 				t.Fatalf("original header + replacement clusters: %v\n%s", err, out)
 			}
 			frames := e.frameTimes(t, path, "v:0")
-			if len(frames) < 5*4*24-2 {
-				t.Fatalf("decoded %d video frames across five segments", len(frames))
+			if len(frames) < 6*4*24-2 {
+				t.Fatalf("decoded %d video frames across six segments", len(frames))
 			}
 			for i := 1; i < len(frames); i++ {
 				if frames[i] <= frames[i-1] || frames[i]-frames[i-1] > 0.1 {
@@ -113,6 +116,9 @@ func TestIntegrationMatroskaFailoverKeepsOpenDecoder(t *testing.T) {
 				}
 			}
 			audio := e.frameTimes(t, path, "a:0")
+			if len(audio) > 0 {
+				t.Logf("video: %d frames %.6f..%.6f; audio: %d frames %.6f..%.6f; hw=%v", len(frames), frames[0], frames[len(frames)-1], len(audio), audio[0], audio[len(audio)-1], s.HWAccelerated())
+			}
 			if len(audio) == 0 || audio[0] > frames[0]+0.1 || audio[len(audio)-1] < frames[len(frames)-1]-0.1 {
 				t.Fatalf("audio does not span the video across the failover: %d frames", len(audio))
 			}
