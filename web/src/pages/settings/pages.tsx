@@ -1,6 +1,6 @@
-import { toast } from "@braedonsaunders/appkit-ui";
+import { SubtabNav, toast } from "@braedonsaunders/appkit-ui";
 import { useCallback, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useApp } from "../../app-context";
 import { ConfigSection } from "../../components/ConfigSection";
 import { ErrorPanel } from "../../components/feedback";
@@ -9,6 +9,7 @@ import { RemoteDiagnostics } from "../../components/RemoteDiagnostics";
 import { api } from "../../lib/api";
 import { humanizeKey, isPlainObject } from "../../lib/format";
 import { useAsync } from "../../lib/hooks";
+import Logs from "../Logs";
 import { BackupsAndImport } from "./Backups";
 import { ClusterOverview, useClustered } from "./Cluster";
 import { ConnectedServices } from "./ConnectedServices";
@@ -246,36 +247,60 @@ const BACKUP_TABS = [
   { key: "import", label: "Import & export" },
 ] as const;
 
-export function BackupsPage() {
-  const tab = useRouteTab(BACKUP_TABS);
+const MAINTENANCE_TABS = [
+  { key: "backups", label: "Backups & import" },
+  { key: "updates", label: "Updates" },
+  { key: "troubleshooting", label: "Troubleshooting" },
+  { key: "logs", label: "Logs" },
+] as const;
+
+export function MaintenancePage() {
+  const tab = useRouteTab(MAINTENANCE_TABS);
   return (
     <DomainPage
-      title="Backups & import"
-      description="Snapshots of your settings and data, and imports from Plex, Trakt and Letterboxd."
-      base="/backups"
-      tabs={BACKUP_TABS}
+      title="Maintenance"
+      description="Back up and import your data, manage updates and troubleshoot your server."
+      base="/maintenance"
+      tabs={MAINTENANCE_TABS}
       active={tab}
     >
-      <BackupsAndImport tab={tab} />
+      {tab === "backups" ? <BackupsSettings /> : null}
+      {tab === "updates" ? (
+        <ConfigSection
+          configKey="updates"
+          endpoint="updates"
+          groups={S.UPDATES}
+          label="Updates"
+          before={() => <UpdatesStatus />}
+        />
+      ) : null}
+      {tab === "troubleshooting" ? (
+        <ConfigSection
+          configKey="spike"
+          endpoint="spike"
+          groups={S.SPIKE}
+          label="Troubleshooting"
+        />
+      ) : null}
+      {tab === "logs" ? <Logs /> : null}
     </DomainPage>
   );
 }
 
-export function UpdatesPage() {
+function BackupsSettings() {
+  const { backupTab } = useParams();
+  const navigate = useNavigate();
+  const tab = backupTab === "import" ? "import" : "backups";
   return (
-    <DomainPage
-      title="Updates"
-      description="Release channel, maintenance window and automatic updates."
-      base="/updates"
-    >
-      <ConfigSection
-        configKey="updates"
-        endpoint="updates"
-        groups={S.UPDATES}
-        label="Updates"
-        before={() => <UpdatesStatus />}
+    <>
+      <SubtabNav
+        ariaLabel="Backups & import sections"
+        tabs={[...BACKUP_TABS]}
+        active={tab}
+        onSelect={(key) => navigate(`/maintenance/backups/${key}`)}
       />
-    </DomainPage>
+      <BackupsAndImport tab={tab} />
+    </>
   );
 }
 
@@ -287,18 +312,6 @@ export function ClusterPage() {
       base="/cluster"
     >
       <ClusterOverview />
-    </DomainPage>
-  );
-}
-
-export function TroubleshootingPage() {
-  return (
-    <DomainPage
-      title="Troubleshooting"
-      description="Tools for tracking down playback problems in a Plex app."
-      base="/troubleshooting"
-    >
-      <ConfigSection configKey="spike" endpoint="spike" groups={S.SPIKE} label="Troubleshooting" />
     </DomainPage>
   );
 }

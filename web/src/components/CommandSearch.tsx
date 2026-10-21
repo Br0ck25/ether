@@ -19,7 +19,7 @@ const ACTIONS = [
   },
   { title: "New collection", href: "/collections/new", keywords: "create" },
   { title: "New notification channel", href: "/notifications/channels", keywords: "alert" },
-  { title: "Back up now", href: "/backups", keywords: "backup snapshot" },
+  { title: "Back up now", href: "/maintenance/backups", keywords: "backup snapshot" },
 ];
 
 function matches(q: string, ...fields: (string | undefined)[]): boolean {

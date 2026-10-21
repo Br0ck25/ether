@@ -179,8 +179,9 @@ export const PAGES: PageDef[] = [
     sections: [],
     keywords: "high availability ha nodes failover postgres postgresql join token weight leader",
   },
+  { href: "/maintenance", title: "Maintenance", sections: [], keywords: "server maintenance" },
   {
-    href: "/backups",
+    href: "/maintenance/backups",
     title: "Backups & import",
     sections: [
       { key: "backups", title: "Backups", keywords: "snapshot restore schedule" },
@@ -188,18 +189,18 @@ export const PAGES: PageDef[] = [
     ],
   },
   {
-    href: "/updates",
+    href: "/maintenance/updates",
     title: "Updates",
     sections: [],
     keywords: "version channel beta maintenance window update now install",
   },
   {
-    href: "/troubleshooting",
+    href: "/maintenance/troubleshooting",
     title: "Troubleshooting",
     sections: [],
     keywords: "local file test playback",
   },
-  { href: "/logs", title: "Logs", sections: [], keywords: "errors debug" },
+  { href: "/maintenance/logs", title: "Logs", sections: [], keywords: "errors debug" },
 ];
 
 export function destinations(): Destination[] {

@@ -262,12 +262,11 @@ describe("Settings", () => {
       "Plex & remote access",
       "Connected services",
       "Notifications",
-      "Backups & import",
-      "Updates",
-      "Troubleshooting",
-      "Logs",
+      "Maintenance",
     ])
       expect(sidebar(name).length).toBeGreaterThan(0);
+    for (const name of ["Backups & import", "Updates", "Troubleshooting", "Logs"])
+      expect(sidebar(name)).toHaveLength(0);
     expect(sidebar("Settings")).toHaveLength(0);
     // Config keys owned by other pages never show up as extra sections here.
     for (const name of ["Usenet", "Indexers", "Cache", "Resolver", "Quality", "Catalog", "Markers"])

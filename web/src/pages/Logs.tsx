@@ -3,8 +3,6 @@ import {
   Button,
   EmptyState,
   Input,
-  ListPageLayout,
-  PageHeader,
   Switch,
   confirmDialog,
   toast,
@@ -88,54 +86,49 @@ export default function Logs() {
   };
 
   return (
-    <ListPageLayout
-      header={
-        <>
-          <PageHeader
-            title="Logs"
-            description={`Newest entries first. ${total.toLocaleString()} entries retained in memory.`}
-            actions={
-              <>
-                <Button variant="outline" size="sm" onClick={() => void load()}>
-                  <RefreshCw size={14} /> Reload
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => void clear()}>
-                  <Trash2 size={14} /> Clear
-                </Button>
-              </>
-            }
+    <section aria-label="Logs" className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-fg-muted">
+          Newest entries first. {total.toLocaleString()} entries retained in memory.
+        </p>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void load()}>
+            <RefreshCw size={14} /> Reload
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => void clear()}>
+            <Trash2 size={14} /> Clear
+          </Button>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-3" role="search">
+        <div className="relative min-w-52 flex-1 sm:max-w-sm">
+          <Search
+            size={14}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+            aria-hidden
           />
-          <div className="flex flex-wrap items-center gap-3" role="search">
-            <div className="relative min-w-52 flex-1 sm:max-w-sm">
-              <Search
-                size={14}
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
-                aria-hidden
-              />
-              <Input
-                type="search"
-                className="h-9 pl-8"
-                placeholder="Filter messages…"
-                value={q}
-                onChange={(e) => setQ(e.currentTarget.value)}
-                aria-label="Filter logs"
-              />
-            </div>
-            <Segmented
-              ariaLabel="Minimum level"
-              size="sm"
-              value={level}
-              onChange={setLevel}
-              options={LEVELS}
-            />
-            <label className="flex items-center gap-2 text-sm text-fg-muted">
-              <Switch checked={follow} onChange={(e) => setFollow(e.currentTarget.checked)} /> Live
-              updates
-            </label>
-          </div>
-        </>
-      }
-    >
+          <Input
+            type="search"
+            className="h-9 pl-8"
+            placeholder="Filter messages…"
+            value={q}
+            onChange={(e) => setQ(e.currentTarget.value)}
+            aria-label="Filter logs"
+          />
+        </div>
+        <Segmented
+          ariaLabel="Minimum level"
+          size="sm"
+          value={level}
+          onChange={setLevel}
+          options={LEVELS}
+        />
+        <label className="flex items-center gap-2 text-sm text-fg-muted">
+          <Switch checked={follow} onChange={(e) => setFollow(e.currentTarget.checked)} /> Live
+          updates
+        </label>
+      </div>
+
       {error ? (
         <ErrorPanel error={error} onRetry={() => void load()} />
       ) : !entries ? (
@@ -194,6 +187,6 @@ export default function Logs() {
           </div>
         </div>
       )}
-    </ListPageLayout>
+    </section>
   );
 }

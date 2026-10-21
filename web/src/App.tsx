@@ -14,9 +14,7 @@ import {
 } from "@braedonsaunders/appkit-ui";
 import {
   Activity as ActivityIcon,
-  ArchiveRestore,
   HardDrive,
-  ArrowDownToLine,
   Boxes,
   Globe,
   LifeBuoy,
@@ -30,7 +28,6 @@ import {
   LogOut,
   MonitorPlay,
   Network,
-  ScrollText,
   Sparkles,
   Tags,
   Tv,
@@ -52,6 +49,7 @@ import {
   Routes,
   useLocation,
   useNavigate,
+  useParams,
   useSearchParams,
 } from "react-router-dom";
 import { AppProvider, useApp } from "./app-context";
@@ -77,12 +75,9 @@ const settingsPage = <K extends keyof typeof import("./pages/settings/pages")>(n
 const GeneralPage = settingsPage("GeneralPage");
 const RemoteAccessPage = settingsPage("RemoteAccessPage");
 const ServicesPage = settingsPage("ServicesPage");
-const BackupsPage = settingsPage("BackupsPage");
-const UpdatesPage = settingsPage("UpdatesPage");
+const MaintenancePage = settingsPage("MaintenancePage");
 const ClusterPage = settingsPage("ClusterPage");
-const TroubleshootingPage = settingsPage("TroubleshootingPage");
 const Setup = lazy(() => import("./pages/Setup"));
-const Logs = lazy(() => import("./pages/Logs"));
 const Activity = lazy(() => import("./pages/activity/Activity"));
 const Notifications = lazy(() => import("./pages/notifications/Notifications"));
 const LiveTV = lazy(() => import("./pages/livetv/LiveTV"));
@@ -158,15 +153,7 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
         { href: "/services", label: "Connected services", icon: <Plug size={icon} /> },
         { href: "/cluster", label: "Cluster", icon: <Boxes size={icon} /> },
         { href: "/notifications", label: "Notifications", icon: <Bell size={icon} /> },
-      ],
-    },
-    {
-      label: "Maintenance",
-      items: [
-        { href: "/backups", label: "Backups & import", icon: <ArchiveRestore size={icon} /> },
-        { href: "/updates", label: "Updates", icon: <ArrowDownToLine size={icon} /> },
-        { href: "/troubleshooting", label: "Troubleshooting", icon: <LifeBuoy size={icon} /> },
-        { href: "/logs", label: "Logs", icon: <ScrollText size={icon} /> },
+        { href: "/maintenance", label: "Maintenance", icon: <LifeBuoy size={icon} /> },
       ],
     },
   ];
@@ -264,6 +251,14 @@ function PageFallback() {
   );
 }
 
+/** Keep bookmarks and health links pointing at the corresponding maintenance tab. */
+function MaintenanceRedirect({ tab }: { tab: string }) {
+  const { backupTab } = useParams();
+  const { search, hash } = useLocation();
+  const suffix = tab === "backups" && backupTab === "import" ? "/import" : "";
+  return <Navigate to={`/maintenance/${tab}${suffix}${search}${hash}`} replace />;
+}
+
 function Shell() {
   const { boot } = useApp();
   const location = useLocation();
@@ -344,10 +339,14 @@ function Shell() {
             <Route path="/remote-access/:tab?" element={<RemoteAccessPage />} />
             <Route path="/services/:tab?" element={<ServicesPage />} />
             <Route path="/cluster" element={<ClusterPage />} />
-            <Route path="/backups/:tab?" element={<BackupsPage />} />
-            <Route path="/updates" element={<UpdatesPage />} />
-            <Route path="/troubleshooting" element={<TroubleshootingPage />} />
-            <Route path="/logs" element={<Logs />} />
+            <Route path="/maintenance/:tab?/:backupTab?" element={<MaintenancePage />} />
+            <Route path="/backups/:backupTab?" element={<MaintenanceRedirect tab="backups" />} />
+            <Route path="/updates" element={<MaintenanceRedirect tab="updates" />} />
+            <Route
+              path="/troubleshooting"
+              element={<MaintenanceRedirect tab="troubleshooting" />}
+            />
+            <Route path="/logs" element={<MaintenanceRedirect tab="logs" />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
