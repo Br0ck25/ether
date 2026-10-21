@@ -57,7 +57,13 @@ func TestWarmFloorReachedAfterStart(t *testing.T) {
 	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 4)}, Options{
 		MinIdle: 3, KeepAlive: 20 * time.Millisecond, IdleTimeout: time.Second,
 	})
-	st := waitLive(t, f, "p", 3)
+	// LiveConnections includes a dial still being authenticated. Wait for
+	// the completed warm floor before asserting its idle/redial counters.
+	var st ProviderStats
+	waitPipeline(t, func() bool {
+		st = statsFor(f, "p")
+		return st.WarmIdleConnections == 3 && st.BackgroundRedials >= 3
+	})
 	if st.BackgroundRedials < 3 || st.MinIdle != 3 || st.WarmIdleConnections != 3 {
 		t.Fatalf("floor stats: %+v", st)
 	}
