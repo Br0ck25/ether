@@ -60,3 +60,39 @@ func TestMarkOneWatchedRetainsOtherContinueWatchingItems(t *testing.T) {
 		}
 	}
 }
+
+// Plex Web repopulates a stale shelf with a paginated request after scrobble.
+// Its metadata-list reducer defaults an absent totalSize to zero and hides it.
+func TestContinueWatchingRefreshIncludesPagination(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	var keys []core.RatingKey
+	for n := range 4 {
+		title := fightClub
+		title.Key = core.MovieKey(9100 + int64(n))
+		title.Title = fmt.Sprintf("Resume pagination %d", n)
+		keys = append(keys, title.Key)
+		f.catalog.titles[title.Key] = title
+		f.state.set(ownerUser.ID, ws(title.Key, 600000, 0))
+	}
+	if rec := f.get(t, "/:/scrobble?key="+keys[0].String()); rec.Code != http.StatusOK {
+		t.Fatal(rec.Code)
+	}
+	for _, path := range []string{"/hubs/sections/1/continueWatching/items", "/hubs/home/continueWatching", "/hubs/continueWatching/items"} {
+		for _, page := range []struct{ start, size, want int }{{0, 4, 3}, {1, 1, 1}, {3, 2, 0}, {0, 0, 0}} {
+			mc := decodeJSON(t, f.get(t, path, "Accept", "application/json", "X-Plex-Container-Start", fmt.Sprint(page.start), "X-Plex-Container-Size", fmt.Sprint(page.size)))
+			if mc["totalSize"] != float64(3) || mc["offset"] != float64(page.start) || mc["size"] != float64(page.want) {
+				t.Fatalf("%s page %+v: size=%v totalSize=%v offset=%v", path, page, mc["size"], mc["totalSize"], mc["offset"])
+			}
+			rows, _ := mc["Metadata"].([]any)
+			if len(rows) != page.want {
+				t.Fatalf("page items=%d want %d", len(rows), page.want)
+			}
+			for _, row := range rows {
+				if row.(map[string]any)["ratingKey"] == keys[0].String() {
+					t.Fatal("watched movie remains")
+				}
+			}
+		}
+	}
+}

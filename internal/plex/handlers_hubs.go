@@ -445,17 +445,25 @@ func (s *Server) handleContinueWatchingItems(w http.ResponseWriter, r *http.Requ
 		}
 		v = cwSection
 	}
-	count := countParam(r, 50)
-	if pr.HasPage && pr.Size > 0 {
-		count = min(pr.Size, 200)
-	}
-	hs := s.continueHub(ctx, pr, v, sec, count)
+	// A shelf refresh needs the total, not just the visible page. Plex Web
+	// treats a missing totalSize as zero and removes the entire row.
+	// Keep the existing bounded 200-item resume window, then page it.
+	hs := s.continueHub(ctx, pr, v, sec, 200)
 	mc := hubContainer()
 	mc.Metadata = s.renderTitles(ctx, pr, hs.Items, renderOpts{media: true, state: hs.state, detailEpisodes: !hs.plain})
 	if hs.included {
 		stampIncluded(mc.Metadata)
 	}
+	total := len(mc.Metadata)
+	start := min(max(pr.Start, 0), total)
+	count := countParam(r, 50)
+	if pr.HasPage && pr.Size >= 0 {
+		count = min(pr.Size, 200)
+	}
+	end := start + min(count, total-start)
+	mc.Metadata = mc.Metadata[start:end]
 	mc.Size = len(mc.Metadata)
+	mc.SetPage(start, total)
 	s.write(w, r, mc)
 }
 

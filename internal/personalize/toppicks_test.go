@@ -122,7 +122,7 @@ func TestHeadlineAndFeedCuration(t *testing.T) {
 }
 
 func TestRowsNeverShowAHandfulOfTitles(t *testing.T) {
-	h := newHarness(t, func(o *Options) { o.MinRowItems = 0 }) // the production default (6)
+	h := newHarness(t, func(o *Options) { o.MinRowItems = 0 }) // the production default (12)
 	u := core.User{ID: 1}
 	sciFiFan(h, u.ID)
 	h.rebuild(u)
@@ -139,7 +139,11 @@ func TestRowsNeverShowAHandfulOfTitles(t *testing.T) {
 			if r.Hidden || r.Source == core.RowSourcePlex || r.Kind == KindUpNext {
 				continue
 			}
-			if len(r.Items) < minRowItems {
+			floor := 12
+			if r.Kind == KindTop10 || r.Kind == KindTop10Today {
+				floor = 10
+			}
+			if len(r.Items) < floor {
 				t.Errorf("%s: %s shows only %d titles", section, r.HubID, len(r.Items))
 			}
 			if r.Kind == KindFranchise {

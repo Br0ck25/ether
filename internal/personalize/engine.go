@@ -110,9 +110,9 @@ type Options struct {
 	BuildTimeout    time.Duration // one model build (default 3m)
 	MaxHomeRows     int           // default 20 across the complete composed page
 	MaxSectionRows  int           // default 16
-	// MinRowItems is the fewest titles an engine row may show (default 6;
-	// negative disables the floor). Continue Watching and Up Next, and
-	// rows the owner places, are exempt.
+	// MinRowItems is the fewest titles an engine row may show (default 12;
+	// negative disables the floor). Continue Watching, Up Next and owner
+	// collections are exempt; Top 10 and smaller requested pages use their cap.
 	MinRowItems int
 	// Exploration scales Thompson sampling (0 = pure exploitation, 1 =
 	// full sampling; default 0.5; negative = 0).

@@ -188,9 +188,9 @@ func (a *assembly) run() []core.HomeRow {
 // remaining films, the next episodes, an owner's collection, the viewer's
 // own watchlist): they keep their titles and similarity-driven rows give
 // way.
-// minRowItems is the fewest titles a row may show: a TV screen shows about
-// six posters, and a row of one or two leaves a wall of empty space.
-const minRowItems = 6
+// minRowItems keeps discovery shelves full on wide desktop and TV layouts.
+// Sparse candidates are omitted and their titles redrafted into fuller rows.
+const minRowItems = 12
 
 // rowFloor is the minimum for a row kind. Continue Watching and Up Next are
 // utility rows: one in-progress title is still worth showing.
@@ -309,10 +309,14 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				continue
 			}
 			min := r.c.minItems
-			if !a.ownerPlaced(r.c, r.hubID) {
-				min = max(min, a.rowFloor(r.c.kind))
+			if r.c.source == core.RowSourceEngine || !a.ownerPlaced(r.c, r.hubID) {
+				floor := a.rowFloor(r.c.kind)
+				if cap := a.rowCap(r.c); floor > cap {
+					floor = cap
+				}
+				min = max(min, floor)
 			}
-			if r.d.pinned && min > 1 {
+			if r.d.pinned && min > 1 && (r.c.source != core.RowSourceEngine || a.minRow <= 0) {
 				min = 1
 			}
 			if n := len(picked[r]); n == 0 || n < min {
