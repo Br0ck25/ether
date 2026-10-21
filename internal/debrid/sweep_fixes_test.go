@@ -43,7 +43,7 @@ func TestStalledBodyIsAbandonedAndResumedAtIncompleteBlock(t *testing.T) {
 	r.eng.stall = 100 * time.Millisecond
 	transport := r.eng.hc.Transport
 	var calls atomic.Int32
-	var retryRange atomic.Value
+	var firstRange, retryRange atomic.Value
 	r.eng.hc = &http.Client{Transport: deliveryTransport(func(req *http.Request) (*http.Response, error) {
 		resp, err := transport.RoundTrip(req)
 		if err != nil {
@@ -51,6 +51,7 @@ func TestStalledBodyIsAbandonedAndResumedAtIncompleteBlock(t *testing.T) {
 		}
 		switch calls.Add(1) {
 		case 1:
+			firstRange.Store(req.Header.Get("Range"))
 			// Two complete blocks, part of the third, then the CDN stops
 			// sending while keeping the connection open.
 			resp.Body = readCloser{Reader: &stallingReader{r: resp.Body, n: 2*testBlock + 123, ctx: req.Context()}, Closer: resp.Body}
@@ -73,8 +74,16 @@ func TestStalledBodyIsAbandonedAndResumedAtIncompleteBlock(t *testing.T) {
 	if err != nil || n != len(got) || !bytes.Equal(got, r.media.data[:len(got)]) {
 		t.Fatalf("read n=%d err=%v", n, err)
 	}
-	if rr, _ := retryRange.Load().(string); rr != fmt.Sprintf("bytes=%d-%d", 2*testBlock, 4*testBlock-1) {
-		t.Fatalf("resumed at %q", rr)
+	// The initial request may read ahead beyond the caller's four blocks.
+	// Recovery must retain its endpoint and resume at the first incomplete
+	// block, independently of the configured/default request chunk size.
+	initial, _ := firstRange.Load().(string)
+	var start, end int64
+	if count, err := fmt.Sscanf(initial, "bytes=%d-%d", &start, &end); err != nil || count != 2 || start != 0 || end < int64(len(got)-1) || end >= int64(len(r.media.data)) {
+		t.Fatalf("unexpected initial range %q", initial)
+	}
+	if rr, _ := retryRange.Load().(string); rr != fmt.Sprintf("bytes=%d-%d", 2*testBlock, end) {
+		t.Fatalf("resumed at %q after initial request %q", rr, initial)
 	}
 }
 
