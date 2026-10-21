@@ -144,15 +144,16 @@ type Registrar struct {
 	addrMu      sync.Mutex // serialises address refreshes
 	addrRefresh time.Time  // last refreshAddresses
 
-	mu        sync.Mutex
-	st        Status
-	lastLAN   []string
-	lastWAN   string
-	next      map[string]time.Time
-	pubFail   int
-	forcePub  bool
-	mappingOn bool
-	asyncID   string // outstanding connectivity request
+	mu            sync.Mutex
+	st            Status
+	lastLAN       []string
+	lastWAN       string
+	next          map[string]time.Time
+	pubFail       int
+	pubGeneration uint64 // advances whenever fresh connections must be published
+	forcePub      bool
+	mappingOn     bool
+	asyncID       string // outstanding connectivity request
 
 	presence *Presence
 }
@@ -319,7 +320,7 @@ func (r *Registrar) RunPortMapping(ctx context.Context) {
 // a config change).
 func (r *Registrar) Trigger() {
 	r.mu.Lock()
-	r.forcePub = true
+	r.requestPublishLocked()
 	r.next[taskAddress] = time.Time{}
 	r.next[taskMapping] = time.Time{}
 	r.mu.Unlock()
@@ -337,12 +338,19 @@ func (r *Registrar) Trigger() {
 // re-checking addresses (e.g. after cluster membership changed).
 func (r *Registrar) RequestPublish() {
 	r.mu.Lock()
-	r.forcePub = true
+	r.requestPublishLocked()
 	r.mu.Unlock()
 	select {
 	case r.wake <- struct{}{}:
 	default:
 	}
+}
+
+// requestPublishLocked marks a new publication request. The generation prevents
+// an older in-flight publication from consuming an update it never observed.
+func (r *Registrar) requestPublishLocked() {
+	r.pubGeneration++
+	r.forcePub = true
 }
 
 // Status returns a snapshot for the admin dashboard.
@@ -426,18 +434,18 @@ func (r *Registrar) runDue(ctx context.Context) {
 	}
 	r.mu.Lock()
 	force := r.forcePub
+	generation := r.pubGeneration
 	r.mu.Unlock()
 	if force || r.due(taskPublish, r.o.PublishInterval) {
 		if err := r.PublishNow(ctx); err != nil && ctx.Err() == nil {
 			r.mu.Lock()
 			r.pubFail++
-			n := r.pubFail
+			backoff := time.Minute << min(r.pubFail-1, 5) // 1m .. 32m
+			if r.pubGeneration == generation {
+				r.forcePub = false // retry this request on the back-off schedule
+			}
+			r.next[taskPublish] = r.o.Now().Add(backoff)
 			r.mu.Unlock()
-			backoff := time.Minute << min(n-1, 5) // 1m .. 32m
-			r.mu.Lock()
-			r.forcePub = false // the back-off schedule retries with fresh state
-			r.mu.Unlock()
-			r.schedule(taskPublish, r.o.Now().Add(backoff))
 		}
 	}
 	if r.due(taskFriends, r.o.FriendSyncInterval) {
@@ -458,7 +466,7 @@ func (r *Registrar) ensureMapping(ctx context.Context, cfg config.Config) {
 			r.o.Mapper.Close(ctx)
 			r.mu.Lock()
 			r.mappingOn = false
-			r.forcePub = true
+			r.requestPublishLocked()
 			r.mu.Unlock()
 		}
 		return
@@ -468,7 +476,7 @@ func (r *Registrar) ensureMapping(ctx context.Context, cfg config.Config) {
 	r.mu.Lock()
 	r.mappingOn = true
 	if st.Active && (st.ExternalPort != prev.ExternalPort || !prev.Active) {
-		r.forcePub = true
+		r.requestPublishLocked()
 	}
 	// A gateway may grant (or an adopted entry may have) a lease shorter
 	// than MappingInterval: check again when the mapper wants to renew,
@@ -545,7 +553,7 @@ func (r *Registrar) refreshAddresses(ctx context.Context, cfg config.Config) {
 		if r.lastLAN != nil || r.lastWAN != "" {
 			r.log.Info("network addresses changed", "lan", lan, "wan", wan)
 		}
-		r.forcePub = true
+		r.requestPublishLocked()
 	}
 	r.lastLAN, r.lastWAN = lan, wan
 	r.st.LANAddresses = lan
@@ -691,6 +699,9 @@ func mergeURIs(own, extra []string) []string {
 // PublishNow publishes the current connections to plex.tv and verifies the
 // server appears in the resources list.
 func (r *Registrar) PublishNow(ctx context.Context) error {
+	r.mu.Lock()
+	generation := r.pubGeneration
+	r.mu.Unlock()
 	cfg := r.o.Config.Get()
 	if cfg.Plex.Token == "" {
 		return errors.New("plextv: not claimed")
@@ -735,7 +746,9 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	r.st.PublishedURIs = uris
 	r.st.LastPublishError = ""
 	r.pubFail = 0
-	r.forcePub = false
+	if r.pubGeneration == generation {
+		r.forcePub = false
+	}
 	r.next[taskPublish] = now.Add(r.o.PublishInterval)
 	lan, wan := slices.Clone(r.lastLAN), r.lastWAN
 	r.mu.Unlock()
@@ -886,7 +899,7 @@ func (r *Registrar) RenewCertificate(ctx context.Context, force bool) error {
 			r.log.Warn("persist certificate paths", "err", uerr)
 		}
 		r.mu.Lock()
-		r.forcePub = true
+		r.requestPublishLocked()
 		r.mu.Unlock()
 	}
 	return err
