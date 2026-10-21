@@ -139,6 +139,41 @@ class TestWin32Safety(unittest.TestCase):
         self.assertEqual(delta["io_sampling"], "unavailable")
 
 
+class TestLaunchFlags(unittest.TestCase):
+    def test_exact_launch_flags(self):
+        self.assertEqual(win.CREATE_SUSPENDED, 0x00000004)
+        self.assertEqual(win.CREATE_NEW_PROCESS_GROUP, 0x00000200)
+        self.assertEqual(win.CREATE_UNICODE_ENVIRONMENT, 0x00000400)
+        self.assertEqual(win.LAUNCH_FLAGS, 0x00000604)
+        import inspect
+        self.assertIn("LAUNCH_FLAGS", inspect.getsource(win.launch_suspended))
+
+    def test_env_block_sorted_case_insensitive_double_nul(self):
+        block = win.build_env_block({"Zebra": "1", "apple": "2", "Banana": "3"})
+        self.assertEqual(block, "apple=2\0Banana=3\0Zebra=1\0\0")
+
+    def test_wait_failed_raises_not_poll(self):
+        from unittest import mock
+        import plex_bench as pb
+        fake = mock.MagicMock()
+        fake.WaitForSingleObject.return_value = 0xFFFFFFFF
+        proc = win.WinProcess(handle=1, thread_handle=2, pid=99, tid=1)
+        with mock.patch.object(win, "_kernel32", return_value=fake):
+            with self.assertRaises(pb.BenchError):
+                proc.wait(timeout=1)
+        fake.GetExitCodeProcess.assert_not_called()
+
+    def test_wait_timeout_still_timeout(self):
+        from unittest import mock
+        import subprocess as sp
+        fake = mock.MagicMock()
+        fake.WaitForSingleObject.return_value = 0x00000102
+        proc = win.WinProcess(handle=1, thread_handle=2, pid=99, tid=1)
+        with mock.patch.object(win, "_kernel32", return_value=fake):
+            with self.assertRaises(sp.TimeoutExpired):
+                proc.wait(timeout=1)
+
+
 class TestProcessTree(unittest.TestCase):
     def test_tree_includes_only_descendants(self):
         ppid = {10: 1, 11: 10, 12: 11, 13: 10, 99: 1}

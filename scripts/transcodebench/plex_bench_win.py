@@ -529,6 +529,19 @@ def read_local_app_data_path():
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_UNICODE_ENVIRONMENT = 0x00000400
+LAUNCH_FLAGS = CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT
+
+
+def _last_error() -> int:
+    getter = getattr(ctypes, "get_last_error", None)
+    return getter() if getter else -1
+
+
+def build_env_block(env: dict) -> str:
+    """UTF-16 environment block string: keys sorted case-insensitively,
+    each entry NUL-terminated, whole block double-NUL terminated."""
+    return "".join(f"{k}={env[k]}\0" for k in sorted(env, key=str.casefold)) + "\0"
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 STILL_ACTIVE = 259
 
@@ -562,8 +575,15 @@ class WinProcess:
     def wait(self, timeout=None):
         k32 = _kernel32()
         ms = 0xFFFFFFFF if timeout is None else int(timeout * 1000)
-        if k32.WaitForSingleObject(self._handle, ms) == 0x00000102:  # WAIT_TIMEOUT
+        result = k32.WaitForSingleObject(self._handle, ms)
+        if result == 0x00000102:  # WAIT_TIMEOUT
             raise subprocess.TimeoutExpired(str(self.pid), timeout)
+        if result == 0xFFFFFFFF:  # WAIT_FAILED: never silently poll/claim cleanup
+            raise pb.BenchError(f"WaitForSingleObject failed for pid {self.pid} "
+                                f"(err {_last_error()})")
+        if result != 0:  # WAIT_OBJECT_0 expected; WAIT_ABANDONED etc are failures here
+            raise pb.BenchError(f"WaitForSingleObject unexpected result {result:#x} "
+                                f"for pid {self.pid}")
         return self.poll()
 
     def terminate(self):
@@ -642,14 +662,13 @@ def launch_suspended(exe: Path, cwd: Path, env: dict) -> WinProcess:
     startup.cb = ctypes.sizeof(STARTUPINFOW)
     proc_info = PROCESS_INFORMATION()
     command = ctypes.create_unicode_buffer(f'"{exe}"')
-    env_block = ctypes.create_unicode_buffer(
-        "".join(f"{k}={v}\0" for k, v in env.items()) + "\0")
+    env_block = ctypes.create_unicode_buffer(build_env_block(env))
     created = k32.CreateProcessW(None, command, None, None, False,
-                                 CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP,
+                                 LAUNCH_FLAGS,
                                  env_block, str(cwd), ctypes.byref(startup),
                                  ctypes.byref(proc_info))
     if not created:
-        raise pb.BenchError(f"CreateProcessW failed for {exe} (err {ctypes.get_last_error()})")
+        raise pb.BenchError(f"CreateProcessW failed for {exe} (err {_last_error()})")
     return WinProcess(proc_info.hProcess, proc_info.hThread,
                       int(proc_info.dwProcessId), int(proc_info.dwThreadId))
 
