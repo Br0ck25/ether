@@ -1100,6 +1100,7 @@ def main(argv=None):
     ap.add_argument("--lab-root", default=DEFAULT_LAB)
     ap.add_argument("--base-url", default="http://127.0.0.1:32400")
     ap.add_argument("--rating-key", default="1")
+    ap.add_argument("--fixture", default="", help="Actual media file selected by rating-key, for reproducible source hashing")
     ap.add_argument("--duration", type=float, default=10.0)
     ap.add_argument("--mode", choices=["fast", "paced"], default="fast")
     ap.add_argument("--concurrency", type=int, default=1)
@@ -1146,7 +1147,7 @@ def main(argv=None):
                                        video_resolution=args.video_resolution,
                                        max_video_bitrate_kbps=args.max_video_bitrate,
                                        audio_codec=args.audio_codec, platform="Android"))
-    fixture = Path(plan["fixture"])
+    fixture = Path(args.fixture or plan["fixture"])
     meta = {"tool": "plex_bench_win/1", "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "config": {**asdict(cfg), "profile": asdict(cfg.profile)}, "isolation_plan": plan,
             "source": {"fixture": str(fixture),
