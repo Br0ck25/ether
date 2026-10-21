@@ -730,9 +730,11 @@ def run_session_win(cfg, root_pid, out_dir: Path, idx: int) -> dict:
                                 if wait_s > 0:
                                     time.sleep(wait_s)
                     else:
-                        with concurrent.futures.ThreadPoolExecutor(
-                                max_workers=min(8, len(new))) as ex:
-                            list(ex.map(fetch, new))
+                        # Preserve playback order. Concurrent distant requests
+                        # can make PMS interpret forward reads as seeks and
+                        # replace the encoder while earlier segments are read.
+                        for item in new:
+                            fetch(item)
                 if root_pid:
                     smp = sample_tree_win(root_pid)
                     samples.append(smp)

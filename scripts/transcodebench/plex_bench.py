@@ -347,8 +347,9 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
                             if delay>0: time.sleep(min(delay,max(0,deadline-time.monotonic())))
                             fetch(item)
                     else:
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8,len(new))) as ex:
-                            list(ex.map(fetch,new))
+                        # Sequential segment reads match normal playback and
+                        # avoid treating speculative future requests as seeks.
+                        for item in new: fetch(item)
                 if root_pid:
                     smp=sample_tree(root_pid); samples.append(smp)
                     peak_rss=smp["rss_bytes"] if peak_rss is None else max(peak_rss,smp["rss_bytes"])
