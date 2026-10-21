@@ -219,6 +219,15 @@ func TestNetworkLabRateLimitRecovery(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("pause made %d upstream requests", calls.Load())
 	}
+	// A failed range publishes its blocks one at a time. Finish that
+	// publication before jumping the policy clock past the cooldown; real
+	// elapsed time would also let these already-failed flights drain.
+	f := src.(*httpSource).f
+	waitFor(t, "rate-limited range completed", func() bool {
+		f.bmu.Lock()
+		defer f.bmu.Unlock()
+		return len(f.flights) == 0
+	})
 	clock.add(61 * time.Second)
 	started := time.Now()
 	got, first, err := networkLabRead(ctx, rc, size)
