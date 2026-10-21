@@ -23,7 +23,11 @@ export const PAGES: PageDef[] = [
   {
     href: "/cache",
     title: "Cache",
-    sections: [],
+    sections: [
+      { key: "overview", title: "Overview", keywords: "storage readiness policy" },
+      { key: "explorer", title: "Explorer", keywords: "retained media releases pins" },
+      { key: "preloading", title: "Preloading", keywords: "household selection popular movies tv" },
+    ],
     keywords: "disk budget storage retention prefetch warming next episode",
   },
   {

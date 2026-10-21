@@ -1,19 +1,15 @@
-import { Badge, Button, Input, Spinner, cn, toast } from "@braedonsaunders/appkit-ui";
-import {
-  ArrowUpRight,
-  Check,
-  Clock3,
-  HardDrive,
-  Leaf,
-  Pin,
-  Play,
-  RefreshCw,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Zap,
-} from "lucide-react";
+import { Badge, Button, Input, Spinner, SubtabNav, cn, toast } from "@braedonsaunders/appkit-ui";
+import { ArrowUpRight, Check, HardDrive, Leaf, Settings2, Sparkles, Zap } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useRouteTab } from "../../components/layout";
+import { CacheOverview } from "./CacheOverview";
+import { CacheExplorer } from "./CacheExplorer";
+const CACHE_TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "explorer", label: "Explorer" },
+  { key: "preloading", label: "Preloading" },
+] as const;
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel } from "../../components/feedback";
 import { Field, NumberInput } from "../../components/fields";
@@ -245,19 +241,6 @@ function Toggle({
   );
 }
 
-function Age({ value }: { value: string }) {
-  const hours = Math.max(0, (Date.now() - Date.parse(value)) / 3600000);
-  return (
-    <span title={new Date(value).toLocaleString()}>
-      {hours < 1
-        ? "Just now"
-        : hours < 24
-          ? `${Math.floor(hours)}h ago`
-          : `${Math.floor(hours / 24)}d ago`}
-    </span>
-  );
-}
-
 export default function Cache() {
   const config = useAsync(() => api.getConfig(), []);
   const live = useAsync((signal) => apiFetch<CacheSnapshot>("/cache/", { signal }), []);
@@ -266,17 +249,16 @@ export default function Cache() {
   useUnsavedGuard(dirty);
   const [saving, setSaving] = useState(false),
     [error, setError] = useState<unknown>(null);
-  const [advanced, setAdvanced] = useState(false),
-    [search, setSearch] = useState("");
+  const [advanced, setAdvanced] = useState(false);
   const [editor, setEditor] = useState<"profiles" | "policy" | null>(null);
   const [profileChoice, setProfileChoice] = useState<{
     name: string;
     values: Partial<Policy>;
   } | null>(null);
-  const [selectionOpen, setSelectionOpen] = useState(false);
+  const tab = useRouteTab(CACHE_TABS);
+  const navigate = useNavigate();
   const [unit, setUnit] = useState<"GiB" | "TiB">("GiB");
-  const [filter, setFilter] = useState("all"),
-    [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const disk = useAsync(() => api.disk(config.data?.cache.dir ?? ""), [config.data?.cache.dir]);
   const patch = (v: Partial<Policy>) => setDraft((d) => (d ? { ...d, ...v } : d));
   async function save() {
@@ -325,9 +307,7 @@ export default function Cache() {
       </Workspace>
     );
   const snap = live.data;
-  const used = snap?.used ?? 0,
-    budget = snap?.budget ?? 0;
-  const percent = budget > 0 ? Math.min(100, (used / budget) * 100) : 0;
+  const used = snap?.used ?? 0;
   const saved = config.data!.cache;
   const savedPreset = PRESETS.find((p) =>
     Object.entries(p.values).every(([k, v]) => saved[k as keyof Policy] === v),
@@ -335,12 +315,6 @@ export default function Cache() {
   const policyName = saved.mode === "off" ? "Pass-through" : savedPreset?.name || "Custom policy";
   const enabled = draft.mode !== "off",
     speculate = enabled && !draft.disableSpeculation;
-  const releases = (snap?.releases ?? []).filter(
-    (r) =>
-      (filter === "all" || (filter === "protected" ? (r.Pins?.length ?? 0) > 0 : r.Plays > 1)) &&
-      `${r.Title} ${r.ReleaseID}`.toLowerCase().includes(search.toLowerCase()),
-  );
-  const reads = (snap?.metrics.hits ?? 0) + (snap?.metrics.misses ?? 0);
   return (
     <Workspace
       title="Cache"
@@ -355,460 +329,218 @@ export default function Cache() {
         </>
       }
     >
-      <main
-        aria-label="Cache operations"
-        className="app-scroll min-h-0 flex-1 overflow-y-auto bg-bg"
-      >
-        <div className="mx-auto grid max-w-[1600px] grid-cols-1 gap-5 p-4 sm:p-6 xl:grid-cols-12">
+      <div className="@container flex min-h-0 flex-1 flex-col">
+        <div className="shrink-0 border-b border-border bg-surface px-4 sm:px-6">
+          <SubtabNav
+            ariaLabel="Cache sections"
+            active={tab}
+            onSelect={(key) => navigate(`/cache/${key}`)}
+            tabs={CACHE_TABS.map((t) =>
+              t.key === "explorer" && snap?.releases.length
+                ? { ...t, count: snap.releases.length }
+                : t,
+            )}
+          />
+        </div>
+        <main
+          aria-label={`Cache ${tab}`}
+          className={cn(
+            "app-scroll flex min-h-0 flex-1 flex-col bg-bg",
+            tab === "overview" ? "overflow-y-auto cockpit:overflow-hidden" : "overflow-hidden",
+          )}
+        >
           {error ? (
-            <div className="xl:col-span-12">
+            <div className="shrink-0 px-4 pt-3">
               <ErrorPanel error={error} />
             </div>
           ) : null}
           {live.error ? (
-            <div className="xl:col-span-12">
+            <div className="shrink-0 px-4 pt-3">
               <ErrorPanel error={live.error} onRetry={() => void live.reload()} />
             </div>
           ) : null}
-          <section className="xl:col-span-8 relative overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/10 via-surface to-surface p-5 sm:p-6">
-            <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-primary/10 blur-3xl" />
-            <div className="relative flex flex-wrap items-center gap-8">
-              <div className="min-w-0 flex-1">
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[.2em] text-primary">
-                  <Sparkles size={13} /> Storage overview
-                </span>
-                <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-                  {config.data?.cache.mode === "off"
-                    ? "Persistent caching is off"
-                    : "Cache is active"}
-                </h2>
-                <p className="mt-2 text-sm text-fg-muted">
-                  {budget > 0
-                    ? `${formatBytes(Math.max(0, budget - used))} available within your budget`
-                    : "No size limit configured"}
-                  {disk.data ? ` · ${formatBytes(disk.data.freeBytes)} free on disk` : ""}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Badge variant="secondary">
-                    <ShieldCheck size={12} /> Playback protected
-                  </Badge>
-                  <Badge variant="secondary">
-                    {config.data?.cache.mode === "off"
-                      ? "Disk writes off"
-                      : config.data?.cache.mode === "adaptive"
-                        ? "Adaptive retention"
-                        : "On-demand retention"}
-                  </Badge>
-                </div>
-              </div>
-              <div
-                className="relative grid h-32 w-32 shrink-0 place-items-center"
-                role="img"
-                aria-label={
-                  snap
-                    ? `${formatBytes(used)} cached${budget ? ` of ${formatBytes(budget)}` : ", unlimited budget"}`
-                    : "Loading cache usage"
-                }
-              >
-                <svg
-                  viewBox="0 0 160 160"
-                  className="absolute inset-0 h-full w-full -rotate-90"
-                  aria-hidden="true"
-                >
-                  <circle
-                    cx="80"
-                    cy="80"
-                    r="70"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="7"
-                    className="text-primary/10"
-                  />
-                  <circle
-                    cx="80"
-                    cy="80"
-                    r="70"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="7"
-                    strokeLinecap="round"
-                    strokeDasharray={`${percent * 4.398} 439.8`}
-                    className="text-primary transition-all duration-700"
-                  />
-                </svg>
-                <div className="text-center">
-                  <span className="block text-2xl font-semibold tracking-tight">
-                    {snap ? formatBytes(used) : "—"}
-                  </span>
-                  <span className="mt-1 block text-xs text-fg-muted">
-                    {config.data?.cache.mode === "off"
-                      ? "disk writes off"
-                      : budget
-                        ? `of ${formatBytes(budget)}`
-                        : "no size limit"}
-                  </span>
-                </div>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-5 border-t border-primary/10 pt-5 sm:grid-cols-4">
-              {[
-                ["Stored releases", snap ? String(snap.releases.length) : "—"],
-                ["Protected bytes", snap ? formatBytes(snap.protectedBytes) : "—"],
-                [
-                  "Disk hit rate",
-                  reads ? `${Math.round((snap!.metrics.hits / reads) * 100)}%` : "—",
-                ],
-                ["Served from disk", snap ? formatBytes(snap.metrics.servedBytes) : "—"],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <p className="text-xl font-semibold tabular-nums">{value}</p>
-                  <p className="mt-1 text-[11px] text-fg-muted">{label}</p>
-                </div>
-              ))}
-            </div>
-            <p className="mt-3 text-[10px] text-fg-subtle">
-              Hit rate and served bytes are disk-cache counters since server startup.
-            </p>
-          </section>
-          <section
-            aria-label="Current cache policy"
-            className="flex flex-col rounded-xl border border-border bg-surface p-5 xl:col-span-4"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[.18em] text-fg-subtle">
-                Current policy
-              </p>
-              <Badge variant="secondary">{saved.mode === "off" ? "Off" : "Active"}</Badge>
-            </div>
-            <h2 className="mt-2 text-xl font-semibold">{policyName}</h2>
-            <dl className="my-4 space-y-3 text-xs">
-              {[
-                [
-                  "Retention",
-                  saved.mode === "off"
-                    ? "No persistent media"
-                    : saved.mode === "adaptive"
-                      ? "Adaptive · repeat watches"
-                      : "Recently streamed",
-                ],
-                [
-                  "Expiry",
-                  saved.retentionDays
-                    ? `${saved.retentionDays} inactive days`
-                    : "When space is needed",
-                ],
-                [
-                  "Managed preloading",
-                  saved.preloadEnabled
-                    ? saved.preloadContent === "tv"
-                      ? "TV episodes"
-                      : saved.preloadContent === "movies"
-                        ? "Movies"
-                        : "Movies & TV"
-                    : "Disabled",
-                ],
-                [
-                  "Selection",
-                  !saved.preloadEnabled
-                    ? "—"
-                    : saved.preloadSource === "popular"
-                      ? "Catalogue popularity"
-                      : saved.preloadSource === "recent"
-                        ? "Newest releases"
-                        : `${saved.preloadHouseholdWeight ?? 65}% household blend`,
-                ],
-              ].map(([label, value]) => (
-                <div key={label} className="flex justify-between gap-4">
-                  <dt className="text-fg-muted">{label}</dt>
-                  <dd className="text-right font-medium">{value}</dd>
-                </div>
-              ))}
-            </dl>
-            <div className="mt-auto border-t border-border pt-3">
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full"
-                onClick={() => {
+          {tab === "overview" ? (
+            <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-5 cockpit:min-h-0 cockpit:flex-1">
+              <CacheOverview
+                snapshot={snap}
+                policy={saved}
+                name={policyName}
+                freeBytes={disk.data?.freeBytes}
+                busy={busy !== null}
+                onProfile={() => {
                   setProfileChoice(null);
                   setEditor("profiles");
                 }}
-              >
-                Choose a cache profile <ArrowUpRight size={14} />
-              </Button>
+                onExplore={() => navigate("/cache/explorer")}
+                onPreloading={() => navigate("/cache/preloading")}
+                onWarm={() => void action("warm")}
+              />
             </div>
-          </section>
-          <section className="xl:col-span-8 overflow-hidden rounded-xl border border-primary/20 bg-surface">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-[.18em] text-primary">
-                  Managed local library
-                </p>
-                <h2 className="mt-1 text-lg font-semibold">Preload activity</h2>
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={busy !== null || !config.data?.cache.preloadEnabled}
-                onClick={() => void action("preload", { paused: !snap?.preload.paused })}
-              >
-                {snap?.preload.paused ? "Resume preloading" : "Pause preloading"}
-              </Button>
+          ) : tab === "explorer" ? (
+            <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col p-4 sm:p-5">
+              <CacheExplorer
+                snapshot={snap}
+                busy={busy !== null}
+                onPin={(releaseId, pinned) => void action("pin", { releaseId, pinned })}
+              />
             </div>
-            <div className="space-y-4 p-4">
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <p className="text-2xl font-semibold">{snap?.preload.ready ?? 0}</p>
-                  <p className="text-xs text-fg-muted">Sources preloaded</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-semibold">
-                    {formatBytes(snap?.preload.allocated ?? 0)}
-                  </p>
-                  <p className="text-xs text-fg-muted">Reserved, including overhead</p>
-                </div>
-                <div>
-                  <p className="text-2xl font-semibold">
-                    {formatBytes(config.data?.cache.preloadBudgetBytes ?? 0)}
-                  </p>
-                  <p className="text-xs text-fg-muted">Preload allocation</p>
-                </div>
-              </div>
-              <div className="rounded-lg bg-bg-subtle p-3">
-                <p className="text-sm font-medium">
-                  {snap?.preload.paused
-                    ? "Paused"
-                    : snap?.preload.state === "filling"
-                      ? snap.preload.title
-                      : snap?.preload.state === "resolving"
-                        ? `Finding a source for ${snap.preload.title}`
-                        : !saved.preloadEnabled
-                          ? "Preloading disabled"
-                          : snap?.preload.state === "selecting"
-                            ? "Selecting titles"
-                            : snap?.preload.state === "ready"
-                              ? "Selection pass complete"
-                              : "Waiting for the next pass"}
-                </p>
-                <p className="mt-1 text-xs text-fg-muted">
-                  {snap?.preload.message ||
-                    "Enable movie and TV preloading to build a local shelf."}
-                </p>
-                {snap?.preload.state === "filling" && (
-                  <>
-                    <div
-                      role="progressbar"
-                      aria-label="Current preload"
-                      aria-valuenow={snap.preload.fetched}
-                      aria-valuemax={snap.preload.size}
-                      className="mt-3 h-1.5 overflow-hidden rounded bg-primary/10"
-                    >
-                      <div
-                        className="h-full bg-primary"
-                        style={{
-                          width: `${snap.preload.size ? Math.min(100, (snap.preload.fetched / snap.preload.size) * 100) : 0}%`,
-                        }}
-                      />
-                    </div>
-                    <p className="mt-1 text-[10px] text-fg-subtle">
-                      {formatBytes(snap.preload.fetched)} / {formatBytes(snap.preload.size)}
+          ) : (
+            <div className="app-scroll mx-auto grid min-h-0 w-full max-w-[1600px] flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 sm:p-5 lg:grid-cols-12 lg:overflow-hidden">
+              <section className="lg:col-span-5 min-h-0 overflow-y-auto rounded-xl border border-primary/20 bg-surface">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[.18em] text-primary">
+                      Managed local library
                     </p>
-                  </>
-                )}
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
-                <p className="text-xs text-fg-muted">
-                  {config.data?.cache.preloadDuringPlayback
-                    ? "May run during playback"
-                    : "Waits during playback"}{" "}
-                  ·{" "}
-                  {config.data?.cache.preloadRateMiB
-                    ? `${config.data.cache.preloadRateMiB} MiB/s limit`
-                    : "No bandwidth cap"}
-                </p>
-                <Button variant="ghost" size="sm" onClick={() => setSelectionOpen(true)}>
-                  <Sparkles size={14} /> Why these titles?
-                </Button>
-              </div>
-              {(snap?.preload.failed ?? 0) > 0 && (
-                <p className="text-xs text-fg-muted">
-                  {snap?.preload.failed} attempts skipped or interrupted this run. Unavailable or
-                  oversized titles do not stop the shelf.
-                </p>
-              )}
-            </div>
-          </section>
-          <section className="xl:col-span-4 rounded-xl border border-border bg-surface">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
-              <div>
-                <h2 className="flex items-center gap-2 text-sm font-semibold">
-                  <Zap size={16} className="text-primary" /> Playback warming
-                </h2>
-                <p className="mt-1 text-xs text-fg-muted">
-                  Background prefetch jobs · live playback has priority
-                </p>
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                disabled={
-                  busy !== null ||
-                  !config.data?.cache.keepInProgressWarm ||
-                  config.data?.cache.disableSpeculation ||
-                  config.data?.cache.mode === "off"
-                }
-                onClick={() => void action("warm")}
-              >
-                <RefreshCw size={13} /> Warm resumes
-              </Button>
-            </div>
-            <div className="grid grid-cols-3 gap-3 p-4 sm:grid-cols-3">
-              {[
-                ["Queued", snap?.prefetch.queued],
-                ["Running", snap?.prefetch.running],
-                ["Completed", snap?.prefetch.completed],
-                ["Failed", snap?.prefetch.failed],
-                ["Dropped", snap?.prefetch.dropped],
-                ["Reclaimed", snap ? formatBytes(snap.metrics.evictedBytes) : "—"],
-              ].map(([label, value]) => (
-                <div key={label}>
-                  <p className="text-lg font-semibold tabular-nums">{value ?? "—"}</p>
-                  <p className="text-[10px] text-fg-muted">{label}</p>
-                </div>
-              ))}
-            </div>
-          </section>
-          <section className="xl:col-span-12 overflow-hidden rounded-xl border border-border bg-surface">
-            <div className="space-y-3 border-b border-border p-4">
-              <div className="flex items-baseline justify-between gap-2">
-                <h2 className="text-sm font-semibold">Retained media</h2>
-                <span className="text-xs text-fg-subtle">Refreshes every 5 seconds</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Input
-                  aria-label="Search cached releases"
-                  placeholder="Find a title or release…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="min-w-36 flex-1"
-                />
-                <select
-                  aria-label="Filter cached releases"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  className="rounded-md border border-border bg-surface px-3 text-sm"
-                >
-                  <option value="all">All releases</option>
-                  <option value="replayed">Repeat watches</option>
-                  <option value="protected">Protected</option>
-                </select>
-              </div>
-            </div>
-            {!snap ? (
-              <div className="p-8 text-center text-sm text-fg-muted">Loading retained media…</div>
-            ) : releases.length === 0 ? (
-              <div className="flex flex-col items-center px-6 py-14 text-center">
-                <div className="mb-4 rounded-2xl bg-primary/10 p-4">
-                  <Play size={24} className="text-primary" />
-                </div>
-                <h3 className="text-base font-medium">
-                  {search || filter !== "all"
-                    ? "No matching releases"
-                    : "Your next stream plants the first seed"}
-                </h3>
-                <p className="mt-2 max-w-sm text-sm leading-relaxed text-fg-muted">
-                  {search || filter !== "all"
-                    ? "Try another search or filter."
-                    : "As viewers watch, retained segments appear here. Nothing needs to be downloaded in advance."}
-                </p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {releases.slice(0, 100).map((r) => (
-                  <div
-                    key={r.ReleaseID}
-                    className="flex items-start gap-3 p-4 transition-colors hover:bg-surface-hover"
+                    <h2 className="mt-1 text-lg font-semibold">Preload activity</h2>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy !== null || !config.data?.cache.preloadEnabled}
+                    onClick={() => void action("preload", { paused: !snap?.preload.paused })}
                   >
-                    <div className="mt-1 rounded-lg bg-primary/10 p-2 text-primary">
-                      <Play size={16} />
+                    {snap?.preload.paused ? "Resume preloading" : "Pause preloading"}
+                  </Button>
+                </div>
+                <div className="space-y-4 p-4">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <p className="text-2xl font-semibold">{snap?.preload.ready ?? 0}</p>
+                      <p className="text-xs text-fg-muted">Sources preloaded</p>
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium" title={r.Title || r.ReleaseID}>
-                        {r.Title || r.ReleaseID}
+                    <div>
+                      <p className="text-2xl font-semibold">
+                        {formatBytes(snap?.preload.allocated ?? 0)}
                       </p>
-                      <p className="mt-1 truncate text-[10px] text-fg-subtle" title={r.ReleaseID}>
-                        {r.ReleaseID}
+                      <p className="text-xs text-fg-muted">Reserved, including overhead</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold">
+                        {formatBytes(config.data?.cache.preloadBudgetBytes ?? 0)}
                       </p>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-fg-muted">
-                        <span>
-                          {formatBytes(r.Bytes)} retained
-                          {r.Size > 0
-                            ? ` · ${Math.min(100, Math.round((r.Bytes / r.Size) * 100))}% of source bytes`
-                            : ""}
-                        </span>
-                        <span>
-                          {r.Plays} {r.Plays === 1 ? "play" : "plays"}
-                        </span>
-                        <span className="inline-flex items-center gap-1">
-                          <Clock3 size={11} />
-                          <Age value={r.LastUsed} />
-                        </span>
-                        {r.Pins?.map((p) => (
-                          <Badge key={p} variant="secondary">
-                            {p === "owner" ? "Kept by you" : p}
-                          </Badge>
-                        ))}
-                      </div>
-                      {r.Size > 0 && (
-                        <div className="mt-2 h-1 w-full max-w-xs overflow-hidden rounded-full bg-primary/10">
+                      <p className="text-xs text-fg-muted">Preload allocation</p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-bg-subtle p-3">
+                    <p className="text-sm font-medium">
+                      {snap?.preload.paused
+                        ? "Paused"
+                        : snap?.preload.state === "filling"
+                          ? snap.preload.title
+                          : snap?.preload.state === "resolving"
+                            ? `Finding a source for ${snap.preload.title}`
+                            : !saved.preloadEnabled
+                              ? "Preloading disabled"
+                              : snap?.preload.state === "selecting"
+                                ? "Selecting titles"
+                                : snap?.preload.state === "ready"
+                                  ? "Selection pass complete"
+                                  : "Waiting for the next pass"}
+                    </p>
+                    <p className="mt-1 text-xs text-fg-muted">
+                      {snap?.preload.message ||
+                        "Enable movie and TV preloading to build a local shelf."}
+                    </p>
+                    {snap?.preload.state === "filling" && (
+                      <>
+                        <div
+                          role="progressbar"
+                          aria-label="Current preload"
+                          aria-valuenow={snap.preload.fetched}
+                          aria-valuemax={snap.preload.size}
+                          className="mt-3 h-1.5 overflow-hidden rounded bg-primary/10"
+                        >
                           <div
-                            className="h-full rounded-full bg-primary/50"
-                            style={{ width: `${Math.min(100, (r.Bytes / r.Size) * 100)}%` }}
+                            className="h-full bg-primary"
+                            style={{
+                              width: `${snap.preload.size ? Math.min(100, (snap.preload.fetched / snap.preload.size) * 100) : 0}%`,
+                            }}
                           />
                         </div>
-                      )}
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      title={
-                        r.Pins?.includes("owner") ? "Release owner pin" : "Keep until unpinned"
-                      }
-                      aria-label={`${r.Pins?.includes("owner") ? "Unpin" : "Pin"} ${r.Title || r.ReleaseID}`}
-                      disabled={busy !== null}
-                      onClick={() =>
-                        void action("pin", {
-                          releaseId: r.ReleaseID,
-                          pinned: !r.Pins?.includes("owner"),
-                        })
-                      }
-                    >
-                      <Pin
-                        size={15}
-                        className={r.Pins?.includes("owner") ? "fill-primary text-primary" : ""}
-                      />
-                    </Button>
+                        <p className="mt-1 text-[10px] text-fg-subtle">
+                          {formatBytes(snap.preload.fetched)} / {formatBytes(snap.preload.size)}
+                        </p>
+                      </>
+                    )}
                   </div>
-                ))}
-                {releases.length > 100 && (
-                  <p className="p-4 text-xs text-fg-muted">
-                    Showing the 100 most recent matches. Search to narrow the list.
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                    <p className="text-xs text-fg-muted">
+                      {config.data?.cache.preloadDuringPlayback
+                        ? "May run during playback"
+                        : "Waits during playback"}{" "}
+                      ·{" "}
+                      {config.data?.cache.preloadRateMiB
+                        ? `${config.data.cache.preloadRateMiB} MiB/s limit`
+                        : "No bandwidth cap"}
+                    </p>
+                  </div>
+                  {(snap?.preload.failed ?? 0) > 0 && (
+                    <p className="text-xs text-fg-muted">
+                      {snap?.preload.failed} attempts skipped or interrupted this run. Unavailable
+                      or oversized titles do not stop the shelf.
+                    </p>
+                  )}
+                </div>
+              </section>
+              <section className="app-scroll lg:col-span-7 min-h-0 overflow-y-auto rounded-xl border border-border bg-surface">
+                <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+                  <div>
+                    <h2 className="flex items-center gap-2 text-sm font-semibold">
+                      <Sparkles size={16} className="text-primary" /> Why these titles?
+                    </h2>
+                    <p className="mt-1 text-xs text-fg-muted">
+                      Highest-ranked selections from the last pass · {snap?.preload.viewers ?? 0}{" "}
+                      active viewers considered
+                    </p>
+                  </div>
+                  <Badge>Explainable selection</Badge>
+                </div>
+                {snap?.preload.selection?.length ? (
+                  <div className="divide-y divide-border">
+                    {snap.preload.selection.slice(0, 6).map((item, i) => (
+                      <div key={item.key} className="flex items-start gap-3 p-4">
+                        <span className="mt-0.5 w-5 shrink-0 font-mono text-xs text-fg-subtle">
+                          {String(i + 1).padStart(2, "0")}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-medium">{item.title}</span>
+                            <span className="shrink-0 text-[10px] uppercase text-fg-subtle">
+                              {item.type === "episode" ? "TV" : "Film"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-fg-muted">{item.reason}</p>
+                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-fg-subtle">
+                            <span>Catalogue {Math.round(item.catalogue)}/100</span>
+                            <span>Household {Math.round(item.household)}/100</span>
+                          </div>
+                        </div>
+                        <span
+                          className="shrink-0 rounded-md bg-primary/10 px-2 py-1 font-mono text-xs text-primary"
+                          aria-label={`Selection score ${Math.round(item.score)} out of 100`}
+                        >
+                          {Math.round(item.score)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="p-4 text-sm leading-relaxed text-fg-muted">
+                    Enable preloading and save to build your first selection. Movies blend discovery
+                    with household favourites; TV keeps a rolling window of episodes ready. Scores
+                    appear after the next selection pass.
                   </p>
                 )}
-              </div>
-            )}
-            <p className="border-t border-border bg-bg-subtle px-4 py-3 text-[11px] leading-relaxed text-fg-muted">
-              Coverage describes stored bytes. Managed preloads carry a preloaded pin; they are not
-              a standalone offline library. Seeking, another release, or an expired provider link
-              can still need your source.
-            </p>
-          </section>
-          <p className="break-all text-[11px] text-fg-subtle xl:col-span-12">
-            <HardDrive size={12} className="mr-1 inline" />
-            {snap?.directory ?? saved.dir}
-          </p>
-        </div>
-      </main>
+                <p className="border-t border-border px-4 py-3 text-[10px] text-fg-subtle">
+                  Scores rank cache candidates, not predicted viewing probabilities. TV windows
+                  taper by episode distance. Selection does not guarantee source availability.
+                </p>
+              </section>
+            </div>
+          )}
+        </main>
+      </div>
       <Drawer
         open={editor !== null}
         onClose={() => {
@@ -1350,67 +1082,6 @@ export default function Cache() {
             </Drawer>
           </div>
         )}
-      </Drawer>
-      <Drawer
-        open={selectionOpen}
-        onClose={() => setSelectionOpen(false)}
-        title="Selection details"
-        size="lg"
-      >
-        <section className="overflow-hidden rounded-xl border border-border bg-surface">
-          <div className="flex items-start justify-between gap-3 border-b border-border p-4">
-            <div>
-              <h2 className="flex items-center gap-2 text-sm font-semibold">
-                <Sparkles size={16} className="text-primary" /> Why these titles?
-              </h2>
-              <p className="mt-1 text-xs text-fg-muted">
-                Highest-ranked selections from the last pass · {snap?.preload.viewers ?? 0} active
-                viewers considered
-              </p>
-            </div>
-            <Badge>Explainable selection</Badge>
-          </div>
-          {snap?.preload.selection?.length ? (
-            <div className="divide-y divide-border">
-              {snap.preload.selection.slice(0, 6).map((item, i) => (
-                <div key={item.key} className="flex items-start gap-3 p-4">
-                  <span className="mt-0.5 w-5 shrink-0 font-mono text-xs text-fg-subtle">
-                    {String(i + 1).padStart(2, "0")}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm font-medium">{item.title}</span>
-                      <span className="shrink-0 text-[10px] uppercase text-fg-subtle">
-                        {item.type === "episode" ? "TV" : "Film"}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-xs text-fg-muted">{item.reason}</p>
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-fg-subtle">
-                      <span>Catalogue {Math.round(item.catalogue)}/100</span>
-                      <span>Household {Math.round(item.household)}/100</span>
-                    </div>
-                  </div>
-                  <span
-                    className="shrink-0 rounded-md bg-primary/10 px-2 py-1 font-mono text-xs text-primary"
-                    aria-label={`Selection score ${Math.round(item.score)} out of 100`}
-                  >
-                    {Math.round(item.score)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="p-4 text-sm leading-relaxed text-fg-muted">
-              Enable preloading and save to build your first selection. Movies blend discovery with
-              household favourites; TV keeps a rolling window of episodes ready. Scores appear after
-              the next selection pass.
-            </p>
-          )}
-          <p className="border-t border-border px-4 py-3 text-[10px] text-fg-subtle">
-            Scores rank cache candidates, not predicted viewing probabilities. TV windows taper by
-            episode distance. Selection does not guarantee source availability.
-          </p>
-        </section>
       </Drawer>
     </Workspace>
   );

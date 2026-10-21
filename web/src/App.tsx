@@ -331,7 +331,7 @@ function Shell() {
             <Route path="/metadata/:tab?" element={<Metadata />} />
             <Route path="/sources/:tab?" element={<Sources />} />
             <Route path="/releases/:tab?" element={<Releases />} />
-            <Route path="/cache" element={<Cache />} />
+            <Route path="/cache/:tab?" element={<Cache />} />
             <Route path="/playback/cache" element={<Navigate to="/cache" replace />} />
             <Route path="/playback/:tab?" element={<Playback />} />
             <Route path="/notifications/:tab?" element={<Notifications />} />

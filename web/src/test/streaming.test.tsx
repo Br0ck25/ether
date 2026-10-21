@@ -194,7 +194,10 @@ describe("Playback", () => {
   it("redirects the legacy cache URL to the new management page", async () => {
     const { fake } = renderApp("/playback/cache");
     expect(await screen.findByRole("heading", { name: "Cache" }, WAIT)).toBeInTheDocument();
-    expect(await screen.findByText("Retained media", {}, WAIT)).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Overview" }, WAIT)).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(screen.queryByRole("button", { name: /Edit cache/i })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit policy" }));
     fireEvent.click(screen.getAllByRole("switch")[0]!);
