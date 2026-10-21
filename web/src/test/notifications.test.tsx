@@ -78,13 +78,11 @@ describe("Notification setup", () => {
   });
   it("tests a paused channel directly and reloads failed delivery history", async () => {
     const onChanged = vi.fn().mockResolvedValue(undefined);
-    const fetcher = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ error: { message: "SMTP authentication failed" } }), {
-          status: 502,
-        }),
-      );
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "SMTP authentication failed" } }), {
+        status: 502,
+      }),
+    );
     vi.stubGlobal("fetch", fetcher);
     render(
       <Channels

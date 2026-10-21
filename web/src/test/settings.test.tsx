@@ -15,9 +15,7 @@ describe("Settings", () => {
         password: "••••",
       };
     });
-    expect(
-      await screen.findByRole("heading", { name: "Integrations" }, WAIT),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Integrations" }, WAIT)).toBeInTheDocument();
     fireEvent.change(await screen.findByLabelText("Username", {}, WAIT), {
       target: { value: "sam.rivera" },
     });
@@ -257,13 +255,7 @@ describe("Settings", () => {
     renderApp("/server");
     await screen.findByRole("heading", { name: "General" }, WAIT);
     const sidebar = (name: string) => screen.queryAllByRole("link", { name });
-    for (const name of [
-      "General",
-      "Connectivity",
-      "Integrations",
-      "Notifications",
-      "Maintenance",
-    ])
+    for (const name of ["General", "Connectivity", "Integrations", "Notifications", "Maintenance"])
       expect(sidebar(name).length).toBeGreaterThan(0);
     for (const name of ["Backups & import", "Updates", "Troubleshooting", "Logs"])
       expect(sidebar(name)).toHaveLength(0);
