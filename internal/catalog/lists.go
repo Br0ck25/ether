@@ -16,13 +16,27 @@ func (c *Catalog) upsertSummaries(ctx context.Context, titles []core.Title, brow
 	if browsable {
 		return c.upsertMany(ctx, titles, upsertOpts{browsable: true})
 	}
-	// Browsable only for those meeting the threshold; the rest are mirror-only.
+	// One transaction for the list, while retaining each title's threshold.
+	// A transaction per summary adds two network round trips per tile in HA.
+	if len(titles) == 0 {
+		return nil
+	}
+	// Concurrent nodes may refresh overlapping lists in different rank order.
+	// Take row locks in key order, while the caller retains its display order.
+	titles = append([]core.Title(nil), titles...)
+	sort.SliceStable(titles, func(i, j int) bool { return titles[i].Key < titles[j].Key })
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := c.now().Unix()
 	for _, t := range titles {
-		if err := c.upsert(ctx, t, upsertOpts{browsable: c.meetsThreshold(t)}); err != nil {
+		if err := upsertOne(ctx, tx, t, upsertOpts{browsable: c.meetsThreshold(t)}, now); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func limitTitles(items []core.Title, limit int) []core.Title {
@@ -203,11 +217,26 @@ func (c *Catalog) List(ctx context.Context, list string, t core.MediaType, limit
 	if err := c.upsertSummaries(ctx, items, false); err != nil {
 		return nil, err
 	}
-	// Reload hydrated.
+	// Hydrate the list together: the facet queries are already batch-aware.
+	keys := make([]core.RatingKey, 0, len(items))
+	for _, it := range items {
+		keys = append(keys, it.Key)
+	}
+	hydrated, loadErr := c.titlesByKeys(ctx, keys)
+	byKey := make(map[core.RatingKey]core.Title, len(hydrated))
+	for _, t := range hydrated {
+		byKey[t.Key] = t
+	}
 	out := make([]core.Title, 0, len(items))
 	for _, it := range items {
-		if st, err := c.loadByKey(ctx, it.Key); err == nil {
-			out = append(out, st.t)
+		if t, ok := byKey[it.Key]; ok {
+			out = append(out, t)
+		} else if loadErr != nil {
+			if st, err := c.loadByKey(ctx, it.Key); err == nil {
+				out = append(out, st.t)
+			} else {
+				out = append(out, it)
+			}
 		} else {
 			out = append(out, it)
 		}
