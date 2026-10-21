@@ -1,6 +1,6 @@
 // Package archive reads the headers of RAR (4.x and 5.x) and 7z archives and
 // maps each inner file onto byte ranges (extents) of the archive volumes, so
-// that store-mode (uncompressed, unencrypted) members can be streamed straight
+// that store-mode members can be streamed (with native decryption when needed)
 // out of the volumes without extracting anything.
 //
 // Every volume is accessed through an io.ReaderAt whose reads may be expensive
@@ -18,13 +18,15 @@ import (
 // Sentinel errors. Errors returned by this package wrap one of these (via
 // fmt.Errorf with %w) so callers can test them with errors.Is.
 var (
-	ErrNotArchive    = errors.New("archive: not a recognised archive")
-	ErrCompressed    = errors.New("archive: compressed (not store mode)")
-	ErrEncrypted     = errors.New("archive: encrypted")
-	ErrSolid         = errors.New("archive: solid archive")
-	ErrUnsupported   = errors.New("archive: unsupported archive feature")
-	ErrCorrupt       = errors.New("archive: corrupt or truncated header")
-	ErrMissingVolume = errors.New("archive: missing volume")
+	ErrNotArchive       = errors.New("archive: not a recognised archive")
+	ErrCompressed       = errors.New("archive: compressed (not store mode)")
+	ErrEncrypted        = errors.New("archive: encrypted")
+	ErrPasswordRequired = fmt.Errorf("archive: password required: %w", ErrEncrypted)
+	ErrBadPassword      = fmt.Errorf("archive: incorrect password: %w", ErrEncrypted)
+	ErrSolid            = errors.New("archive: solid archive")
+	ErrUnsupported      = errors.New("archive: unsupported archive feature")
+	ErrCorrupt          = errors.New("archive: corrupt or truncated header")
+	ErrMissingVolume    = errors.New("archive: missing volume")
 )
 
 // Format identifies an archive container format.
@@ -85,14 +87,15 @@ type Volume struct {
 
 // Member is one inner file mapped onto volume byte ranges.
 type Member struct {
-	Name      string
-	Size      int64 // unpacked size
-	Stored    bool
-	Encrypted bool
-	Solid     bool
-	Dir       bool
-	Method    string   // human-readable, e.g. "store", "rar5:m3", "lzma", "copy", "aes"
-	Extents   []Extent // in order; sum of Extent.Size == Size for stored files
+	Name       string
+	Size       int64 // unpacked size
+	Stored     bool
+	Encrypted  bool
+	Solid      bool
+	Dir        bool
+	Method     string      // human-readable, e.g. "store", "rar5:m3", "lzma", "copy", "aes"
+	Extents    []Extent    // in order; ciphertext ranges when Encryption is non-nil
+	Encryption *Encryption // ephemeral decryption metadata; nil for plain/unsupported encryption
 }
 
 // Extent is a contiguous byte range inside one volume.
@@ -107,7 +110,7 @@ type Extent struct {
 // that order), or ErrUnsupported for a directory.
 func (m *Member) Streamable() error {
 	switch {
-	case m.Encrypted:
+	case m.Encrypted && m.Encryption == nil:
 		return fmt.Errorf("archive: member %q: %w", m.Name, ErrEncrypted)
 	case m.Solid:
 		return fmt.Errorf("archive: member %q: %w", m.Name, ErrSolid)

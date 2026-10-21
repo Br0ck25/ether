@@ -124,30 +124,54 @@ func readRAR5(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 	pos := int64(len(sigRAR5))
 	var prefix [rar5Prefix]byte
 	mainSeen := false
+	crypto := newRARCrypto(o)
+	var blockKey []byte
 	for pos < size {
-		if size-pos < rar5MinBlock {
-			return nil, fmt.Errorf("archive: rar5 block at %d: %d trailing bytes: %w", pos, size-pos, ErrCorrupt)
+		if err := crypto.ctx.Err(); err != nil {
+			return nil, err
 		}
-		pre := prefix[:min(int64(rar5Prefix), size-pos)]
-		if err := readAt(r, pre, pos, size); err != nil {
-			return nil, fmt.Errorf("archive: rar5 block at %d: %w", pos, err)
-		}
-		hsize, n := uvarint(pre[4:])
-		if n == 0 || hsize == 0 || hsize > rar5MaxHeader {
-			return nil, fmt.Errorf("archive: rar5 block at %d: bad header size: %w", pos, ErrCorrupt)
-		}
-		total := 4 + n + int(hsize)
-		if int64(total) > size-pos {
-			return nil, fmt.Errorf("archive: rar5 block at %d: header (%d bytes) runs past end of volume: %w", pos, total, ErrCorrupt)
-		}
-		h := make([]byte, total)
-		got := copy(h, pre)
-		if got < total {
-			if err := readAt(r, h[got:], pos+int64(got), size); err != nil {
-				return nil, fmt.Errorf("archive: rar5 block at %d: %w", pos, err)
+		var h []byte
+		var headerBytes int64
+		if blockKey != nil {
+			var iv [16]byte
+			if err := readAt(r, iv[:], pos, size); err != nil {
+				return nil, err
 			}
+			var padded int64
+			var err error
+			h, padded, err = decryptRARHeader(r, size, pos+16, blockKey, iv, true)
+			if err != nil {
+				return nil, err
+			}
+			headerBytes = 16 + padded
+		} else {
+			if size-pos < rar5MinBlock {
+				return nil, fmt.Errorf("archive: truncated RAR5 block: %w", ErrCorrupt)
+			}
+			pre := prefix[:min(int64(rar5Prefix), size-pos)]
+			if err := readAt(r, pre, pos, size); err != nil {
+				return nil, err
+			}
+			hs, n := uvarint(pre[4:])
+			if n == 0 || hs == 0 || hs > rar5MaxHeader {
+				return nil, fmt.Errorf("archive: invalid RAR5 header size: %w", ErrCorrupt)
+			}
+			total := 4 + n + int(hs)
+			if int64(total) > size-pos {
+				return nil, fmt.Errorf("archive: truncated RAR5 header: %w", ErrCorrupt)
+			}
+			h = make([]byte, total)
+			got := copy(h, pre)
+			if err := readAt(r, h[got:], pos+int64(got), size); err != nil {
+				return nil, err
+			}
+			headerBytes = int64(total)
 		}
+		_, n := uvarint(h[4:])
 		if c, want := crc32.ChecksumIEEE(h[4:]), binary.LittleEndian.Uint32(h); c != want {
+			if blockKey != nil {
+				return nil, fmt.Errorf("archive: encrypted RAR5 header CRC mismatch: %w: %w", ErrBadPassword, ErrCorrupt)
+			}
 			return nil, fmt.Errorf("archive: rar5 block at %d: header crc %#08x, want %#08x: %w", pos, c, want, ErrCorrupt)
 		}
 		body := h[4+n:]
@@ -169,7 +193,7 @@ func readRAR5(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 		}
 		fields := rar5Buf{b: b.b[:int64(len(b.b))-extraSize]}
 		extra := b.b[int64(len(b.b))-extraSize:]
-		dataOff := pos + int64(total)
+		dataOff := pos + headerBytes
 		if dataSize > size-dataOff {
 			return nil, fmt.Errorf("archive: rar5 block at %d: data (%d bytes) runs past end of volume: %w", pos, dataSize, ErrCorrupt)
 		}
@@ -180,7 +204,14 @@ func readRAR5(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 		}
 		switch typ {
 		case rar5Encryption:
-			return nil, fmt.Errorf("archive: rar5 headers are encrypted: %w", ErrEncrypted)
+			if blockKey != nil || mainSeen {
+				return nil, fmt.Errorf("archive: misplaced RAR5 encryption header: %w", ErrCorrupt)
+			}
+			enc, err := parseRAR5Encryption(&fields, crypto, false)
+			if err != nil {
+				return nil, err
+			}
+			blockKey = enc.Key
 		case rar5Main:
 			if mainSeen {
 				break
@@ -203,7 +234,7 @@ func readRAR5(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 			v.Solid = af&rar5ArcSolid != 0
 			v.DataStart = next
 		case rar5File:
-			f, err := parseRAR5File(&fields, extra, flags)
+			f, err := parseRAR5File(&fields, extra, flags, crypto)
 			if err != nil {
 				return nil, fmt.Errorf("archive: rar5 file header at %d: %w", pos, err)
 			}
@@ -234,7 +265,7 @@ func readRAR5(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 	return v, nil
 }
 
-func parseRAR5File(p *rar5Buf, extra []byte, hflags uint64) (RARFile, error) {
+func parseRAR5File(p *rar5Buf, extra []byte, hflags uint64, crypto ...*rarCrypto) (RARFile, error) {
 	var f RARFile
 	ff := p.vint()
 	unp := p.size()
@@ -273,7 +304,18 @@ func parseRAR5File(p *rar5Buf, extra []byte, hflags uint64) (RARFile, error) {
 		}
 		rb := rar5Buf{b: rec}
 		if t := rb.vint(); rb.err == nil && t == rar5ExtraEncryption {
+			if f.Encrypted {
+				return f, fmt.Errorf("archive: duplicate RAR5 encryption record: %w", ErrCorrupt)
+			}
 			f.Encrypted = true
+			if len(crypto) > 0 && crypto[0].password != "" {
+				enc, err := parseRAR5Encryption(&rb, crypto[0], true)
+				if err != nil {
+					return f, err
+				}
+				enc.Size = f.UnpackedSize
+				f.Encryption = enc
+			}
 		}
 	}
 	return f, nil

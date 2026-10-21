@@ -2,6 +2,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -101,6 +102,7 @@ func (c *sz7Coder) name() string {
 
 type sz7Fold struct {
 	coders      []sz7Coder
+	bindIn      []uint64 // in-stream index of each bind pair
 	bindOut     []uint64 // out-stream index of each bind pair
 	numPacked   int
 	unpackSizes []uint64
@@ -335,6 +337,7 @@ func (s *sz7Buf) folder() sz7Fold {
 			s.fail("bind pair out of range")
 			return f
 		}
+		f.bindIn = append(f.bindIn, in)
 		f.bindOut = append(f.bindOut, out)
 	}
 	f.numPacked = totalIn - numBind
@@ -600,6 +603,19 @@ func (s *sz7Buf) filesInfo() []sz7File {
 // maps the result back onto the individual volumes). Extents use Volume 0
 // and offsets in r. Only stored (Copy-only) members have extents.
 func List7z(r io.ReaderAt, size int64) ([]Member, error) {
+	return list7z(&sz7Crypto{ctx: context.Background()}, r, size)
+}
+
+// List7zWithPassword lists an archive and prepares seekable decryption for
+// stored encrypted members. Keys live only with the returned member plans.
+func List7zWithPassword(ctx context.Context, r io.ReaderAt, size int64, password string) ([]Member, error) {
+	return list7z(&sz7Crypto{ctx: ctx, password: password, enabled: true, keys: make(map[string][]byte)}, r, size)
+}
+
+func list7z(crypto *sz7Crypto, r io.ReaderAt, size int64) ([]Member, error) {
+	if err := crypto.ctx.Err(); err != nil {
+		return nil, err
+	}
 	var sh [sz7SigHeaderLen]byte
 	if size < int64(len(sig7z)) {
 		return nil, fmt.Errorf("archive: 7z: %w", ErrNotArchive)
@@ -644,12 +660,15 @@ func List7z(r io.ReaderAt, size int64) ([]Member, error) {
 		return nil, fmt.Errorf("archive: 7z header crc %#08x, want %#08x: %w", got, nextCRC, ErrCorrupt)
 	}
 	for depth := 0; ; depth++ {
+		if err := crypto.ctx.Err(); err != nil {
+			return nil, err
+		}
 		if len(hdr) == 0 {
 			return nil, fmt.Errorf("archive: 7z empty header: %w", ErrCorrupt)
 		}
 		switch hdr[0] {
 		case sz7Header:
-			return parse7zHeader(hdr[1:], size)
+			return parse7zHeader(crypto, hdr[1:], size)
 		case sz7EncodedHeader:
 			if depth >= sz7MaxNesting {
 				return nil, fmt.Errorf("archive: 7z encoded headers nested too deep: %w", ErrCorrupt)
@@ -660,7 +679,7 @@ func List7z(r io.ReaderAt, size int64) ([]Member, error) {
 				return nil, b.err
 			}
 			var err error
-			if hdr, err = decode7zHeader(r, size, st); err != nil {
+			if hdr, err = decode7zHeader(crypto, r, size, st); err != nil {
 				return nil, err
 			}
 		default:
@@ -670,48 +689,83 @@ func List7z(r io.ReaderAt, size int64) ([]Member, error) {
 }
 
 // decode7zHeader unpacks an encoded header described by st.
-func decode7zHeader(r io.ReaderAt, size int64, st *sz7Streams) ([]byte, error) {
-	if len(st.folders) != 1 || len(st.packSizes) < 1 {
-		return nil, fmt.Errorf("archive: 7z encoded header with %d folders: %w", len(st.folders), ErrCorrupt)
+func decode7zHeader(crypto *sz7Crypto, r io.ReaderAt, size int64, st *sz7Streams) ([]byte, error) {
+	if len(st.folders) != 1 || len(st.packSizes) != 1 {
+		return nil, fmt.Errorf("archive: 7z encoded header streams: %w", ErrCorrupt)
 	}
 	f := &st.folders[0]
-	if f.hasMethod(sz7MethodAES) {
-		return nil, fmt.Errorf("archive: 7z header is encrypted: %w", ErrEncrypted)
-	}
-	if len(f.coders) != 1 || f.numPacked != 1 {
-		return nil, fmt.Errorf("archive: 7z header coder chain %s: %w", f.method(), ErrUnsupported)
+	order, err := f.chain()
+	if err != nil {
+		return nil, err
 	}
 	unpack := f.unpackSize()
 	packSize := st.packSizes[0]
 	avail := uint64(size - sz7SigHeaderLen)
 	if unpack > sz7MaxHeader || packSize > sz7MaxHeader || st.packPos > avail || packSize > avail-st.packPos {
-		return nil, fmt.Errorf("archive: 7z encoded header (%d packed, %d unpacked) out of range: %w", packSize, unpack, ErrCorrupt)
+		return nil, fmt.Errorf("archive: 7z encoded header out of range: %w", ErrCorrupt)
 	}
 	packed := make([]byte, packSize)
 	if err := readAt(r, packed, int64(sz7SigHeaderLen+st.packPos), size); err != nil {
 		return nil, err
 	}
-	c := &f.coders[0]
-	var out []byte
+	encrypted := false
+	for _, i := range order {
+		if err := crypto.ctx.Err(); err != nil {
+			return nil, err
+		}
+		c := &f.coders[i]
+		n := f.unpackSizes[i]
+		if n > sz7MaxHeader {
+			return nil, fmt.Errorf("archive: 7z header intermediate size exceeds limit: %w", ErrCorrupt)
+		}
+		if bytes.Equal(c.id, sz7MethodAES) {
+			packed, err = crypto.decrypt(c.props, packed, n)
+			encrypted = true
+		} else {
+			packed, err = decode7zHeaderCoder(c, packed, n)
+		}
+		if err != nil {
+			if encrypted && !bytes.Equal(c.id, sz7MethodAES) {
+				return nil, fmt.Errorf("archive: 7z encrypted header decode: %w: %w", ErrBadPassword, err)
+			}
+			return nil, err
+		}
+	}
+	if f.hasCRC && crc32.ChecksumIEEE(packed) != f.crc {
+		if encrypted {
+			return nil, fmt.Errorf("archive: 7z encrypted header CRC: %w: %w", ErrBadPassword, ErrCorrupt)
+		}
+		return nil, fmt.Errorf("archive: 7z decoded header crc mismatch: %w", ErrCorrupt)
+	}
+	if encrypted && (len(packed) == 0 || (packed[0] != sz7Header && packed[0] != sz7EncodedHeader)) {
+		return nil, fmt.Errorf("archive: 7z encrypted header marker: %w: %w", ErrBadPassword, ErrCorrupt)
+	}
+	return packed, nil
+}
+
+func decode7zHeaderCoder(c *sz7Coder, packed []byte, unpack uint64) ([]byte, error) {
+	var zr io.Reader
 	switch {
 	case bytes.Equal(c.id, sz7MethodCopy):
-		if packSize != unpack {
+		if uint64(len(packed)) != unpack {
 			return nil, fmt.Errorf("archive: 7z copy header size mismatch: %w", ErrCorrupt)
 		}
-		out = packed
+		return packed, nil
 	case bytes.Equal(c.id, sz7MethodLZMA):
 		if len(c.props) != 5 {
 			return nil, fmt.Errorf("archive: 7z lzma properties: %w", ErrCorrupt)
 		}
+		// lzma.NewReader honors the dictionary encoded in its header. Bound it
+		// before allocation, including malicious encrypted headers.
+		if binary.LittleEndian.Uint32(c.props[1:]) > sz7MaxHeader {
+			return nil, fmt.Errorf("archive: 7z lzma dictionary exceeds limit: %w", ErrCorrupt)
+		}
 		h := make([]byte, lzma.HeaderLen)
 		copy(h, c.props)
 		binary.LittleEndian.PutUint64(h[5:], unpack)
-		zr, err := lzma.NewReader(io.MultiReader(bytes.NewReader(h), bytes.NewReader(packed)))
+		var err error
+		zr, err = lzma.NewReader(io.MultiReader(bytes.NewReader(h), bytes.NewReader(packed)))
 		if err != nil {
-			return nil, fmt.Errorf("archive: 7z lzma header: %v: %w", err, ErrCorrupt)
-		}
-		out = make([]byte, unpack)
-		if _, err := io.ReadFull(zr, out); err != nil {
 			return nil, fmt.Errorf("archive: 7z lzma header: %v: %w", err, ErrCorrupt)
 		}
 	case bytes.Equal(c.id, sz7MethodLZMA2):
@@ -722,25 +776,23 @@ func decode7zHeader(r io.ReaderAt, size int64, st *sz7Streams) ([]byte, error) {
 		if unpack > dict {
 			dict = unpack
 		}
-		zr, err := lzma.Reader2Config{DictCap: int(dict)}.NewReader2(bytes.NewReader(packed))
+		var err error
+		zr, err = lzma.Reader2Config{DictCap: int(dict)}.NewReader2(bytes.NewReader(packed))
 		if err != nil {
-			return nil, fmt.Errorf("archive: 7z lzma2 header: %v: %w", err, ErrCorrupt)
-		}
-		out = make([]byte, unpack)
-		if _, err := io.ReadFull(zr, out); err != nil {
 			return nil, fmt.Errorf("archive: 7z lzma2 header: %v: %w", err, ErrCorrupt)
 		}
 	default:
 		return nil, fmt.Errorf("archive: 7z header coder %s: %w", c.name(), ErrUnsupported)
 	}
-	if f.hasCRC && crc32.ChecksumIEEE(out) != f.crc {
-		return nil, fmt.Errorf("archive: 7z decoded header crc mismatch: %w", ErrCorrupt)
+	out := make([]byte, unpack)
+	if _, err := io.ReadFull(zr, out); err != nil {
+		return nil, fmt.Errorf("archive: 7z decode header: %v: %w", err, ErrCorrupt)
 	}
 	return out, nil
 }
 
 // parse7zHeader parses a plain Header (after its kHeader byte) into members.
-func parse7zHeader(hdr []byte, size int64) ([]Member, error) {
+func parse7zHeader(crypto *sz7Crypto, hdr []byte, size int64) ([]Member, error) {
 	b := sz7Buf{b: hdr}
 	id := b.byte()
 	if id == sz7ArchiveProperties {
@@ -800,6 +852,9 @@ func parse7zHeader(hdr []byte, size int64) ([]Member, error) {
 	fi, si := 0, 0 // folder, substream within folder
 	var inFolder uint64
 	for _, f := range files {
+		if err := crypto.ctx.Err(); err != nil {
+			return nil, err
+		}
 		if f.emptyStream {
 			if f.anti {
 				continue
@@ -831,7 +886,46 @@ func parse7zHeader(hdr []byte, size int64) ([]Member, error) {
 			Dir:       f.hasAttr && f.attr&attrDirectory != 0,
 			Method:    fo.method(),
 		}
-		if m.Stored {
+		if m.Encrypted && crypto.enabled {
+			order, err := fo.chain()
+			if err != nil {
+				return nil, err
+			}
+			stored := true
+			aesIndex := -1
+			for j, i := range order {
+				switch {
+				case bytes.Equal(fo.coders[i].id, sz7MethodAES):
+					if j != 0 || aesIndex != -1 {
+						stored = false
+					}
+					aesIndex = i
+				case bytes.Equal(fo.coders[i].id, sz7MethodCopy):
+				default:
+					stored = false
+				}
+			}
+			if stored && aesIndex >= 0 {
+				enc, err := crypto.encryption(fo.coders[aesIndex].props)
+				if err != nil {
+					return nil, err
+				}
+				packed := st.packSizes[firstPack[fi]]
+				plain := fo.unpackSize()
+				if plain > 1<<62 || packed%16 != 0 || packed < plain || packed-plain >= 16 || packStart[fi] > uint64(size) || packed > uint64(size)-packStart[fi] {
+					return nil, fmt.Errorf("archive: 7z encrypted folder sizes: %w", ErrCorrupt)
+				}
+				for _, n := range fo.unpackSizes {
+					if n != plain {
+						return nil, fmt.Errorf("archive: 7z encrypted copy size mismatch: %w", ErrCorrupt)
+					}
+				}
+				enc.Offset, enc.Size = int64(inFolder), int64(plain)
+				m.Stored, m.Encryption = true, enc
+				m.Extents = []Extent{{Volume: 0, Offset: int64(packStart[fi]), Size: int64(packed)}}
+			}
+		}
+		if m.Stored && m.Encryption == nil {
 			if fo.numPacked != 1 || st.packSizes[firstPack[fi]] != fo.unpackSize() {
 				return nil, fmt.Errorf("archive: 7z copy folder %d size mismatch: %w", fi, ErrCorrupt)
 			}

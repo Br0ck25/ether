@@ -52,31 +52,57 @@ func readRAR4(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 	pos := int64(len(sigRAR4))
 	var base [rar4BaseLen]byte
 	mainSeen := false
+	headersEncrypted := false
+	crypto := newRARCrypto(o)
 	numberKnown := false
 	for pos < size {
-		if err := readAt(r, base[:], pos, size); err != nil {
-			return nil, fmt.Errorf("archive: rar4 block at %d: %w", pos, err)
+		if err := crypto.ctx.Err(); err != nil {
+			return nil, err
 		}
-		typ := base[2]
-		flags := binary.LittleEndian.Uint16(base[3:])
-		hsize := int64(binary.LittleEndian.Uint16(base[5:]))
-		if hsize < rar4BaseLen {
-			return nil, fmt.Errorf("archive: rar4 block at %d: header size %d: %w", pos, hsize, ErrCorrupt)
+		var h []byte
+		var headerBytes int64
+		if headersEncrypted {
+			salt := make([]byte, 8)
+			if err := readAt(r, salt, pos, size); err != nil {
+				return nil, err
+			}
+			keys, err := crypto.rar4(salt)
+			if err != nil {
+				return nil, err
+			}
+			var padded int64
+			h, padded, err = decryptRARHeader(r, size, pos+8, keys.key, keys.iv, false)
+			if err != nil {
+				return nil, err
+			}
+			headerBytes = 8 + padded
+		} else {
+			if err := readAt(r, base[:], pos, size); err != nil {
+				return nil, err
+			}
+			length := int64(binary.LittleEndian.Uint16(base[5:]))
+			if length < rar4BaseLen || length > size-pos {
+				return nil, fmt.Errorf("archive: invalid RAR4 header size: %w", ErrCorrupt)
+			}
+			h = make([]byte, length)
+			copy(h, base[:])
+			if err := readAt(r, h[rar4BaseLen:], pos+rar4BaseLen, size); err != nil {
+				return nil, err
+			}
+			headerBytes = length
 		}
-		if hsize > size-pos {
-			return nil, fmt.Errorf("archive: rar4 block at %d: header (%d bytes) runs past end of volume: %w", pos, hsize, ErrCorrupt)
-		}
-		h := make([]byte, hsize)
-		copy(h, base[:])
-		if err := readAt(r, h[rar4BaseLen:], pos+rar4BaseLen, size); err != nil {
-			return nil, fmt.Errorf("archive: rar4 block at %d: %w", pos, err)
-		}
+		typ := h[2]
+		flags := binary.LittleEndian.Uint16(h[3:])
+		hsize := int64(len(h))
 		if !mainSeen && typ != rar4Main {
 			return nil, fmt.Errorf("archive: rar4 block at %d: type %#x before main header: %w", pos, typ, ErrCorrupt)
 		}
 		switch typ {
 		case rar4Main, rar4File, rar4NewSub, rar4End:
 			if got, want := uint16(crc32.ChecksumIEEE(h[2:])), binary.LittleEndian.Uint16(h); got != want {
+				if headersEncrypted {
+					return nil, fmt.Errorf("archive: encrypted RAR4 header CRC mismatch: %w: %w", ErrBadPassword, ErrCorrupt)
+				}
 				return nil, fmt.Errorf("archive: rar4 block at %d: header crc %#04x, want %#04x: %w", pos, got, want, ErrCorrupt)
 			}
 		}
@@ -87,7 +113,7 @@ func readRAR4(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 			}
 			addSize = int64(binary.LittleEndian.Uint32(h[7:]))
 		}
-		next := pos + hsize
+		next := pos + headerBytes
 		switch typ {
 		case rar4Main:
 			if mainSeen {
@@ -95,7 +121,10 @@ func readRAR4(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 			}
 			mainSeen = true
 			if flags&rar4MainPassword != 0 {
-				return nil, fmt.Errorf("archive: rar4 headers are encrypted: %w", ErrEncrypted)
+				if o.Password == "" {
+					return nil, ErrPasswordRequired
+				}
+				headersEncrypted = true
 			}
 			v.MultiVolume = flags&rar4MainVolume != 0
 			v.First = flags&rar4MainFirstVolume != 0 || !v.MultiVolume
@@ -106,6 +135,23 @@ func readRAR4(r io.ReaderAt, size int64, o RAROptions) (*RARVolume, error) {
 			f, dataSize, err := parseRAR4File(h, flags)
 			if err != nil {
 				return nil, fmt.Errorf("archive: rar4 file header at %d: %w", pos, err)
+			}
+			if typ == rar4File && f.Encrypted && o.Password != "" {
+				if flags&0x400 == 0 || h[24] < 29 {
+					return nil, fmt.Errorf("archive: legacy RAR encryption unsupported: %w", ErrEncrypted)
+				}
+				saltOff := rar4FileFixed + int(binary.LittleEndian.Uint16(h[26:]))
+				if flags&rar4FileLarge != 0 {
+					saltOff += 8
+				}
+				if saltOff > len(h)-8 {
+					return nil, fmt.Errorf("archive: RAR4 salt truncated: %w", ErrCorrupt)
+				}
+				keys, err := crypto.rar4(h[saltOff : saltOff+8])
+				if err != nil {
+					return nil, err
+				}
+				f.Encryption = &Encryption{Key: keys.key, IV: keys.iv, Size: f.UnpackedSize}
 			}
 			f.HeaderOffset = pos
 			f.DataOffset = next

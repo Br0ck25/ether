@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/braedonsaunders/ether/internal/archive"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/nzb"
 )
@@ -28,19 +29,20 @@ type release struct {
 	refs int // guarded by e.mu
 
 	// infoMu guards the nzb files' Name, Info and Obfuscated: identifying
-	// obfuscated files (plan build, under planMu) rewrites them while health
+	// obfuscated files (plan build, under planGate) rewrites them while health
 	// checks and PAR2 lookups of the same release read them.
 	infoMu sync.RWMutex
 
-	planMu  sync.Mutex
-	plan    *plan
-	planErr error // permanent rejection, cached
+	planGate chan struct{}
+	plan     *plan
+	planErr  error // permanent rejection, cached
 
-	p2 par2State
+	p2           par2State
+	rarPasswords archive.RARPasswordCache
 }
 
 func newRelease(e *Engine, digest string, doc *nzb.NZB) *release {
-	r := &release{e: e, digest: digest, doc: doc}
+	r := &release{e: e, digest: digest, doc: doc, planGate: make(chan struct{}, 1)}
 	base := 0
 	for i, f := range doc.Files {
 		pf := newPostedFile(i, f, base, r.partSize.Load)
@@ -65,10 +67,17 @@ func (r *release) ensurePlan(ctx context.Context, prio core.Priority, cacheID st
 
 // ensurePlanWithCandidate announces the first identified candidate before
 // reading its archive layout. Health checks can inspect its articles while
-// planning continues. The callback must not block or call back into planMu.
+// planning continues. The callback must not block or call back into planning.
 func (r *release) ensurePlanWithCandidate(ctx context.Context, prio core.Priority, cacheID string, ready func([]*postedFile)) (*plan, error) {
-	r.planMu.Lock()
-	defer r.planMu.Unlock()
+	select {
+	case r.planGate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-r.planGate }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if r.plan != nil {
 		if ready != nil {
 			ready(r.plan.vols)

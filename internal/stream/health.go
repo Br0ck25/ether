@@ -12,7 +12,7 @@ import (
 
 // Check implements core.HealthChecker. It parses the NZB, inspects the
 // archive headers of the main video (rejecting compressed, solid and
-// encrypted archives and releases without a playable file) and STATs a
+// unsupported encryption and releases without a playable file) and STATs a
 // spread sample of the main video's articles in parallel: the first, the
 // last and evenly spaced ones across every volume.
 //

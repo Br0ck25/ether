@@ -35,6 +35,7 @@ func plainCaps() core.ClientCaps {
 func consoleReleases() []core.Release {
 	pw := rel("pwd", "The.Signal.1999.1080p.BluRay.x264-PWD", 9000)
 	pw.Password = true
+	pw.Protocol = core.ProtocolTorrent
 	return append(movieReleases(),
 		rel("cam", "The.Signal.1999.CAM.x264-GRP", 700),
 		pw,

@@ -787,7 +787,8 @@ func minFormatScore(rcfg config.Resolver, profile core.QualityProfile) *int {
 // identity/absolute-size sanity checks.
 func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.SearchRequest,
 	profile core.QualityProfile, rcfg config.Resolver, caps core.ClientCaps, exclude map[string]bool, preferred bool) string {
-	if rel.Password {
+	// Usenet passwords are supplied by NZB metadata and validated by the engine.
+	if rel.Password && rel.Protocol == core.ProtocolTorrent {
 		return "passworded"
 	}
 	if exclude[rel.ID] {

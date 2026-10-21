@@ -1,6 +1,8 @@
 package archive
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -8,15 +10,16 @@ import (
 
 // RARFile is one file header found in one RAR volume.
 type RARFile struct {
-	Name         string // path inside the archive, '/'-separated
-	HeaderOffset int64  // offset of the block header in this volume
-	DataOffset   int64  // offset of this file's data in this volume
-	PackedSize   int64  // bytes of this file's data stored in this volume
-	UnpackedSize int64  // total unpacked size of the whole file (-1 if unknown)
-	Method       int    // raw method: RAR4 0x30..0x35, RAR5 0..5
-	Stored       bool   // RAR4 method 0x30 / RAR5 method 0
-	Encrypted    bool   // RAR4 LHD_PASSWORD, RAR5 file encryption extra record
-	Solid        bool   // RAR4 LHD_SOLID / RAR5 compression-info solid bit
+	Name         string      // path inside the archive, '/'-separated
+	HeaderOffset int64       // offset of the block header in this volume
+	DataOffset   int64       // offset of this file's data in this volume
+	PackedSize   int64       // bytes of this file's data stored in this volume
+	UnpackedSize int64       // total unpacked size of the whole file (-1 if unknown)
+	Method       int         // raw method: RAR4 0x30..0x35, RAR5 0..5
+	Stored       bool        // RAR4 method 0x30 / RAR5 method 0
+	Encryption   *Encryption `json:"-"`
+	Encrypted    bool        // RAR4 LHD_PASSWORD, RAR5 file encryption extra record
+	Solid        bool        // RAR4 LHD_SOLID / RAR5 compression-info solid bit
 	Dir          bool
 	SplitBefore  bool // continued from previous volume
 	SplitAfter   bool // continues in next volume
@@ -41,7 +44,10 @@ type RARVolume struct {
 // RAROptions tunes ReadRARVolume.
 type RAROptions struct {
 	// MaxFiles stops parsing after this many file headers (0 = no limit).
-	MaxFiles int
+	MaxFiles      int
+	Password      string `json:"-"`
+	Context       context.Context
+	PasswordCache *RARPasswordCache
 }
 
 // ReadRARVolume parses the block headers of one RAR4 or RAR5 volume without
@@ -50,12 +56,17 @@ type RAROptions struct {
 // volume, so the end block is not read), or after opts.MaxFiles file headers.
 // opts may be nil.
 //
-// Header-encrypted archives return an error wrapping ErrEncrypted. Unknown
+// Encrypted headers require opts.Password; derived keys remain ephemeral. Unknown
 // block types are skipped. Header CRCs are verified (ErrCorrupt on mismatch).
 func ReadRARVolume(r io.ReaderAt, size int64, opts *RAROptions) (*RARVolume, error) {
 	var o RAROptions
 	if opts != nil {
 		o = *opts
+	}
+	if o.Context != nil {
+		if err := o.Context.Err(); err != nil {
+			return nil, err
+		}
 	}
 	n := min(int64(SignatureLen), max(size, 0))
 	head := make([]byte, n)
@@ -113,13 +124,14 @@ func ComposeRAR(vols []*RARVolume) ([]Member, error) {
 			return nil, fmt.Errorf("archive: volume %d: %q continues a file the previous volume did not split: %w", vi, f.Name, ErrCorrupt)
 		}
 		m := Member{
-			Name:      f.Name,
-			Size:      f.UnpackedSize,
-			Stored:    f.Stored,
-			Encrypted: f.Encrypted,
-			Solid:     f.Solid,
-			Dir:       f.Dir,
-			Method:    rarMethodName(vols[vi].Format, f),
+			Name:       f.Name,
+			Size:       f.UnpackedSize,
+			Stored:     f.Stored,
+			Encrypted:  f.Encrypted,
+			Encryption: f.Encryption,
+			Solid:      f.Solid,
+			Dir:        f.Dir,
+			Method:     rarMethodName(vols[vi].Format, f),
 		}
 		addExtent := func(v int, rf *RARFile) {
 			if rf.PackedSize > 0 {
@@ -147,6 +159,12 @@ func ComposeRAR(vols []*RARVolume) ([]Member, error) {
 				return nil, fmt.Errorf("archive: volume %d does not continue %q: %w", next, f.Name, ErrCorrupt)
 			}
 			c := &nv.Files[0]
+			if f.Encrypted != c.Encrypted || (f.Encryption == nil) != (c.Encryption == nil) || f.Encryption != nil && (!bytes.Equal(f.Encryption.Key, c.Encryption.Key) || f.Encryption.IV != c.Encryption.IV) {
+				return nil, fmt.Errorf("archive: split file encryption changes: %w", ErrCorrupt)
+			}
+			if m.Encryption != nil && m.Size >= 0 && c.UnpackedSize >= 0 && m.Size != c.UnpackedSize {
+				return nil, fmt.Errorf("archive: encrypted split file size changes: %w", ErrCorrupt)
+			}
 			m.Stored = m.Stored && c.Stored
 			m.Encrypted = m.Encrypted || c.Encrypted
 			m.Solid = m.Solid || c.Solid
@@ -158,7 +176,7 @@ func ComposeRAR(vols []*RARVolume) ([]Member, error) {
 		}
 		if m.Dir {
 			m.Size = max(m.Size, 0)
-		} else if m.Stored && !m.Encrypted {
+		} else if m.Stored && (!m.Encrypted || m.Encryption != nil) {
 			var sum int64
 			for _, e := range m.Extents {
 				if e.Size > math.MaxInt64-sum {
@@ -167,7 +185,17 @@ func ComposeRAR(vols []*RARVolume) ([]Member, error) {
 				sum += e.Size
 			}
 			if m.Size < 0 {
+				if m.Encryption != nil {
+					return nil, fmt.Errorf("archive: encrypted stored file has unknown plaintext size: %w", ErrUnsupported)
+				}
 				m.Size = sum
+			} else if m.Encryption != nil {
+				if m.Size > math.MaxInt64-15 || sum != (m.Size+15)&^15 {
+					return nil, fmt.Errorf("archive: encrypted stored size mismatch: %w", ErrCorrupt)
+				}
+				e := *m.Encryption
+				e.Size = m.Size
+				m.Encryption = &e
 			} else if sum != m.Size {
 				return nil, fmt.Errorf("archive: stored file %q has %d data bytes, header says %d: %w", m.Name, sum, m.Size, ErrCorrupt)
 			}

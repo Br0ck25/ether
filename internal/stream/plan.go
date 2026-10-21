@@ -95,6 +95,11 @@ type plan struct {
 	// 7z: the member's extents in the concatenated archive.
 	concatExt []archive.Extent
 
+	// Encrypted plans use verified ciphertext extents, plus a plaintext layout
+	// for scheduling. Keys exist only in this bounded, in-memory release plan.
+	encrypted    *archive.Member
+	cipherLayout *layout
+
 	mu       sync.Mutex
 	lay      *layout
 	info     []volInfo
@@ -138,6 +143,9 @@ func (p *plan) isVerified(vol int) bool {
 }
 
 func (p *plan) buildLocked(version int) (*layout, error) {
+	if p.encrypted != nil {
+		return p.encryptedLayout(version)
+	}
 	if p.size < 0 || len(p.info) != len(p.vols) || len(p.verified) != len(p.vols) {
 		return nil, fmt.Errorf("stream: inconsistent archive layout: %w", ErrCorrupt)
 	}
@@ -303,7 +311,7 @@ func (p *plan) inspect(ctx context.Context, v verifier, k int) (volInfo, error) 
 	size := pf.Size()
 	switch p.kind {
 	case kindRAR:
-		vol, err := archive.ReadRARVolume(b.reader(ctx, pf), size, &archive.RAROptions{MaxFiles: 1})
+		vol, err := archive.ReadRARVolume(b.reader(ctx, pf), size, b.rarOptions(ctx, 1))
 		if err != nil {
 			return volInfo{}, fmt.Errorf("stream: rar volume %d (%s): %w", k+1, pf.Name(), err)
 		}

@@ -94,7 +94,7 @@ func (b *builder) planRAR(ctx context.Context, vols []*postedFile) (*plan, error
 	if err := b.heads(ctx, probe); err != nil {
 		return nil, err
 	}
-	v0, err := archive.ReadRARVolume(b.reader(ctx, vols[0]), vols[0].Size(), nil)
+	v0, err := archive.ReadRARVolume(b.reader(ctx, vols[0]), vols[0].Size(), b.rarOptions(ctx, 0))
 	if err != nil {
 		return nil, fmt.Errorf("stream: rar %s: %w", vols[0].Name(), err)
 	}
@@ -107,7 +107,7 @@ func (b *builder) planRAR(ctx context.Context, vols []*postedFile) (*plan, error
 		setBytes += int64(n-2) * vols[1].Size()
 	}
 	main := pickRARFile(v0.Files)
-	if main == nil || !main.SplitAfter || main.SplitBefore || main.UnpackedSize <= 0 || main.UnpackedSize*2 < setBytes {
+	if main == nil || main.Encrypted || !main.SplitAfter || main.SplitBefore || main.UnpackedSize <= 0 || main.UnpackedSize*2 < setBytes {
 		// The video is not a single member spanning the set from volume 1
 		// (or volume 1 has no video): read every volume's headers.
 		return b.rarFullScan(ctx, vols)
@@ -117,7 +117,7 @@ func (b *builder) planRAR(ctx context.Context, vols []*postedFile) (*plan, error
 	}
 
 	read := func(k int) (*archive.RARFile, error) {
-		v, err := archive.ReadRARVolume(b.reader(ctx, vols[k]), vols[k].Size(), &archive.RAROptions{MaxFiles: 1})
+		v, err := archive.ReadRARVolume(b.reader(ctx, vols[k]), vols[k].Size(), b.rarOptions(ctx, 1))
 		if err != nil {
 			return nil, fmt.Errorf("stream: rar volume %d (%s): %w", k+1, vols[k].Name(), err)
 		}
@@ -175,7 +175,7 @@ func (b *builder) rarFullScan(ctx context.Context, vols []*postedFile) (*plan, e
 	}
 	parsed := make([]*archive.RARVolume, len(vols))
 	err := b.parallel(ctx, len(vols), func(ctx context.Context, k int) error {
-		v, err := archive.ReadRARVolume(b.reader(ctx, vols[k]), vols[k].Size(), nil)
+		v, err := archive.ReadRARVolume(b.reader(ctx, vols[k]), vols[k].Size(), b.rarOptions(ctx, 0))
 		if err != nil {
 			return fmt.Errorf("stream: rar volume %d (%s): %w", k+1, vols[k].Name(), err)
 		}
@@ -188,7 +188,7 @@ func (b *builder) rarFullScan(ctx context.Context, vols []*postedFile) (*plan, e
 	return b.rarFromVolumes(ctx, vols, parsed)
 }
 
-func (b *builder) rarFromVolumes(_ context.Context, vols []*postedFile, parsed []*archive.RARVolume) (*plan, error) {
+func (b *builder) rarFromVolumes(ctx context.Context, vols []*postedFile, parsed []*archive.RARVolume) (*plan, error) {
 	members, err := archive.ComposeRAR(parsed)
 	if err != nil {
 		return nil, fmt.Errorf("stream: rar %s: %w", vols[0].Name(), err)
@@ -196,6 +196,9 @@ func (b *builder) rarFromVolumes(_ context.Context, vols []*postedFile, parsed [
 	m := chooseMember(members)
 	if m == nil {
 		return nil, fmt.Errorf("%w: rar %s holds no video (%d files)", ErrNoPlayableFile, vols[0].Name(), len(members))
+	}
+	if m.Encrypted && b.rel.doc.Password() == "" {
+		return nil, archive.ErrPasswordRequired
 	}
 	if err := m.Streamable(); err != nil {
 		return nil, fmt.Errorf("stream: rar %s: %s: %w", vols[0].Name(), m.Name, err)
@@ -205,6 +208,9 @@ func (b *builder) rarFromVolumes(_ context.Context, vols []*postedFile, parsed [
 	for k := range vols {
 		info[k] = volInfo{size: vols[k].Size()}
 		verified[k] = true
+	}
+	if m.Encryption != nil {
+		return b.encryptedPlan(ctx, kindRAR, m, vols, info)
 	}
 	for _, x := range m.Extents {
 		if x.Volume < 0 || x.Volume >= len(vols) {
@@ -223,6 +229,12 @@ func (b *builder) rarFromVolumes(_ context.Context, vols []*postedFile, parsed [
 // plan7z maps the main video inside a copy-method 7z set.
 func (b *builder) plan7z(ctx context.Context, vols []*postedFile) (*plan, error) {
 	n := len(vols)
+	// Encrypted headers and payloads cannot use unverified volume offsets.
+	if b.rel.doc.Password() != "" {
+		if err := b.heads(ctx, vols); err != nil {
+			return nil, err
+		}
+	}
 	// The signature header is at the start of volume 1 and the archive
 	// header at the end of the last volume: fetch both ends at once.
 	last := vols[n-1]
@@ -251,7 +263,7 @@ func (b *builder) plan7z(ctx context.Context, vols []*postedFile) (*plan, error)
 	sizes := func() int64 {
 		var t int64
 		for k := range vols {
-			if k == 0 || k == n-1 || verified[k] {
+			if k == 0 || k == n-1 || verified[k] || vols[k].SizeKnown() {
 				info[k] = volInfo{size: vols[k].Size()}
 				verified[k] = true
 			} else {
@@ -281,7 +293,7 @@ func (b *builder) plan7z(ctx context.Context, vols []*postedFile) (*plan, error)
 	for k, pf := range vols {
 		av[k] = archive.Volume{R: b.reader(ctx, pf), Size: info[k].size}
 	}
-	members, err := archive.List7z(archive.NewMultiReader(av), total)
+	members, err := archive.List7zWithPassword(ctx, archive.NewMultiReader(av), total, b.rel.doc.Password())
 	if err != nil {
 		return nil, fmt.Errorf("stream: 7z %s: %w", vols[0].Name(), err)
 	}
@@ -291,6 +303,9 @@ func (b *builder) plan7z(ctx context.Context, vols []*postedFile) (*plan, error)
 	}
 	if err := m.Streamable(); err != nil {
 		return nil, fmt.Errorf("stream: 7z %s: %s: %w", vols[0].Name(), m.Name, err)
+	}
+	if m.Encryption != nil {
+		return b.encryptedPlan(ctx, kind7z, m, vols, info)
 	}
 	p := newPlan(b.rel, kind7z, path.Base(m.Name), m.Size, vols, info, verified)
 	p.concatExt = m.Extents
@@ -316,7 +331,7 @@ func pickRARFile(files []archive.RARFile) *archive.RARFile {
 }
 
 func rarMember(f *archive.RARFile) archive.Member {
-	return archive.Member{Name: f.Name, Size: f.UnpackedSize, Stored: f.Stored, Encrypted: f.Encrypted, Solid: f.Solid, Dir: f.Dir}
+	return archive.Member{Name: f.Name, Size: f.UnpackedSize, Stored: f.Stored, Encrypted: f.Encrypted, Encryption: f.Encryption, Solid: f.Solid, Dir: f.Dir}
 }
 
 // chooseMember picks the main video of an archive: the largest video that
@@ -503,7 +518,7 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 		switch archive.Detect(head) {
 		case archive.FormatRAR4, archive.FormatRAR5:
 			num := -1
-			if v, err := archive.ReadRARVolume(bytes.NewReader(head), int64(len(head)), &archive.RAROptions{MaxFiles: 1}); err == nil {
+			if v, err := archive.ReadRARVolume(bytes.NewReader(head), int64(len(head)), b.rarOptions(ctx, 1)); err == nil {
 				if v.Number >= 0 {
 					num = v.Number
 				} else if v.First {
@@ -566,7 +581,11 @@ func looksLikeVideo(b []byte) bool {
 		return true
 	case len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "AVI ":
 		return true
-	case len(b) >= 4 && bytes.Equal(b[:4], []byte{0x00, 0x00, 0x01, 0xba}): // MPEG program stream
+	case len(b) >= 4 && (bytes.Equal(b[:4], []byte{0x00, 0x00, 0x01, 0xba}) || bytes.Equal(b[:4], []byte{0x00, 0x00, 0x01, 0xb3})): // MPEG program/elementary video stream
+		return true
+	case len(b) >= 9 && string(b[:3]) == "FLV" && b[3] == 1 && b[4]&^byte(5) == 0 && binary.BigEndian.Uint32(b[5:9]) >= 9:
+		return true
+	case len(b) >= 27 && string(b[:4]) == "OggS" && b[4] == 0 && b[5]&^byte(7) == 0:
 		return true
 	case len(b) >= 16 && bytes.Equal(b[:8], []byte{0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11}): // ASF/WMV
 		return true
