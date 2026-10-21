@@ -56,11 +56,11 @@ func Handler(o HandlerOptions) http.Handler {
 	})
 	mux.HandleFunc("POST /join-tokens", func(w http.ResponseWriter, r *http.Request) {
 		if !o.Clustered || !o.Config.Clustered() {
-			writeError(w, http.StatusConflict, "not_clustered", "clustering is not enabled: this server uses SQLite. Run `ether cluster init` to make it the first node of a cluster.")
+			writeError(w, http.StatusConflict, "not_clustered", "Create a cluster from the Cluster page first.")
 			return
 		}
 		if !o.Config.Get().SetupComplete {
-			writeError(w, http.StatusForbidden, "setup_incomplete", "finish setup before adding nodes, or create a token with `ether cluster token`")
+			writeError(w, http.StatusForbidden, "setup_incomplete", "finish setup before adding nodes")
 			return
 		}
 		var body struct {

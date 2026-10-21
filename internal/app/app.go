@@ -68,8 +68,9 @@ import (
 
 // Options configure a run.
 type Options struct {
-	DataDir string
-	Version string
+	clusterSetup *clusterSetup
+	DataDir      string
+	Version      string
 	// Logger receives everything; the admin log ring is teed onto it.
 	Logger *slog.Logger
 	// Spike forces spike mode (local files, no Usenet) on top of config.
@@ -688,7 +689,13 @@ func (a *App) Run(ctx context.Context) error {
 	watchdogErr := make(chan error, 1)
 	go func() { watchdogErr <- newWatchdog(probeURL(ln.Addr()), a.log.With("component", "watchdog")).run(ctx) }()
 	var runErr error
+	var setupStop <-chan struct{}
+	if a.opts.clusterSetup != nil {
+		setupStop = a.opts.clusterSetup.stop
+	}
 	select {
+	case <-setupStop:
+		runErr = errClusterSetup
 	case <-ctx.Done():
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {

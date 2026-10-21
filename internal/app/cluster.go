@@ -288,6 +288,10 @@ func (a *App) clusterHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		st := clusterStatus{Mode: a.cluster.Mode(), Self: a.cluster.Self(), Epoch: a.cluster.Epoch()}
+		st.Self.Draining = a.nodeDraining()
+		if a.cfg != nil {
+			st.Self.Caps.Weight = a.cfg.Get().Server.ClusterWeight
+		}
 		// Bounded so the page still answers (with the database state)
 		// while the database is unreachable.
 		nctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -323,6 +327,10 @@ func (a *App) clusterHandler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(st)
 	})
+	mux.Handle("/node", a.clusterManageHandler())
+	setup := a.clusterSetupHandler()
+	mux.Handle("/setup", setup)
+	mux.Handle("/setup/", setup)
 	settings := a.clusterSettingsHandler()
 	mux.Handle("/settings", settings)
 	mux.Handle("/join-tokens", settings)

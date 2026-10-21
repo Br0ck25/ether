@@ -6,6 +6,7 @@ import {
   Button,
   confirmDialog,
   EmptyState,
+  Input,
   PagedTable,
   SettingsSection,
   Textarea,
@@ -17,6 +18,7 @@ import { Link } from "react-router-dom";
 import { Drawer } from "../../components/Drawer";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Field, Segmented } from "../../components/fields";
+import { ClusterSetup } from "./ClusterSetup";
 import { Section } from "../../components/layout";
 import { SettingsRow } from "../../components/SettingsRow";
 import { api, errorMessage } from "../../lib/api";
@@ -117,14 +119,6 @@ function copy(text: string, what: string) {
     .catch(() => toast.error(`Select and copy the ${what.toLowerCase()}`));
 }
 
-function Code({ children }: { children: string }) {
-  return (
-    <pre className="overflow-x-auto rounded-md border border-border bg-bg-subtle px-3 py-2 text-xs">
-      <code>{children}</code>
-    </pre>
-  );
-}
-
 /**
  * Server › Cluster: on a standalone server, what clustering is and how to
  * start; on a cluster node, the nodes, their health and the join tokens.
@@ -132,6 +126,8 @@ function Code({ children }: { children: string }) {
 export function ClusterOverview() {
   const status = useAsync((signal) => api.clusterStatus(signal), []);
   const clustered = isClustered(status.data);
+  const [addingNode, setAddingNode] = useState(false);
+  const setup = useAsync((signal) => api.clusterSetupStatus(signal), []);
   const settings = useAsync(
     async (signal) => (clustered ? api.clusterSettings(signal) : null),
     [clustered],
@@ -145,7 +141,18 @@ export function ClusterOverview() {
     return <ErrorPanel error={status.error} onRetry={() => void status.reload()} />;
   const s = status.data;
   if (!s) return <LoadingRows rows={3} />;
-  if (!clustered) return <Standalone status={s} />;
+  if (!clustered)
+    return (
+      <Standalone
+        status={s}
+        available={setup.data?.available ?? false}
+        message={setup.data?.state === "failed" ? setup.data.message : undefined}
+        onComplete={() => {
+          void status.reload();
+          void setup.reload();
+        }}
+      />
+    );
 
   const warnings = clusterWarnings(s);
   return (
@@ -162,64 +169,100 @@ export function ClusterOverview() {
           </AlertDescription>
         </Alert>
       ) : null}
-      <Nodes status={s} />
+      <Nodes status={s} onChanged={() => void status.reload()} onAdd={() => setAddingNode(true)} />
       <SharedSettings status={s} settings={settings} />
       <JoinTokens settings={settings} />
+      {addingNode ? (
+        <JoinTokenDrawer
+          onClose={() => setAddingNode(false)}
+          onCreated={() => void settings.reload()}
+        />
+      ) : null}
     </>
   );
 }
 
-function Standalone({ status }: { status: ClusterStatus }) {
+function Standalone({
+  status,
+  available,
+  message,
+  onComplete,
+}: {
+  status: ClusterStatus;
+  available: boolean;
+  message?: string;
+  onComplete: () => void;
+}) {
   return (
     <>
+      {message ? (
+        <Alert variant="destructive" role="alert">
+          <AlertTitle>Cluster setup needs attention</AlertTitle>
+          <AlertDescription>{message}</AlertDescription>
+        </Alert>
+      ) : null}
       <SettingsSection title="This server">
         <SettingsRow
           title="Role"
-          description="Everything is stored in this server's own SQLite database."
+          description="Your data currently lives in this server’s SQLite database."
           control={<Badge variant="secondary">Standalone (SQLite)</Badge>}
         />
         {status.self?.version ? (
           <SettingsRow title="Version" description={status.self.version} />
         ) : null}
       </SettingsSection>
-      <Section
-        title="Start a cluster"
-        description="Two or more Ether servers on one network can share a PostgreSQL database and appear in Plex as a single server. If one stops, viewers carry on through the others."
+      <ClusterSetup available={available} onComplete={onComplete} />
+      <a
+        className="text-sm text-fg-muted underline"
+        href={CLUSTER_DOCS}
+        target="_blank"
+        rel="noreferrer"
       >
-        <ol className="list-decimal space-y-3 pl-5 text-sm text-fg-muted">
-          <li>
-            Create an empty PostgreSQL 14+ database that every server can reach, and take a backup
-            of this server.
-          </li>
-          <li>
-            Stop Ether, then make this server the cluster's first node:
-            <Code>
-              {
-                "ether cluster init --database-url 'postgres://ether:PASSWORD@db.lan:5432/ether?sslmode=require'"
-              }
-            </Code>
-          </li>
-          <li>Start Ether again and come back here to add more nodes.</li>
-        </ol>
-        <p className="text-sm text-fg-muted">
-          Ether doesn't run or replicate the database for you.{" "}
-          <a className="underline" href={CLUSTER_DOCS} target="_blank" rel="noreferrer">
-            Read the cluster guide
-          </a>{" "}
-          before you start.
-        </p>
-      </Section>
+        Read the cluster guide
+      </a>
     </>
   );
 }
 
-function Nodes({ status }: { status: ClusterStatus }) {
+export function managerURL(n: ClusterNode): string | null {
+  for (const addr of n.addrs ?? []) {
+    try {
+      const u = new URL(addr);
+      if ((u.protocol === "http:" || u.protocol === "https:") && !u.username && !u.password)
+        return new URL("/ether/cluster", u).href;
+    } catch {
+      /* skip malformed connections */
+    }
+  }
+  return null;
+}
+
+function Nodes({
+  status,
+  onChanged,
+  onAdd,
+}: {
+  status: ClusterStatus;
+  onChanged: () => void;
+  onAdd: () => void;
+}) {
+  const [manage, setManage] = useState(false);
   const nodes = sortNodes(status.nodes ?? []);
   const live = nodes.filter((n) => n.live).length;
   return (
     <Section
       title="Nodes"
-      description={`${live} of ${plural(nodes.length, "node")} online. Any online node can serve viewers.`}
+      description={`${live} of ${plural(nodes.length, "node")} online. Open a node’s manager to change its local settings.`}
+      actions={
+        <div className="flex gap-2">
+          <Button size="sm" onClick={onAdd}>
+            <Plus size={14} /> Add node
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setManage(true)}>
+            Manage this node
+          </Button>
+        </div>
+      }
     >
       <PagedTable<ClusterNode>
         rows={nodes}
@@ -254,7 +297,9 @@ function Nodes({ status }: { status: ClusterStatus }) {
             key: "status",
             header: "Status",
             cell: (n) =>
-              n.live ? (
+              n.live && n.draining ? (
+                <Badge variant="warning">Paused</Badge>
+              ) : n.live ? (
                 <Badge variant="success">Online</Badge>
               ) : (
                 <span className="flex flex-col items-start gap-0.5">
@@ -291,13 +336,132 @@ function Nodes({ status }: { status: ClusterStatus }) {
             ),
           },
           {
+            key: "manage",
+            header: "",
+            cell: (n) =>
+              n.id === status.self.id ? null : managerURL(n) ? (
+                <a
+                  className="text-sm text-primary underline"
+                  href={managerURL(n)!}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open manager<span className="sr-only"> for {nodeName(n)}</span>
+                </a>
+              ) : (
+                <span className="text-xs text-fg-muted">No address reported</span>
+              ),
+          },
+          {
             key: "ip",
             header: "Public IP",
             cell: (n) => <code className="text-xs text-fg-muted">{n.caps?.egressIp || "—"}</code>,
           },
         ]}
       />
+      {manage ? (
+        <NodeDrawer status={status} onClose={() => setManage(false)} onChanged={onChanged} />
+      ) : null}
     </Section>
+  );
+}
+
+function NodeDrawer({
+  status,
+  onClose,
+  onChanged,
+}: {
+  status: ClusterStatus;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [weight, setWeight] = useState(status.self.caps.weight || 1);
+  const [draining, setDraining] = useState(status.self.draining ?? false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const save = async (body: { weight?: number; draining?: boolean }) => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.updateClusterNode(body);
+      setDraining(result.draining);
+      onChanged();
+      toast.success("Node updated");
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      title="Manage this node"
+      description={nodeName(status.self)}
+      footer={
+        <Button variant="outline" onClick={onClose}>
+          Done
+        </Button>
+      }
+    >
+      <div className="space-y-6">
+        {error ? (
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+        <Field
+          label="Node weight"
+          htmlFor="cluster-weight"
+          hint="Relative share of account-wide provider connections and request budgets. A weight of 2 gets twice the share of a node with weight 1."
+        >
+          <Input
+            id="cluster-weight"
+            type="number"
+            min={1}
+            max={100}
+            value={weight}
+            onChange={(e) => setWeight(e.target.valueAsNumber)}
+          />
+        </Field>
+        <Button
+          disabled={busy || !Number.isInteger(weight) || weight < 1 || weight > 100}
+          onClick={() => void save({ weight })}
+        >
+          Save weight
+        </Button>
+        <SettingsSection title="New streams">
+          <SettingsRow
+            title={draining ? "Paused" : "Accepting streams"}
+            description="Pausing keeps current streams playing, hands scheduled work to another node and removes this node from published connections. It resumes automatically after a server restart."
+          />
+        </SettingsSection>
+        <Alert variant="warning">
+          <AlertDescription>
+            Pausing the only available node prevents new playback until you resume it.
+          </AlertDescription>
+        </Alert>
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => void save({ draining: !draining })}
+        >
+          {draining ? "Resume new streams" : "Pause new streams"}
+        </Button>
+        <p className="text-sm text-fg-muted">
+          Change this node’s port, cache and transcoding hardware from{" "}
+          <Link className="underline" to="/server">
+            General settings
+          </Link>
+          . Use{" "}
+          <Link className="underline" to="/updates">
+            Updates
+          </Link>{" "}
+          for rolling cluster updates.
+        </p>
+      </div>
+    </Drawer>
   );
 }
 
@@ -336,12 +500,11 @@ function SharedSettings({ status, settings }: { status: ClusterStatus; settings:
         description={
           <>
             Port, listen address, log level, cache, transcoding hardware, the public port for its
-            port forward, the database address and the node's weight are set on each node, on that
-            node's own{" "}
+            port forward and the node's weight are set on each node, on that node's own{" "}
             <Link to="/server" className="underline">
               General
             </Link>{" "}
-            page or config file.
+            page.
           </>
         }
       />
@@ -488,11 +651,6 @@ const TTL_OPTIONS = [
   { value: "60", label: "1 hour" },
 ];
 
-/** Shell-quoted join command for a token. */
-export function joinCommand(token: string): string {
-  return `ether cluster join '${token}'`;
-}
-
 function JoinTokenDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [ttl, setTtl] = useState("60");
   const [busy, setBusy] = useState(false);
@@ -565,21 +723,17 @@ function JoinTokenDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
             </Button>
             <Field
               label="On the new machine"
-              hint="Install Ether, stop it, run this command, then start it. Add --database-url if the new machine reaches the database at a different address."
+              hint="Open its Server Manager, choose Cluster → Join cluster and paste this token. Ether checks the connection, backs up its data and restarts automatically."
             >
-              <Code>{joinCommand(created.token)}</Code>
+              <p className="text-sm text-fg-muted">
+                Install and open Ether on the new machine. You can join before completing its
+                standalone setup.
+              </p>
             </Field>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => copy(joinCommand(created.token), "Command")}
-            >
-              <Copy size={14} /> Copy command
-            </Button>
           </>
         ) : (
           <p className="text-sm text-fg-muted">
-            The token is shown once, together with the command to run on the new machine. It
+            Paste the token into Cluster → Join cluster on the new machine. It is shown once and
             contains the database password and the credential key, so treat it like a password.
           </p>
         )}

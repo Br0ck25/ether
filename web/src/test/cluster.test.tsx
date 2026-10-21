@@ -5,9 +5,9 @@ import type { ClusterStatus } from "../lib/types";
 import {
   CLUSTER_POLL_MS,
   clusterWarnings,
-  joinCommand,
   tokenState,
   transcodeLabel,
+  managerURL,
 } from "../pages/settings/Cluster";
 import { calls, renderApp } from "./harness";
 
@@ -31,10 +31,12 @@ describe("Server › Cluster", () => {
     expect(screen.getAllByRole("link", { name: "Cluster" }).length).toBeGreaterThan(0);
   });
 
-  it("explains clustering on a standalone server without offering cluster controls", async () => {
+  it("offers guided create and join on a standalone server", async () => {
     const { fake } = renderApp("/cluster");
     expect(await screen.findByText("Standalone (SQLite)", {}, WAIT)).toBeInTheDocument();
-    expect(screen.getByText(/ether cluster init --database-url/)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Create cluster" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Join cluster" })).toBeEnabled();
+    expect(screen.queryByText(/ether cluster init/)).toBeNull();
     expect(screen.getByRole("link", { name: "Read the cluster guide" })).toHaveAttribute(
       "href",
       expect.stringContaining("docs/install.md#running-a-cluster"),
@@ -42,6 +44,72 @@ describe("Server › Cluster", () => {
     expect(screen.queryByRole("button", { name: /Create join token/ })).toBeNull();
     expect(screen.queryByRole("region", { name: "Nodes" })).toBeNull();
     expect(calls(fake, "GET", "/cluster/settings")).toHaveLength(0);
+  });
+
+  it("tests a database, reviews the plan and automatically creates the cluster", async () => {
+    const { fake } = renderApp("/cluster");
+    fireEvent.click(await screen.findByRole("button", { name: "Create cluster" }, WAIT));
+    const drawer = await screen.findByRole("dialog", { name: "Create cluster" });
+    const next = within(drawer).getByRole("button", { name: "Test connection and continue" });
+    expect(next).toBeDisabled();
+    fireEvent.change(within(drawer).getByLabelText("Database host"), {
+      target: { value: "db.lan" },
+    });
+    fireEvent.change(within(drawer).getByLabelText("Database password"), {
+      target: { value: "secret@:/" },
+    });
+    fireEvent.click(next);
+    await within(drawer).findByText("Connection verified", {}, WAIT);
+    expect(calls(fake, "POST", "/cluster/setup/check")[0]!.body).toMatchObject({
+      mode: "create",
+      databaseUrl: "postgresql://ether:secret%40%3A%2F@db.lan:5432/ether?sslmode=require",
+    });
+    expect(calls(fake, "POST", "/cluster/setup/apply")).toHaveLength(0);
+    expect(within(drawer).getByText(/Create a portable backup/)).toBeInTheDocument();
+    fireEvent.click(within(drawer).getByRole("button", { name: "Create cluster and restart" }));
+    await screen.findByRole("region", { name: "Nodes" }, WAIT);
+    expect(calls(fake, "POST", "/cluster/setup/apply")).toHaveLength(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("requires explicit replacement and allows recovery from an invalid join token", async () => {
+    const { fake } = renderApp("/cluster");
+    fireEvent.click(await screen.findByRole("button", { name: "Join cluster" }, WAIT));
+    const drawer = await screen.findByRole("dialog", { name: "Join cluster" });
+    fireEvent.change(within(drawer).getByLabelText("Join token"), { target: { value: "wrong" } });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Test connection and continue" }));
+    await within(drawer).findByText(/Confirm replacement/, {}, WAIT);
+    fireEvent.click(within(drawer).getByRole("checkbox"));
+    fireEvent.click(within(drawer).getByRole("button", { name: "Test connection and continue" }));
+    await within(drawer).findByText("The join token is not valid.", {}, WAIT);
+    expect(calls(fake, "POST", "/cluster/setup/apply")).toHaveLength(0);
+    fireEvent.change(within(drawer).getByLabelText("Join token"), {
+      target: { value: "ether-join-v1:example" },
+    });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Test connection and continue" }));
+    await within(drawer).findByText("Connection verified", {}, WAIT);
+    expect(within(drawer).getByText(/existing history is not merged/)).toBeInTheDocument();
+    fireEvent.click(within(drawer).getByRole("button", { name: "Join cluster and restart" }));
+    await screen.findByRole("region", { name: "Nodes" }, WAIT);
+    expect(calls(fake, "POST", "/cluster/setup/apply")[0]!.body).toMatchObject({
+      mode: "join",
+      token: "ether-join-v1:example",
+      replace: true,
+    });
+  });
+
+  it("changes the local node weight and pauses and resumes new streams", async () => {
+    const { fake } = renderApp("/cluster", { cluster: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Manage this node" }, WAIT));
+    const drawer = await screen.findByRole("dialog", { name: "Manage this node" });
+    fireEvent.change(within(drawer).getByLabelText("Node weight"), { target: { value: "3" } });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Save weight" }));
+    await waitFor(() => expect(calls(fake, "PATCH", "/cluster/node")).toHaveLength(1));
+    expect(calls(fake, "PATCH", "/cluster/node")[0]!.body).toEqual({ weight: 3 });
+    fireEvent.click(await within(drawer).findByRole("button", { name: "Pause new streams" }));
+    fireEvent.click(await within(drawer).findByRole("button", { name: "Resume new streams" }));
+    await waitFor(() => expect(calls(fake, "PATCH", "/cluster/node")).toHaveLength(3));
+    expect(calls(fake, "PATCH", "/cluster/node")[2]!.body).toEqual({ draining: false });
   });
 
   it("lists every node with its role, health, load and capabilities", async () => {
@@ -59,6 +127,10 @@ describe("Server › Cluster", () => {
     expect(within(attic).getByLabelText("attic streams")).toHaveTextContent("2");
     expect(within(attic).getByLabelText("attic weight")).toHaveTextContent("2");
     expect(within(attic).getByText("198.51.100.20")).toBeInTheDocument();
+    expect(within(attic).getByRole("link", { name: "Open manager for attic" })).toHaveAttribute(
+      "href",
+      "http://n-attic.test:32400/ether/cluster",
+    );
 
     const garage = rowOf(nodes, "garage");
     expect(within(garage).getByText("Offline")).toBeInTheDocument();
@@ -103,9 +175,9 @@ describe("Server › Cluster", () => {
     expect(within(drawer).getByText("Keep this token secret")).toBeInTheDocument();
     expect(within(drawer).getByText(/database password/)).toBeInTheDocument();
     expect(within(drawer).getByText(/shown only once/)).toBeInTheDocument();
-    expect(within(drawer).getByText(joinCommand(token))).toBeInTheDocument();
+    expect(within(drawer).getByText(/choose Cluster → Join cluster/)).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: /Copy token/ })).toBeInTheDocument();
-    expect(within(drawer).getByRole("button", { name: /Copy command/ })).toBeInTheDocument();
+    expect(within(drawer).queryByRole("button", { name: /Copy command/ })).toBeNull();
     expect(calls(fake, "POST", "/cluster/join-tokens")[0]!.body).toEqual({ ttlMinutes: 15 });
 
     // The new token is listed (by id only), and closing the drawer forgets the secret.
@@ -193,6 +265,14 @@ describe("cluster helpers", () => {
       "Nodes differ",
       "Couldn't read the cluster's nodes from the database: connection refused",
     ]);
+  });
+
+  it("builds safe links to peer managers", () => {
+    expect(
+      managerURL({ ...base.self, addrs: ["javascript:alert(1)", "http://node.lan:32400"] }),
+    ).toBe("http://node.lan:32400/ether/cluster");
+    expect(managerURL({ ...base.self, addrs: ["https://user:secret@node.lan"] })).toBeNull();
+    expect(managerURL({ ...base.self, addrs: null })).toBeNull();
   });
 
   it("classifies tokens and transcoders", () => {

@@ -522,6 +522,7 @@ export interface ClusterNode {
   lastSeen: string;
   leader: boolean;
   live: boolean;
+  draining?: boolean;
 }
 
 export interface ClusterHealth {
@@ -602,4 +603,16 @@ export interface SystemLoad {
   history: LoadSample[];
   gpus: LoadGPU[];
   error?: string;
+}
+
+export interface ClusterSetupRequest {
+  mode: "create" | "join";
+  databaseUrl: string;
+  token: string;
+  replace: boolean;
+}
+export interface ClusterSetupStatus {
+  available: boolean;
+  state: "idle" | "checking" | "restarting" | "applying" | "complete" | "failed";
+  message?: string;
 }

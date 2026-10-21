@@ -247,6 +247,14 @@ owner-supplied PostgreSQL database. Ether ships no database and does not manage
 PostgreSQL availability; a highly available PostgreSQL deployment is the owner's
 responsibility.
 
+The owner starts or joins a cluster through the Server Manager wizard. Ether
+tests the connection without changing the database or consuming a token, takes
+a portable backup, stops its writers, applies the migration or join and
+restarts automatically. A configured server requires explicit confirmation
+before adopting another cluster’s identity. Failed application restores the
+previous local settings and credential key. No terminal commands are required.
+The owner can adjust node weights and pause or resume admissions in the UI.
+
 Every node shares one server identity: machine identifier, plex.tv
 registration, plex.direct certificate and credential key. Plex apps see a
 single server whose published connections are the union of the healthy nodes'

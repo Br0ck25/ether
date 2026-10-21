@@ -231,8 +231,10 @@ remain snapshots. Guide coverage shows channels that need a mapping or new data.
 ## Cluster
 
 **Server › Cluster** shows how this server stores its data. A standalone
-server uses its own SQLite database; the page explains how to turn it into the
-first node of a cluster (see [Running a cluster](install.md#running-a-cluster)).
+server uses its own SQLite database; choose **Create cluster** to test a
+PostgreSQL connection, review the migration and let Ether back up, migrate and
+restart automatically. Choose **Join cluster** to add this machine with a
+one-time token from another node (see [Running a cluster](install.md#running-a-cluster)).
 
 On a cluster node the page lists every node with its version, whether it leads
 the cluster, whether it is online (or when it was last seen), its active
@@ -242,9 +244,17 @@ addresses, or this node losing touch with the database. The page also shows
 the shared settings version and the credential key fingerprint, which match on
 every node, and refreshes every 10 seconds.
 
-To add a node, choose **Create join token**. The drawer shows the token and
-the `ether cluster join` command once; copy them before closing it, and keep
-the token secret. Revoke tokens you no longer need from the list.
+To add a node, choose **Create join token**. The drawer shows the token
+once. On the new machine, open **Cluster › Join cluster**, paste it and follow
+the wizard. Fresh installs also offer **Join a cluster instead** during setup.
+No terminal commands are required. Keep the token secret and revoke unused
+tokens you no longer need.
+
+**Manage this node** adjusts its provider capacity weight or pauses/resumes new
+streams while existing streams keep playing. A pause ends after a restart.
+Pausing the only available node prevents new playback until you resume it.
+**Open manager** opens a peer node’s own settings; **Updates** handles rolling
+cluster updates.
 
 Elsewhere, **Backups & import** shows which node holds each backup and offers
 a shared backup folder, the Usenet and Debrid pages show this node's share of

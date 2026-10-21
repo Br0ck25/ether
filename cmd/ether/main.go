@@ -63,17 +63,9 @@ func main() {
 
 	logger := setupLogging(*dataDir, logLevelFor(*logLevel, *dataDir))
 	run := func(ctx context.Context) error {
-		a, err := app.New(ctx, app.Options{
-			DataDir:    *dataDir,
-			Logger:     logger,
-			Spike:      *spike,
-			SpikeFiles: fs.Args(),
+		return app.Serve(ctx, app.Options{
+			DataDir: *dataDir, Logger: logger, Spike: *spike, SpikeFiles: fs.Args(),
 		})
-		if err != nil {
-			return err
-		}
-		defer a.Close()
-		return a.Run(ctx)
 	}
 
 	svc, err := service.New(run, service.Options{DataDir: *dataDir, Logger: logger})

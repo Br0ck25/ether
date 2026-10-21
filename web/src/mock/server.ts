@@ -1618,11 +1618,13 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
   // ---- Cluster -----------------------------------------------------------------------
 
+  let clusterSetupState = "idle";
+  let nodePaused = false;
   function clusterNodes(): ClusterNode[] {
     const ago = (s: number) => new Date(Date.now() - s * 1000).toISOString();
     const node = (n: Partial<ClusterNode> & { id: string; name: string }): ClusterNode => ({
       version: state.boot.version,
-      addrs: [],
+      addrs: [`http://${n.id}.test:32400`],
       caps: { transcode: true, hwAccel: "videotoolbox", egressIp: "203.0.113.7" },
       load: 0,
       startedAt: ago(86400),
@@ -1634,7 +1636,19 @@ export function createFakeServer(opts: FakeOptions = {}) {
     if (!state.clustered)
       return [node({ id: "n-solo", name: state.boot.serverName, leader: true, load: 1 })];
     return [
-      node({ id: "n-den", name: "den", leader: true, load: 1 }),
+      node({
+        id: "n-den",
+        name: "den",
+        leader: true,
+        load: 1,
+        draining: nodePaused,
+        caps: {
+          transcode: true,
+          hwAccel: "videotoolbox",
+          weight: state.config.server.clusterWeight || 1,
+          egressIp: "203.0.113.7",
+        },
+      }),
       node({
         id: "n-attic",
         name: "attic",
@@ -1814,6 +1828,26 @@ export function createFakeServer(opts: FakeOptions = {}) {
         return json({ users: state.users });
       case "GET /cluster":
         return json(clusterStatus());
+      case "GET /cluster/setup":
+        return json({ available: true, state: clusterSetupState });
+      case "POST /cluster/setup/check": {
+        const req = body as { mode: string; token: string; replace: boolean };
+        if (req.mode === "join" && state.boot.setupComplete && !req.replace)
+          return err(409, "replace_required", "Confirm replacement of this server’s identity.");
+        if (req.mode === "join" && !req.token.startsWith("ether-join-v1:"))
+          return err(400, "invalid_token", "The join token is not valid.");
+        return json({ ok: true });
+      }
+      case "POST /cluster/setup/apply":
+        state.clustered = true;
+        clusterSetupState = "complete";
+        return json({ state: "restarting" }, 202);
+      case "PATCH /cluster/node": {
+        const req = body as { weight?: number; draining?: boolean };
+        if (req.weight !== undefined) state.config.server.clusterWeight = req.weight;
+        if (req.draining !== undefined) nodePaused = req.draining;
+        return json({ weight: state.config.server.clusterWeight || 1, draining: nodePaused });
+      }
       case "GET /cluster/settings":
         return json(
           state.clustered

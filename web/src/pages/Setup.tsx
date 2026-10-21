@@ -332,6 +332,16 @@ export default function Setup() {
         </div>
       }
     >
+      {step === 0 ? (
+        <Alert>
+          <AlertDescription>
+            Adding a node to an existing cluster?{" "}
+            <Button variant="link" onClick={() => navigate("/cluster")}>
+              Join a cluster instead
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <h2 className="text-base font-semibold text-fg">{STEPS[step]!.heading}</h2>
       <MutationError error={error} />
 

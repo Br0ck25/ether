@@ -141,8 +141,8 @@ single server needs none of this: it keeps everything in its own SQLite
 database.
 
 The **Cluster** page in the web UI (under *Server*) shows whether a server is
-standalone or a node, lists the nodes and their health, and creates the join
-tokens new nodes use.
+standalone or a node, guides cluster creation and joining, and manages nodes
+and one-time join tokens. No terminal commands are required for setup.
 
 ### What you need
 
@@ -170,52 +170,65 @@ tokens new nodes use.
 
 ### Start a cluster from an existing server
 
-Take a backup first (*Backups & import › Create snapshot*). Then, on the
-server:
+1. Finish this server's normal setup, then open **Server › Cluster** and choose
+   **Create cluster**.
+2. Enter the empty database's host, port, name, user, password and TLS setting.
+   Choose **Test connection and continue**. Ether checks connectivity, the
+   PostgreSQL version and that the schema is empty without modifying it.
+3. Review the migration plan and choose **Create cluster and restart**.
+   Stop active streams first. Ether creates a portable backup, shuts down its
+   writers, copies its SQLite data into PostgreSQL and restarts automatically.
+4. The page reconnects and shows this node in the cluster. Viewers, history,
+   playlists and Plex sign-in come along; Plex apps see the same server.
 
-```sh
-# 1. Stop Ether (stop the service, or quit the tray app).
-# 2. Copy this server into PostgreSQL and make it the first node:
-ether cluster init --database-url 'postgres://ether:PASSWORD@db.lan:5432/ether?sslmode=require'
-# 3. Start Ether again.
-```
+The original SQLite database remains in the data directory. If applying the
+change fails, Ether restores the previous local settings and credential key
+and reopens the manager with an error. An unsuccessful migration can leave data
+in the destination database; use a fresh empty database before retrying creation.
 
-`init` copies the server's data into PostgreSQL (it refuses a database that
-already holds data), moves its settings and identity there and points
-`config.json` at PostgreSQL. Your viewers, history, playlists and Plex sign-in
-come along; Plex apps keep seeing the same server. Open the Cluster page to
-confirm the server now shows as a node and the leader.
-
-A brand-new install can instead start with `ETHER_DATABASE_URL` set to the
-empty database; the first node to start seeds the cluster.
+A deployment with `ETHER_DATABASE_URL` set controls the database through its
+environment, so guided database changes are disabled there. Existing cluster
+management remains available. New container nodes can omit that override and
+use the join wizard to save the database connection securely in their local
+configuration.
 
 ### Add a node
 
-1. On the **Cluster** page of any running node, choose **Create join token**,
-   pick how long it stays valid (at most an hour) and create it. The token is
-   shown **once**, with the command to run. (On the command line:
-   `ether cluster token`.)
-2. Install Ether on the new machine and stop it.
-3. Run the command from the drawer:
+1. On the **Cluster** page of a running node, choose **Create join token**,
+   pick its validity (at most an hour), create it and copy the token.
+2. Install and open Ether on the new machine. Choose **Join a cluster instead**
+   from initial setup, or open **Server › Cluster › Join cluster**.
+3. Paste the token. If this server was already configured, explicitly confirm
+   replacing its identity and shared settings. Its existing history is backed
+   up and is not merged into the cluster. An optional database URL override
+   lets this node use a different address for PostgreSQL.
+4. Choose **Test connection and continue**, review the plan, then choose
+   **Join cluster and restart**. Ether backs up the local server, adopts the
+   cluster's credentials and settings and restarts automatically. Sign in as
+   the cluster owner if prompted.
+5. Set this node's remote-access port forward if needed. It appears in the
+   cluster membership list within a few seconds.
 
-   ```sh
-   ether cluster join 'ether-join-v1:...'
-   ```
+The token is shown once and is a secret: it carries the database password and
+credential key. Use it promptly and do not paste it into chats or tickets.
+Checking the connection does not consume it. A successful join consumes it;
+a failed join may require a fresh token. Unused tokens can be revoked from
+the Cluster page.
 
-4. Start Ether on the new machine and forward its own port. It appears on the
-   Cluster page within a few seconds.
+The `ether cluster init`, `token` and `join` commands remain available for
+scripted deployments; the web flow performs their operations automatically.
 
-The token is a secret: it carries the database password and the credential
-key that decrypts every stored credential. Treat it like a password, use it
-promptly and don't paste it into chats or tickets. A token works once; a used
-or expired one is refused, so create another. Unused tokens can be revoked
-from the Cluster page.
+### Manage nodes
 
-`join` refuses to overwrite an already configured server unless you pass
-`--force` (its old settings are kept as `*.pre-join-*` files). If the new
-machine reaches the database at a different address, add
-`--database-url 'postgres://…'`. Joining from the web setup wizard is not
-available.
+**Manage this node** changes its relative provider capacity weight and pauses
+or resumes new streams. Pausing preserves existing playback, removes the node
+from published connections and hands scheduled work to another available node.
+It resumes after a restart. Pausing the only available node prevents new playback
+until it is resumed. A rolling update owns its maintenance state while draining.
+
+Use **Open manager** beside another node to manage that machine's local settings.
+Owner credentials are not forwarded between nodes; sign in there if needed.
+The **Updates** page handles rolling software updates.
 
 ### Settings: shared and per node
 
@@ -247,8 +260,8 @@ debrid file is a per-node setting and is not divided: it only changes how
 quickly a single stream fills. Indexer daily limits are counted in the shared
 database, so together the nodes never exceed an indexer's quota.
 
-To give a node a larger share, raise its **Node weight** on that node's
-*General* page (`server.clusterWeight` in its `config.json`). A node at `2`
+To give a node a larger share, raise its **Node weight** in **Cluster › Manage
+this node** or on that node's *General* page (`server.clusterWeight` in its `config.json`). A node at `2`
 gets twice the share of a node at the default of `1`. Weights are listed on
 the Cluster page.
 

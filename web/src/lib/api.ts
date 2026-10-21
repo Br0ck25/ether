@@ -23,6 +23,8 @@ import type {
 } from "./contract";
 import type {
   Bootstrap,
+  ClusterSetupRequest,
+  ClusterSetupStatus,
   ClusterSettings,
   ClusterStatus,
   CreatedJoinToken,
@@ -261,6 +263,14 @@ export const api = {
   updateNow: (force = false) => post<UpdateStatus>("/updates/apply", { force }),
 
   // ---- Cluster ---------------------------------------------------------------------
+  clusterSetupStatus: (signal?: AbortSignal) =>
+    apiFetch<ClusterSetupStatus>("/cluster/setup", { signal }),
+  checkClusterSetup: (request: ClusterSetupRequest) =>
+    post<{ ok: boolean }>("/cluster/setup/check", request),
+  applyClusterSetup: (request: ClusterSetupRequest) =>
+    post<{ state: string }>("/cluster/setup/apply", request),
+  updateClusterNode: (body: { weight?: number; draining?: boolean }) =>
+    send<{ weight: number; draining: boolean }>("PATCH", "/cluster/node", body),
   clusterStatus: (signal?: AbortSignal) => apiFetch<ClusterStatus>("/cluster/", { signal }),
   clusterSettings: (signal?: AbortSignal) =>
     apiFetch<ClusterSettings>("/cluster/settings", { signal }),
