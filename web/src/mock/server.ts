@@ -1718,7 +1718,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     const seg = p.split("/").filter(Boolean);
     const route = `${method} /${seg.join("/")}`;
 
-    const cached = cacheMock(method, seg, body, state.config);
+    const cached = cacheMock(method, seg, body, state.config, state.clustered);
     if (cached) return json(cached.body, cached.status);
 
     const site = sites.handle(method, seg, body, state.config);

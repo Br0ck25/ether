@@ -12,6 +12,11 @@ import (
 )
 
 func (a *App) configureCache(c config.Cache) {
+	// Keep the active backend and its policy together until the node restarts.
+	if a.cache.Directory() != c.Dir || a.cache.Shared() != (c.Storage == "shared") {
+		return
+	}
+	a.cacheConfig.Store(&c)
 	a.cache.SetPolicy(segcache.Policy{Mode: c.Mode, Retention: time.Duration(c.RetentionDays) * 24 * time.Hour, ReplayBoost: time.Duration(c.ReplayBoostHours) * time.Hour})
 	a.cache.SetBudget(c.BudgetBytes)
 }
@@ -34,10 +39,10 @@ func (a *App) cacheHandler() http.Handler {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"used": used, "budget": budget, "directory": a.cache.Directory(), "protectedBytes": pinnedBytes, "releases": releases, "metrics": a.cache.Metrics(), "prefetch": a.prefetch.Stats(), "preload": a.cachefill.Status()})
+		_ = json.NewEncoder(w).Encode(map[string]any{"policy": a.runningCacheConfig(), "shared": a.cache.Shared(), "clustered": a.clustered(), "storageError": a.cache.StorageError(), "restartRequired": a.cacheRestartRequired(), "used": used, "budget": budget, "directory": a.cache.Directory(), "protectedBytes": pinnedBytes, "releases": releases, "metrics": a.cache.Metrics(), "prefetch": a.prefetch.Stats(), "preload": a.cachefill.Status()})
 	})
 	mux.HandleFunc("POST /warm", func(w http.ResponseWriter, r *http.Request) {
-		cfg := a.cfg.Get().Cache
+		cfg := a.runningCacheConfig()
 		if cfg.DisableSpeculation || cfg.Mode == "off" || !cfg.KeepInProgressWarm {
 			http.Error(w, "Enable resume warming first", http.StatusConflict)
 			return
@@ -120,4 +125,15 @@ func (a *App) cacheHousehold(ctx context.Context, scope string) ([]core.User, er
 		}
 	}
 	return out, nil
+}
+
+func (a *App) runningCacheConfig() config.Cache {
+	if p := a.cacheConfig.Load(); p != nil {
+		return *p
+	}
+	return a.cfg.Get().EffectiveCache()
+}
+func (a *App) cacheRestartRequired() bool {
+	p := a.cfg.Get().EffectiveCache()
+	return p.Dir != a.cache.Directory() || (p.Storage == "shared") != a.cache.Shared()
 }

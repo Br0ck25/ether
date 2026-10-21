@@ -358,3 +358,27 @@ func TestSealRoundTrip(t *testing.T) {
 		t.Fatal("fingerprint")
 	}
 }
+
+func TestSharedCachePolicyKeepsMountsAndLocalCacheIndependent(t *testing.T) {
+	a := Config{Cache: Cache{Dir: "/mnt/nas-a", Storage: "shared", BudgetBytes: 100}}
+	a.SetCachePolicy(a.Cache)
+	b := Config{Cache: Cache{Dir: "/Volumes/nas", Storage: "shared", BudgetBytes: 3}}
+	merged, err := MergeShared(b, SharedJSON(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := merged.EffectiveCache(); got.Dir != "/Volumes/nas" || got.BudgetBytes != 100 || got.Storage != "shared" {
+		t.Fatalf("bad merged policy %+v", got)
+	}
+	b.Cache.Storage = "local"
+	merged, err = MergeShared(b, SharedJSON(a))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := merged.EffectiveCache(); got.BudgetBytes != 3 {
+		t.Fatal("shared policy changed a local cache")
+	}
+	if a.SharedCache.Dir != "" {
+		t.Fatal("mount path leaked into shared policy")
+	}
+}

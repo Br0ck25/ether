@@ -29,6 +29,30 @@ describe("Cache management", () => {
     expect(fake.state.config.cache.budgetBytes).toBe(250 * 1024 ** 3);
     expect(fake.state.config.cache.mode).toBe("adaptive");
   });
+  it("returns from the saved policy editor to presets and reviews a replacement", async () => {
+    const { fake } = renderApp("/cache");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit policy" }, WAIT));
+    fireEvent.click(screen.getByRole("button", { name: "Back to presets" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Feather/ }, WAIT));
+    fireEvent.click(screen.getByRole("button", { name: "Review profile" }));
+    expect(screen.getByLabelText("Media disk budget")).toHaveValue(0.25);
+    fireEvent.click(screen.getByRole("button", { name: "Back to presets" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Encore/ }, WAIT));
+    fireEvent.click(screen.getByRole("button", { name: "Review profile" }));
+    expect(screen.getByLabelText("Media disk budget")).toHaveValue(250);
+    expect(calls(fake, "PUT", "/config/cache")).toHaveLength(0);
+  });
+  it("offers shared NAS only in a cluster and preserves the node mount path", async () => {
+    const { fake } = renderApp("/cache", { cluster: true });
+    fireEvent.click(await screen.findByRole("button", { name: "Edit policy" }, WAIT));
+    fireEvent.click(screen.getByRole("radio", { name: /Shared NAS/ }));
+    fireEvent.change(screen.getByLabelText("NAS mount path on this node"), {
+      target: { value: "/mnt/ether-cache" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save policy" }));
+    await waitFor(() => expect(fake.state.config.cache.storage).toBe("shared"));
+    expect(fake.state.config.cache.dir).toBe("/mnt/ether-cache");
+  });
   it("disables speculation controls in no-media mode and saves the off policy", async () => {
     const { fake } = renderApp("/cache");
     fireEvent.click(await screen.findByRole("button", { name: "Edit policy" }, WAIT));

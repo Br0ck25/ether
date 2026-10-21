@@ -20,7 +20,7 @@ var configSections = map[string]string{
 
 func (h *Handler) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"config": RedactConfig(h.deps.Config.Get()),
+		"config": effectiveRedacted(h.deps.Config.Get()),
 	})
 }
 
@@ -81,6 +81,7 @@ func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		next = env.Config
 	}
 	next = UnredactConfig(next, prev)
+	next.SetCachePolicy(next.Cache)
 	errs, err := h.saveConfig(next)
 	switch {
 	case err != nil:
@@ -89,7 +90,7 @@ func (h *Handler) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	case len(errs) > 0:
 		writeValidationError(w, errs)
 	default:
-		writeJSON(w, http.StatusOK, map[string]any{"config": RedactConfig(h.deps.Config.Get())})
+		writeJSON(w, http.StatusOK, map[string]any{"config": effectiveRedacted(h.deps.Config.Get())})
 	}
 }
 
@@ -112,7 +113,7 @@ func (h *Handler) handleGetSection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown_section", "no such config section")
 		return
 	}
-	raw, err := json.Marshal(RedactConfig(h.deps.Config.Get()))
+	raw, err := json.Marshal(effectiveRedacted(h.deps.Config.Get()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "could not encode config")
 		return
@@ -145,7 +146,9 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	prev := h.deps.Config.Get()
-	prevRaw, _ := json.Marshal(prev)
+	effective := prev
+	effective.Cache = prev.EffectiveCache()
+	prevRaw, _ := json.Marshal(effective)
 	var all map[string]json.RawMessage
 	if err := json.Unmarshal(prevRaw, &all); err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "could not encode config")
@@ -164,6 +167,11 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next = UnredactConfig(next, prev)
+	if field == "cache" {
+		next.SetCachePolicy(next.Cache)
+	} else {
+		next.Cache = prev.Cache
+	}
 	errs, err := h.saveConfig(next)
 	switch {
 	case err != nil:
@@ -172,7 +180,7 @@ func (h *Handler) handlePutSection(w http.ResponseWriter, r *http.Request) {
 	case len(errs) > 0:
 		writeValidationError(w, errs)
 	default:
-		raw, _ := json.Marshal(RedactConfig(h.deps.Config.Get()))
+		raw, _ := json.Marshal(effectiveRedacted(h.deps.Config.Get()))
 		var out map[string]json.RawMessage
 		_ = json.Unmarshal(raw, &out)
 		writeJSON(w, http.StatusOK, map[string]any{"section": field, "value": json.RawMessage(out[field])})
@@ -195,4 +203,9 @@ func mergeSection(current, patch json.RawMessage) (json.RawMessage, error) {
 		curObj[k] = v
 	}
 	return json.Marshal(curObj)
+}
+
+func effectiveRedacted(c config.Config) config.Config {
+	c.Cache = c.EffectiveCache()
+	return RedactConfig(c)
 }

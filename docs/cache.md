@@ -7,8 +7,10 @@ Tabs have their own URLs and the overview fits the desktop viewport, following
 the server Overview layout. **Edit policy** opens the settings drawer.
 **Choose a cache profile** opens the preset cards, followed by a review step;
 selecting a card does not change the policy or start a job. Save after reviewing
-the controls.
-Storage settings apply to this node. Existing settings retain their previous behaviour until you change them.
+the controls. **Back to presets** is always available at the top of the policy
+editor, including when editing an already saved policy.
+Local storage settings apply to this node. Shared NAS policies apply to all
+participating nodes; mount paths remain node-specific.
 
 ## Choose a footprint
 
@@ -32,9 +34,10 @@ applies to managed preloading, not foreground playback.
 Demand mode evicts the oldest unprotected segments. Adaptive mode considers
 release recency and repeat playback admissions: each repeat earns the configured
 recency credit, capped at eight repeats and removed after 30 days without a play.
-Reads by a prefetch job never count as plays. The eviction policy compares whole
-releases, so a large favourite does not lose merely because it has many segments.
-The oldest segment of the least valuable release is evicted first.
+Reads by a prefetch job never count as plays. Local eviction compares whole releases and then removes the oldest segment of
+the least valuable release. Shared eviction ranks bounded batches of the oldest
+unprotected segments with the same repeat-viewing credit, avoiding an unbounded
+NAS scan or database transaction.
 
 Unprotected releases expire after the configured number of inactive days; zero
 means only the size budget expires them. The expiry pass runs every minute.
@@ -140,5 +143,54 @@ managed shelf separately reports current title, progress, reserved space,
 completed sources and skipped/interrupted attempts.
 
 Changing the cache directory requires a restart and does not move old data.
-The page always labels the active directory. Clusters fill and retain media on
-each node independently; they do not pool disks or coordinate catalogue shards.
+The page always labels the active directory. With local storage selected, cluster
+nodes fill and retain media independently. Shared NAS storage coordinates one
+pool as described below; it does not combine separate node disks.
+
+## Shared NAS cache for a cluster
+
+Choose **Edit policy → Where your cache lives → Shared NAS** on a PostgreSQL
+cluster running a shared-cache-capable Ether release on each participating
+node. The cluster shares one pool, with one budget, retention policy, preload
+allocation and set of owner pins. A cluster may keep some nodes on local caches.
+The Shared NAS choice is unavailable on a standalone SQLite server.
+
+1. Mount an owner-managed NFS or SMB share through the operating system on every
+   participating node. Ether uses mounted filesystem paths, not `smb://` URLs,
+   and does not install mounts or store NAS credentials.
+2. On the first node, choose an **empty, dedicated directory** on that mount.
+   Give the Ether service account read/write access. Select the desired preset,
+   budget and preload options, save, then restart this node.
+3. On each other node, select Shared NAS and point to the **same directory on the
+   same share**. Mount paths may differ between machines. The existing shared
+   policy is offered when joining. Save and restart each node.
+4. The Overview badge reads **Shared cluster pool** once active. Explorer lists
+   the pool's releases and pins. Disk-hit metrics and opening-warmup activity
+   describe the serving node; retained bytes and full-title preloading describe
+   the shared pool.
+
+The first node creates a pool identity marker. Later nodes must see that marker;
+a different or missing mount is rejected instead of silently creating a private
+cache. Mount the NAS before starting the service. A configured shared backend
+whose mount cannot be verified prevents startup; a lost mount or database during
+operation causes cache misses/write failures and a visible storage error, without
+switching to another disk. Restore the mount/database to resume cache access.
+Changing backend or path is a restart-required operation. Existing local bytes
+are not migrated, merged or deleted. Shared metadata lives in PostgreSQL; do not
+put Ether's SQLite database or transcode output on the shared cache folder.
+
+Each published segment uses an immutable filename and a checksum. PostgreSQL
+transactions serialize pin/accounting/eviction decisions across nodes. Live and
+resume pins belong to their originating node and are renewed; abandoned pins
+expire after three minutes. Owner and preload pins persist. NAS writes that are
+interrupted before publication are journaled and reclaimed after 24 hours.
+The share must support ordinary file creation, reads, deletion and durable flush;
+its availability, permissions and network throughput remain owner-managed.
+
+One renewable, fenced preload lease coordinates the shared shelf. Every node can
+serve its retained media. A replacement worker reuses the stored manifest and
+complete sources; stale workers cannot overwrite the manifest or remove the new
+worker's pins. Followers check every 30 seconds and may take over after the
+60-second lease expires. Successful catalogue passes remain 15 minutes apart.
+Pause/resume applies to the whole pool. Preloading waits for playback on any
+cluster node unless its policy explicitly permits concurrent downloads.

@@ -32,6 +32,7 @@ func (s Scope) String() string {
 // sectionScopes classifies every top-level key of Config whose whole value
 // shares one scope.
 var sectionScopes = map[string]Scope{
+	"sharedCache":   Shared,
 	"usenet":        Shared,
 	"indexers":      Shared,
 	"catalog":       Shared,
@@ -87,6 +88,7 @@ var mixedSections = map[string]map[string]Scope{
 		"keyFile":  Local,
 	},
 	"cache": {
+		"storage":                Local,
 		"dir":                    Local,
 		"budgetBytes":            Local,
 		"mode":                   Local,

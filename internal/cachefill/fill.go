@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,6 +39,7 @@ type Engine interface {
 }
 
 type Deps struct {
+	Shared *SharedStore // nil for a node-local shelf
 	// Household returns active members of the configured household scope.
 	Household func(context.Context, string) ([]core.User, error)
 	State     WatchReader
@@ -100,29 +102,61 @@ func New(dir string, d Deps) (*Manager, error) {
 		d.Logger = slog.Default()
 	}
 	m := &Manager{deps: d, path: filepath.Join(dir, "preload.json"), wake: make(chan struct{}, 1), items: map[core.RatingKey]Item{}, status: Status{State: "idle"}}
-	b, err := os.ReadFile(m.path)
-	if err == nil {
-		var doc struct {
-			Items  []Item `json:"items"`
-			Paused bool   `json:"paused"`
-		}
-		if err = json.Unmarshal(b, &doc); err != nil {
-			d.Logger.Warn("ignoring invalid preload manifest", "err", err)
-			doc.Items = nil
-			doc.Paused = true
-		}
-		m.status.Paused = doc.Paused
-		for _, it := range doc.Items {
-			if it.ReleaseID != "" && it.Size > 0 {
-				m.items[it.Key] = it
-			}
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	var b []byte
+	var err error
+	if d.Shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		b, m.status, err = d.Shared.load(ctx)
+		cancel()
+	} else {
+		b, err = os.ReadFile(m.path)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
+	if err == nil {
+		if err = m.loadDocument(b); err != nil {
+			if d.Shared != nil {
+				return nil, err
+			}
+			d.Logger.Warn("ignoring invalid preload manifest", "err", err)
+			m.status.Paused = true
+		}
+	}
+
 	return m, nil
 }
 func (m *Manager) Status() Status {
+	if m.deps.Shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		b, st, err := m.deps.Shared.load(ctx)
+		if err != nil {
+			return Status{State: "waiting", Message: "Shared preload database is unavailable"}
+		}
+		var doc struct {
+			Items []Item `json:"items"`
+		}
+		if json.Unmarshal(b, &doc) == nil {
+			st.Items = doc.Items
+		}
+		st.Ready, st.Allocated = 0, 0
+		sizes := m.releaseSizes()
+		for i := range st.Items {
+			it := &st.Items[i]
+			n := sizes(it.ReleaseID)
+			it.Complete = it.Complete && it.StoredBytes > 0 && n >= it.StoredBytes
+			st.Allocated += max(it.Size, n)
+			if it.Complete {
+				st.Ready++
+			}
+		}
+		return st
+	}
+	return m.localStatus()
+}
+func (m *Manager) localStatus() Status {
+	sizes := m.releaseSizes()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := m.status
@@ -131,9 +165,9 @@ func (m *Manager) Status() Status {
 	s.Ready = 0
 	s.Allocated = 0
 	for _, it := range m.items {
-		it.Complete = it.Complete && it.StoredBytes > 0 && m.deps.Cache.ReleaseBytes(it.ReleaseID) >= it.StoredBytes
+		it.Complete = it.Complete && it.StoredBytes > 0 && sizes(it.ReleaseID) >= it.StoredBytes
 		s.Items = append(s.Items, it)
-		s.Allocated += max(it.Size, m.deps.Cache.ReleaseBytes(it.ReleaseID))
+		s.Allocated += max(it.Size, sizes(it.ReleaseID))
 		if it.Complete {
 			s.Ready++
 		}
@@ -144,6 +178,9 @@ func (m *Manager) Status() Status {
 
 // Wake cancels an old-policy job before scheduling a pass with current settings.
 func (m *Manager) Wake() {
+	if m.deps.Shared != nil {
+		m.deps.Shared.wake()
+	}
 	m.mu.Lock()
 	if m.cancel != nil {
 		m.cancel()
@@ -155,6 +192,11 @@ func (m *Manager) Wake() {
 	}
 }
 func (m *Manager) Pause(v bool) error {
+	if m.deps.Shared != nil {
+		err := m.deps.Shared.pause(v)
+		m.Wake()
+		return err
+	}
 	m.mu.Lock()
 	m.status.Paused = v
 	m.mu.Unlock()
@@ -164,17 +206,29 @@ func (m *Manager) Pause(v bool) error {
 func (m *Manager) state(state, message string) {
 	m.mu.Lock()
 	m.status.State, m.status.Message = state, message
+	st := m.status
 	m.mu.Unlock()
+	if m.deps.Shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := m.deps.Shared.save(ctx, nil, st); err != nil {
+			m.deps.Logger.Debug("shared preload status", "err", err)
+		}
+	}
 }
 func (m *Manager) Run(ctx context.Context) {
-	ticker := time.NewTicker(15 * time.Minute)
+	every := 15 * time.Minute
+	if m.deps.Shared != nil {
+		every = 30 * time.Second
+	}
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		run, cancel := context.WithCancel(ctx)
 		m.mu.Lock()
 		m.cancel = cancel
 		m.mu.Unlock()
-		err := m.pass(run)
+		err := m.runPass(run)
 		cancel()
 		m.mu.Lock()
 		m.cancel = nil
@@ -199,6 +253,15 @@ func (m *Manager) allowed() error {
 	m.mu.Lock()
 	paused := m.status.Paused
 	m.mu.Unlock()
+	if m.deps.Shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, st, err := m.deps.Shared.load(ctx)
+		cancel()
+		if err != nil {
+			return err
+		}
+		paused = st.Paused
+	}
 	if paused {
 		return errors.New("Preloading is paused")
 	}
@@ -238,6 +301,11 @@ func (m *Manager) save() error {
 	if err != nil {
 		return err
 	}
+	if m.deps.Shared != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return m.deps.Shared.save(ctx, b, m.localStatus())
+	}
 	f, err := os.CreateTemp(filepath.Dir(m.path), "preload-*.tmp")
 	if err != nil {
 		return err
@@ -262,7 +330,7 @@ func (m *Manager) forget(key core.RatingKey) error {
 	}
 	delete(m.items, key)
 	m.mu.Unlock()
-	if err := m.deps.Cache.Unpin(it.ReleaseID, pinReason); err != nil {
+	if err := m.pin(it.ReleaseID, false); err != nil {
 		return err
 	}
 	return m.save()
@@ -279,7 +347,7 @@ func (m *Manager) pass(ctx context.Context) error {
 	}
 	// Retire excess reservations first, even while disabled/paused. Cached bytes
 	// become ordinary retention candidates, never a forced deletion.
-	snapshot := m.Status()
+	snapshot := m.localStatus()
 	sort.Slice(snapshot.Items, func(i, j int) bool { return snapshot.Items[i].Updated.Before(snapshot.Items[j].Updated) })
 	allocated, count := snapshot.Allocated, len(snapshot.Items)
 	for _, it := range snapshot.Items {
@@ -293,13 +361,18 @@ func (m *Manager) pass(ctx context.Context) error {
 	}
 	// Clear orphan pins left between pinning and a manifest write/crash.
 	wanted := map[string]bool{}
-	for _, it := range m.Status().Items {
+	for _, it := range m.localStatus().Items {
 		wanted[it.ReleaseID] = true
+		if m.deps.Shared != nil {
+			if err := m.pin(it.ReleaseID, true); err != nil {
+				return err
+			}
+		}
 	}
 	for id, reasons := range m.deps.Cache.Pins() {
 		for _, reason := range reasons {
 			if reason == pinReason && !wanted[id] {
-				if err := m.deps.Cache.Unpin(id, pinReason); err != nil {
+				if err := m.pin(id, false); err != nil {
 					return err
 				}
 			}
@@ -328,7 +401,7 @@ func (m *Manager) pass(ctx context.Context) error {
 	}
 	// Slide each successfully planned show's shelf forward. Old episodes
 	// return to ordinary retention; transient metadata failures preserve pins.
-	for _, it := range m.Status().Items {
+	for _, it := range m.localStatus().Items {
 		if it.Key.Kind() == core.KindEpisode && plan.Shows[rootKey(it.Key)] && !wantedKeys[it.Key] {
 			if err := m.forget(it.Key); err != nil {
 				return err
@@ -339,7 +412,7 @@ func (m *Manager) pass(ctx context.Context) error {
 	for i, title := range candidates {
 		ranks[title.Title.Key] = i
 	}
-	for _, it := range m.Status().Items {
+	for _, it := range m.localStatus().Items {
 		if plan.UnavailableShows[rootKey(it.Key)] {
 			ranks[it.Key] = -1
 		}
@@ -433,7 +506,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	if err := m.makeRoom(title.Key, reservation, limit, maxTitles, ranks); err != nil {
 		return err
 	}
-	if err := m.deps.Cache.Pin(res.Release.ID, pinReason); err != nil {
+	if err := m.pin(res.Release.ID, true); err != nil {
 		return err
 	}
 	it := Item{Key: title.Key, Title: displayTitle(*title), ReleaseID: res.Release.ID, Size: reservation, Updated: time.Now()}
@@ -442,7 +515,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 	m.status.Size = size
 	m.mu.Unlock()
 	if err := m.save(); err != nil {
-		_ = m.deps.Cache.Unpin(res.Release.ID, pinReason)
+		_ = m.pin(res.Release.ID, false)
 		return err
 	}
 	m.deps.Cache.Describe(res.Release.ID, displayTitle(*title), size)
@@ -501,7 +574,7 @@ func (m *Manager) fill(ctx context.Context, owner *core.User, title *core.Title,
 // makeRoom rotates out lower-ranked shelf entries, never better ones. Removing
 // a preload reservation leaves its bytes available to ordinary cache retention.
 func (m *Manager) makeRoom(key core.RatingKey, reservation, limit int64, maxTitles int, ranks map[core.RatingKey]int) error {
-	s := m.Status()
+	s := m.localStatus()
 	allocated, count := s.Allocated, len(s.Items)
 	rank := func(k core.RatingKey) int {
 		if n, ok := ranks[k]; ok {
@@ -537,4 +610,37 @@ func (m *Manager) makeRoom(key core.RatingKey, reservation, limit int64, maxTitl
 		}
 	}
 	return nil
+}
+
+func (m *Manager) loadDocument(b []byte) error {
+	if len(b) == 0 {
+		return nil
+	}
+	var doc struct {
+		Items  []Item `json:"items"`
+		Paused bool   `json:"paused"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("invalid preload manifest: %w", err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items = map[core.RatingKey]Item{}
+	for _, it := range doc.Items {
+		if it.ReleaseID != "" && it.Size > 0 {
+			m.items[it.Key] = it
+		}
+	}
+	if m.deps.Shared == nil {
+		m.status.Paused = doc.Paused
+	}
+	return nil
+}
+
+func (m *Manager) releaseSizes() func(string) int64 {
+	if c, ok := m.deps.Cache.(interface{ ReleaseSizes() map[string]int64 }); ok {
+		sizes := c.ReleaseSizes()
+		return func(id string) int64 { return sizes[id] }
+	}
+	return m.deps.Cache.ReleaseBytes
 }

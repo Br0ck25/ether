@@ -39,7 +39,7 @@ export function CacheOverview({
           [
             "Retained",
             s ? formatBytes(used) : "—",
-            `${s?.releases.length ?? 0} releases on this node`,
+            `${s?.releases.length ?? 0} releases ${s?.shared ? "in the shared pool" : "on this node"}`,
           ],
           [
             "Disk hit rate",
@@ -49,7 +49,7 @@ export function CacheOverview({
           [
             "Served locally",
             s ? formatBytes(s.metrics.servedBytes) : "—",
-            "Delivered from the disk cache",
+            s?.shared ? "Served by this node from NAS" : "Delivered from the disk cache",
           ],
           [
             "Space reclaimed",

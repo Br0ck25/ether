@@ -50,12 +50,14 @@ export function createCacheMock() {
       Pins: [],
     },
   ];
-  return (method: string, seg: string[], body: unknown, cfg: EtherConfig) => {
+  return (method: string, seg: string[], body: unknown, cfg: EtherConfig, clustered = false) => {
     if (seg[0] !== "cache") return undefined;
     if (method === "GET" && seg.length === 1)
       return {
         status: 200,
         body: {
+          clustered,
+          shared: cfg.cache.storage === "shared",
           used: releases.reduce((sum, r) => sum + r.Bytes, 0),
           budget: cfg.cache.budgetBytes,
           directory: cfg.cache.dir,
