@@ -105,7 +105,7 @@ function SetupWizard({
   const [database, setDatabase] = useState("ether");
   const [user, setUser] = useState("ether");
   const [password, setPassword] = useState("");
-  const [tls, setTLS] = useState("require");
+  const [tls, setTLS] = useState("verify-full");
   const [token, setToken] = useState("");
   const [override, setOverride] = useState("");
   const [replace, setReplace] = useState(false);
@@ -322,10 +322,17 @@ function SetupWizard({
                   value={tls}
                   onChange={(e) => setTLS(e.target.value)}
                 >
-                  <option value="require">Require TLS</option>
                   <option value="verify-full">Verify TLS certificate and hostname</option>
-                  <option value="disable">No TLS (trusted network only)</option>
+                  <option value="require">TLS without certificate verification</option>
+                  <option value="disable">No TLS (credentials are sent unencrypted)</option>
                 </select>
+                {tls !== "verify-full" ? (
+                  <p className="mt-2 text-sm text-warning" role="alert">
+                    {tls === "disable"
+                      ? "Database traffic and credentials will be sent without encryption."
+                      : "TLS encrypts traffic, but this mode does not verify the database server’s identity."}
+                  </p>
+                ) : null}
               </Field>
             </>
           ) : (

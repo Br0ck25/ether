@@ -167,7 +167,10 @@ and one-time join tokens. No terminal commands are required for setup.
   on Kubernetes, or a managed PostgreSQL service. Ether tolerates brief
   database outages without ending streams, but not long ones.
 - **Nodes on the same LAN.** Every node must reach the database (allow it
-  through the firewall; use `sslmode=require` unless the network is trusted).
+  through the firewall). Ether defaults to `sslmode=verify-full`, which checks
+  the certificate and hostname. Use a trusted CA certificate on PostgreSQL;
+  only select `require` (no identity verification) or `disable` (plaintext)
+  deliberately for a controlled deployment.
 - **A port forward per node** for remote access: each node needs its own
   external port (for example 32400 to the first node, 32401 to the second),
   or UPnP. Set the public port on each node's *Connectivity* page.
@@ -327,3 +330,17 @@ updates automatically: a verified binary self-replace (with automatic
 rollback copy) or the platform installer (DMG/setup.exe). Linux packages
 update through your package manager or a new Docker image. Nothing is
 ever installed without a valid ed25519 signature and SHA-256 match.
+
+### Signed feed freshness
+
+Update feeds carry signed issue and expiry times, valid for 30 days. Ether rejects
+expired or undated feeds instead of treating them as proof that no update exists.
+The repository’s weekly **Refresh signed update feeds** workflow renews the
+current release without changing its binaries; it can also be run manually.
+Maintainers must keep that workflow enabled and the release signing secrets
+configured. A failed freshness check leaves the installed server running.
+Check the system clock and the feed publisher’s workflow if it occurs.
+
+Feeds use detached `.json.sig` signatures so older Ether clients can verify the
+new freshness fields. Custom feed publishers must supply both files and renew
+them before expiry with `ether-release-sign renew`; never renew unverified input.

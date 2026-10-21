@@ -52,6 +52,8 @@ func main() {
 		err = cmdVerify(os.Args[2:])
 	case "manifest":
 		err = cmdManifest(os.Args[2:])
+	case "renew":
+		err = cmdRenew(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -65,7 +67,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: ether-release-sign <keygen|sign|verify|manifest> [flags]  (see package docs)")
+	fmt.Fprintln(os.Stderr, "usage: ether-release-sign <keygen|sign|verify|manifest|renew> [flags]  (see package docs)")
 }
 
 func cmdKeygen(args []string) error {
@@ -169,6 +171,9 @@ func cmdSign(args []string) error {
 	if err := m.Validate(); err != nil {
 		return err
 	}
+	if err := m.ValidateFreshness(time.Now()); err != nil {
+		return err
+	}
 	outPath := *out
 	if outPath == "" {
 		outPath = *in
@@ -231,6 +236,9 @@ func cmdVerify(args []string) error {
 	} else if err := m.Verify(pub); err != nil {
 		return err
 	}
+	if err := m.ValidateFreshness(time.Now()); err != nil {
+		return err
+	}
 	fmt.Printf("ok: %s %s (%s)\n", m.Channel, m.Version, *in)
 	return nil
 }
@@ -261,6 +269,7 @@ func cmdManifest(args []string) error {
 		Version: *version, Channel: *channel,
 		PublishedAt: time.Now().UTC(), NotesURL: *notesURL,
 	}
+	m.RenewFreshness(time.Now())
 	for _, spec := range arts {
 		parts := strings.SplitN(spec, ":", 5)
 		if len(parts) != 5 {

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // ProgressFunc receives cumulative downloaded bytes (total may be 0 when
@@ -23,8 +24,11 @@ type ProgressFunc func(downloaded, total int64)
 // partial files are removed on error. Downloads are capped at
 // max(Size, Size*1.1) when Size is known, else 2 GiB.
 func (c *Client) Download(ctx context.Context, upd *Update, dir string, progress ProgressFunc) (string, error) {
-	if upd == nil || upd.Artifact == nil {
+	if upd == nil || upd.Artifact == nil || upd.Manifest == nil {
 		return "", fmt.Errorf("updater: nil update")
+	}
+	if err := upd.Manifest.ValidateFreshness(time.Now()); err != nil {
+		return "", err
 	}
 	return c.DownloadArtifact(ctx, upd.Artifact, dir, progress)
 }

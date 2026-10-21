@@ -24,7 +24,7 @@ type Database struct {
 	// Driver is "sqlite" (default) or "postgres".
 	Driver string `json:"driver,omitempty"`
 	// URL is the PostgreSQL connection URL, e.g.
-	// postgres://ether:secret@db.lan:5432/ether?sslmode=require
+	// postgres://ether:secret@db.lan:5432/ether?sslmode=verify-full
 	URL string `json:"url,omitempty"`
 	// DeferMigrations makes this node wait, at startup, instead of applying
 	// new schema migrations to the shared database while another live node

@@ -24,6 +24,7 @@ func channelFeed(t *testing.T, versions map[string]string) (*httptest.Server, *C
 		m := &Manifest{Version: version, Channel: channel, PublishedAt: time.Now(),
 			Artifacts: []Artifact{{OS: runtime.GOOS, Arch: runtime.GOARCH, Kind: KindBinary,
 				URL: srv.URL + "/ether", SHA256: shaHex([]byte("x")), Size: 1, Filename: "ether"}}}
+		m.RenewFreshness(time.Now())
 		if err := m.Sign(priv); err != nil {
 			t.Fatal(err)
 		}

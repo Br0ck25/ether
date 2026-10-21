@@ -223,6 +223,9 @@ func (c *Client) fetchManifest(ctx context.Context, url string) (*Manifest, erro
 		if err := m.Verify(c.pub); err != nil {
 			return nil, err
 		}
+		if err := m.ValidateFreshness(time.Now()); err != nil {
+			return nil, err
+		}
 		return &m, nil
 	}
 	// Detached signature: "<manifest>.sig", base64 over the exact bytes.
@@ -231,6 +234,9 @@ func (c *Client) fetchManifest(ctx context.Context, url string) (*Manifest, erro
 		return nil, fmt.Errorf("%w (no embedded signature and detached fetch failed: %v)", ErrBadSignature, err)
 	}
 	if err := VerifyDetached(c.pub, body, string(sigBody)); err != nil {
+		return nil, err
+	}
+	if err := m.ValidateFreshness(time.Now()); err != nil {
 		return nil, err
 	}
 	return &m, nil

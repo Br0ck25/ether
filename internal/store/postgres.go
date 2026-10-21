@@ -75,10 +75,37 @@ func RedactURL(raw string) string {
 	return strings.Join(fields, " ")
 }
 
+// parsePostgresConfig requires verified TLS unless the owner explicitly selects
+// another mode in the connection string. pgx otherwise defaults to "prefer",
+// which silently retries without encryption. A default supplied in the DSN also
+// takes precedence over ambient PGSSLMODE, keeping service behavior predictable.
+func parsePostgresConfig(raw string) (*pgx.ConnConfig, error) {
+	if isPostgresURL(raw) {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, err
+		}
+		q, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return nil, err
+		}
+		if q.Get("sslmode") == "" {
+			q.Set("sslmode", "verify-full")
+			u.RawQuery = q.Encode()
+		}
+		raw = u.String()
+	} else {
+		// pgx's keyword parser uses the last occurrence, preserving an
+		// explicit owner mode while providing a secure default otherwise.
+		raw = "sslmode=verify-full " + raw
+	}
+	return pgx.ParseConfig(raw)
+}
+
 // openPostgres connects to an owner-supplied PostgreSQL database, checks
 // the server and migrates the schema under a cluster-wide lock.
 func openPostgres(ctx context.Context, rawURL string, log *slog.Logger, gate MigrationGate) (*sql.DB, error) {
-	cfg, err := pgx.ParseConfig(rawURL)
+	cfg, err := parsePostgresConfig(rawURL)
 	if err != nil {
 		// pgx errors can echo the connection string; never surface it.
 		return nil, fmt.Errorf("store: invalid postgres URL %s", RedactURL(rawURL))

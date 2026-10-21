@@ -32,7 +32,7 @@ func (d *pgDriver) Open(name string) (driver.Conn, error) {
 }
 
 func (d *pgDriver) OpenConnector(name string) (driver.Connector, error) {
-	cfg, err := pgx.ParseConfig(name)
+	cfg, err := parsePostgresConfig(name)
 	if err != nil {
 		return nil, err
 	}

@@ -62,7 +62,7 @@ describe("Server › Cluster", () => {
     await within(drawer).findByText("Connection verified", {}, WAIT);
     expect(calls(fake, "POST", "/cluster/setup/check")[0]!.body).toMatchObject({
       mode: "create",
-      databaseUrl: "postgresql://ether:secret%40%3A%2F@db.lan:5432/ether?sslmode=require",
+      databaseUrl: "postgresql://ether:secret%40%3A%2F@db.lan:5432/ether?sslmode=verify-full",
     });
     expect(calls(fake, "POST", "/cluster/setup/apply")).toHaveLength(0);
     expect(within(drawer).getByText(/Create a portable backup/)).toBeInTheDocument();
@@ -70,6 +70,18 @@ describe("Server › Cluster", () => {
     await screen.findByRole("region", { name: "Nodes" }, WAIT);
     expect(calls(fake, "POST", "/cluster/setup/apply")).toHaveLength(1);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("warns when the owner explicitly weakens database transport protection", async () => {
+    renderApp("/cluster");
+    fireEvent.click(await screen.findByRole("button", { name: "Create cluster" }, WAIT));
+    const drawer = await screen.findByRole("dialog", { name: "Create cluster" });
+    const tls = within(drawer).getByLabelText("Database encryption");
+    expect(tls).toHaveValue("verify-full");
+    fireEvent.change(tls, { target: { value: "require" } });
+    expect(within(drawer).getByRole("alert")).toHaveTextContent("does not verify");
+    fireEvent.change(tls, { target: { value: "disable" } });
+    expect(within(drawer).getByRole("alert")).toHaveTextContent("without encryption");
   });
 
   it("requires explicit replacement and allows recovery from an invalid join token", async () => {

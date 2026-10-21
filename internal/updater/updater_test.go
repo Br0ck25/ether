@@ -86,6 +86,7 @@ func newFeed(t *testing.T, mutate func(m *Manifest), detached bool) *feed {
 				SHA256: shaHex([]byte("x")), Size: 1},
 		},
 	}
+	m.RenewFreshness(time.Now())
 	f.server = httptest.NewServer(mux)
 	m.Artifacts[0].URL = f.server.URL + "/ether"
 	if mutate != nil {

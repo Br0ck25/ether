@@ -4,8 +4,8 @@ go 1.27.3
 
 require (
 	fyne.io/systray v1.12.2
-	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	github.com/andybalholm/cascadia v1.3.4
 	github.com/coder/websocket v1.8.15
 	github.com/dlclark/regexp2 v1.11.5
@@ -27,7 +27,7 @@ require (
 	github.com/ebitengine/purego v0.11.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

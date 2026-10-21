@@ -55,8 +55,12 @@ type Manifest struct {
 	Version     string    `json:"version"`
 	Channel     string    `json:"channel"`
 	PublishedAt time.Time `json:"publishedAt,omitempty"`
-	NotesURL    string    `json:"notesUrl,omitempty"`
-	Notes       string    `json:"notes,omitempty"`
+	// IssuedAt and ExpiresAt bound replay of a signed feed. Pointers preserve
+	// the canonical encoding of legacy manifests during signature checks.
+	IssuedAt  *time.Time `json:"issuedAt,omitempty"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	NotesURL  string     `json:"notesUrl,omitempty"`
+	Notes     string     `json:"notes,omitempty"`
 	// MinVersion, when set, is the oldest installed version that may
 	// update directly to this release (older installs must reinstall).
 	MinVersion string     `json:"minVersion,omitempty"`
@@ -72,7 +76,30 @@ var (
 	ErrNoArtifact     = errors.New("updater: no artifact for this platform")
 	ErrChecksum       = errors.New("updater: artifact checksum mismatch")
 	ErrTooOldToUpdate = errors.New("updater: installed version is too old to update directly; reinstall")
+	ErrStaleManifest  = errors.New("updater: update feed is expired or lacks signed freshness; check the server clock and contact the feed publisher")
 )
+
+// ManifestLifetime bounds replay to 30 days. The publisher refreshes the
+// signature weekly without changing the release, artifacts, or publication date.
+const ManifestLifetime = 30 * 24 * time.Hour
+
+// RenewFreshness updates the timestamps before signing. Never call this on
+// unverified downloaded content: renewal is a release-publisher operation.
+func (m *Manifest) RenewFreshness(now time.Time) {
+	now = now.UTC()
+	expires := now.Add(ManifestLifetime)
+	m.IssuedAt, m.ExpiresAt = &now, &expires
+}
+
+// ValidateFreshness must run only after authenticating the manifest.
+func (m *Manifest) ValidateFreshness(now time.Time) error {
+	if m.IssuedAt == nil || m.ExpiresAt == nil || m.IssuedAt.IsZero() ||
+		!m.ExpiresAt.After(*m.IssuedAt) || m.ExpiresAt.Sub(*m.IssuedAt) > ManifestLifetime ||
+		m.IssuedAt.After(now.Add(5*time.Minute)) || !now.Before(*m.ExpiresAt) {
+		return ErrStaleManifest
+	}
+	return nil
+}
 
 // SigningBytes is the canonical payload an embedded signature covers: the
 // manifest's JSON encoding (struct field order, no indentation) with the
