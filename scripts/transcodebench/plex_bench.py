@@ -284,7 +284,15 @@ def run_session(cfg: Config, root_pid: int|None, out_dir: Path, idx: int) -> dic
         lock=threading.Lock()
         def fetch(item):
             uri, extinf = item
-            st,_,data=http_get(uri, timeout=min(30,cfg.timeout_s))
+            # PMS lists segments before they are fully written; retry 404s briefly.
+            deadline_seg=time.monotonic()+15.0; data=None
+            while True:
+                try:
+                    st,_,data=http_get(uri, timeout=min(30,cfg.timeout_s)); break
+                except BenchError as e:
+                    if "HTTP 404" in str(e) and time.monotonic()<deadline_seg:
+                        time.sleep(0.5); continue
+                    raise
             if st!=200: raise BenchError(f"segment HTTP {st}")
             if not data: raise BenchError(f"empty segment {sanitize(uri)}")
             with lock: downloaded[uri]=(len(data),extinf)
