@@ -12,15 +12,19 @@ import (
 )
 
 var (
-	reYear       = regexp.MustCompile(`\b(19\d{2}|20\d{2})\b`)
-	reSE         = regexp.MustCompile(`(?i)\bS(\d{1,2})E(\d{1,3})((?:E\d{1,3})*)(?:-?E?(\d{1,3}))?\b`)
-	reSeasonOnly = regexp.MustCompile(`(?i)\bS(\d{1,2})(?:\s*-\s*S(\d{1,2}))?\b`)
-	reSeasonWord = regexp.MustCompile(`(?i)\bSeason\s*(\d{1,2})\b`)
-	reXEpisode   = regexp.MustCompile(`\b(\d{1,2})x(\d{1,3})\b`)
-	reEpRange    = regexp.MustCompile(`(?i)E(\d{1,3})`)
-	reChannels   = regexp.MustCompile(`([257])[\s.]([01])\b`)
-	reGroupTail  = regexp.MustCompile(`-([A-Za-z0-9][A-Za-z0-9_]{1,})$`)
-	reBracket    = regexp.MustCompile(`\[([^\]]+)\]`)
+	reYear        = regexp.MustCompile(`\b(188[89]|189\d|19\d{2}|20\d{2})\b`)
+	reSE          = regexp.MustCompile(`(?i)\bS(\d{1,2})[\s-]*E(\d{1,3})((?:\s*E\d{1,3})*)(?:\s*-\s*E?(\d{1,3}))?\b`)
+	reSeasonAndEp = regexp.MustCompile(`(?i)\b(?:Season|Series|Saison|Stagione|Temporada)\s*(\d{1,2})\b[\s-]*\b(?:Episode|Ep)\s*(\d{1,3})\b`)
+	reSeasonOnly  = regexp.MustCompile(`(?i)\bS(\d{1,2})(?:\s*(?:-|to)\s*S?(\d{1,2}))?\b`)
+	reSeasonWord  = regexp.MustCompile(`(?i)\b(?:Seasons?|Saison|Stagione|Temporada)\s*(\d{1,2})(?:\s*(?:-|to)\s*(?:Seasons?|S)?\s*(\d{1,2}))?\b`)
+	reXEpisode    = regexp.MustCompile(`\b(\d{1,2})x(\d{1,3})\b`)
+	reBareEpisode = regexp.MustCompile(`(?i)\b(?:Episode\s*(\d{1,3})|Ep\s*(\d{1,3})|E(\d{2,3}))\b`)
+	reDashEpisode = regexp.MustCompile(`(?i)\s-\s*(\d{2,3})\s+(?:\d{3,4}[pi]\b|BD\b|BLURAY\b|WEB|HDTV\b|DVD|X264\b|X265\b|HEVC\b|H264\b|H265\b|AV1\b|XVID\b)`)
+	reEpRange     = regexp.MustCompile(`(?i)E(\d{1,3})`)
+	reChannels    = regexp.MustCompile(`([257])[\s.]([01])\b`)
+	reRawChannels = regexp.MustCompile(`\b(5\.1|7\.1|2\.0|2\.1|6\.1)\b`)
+	reGroupTail   = regexp.MustCompile(`-([A-Za-z0-9][A-Za-z0-9_]{1,})$`)
+	reBracket     = regexp.MustCompile(`\[([^\]]+)\]`)
 )
 
 var containers = map[string]bool{
@@ -57,13 +61,16 @@ func Parse(name string) core.ReleaseInfo {
 	// is only used when there is no -GROUP suffix ("-SPARKS[rarbg]" names
 	// SPARKS, and [rarbg] is the uploader).
 	bracketGroup, leadingGroup := "", ""
-	if ms := reBracket.FindAllStringSubmatchIndex(raw, -1); len(ms) > 0 {
-		for i, m := range ms {
-			v := strings.TrimSpace(raw[m[2]:m[3]])
-			if v != "" && len(v) <= 20 && !looksLikeMeta(v) {
-				bracketGroup = v
-				if i == 0 && m[0] == 0 {
-					leadingGroup = v
+	hasBracket := strings.IndexByte(raw, '[') >= 0
+	if hasBracket {
+		if ms := reBracket.FindAllStringSubmatchIndex(raw, -1); len(ms) > 0 {
+			for i, m := range ms {
+				v := strings.TrimSpace(raw[m[2]:m[3]])
+				if v != "" && len(v) <= 20 && !looksLikeMeta(v) {
+					bracketGroup = v
+					if i == 0 && m[0] == 0 {
+						leadingGroup = v
+					}
 				}
 			}
 		}
@@ -79,7 +86,10 @@ func Parse(name string) core.ReleaseInfo {
 		}
 	}
 	// Group: trailing -GROUP (after stripping bracket chunks).
-	noBrackets := reBracket.ReplaceAllString(stem, " ")
+	noBrackets := stem
+	if hasBracket {
+		noBrackets = reBracket.ReplaceAllString(stem, " ")
+	}
 	if leadingGroup != "" {
 		info.Group = leadingGroup
 	} else if m := reGroupTail.FindStringSubmatch(strings.TrimSpace(noBrackets)); m != nil && !isKnownTail(m[1]) {
@@ -92,7 +102,7 @@ func Parse(name string) core.ReleaseInfo {
 	upper := " " + strings.ToUpper(spaced) + " "
 
 	// Season / episode.
-	markerAt := parseEpisodes(spaced, &info)
+	markerAt := parseEpisodes(spaced, upper, &info)
 	var yearAt int
 	info.Year, yearAt = parseYearAt(spaced)
 	// Words before the release year or the episode/season marker are the
@@ -103,9 +113,13 @@ func Parse(name string) core.ReleaseInfo {
 		floor = markerAt
 	}
 	// "COMPLETE" before the release year is usually part of the title
-	// ("A.Complete.Unknown.2024"), unless it names a pack.
-	if idx := tokenIndex(spaced, "COMPLETE"); idx >= 0 && (idx > yearAt || len(info.Seasons) > 0 || namesPack(spaced[idx+len("COMPLETE"):])) {
-		info.FullSeason = true
+	// ("A.Complete.Unknown.2024"), unless it names a pack. A string that
+	// already names a specific episode ("Show.S01.COMPLETE/Show.S01E02.mkv")
+	// is that episode, not a whole-season pack.
+	if len(info.Episodes) == 0 {
+		if idx := tokenIndex(spaced, "COMPLETE"); idx >= 0 && (idx > yearAt || len(info.Seasons) > 0 || namesPack(spaced[idx+len("COMPLETE"):])) {
+			info.FullSeason = true
+		}
 	}
 	info.Height = parseHeight(upper)
 	info.Source = parseSource(upper)
@@ -116,7 +130,7 @@ func Parse(name string) core.ReleaseInfo {
 	}
 	// DDP5.1 style, where dot was a separator: DD 5 1 handled above; also "5.1" in raw.
 	if info.Channels == "" {
-		if m := regexp.MustCompile(`\b(5\.1|7\.1|2\.0|2\.1|6\.1)\b`).FindStringSubmatch(raw); m != nil {
+		if m := reRawChannels.FindStringSubmatch(raw); m != nil {
 			info.Channels = m[1]
 		}
 	}
@@ -140,7 +154,7 @@ func Parse(name string) core.ReleaseInfo {
 			}
 		}
 	}
-	info.Title = extractTitle(spaced, yearAt, floor, &info)
+	info.Title = extractTitle(spaced, yearAt, markerAt, floor, &info)
 	return info
 }
 
@@ -166,75 +180,133 @@ func isKnownTail(g string) bool {
 	return false
 }
 
+var spacifyReplacer = strings.NewReplacer(".", " ", "_", " ", "(", " ", ")", " ", "[", " ", "]", " ")
+
 // spacify turns separators into spaces, keeping hyphens inside tokens.
 func spacify(s string) string {
-	r := strings.NewReplacer(".", " ", "_", " ", "(", " ", ")", " ", "[", " ", "]", " ")
-	s = r.Replace(s)
+	s = spacifyReplacer.Replace(s)
 	return strings.Join(strings.Fields(s), " ")
 }
 
 // parseEpisodes fills seasons and episodes and returns the offset of the
 // marker it read them from, or -1.
-func parseEpisodes(spaced string, info *core.ReleaseInfo) int {
-	if loc := reSE.FindStringSubmatchIndex(spaced); loc != nil {
-		m := submatches(spaced, loc)
-		s, _ := strconv.Atoi(m[1])
-		info.Seasons = []int{s}
-		first, _ := strconv.Atoi(m[2])
-		eps := []int{first}
-		// Additional E## tokens chained (S01E02E03).
-		for _, em := range reEpRange.FindAllStringSubmatch(m[3], -1) {
-			n, _ := strconv.Atoi(em[1])
-			eps = append(eps, n)
-		}
-		// Range tail: S01E02-E04 or S01E02-04 (captured last group beyond chained).
-		if m[4] != "" && len(eps) == 1 {
-			last, _ := strconv.Atoi(m[4])
-			// Only expand when it really looks like a range end and is
-			// a small step forward.
-			if last > first && last-first <= 30 && rangeTailPresent(spaced, m[0]) {
-				for n := first + 1; n <= last; n++ {
-					eps = append(eps, n)
-				}
-			} else if last != first {
-				eps = append(eps, last)
-			}
-		}
-		sort.Ints(eps)
-		info.Episodes = dedupeInts(eps)
-		return loc[0]
-	}
-	if loc := reSeasonWord.FindStringSubmatchIndex(spaced); loc != nil {
-		m := submatches(spaced, loc)
-		s, _ := strconv.Atoi(m[1])
-		info.Seasons = []int{s}
-		info.FullSeason = true
-		return loc[0]
-	}
-	if loc := reSeasonOnly.FindStringSubmatchIndex(spaced); loc != nil {
-		m := submatches(spaced, loc)
-		// Guard against matching the S in e.g. S01E02 (already handled) —
-		// here no E followed, so it is a season pack.
-		s, _ := strconv.Atoi(m[1])
-		info.Seasons = []int{s}
-		if m[2] != "" {
-			end, _ := strconv.Atoi(m[2])
-			for n := s + 1; n <= end && n-s <= 20; n++ {
-				info.Seasons = append(info.Seasons, n)
-			}
-		}
-		info.FullSeason = true
-		return loc[0]
-	}
-	if loc := reXEpisode.FindStringSubmatchIndex(spaced); loc != nil {
-		m := submatches(spaced, loc)
-		s, _ := strconv.Atoi(m[1])
-		e, _ := strconv.Atoi(m[2])
-		// 1x02 is ambiguous with e.g. codec-ish tokens; season<=50 guard.
-		if s >= 1 && s <= 50 {
+func parseEpisodes(spaced, upper string, info *core.ReleaseInfo) int {
+	hasS := strings.Contains(upper, " S")
+	if hasS {
+		if loc := reSE.FindStringSubmatchIndex(spaced); loc != nil {
+			m := submatches(spaced, loc)
+			s, _ := strconv.Atoi(m[1])
 			info.Seasons = []int{s}
-			info.Episodes = []int{e}
+			first, _ := strconv.Atoi(m[2])
+			eps := []int{first}
+			// Additional E## tokens chained (S01E02E03).
+			for _, em := range reEpRange.FindAllStringSubmatch(m[3], -1) {
+				n, _ := strconv.Atoi(em[1])
+				eps = append(eps, n)
+			}
+			// Range tail: S01E02-E04 or S01E02-04 (captured last group beyond chained).
+			if m[4] != "" && len(eps) == 1 {
+				last, _ := strconv.Atoi(m[4])
+				// Only expand when it really looks like a range end and is
+				// a small step forward.
+				if last > first && last-first <= 30 && rangeTailPresent(spaced, m[0]) {
+					for n := first + 1; n <= last; n++ {
+						eps = append(eps, n)
+					}
+				} else if last != first {
+					eps = append(eps, last)
+				}
+			}
+			sort.Ints(eps)
+			info.Episodes = dedupeInts(eps)
 			return loc[0]
+		}
+	}
+	hasSeasonWord := containsAny(upper, "SEASON", "SERIES", "SAISON", "STAGIONE", "TEMPORADA")
+	if hasSeasonWord {
+		if loc := reSeasonAndEp.FindStringSubmatchIndex(spaced); loc != nil {
+			m := submatches(spaced, loc)
+			s, _ := strconv.Atoi(m[1])
+			e, _ := strconv.Atoi(m[2])
+			if s >= 1 && s <= 50 && e >= 1 {
+				info.Seasons = []int{s}
+				info.Episodes = []int{e}
+				return loc[0]
+			}
+		}
+		if loc := reSeasonWord.FindStringSubmatchIndex(spaced); loc != nil {
+			m := submatches(spaced, loc)
+			s, _ := strconv.Atoi(m[1])
+			info.Seasons = []int{s}
+			if m[2] != "" {
+				end, _ := strconv.Atoi(m[2])
+				for n := s + 1; n <= end && n-s <= 30; n++ {
+					info.Seasons = append(info.Seasons, n)
+				}
+			}
+			info.FullSeason = true
+			return loc[0]
+		}
+	}
+	if hasS {
+		if loc := reSeasonOnly.FindStringSubmatchIndex(spaced); loc != nil {
+			m := submatches(spaced, loc)
+			// Guard against matching the S in e.g. S01E02 (already handled) —
+			// here no E followed, so it is a season pack.
+			s, _ := strconv.Atoi(m[1])
+			info.Seasons = []int{s}
+			if m[2] != "" {
+				end, _ := strconv.Atoi(m[2])
+				for n := s + 1; n <= end && n-s <= 30; n++ {
+					info.Seasons = append(info.Seasons, n)
+				}
+			}
+			info.FullSeason = true
+			return loc[0]
+		}
+	}
+	if strings.Contains(upper, "X") {
+		if loc := reXEpisode.FindStringSubmatchIndex(spaced); loc != nil {
+			m := submatches(spaced, loc)
+			s, _ := strconv.Atoi(m[1])
+			e, _ := strconv.Atoi(m[2])
+			// 1x02 is ambiguous with e.g. codec-ish tokens; season<=50 guard.
+			if s >= 1 && s <= 50 {
+				info.Seasons = []int{s}
+				info.Episodes = []int{e}
+				return loc[0]
+			}
+		}
+	}
+	if strings.Contains(upper, " E") {
+		if loc := reBareEpisode.FindStringSubmatchIndex(spaced); loc != nil {
+			m := submatches(spaced, loc)
+			_, yearAt := parseYearAt(spaced)
+			// "Star Wars Episode 1 1999" has the release year after "Episode 1";
+			// miniseries and season-directory files ("Band.of.Brothers.E01",
+			// "Episode 05 - Name.mkv") do not.
+			if m[1] == "" || yearAt < 0 || loc[0] > yearAt {
+				tok := m[1]
+				if tok == "" {
+					tok = m[2]
+				}
+				if tok == "" {
+					tok = m[3]
+				}
+				if e, err := strconv.Atoi(tok); err == nil && e >= 1 && e <= 100 {
+					info.Episodes = []int{e}
+					return loc[0]
+				}
+			}
+		}
+	}
+	if strings.Contains(spaced, " - ") {
+		if loc := reDashEpisode.FindStringSubmatchIndex(spaced); loc != nil {
+			m := submatches(spaced, loc)
+			if e, err := strconv.Atoi(m[1]); err == nil && e >= 1 && e <= 500 {
+				info.Episodes = []int{e}
+				return loc[0]
+			}
 		}
 	}
 	return -1
@@ -395,17 +467,18 @@ func parseSource(upper string) core.Source {
 	switch {
 	case strings.Contains(upper, " REMUX") || strings.Contains(upper, "BDREMUX"):
 		return core.SourceRemux
-	case containsAny(upper, "BLURAY", "BLU-RAY", "BDRIP", "BRRIP", "BD-RIP"):
+	case containsAny(upper, "BLURAY", "BLU-RAY", "BDRIP", "BRRIP", "BD-RIP", "HDDVD", "HD-DVD"):
 		return core.SourceBluRay
 	case containsAny(upper, "WEBRIP", "WEB-RIP", " WEB RIP "):
 		return core.SourceWEBRip
 	case containsAny(upper, "WEB-DL", "WEBDL", " WEB DL", " WEB "):
 		return core.SourceWEBDL
-	case strings.Contains(upper, " HDTV") || strings.Contains(upper, "HDTV "):
+	case strings.Contains(upper, " HDTV") || strings.Contains(upper, "HDTV ") ||
+		containsAny(upper, " PDTV ", " DSR ", " DSRIP ", " TVRIP ", " SATRIP ", " DTHRIP ", " SDTV "):
 		return core.SourceHDTV
 	case containsAny(upper, "DVDSCR", " SCR ", "SCREENER"):
 		return core.SourceScreener
-	case containsAny(upper, "DVDRIP", "DVD-RIP", " DVD "):
+	case containsAny(upper, "DVDRIP", "DVD-RIP", " DVD ", " DVDR ", " DVD5 ", " DVD9 ", " DVD-5 ", " DVD-9 ", " VHSRIP ", " LDRIP ", " LASERDISC "):
 		return core.SourceDVD
 	case containsAny(upper, "HDCAM", " HD CAM", " CAM ", " CAM-", "CAMRIP", "HQCAM", "HDTS", "HD-TS", "TSRIP", "HDTC", "HD-TC", " TELESYNC", " TELECINE", " TS ", " TC ", "-TS ", "-TC "):
 		return core.SourceCam
@@ -425,6 +498,8 @@ func parseVideoCodec(upper string) string {
 		return "vp9"
 	case containsAny(upper, "X264", "H264", "H 264", " AVC"):
 		return "h264"
+	case containsAny(upper, " VC-1", " VC1"):
+		return "vc1"
 	case containsAny(upper, "XVID", "DIVX"):
 		return "xvid"
 	case containsAny(upper, "MPEG2", "MPEG-2"):
@@ -471,45 +546,34 @@ func containsAny(s string, subs ...string) bool {
 // boundaryKeywords mark the end of the title portion.
 var boundaryKeywords = []string{
 	"2160P", "1080P", "1080I", "720P", "576P", "480P", "360P", "4K", "UHD",
-	"BLURAY", "BLU-RAY", "BDRIP", "BRRIP", "WEB-DL", "WEBDL", "WEBRIP", "WEB", "HDTV",
-	"DVDRIP", "DVDSCR", "REMUX", "X264", "X265", "H264", "H265", "HEVC", "AVC", "AV1",
+	"BLURAY", "BLU-RAY", "BDRIP", "BRRIP", "HDDVD", "HD-DVD", "WEB-DL", "WEBDL", "WEBRIP", "WEB", "HDTV",
+	"PDTV", "DSR", "DSRIP", "TVRIP", "SATRIP", "DTHRIP", "SDTV",
+	"DVDRIP", "DVDR", "DVD5", "DVD9", "DVDSCR", "VHSRIP", "LDRIP", "LASERDISC",
+	"REMUX", "X264", "X265", "H264", "H265", "HEVC", "AVC", "AV1", "VP9", "XVID", "DIVX", "MPEG2", "VC1", "VC-1",
 	"CAM", "HDCAM", "HDTS", "TELESYNC", "TELECINE", "PROPER", "REPACK", "COMPLETE",
-	"SEASON", "MULTI", "FRENCH", "GERMAN", "SPANISH", "ITALIAN", "HDR", "HDR10",
-	"INTERNAL", "LIMITED", "SUBBED", "DUBBED",
+	"SEASON", "SEASONS", "MULTI", "FRENCH", "GERMAN", "SPANISH", "ITALIAN", "HDR", "HDR10",
+	"INTERNAL", "LIMITED", "SUBBED", "DUBBED", "NTSC", "PAL",
 }
 
 // titleWordKeywords are boundary keywords that are also ordinary title
 // words ("The French Dispatch", "Internal Affairs", "Charlottes Web",
 // "Cam"); before the release year or episode marker they stay in the title.
 var titleWordKeywords = map[string]bool{
-	"COMPLETE": true, "SEASON": true, "MULTI": true, "FRENCH": true, "GERMAN": true,
+	"COMPLETE": true, "SEASON": true, "SEASONS": true, "MULTI": true, "FRENCH": true, "GERMAN": true,
 	"SPANISH": true, "ITALIAN": true, "INTERNAL": true, "LIMITED": true,
-	"SUBBED": true, "DUBBED": true, "CAM": true, "WEB": true,
+	"SUBBED": true, "DUBBED": true, "CAM": true, "WEB": true, "PAL": true,
 }
 
-func extractTitle(spaced string, yearAt, floor int, info *core.ReleaseInfo) string {
+func extractTitle(spaced string, yearAt, markerAt, floor int, info *core.ReleaseInfo) string {
 	cut := len(spaced)
 	consider := func(idx int) {
 		if idx > 0 && idx < cut {
 			cut = idx
 		}
 	}
-	// Year boundary (the occurrence parseYearAt chose).
+	// Year boundary (the occurrence parseYearAt chose) and episode/season marker.
 	consider(yearAt)
-	if loc := reSE.FindStringIndex(spaced); loc != nil {
-		consider(loc[0])
-	}
-	if loc := reSeasonWord.FindStringIndex(spaced); loc != nil {
-		consider(loc[0])
-	}
-	if len(info.Seasons) > 0 && len(info.Episodes) == 0 {
-		if loc := reSeasonOnly.FindStringIndex(spaced); loc != nil {
-			consider(loc[0])
-		}
-	}
-	if loc := reXEpisode.FindStringIndex(spaced); loc != nil && len(info.Episodes) > 0 {
-		consider(loc[0])
-	}
+	consider(markerAt)
 	for _, kw := range boundaryKeywords {
 		// Keywords are whole tokens ("Multiverse" is not MULTI, "Scam" is
 		// not CAM), and words before the release year or episode marker

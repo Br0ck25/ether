@@ -394,3 +394,22 @@ search:
 		t.Fatalf("rows = %+v, err = %v", rows, err)
 	}
 }
+
+func TestCardigannFallbackFindsSeasonPackAndInitialismAlias(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		if strings.Contains(r.URL.Path, "Obscure+Show+S02") && !strings.Contains(r.URL.Path, "S02E07") {
+			fmt.Fprint(w, `<table id="torrents"><tbody><tr><td><a href="?cat=2">TV</a></td><td><a class="title" href="/d/1">Obscure.Show.S02.COMPLETE.720p.BluRay.x264-GRP</a><a href="magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567">dl</a></td><td class="size">8 GB</td><td class="seeders">9</td><td class="leechers">1</td></tr></tbody></table>`)
+			return
+		}
+		fmt.Fprint(w, `<table id="torrents"><tbody></tbody></table>`)
+	}))
+	defer srv.Close()
+	r := testRunner(t, loadDef(t, "public.yml"), srv.URL, runnerSetup{})
+	rels, err := r.Search(context.Background(), core.SearchRequest{
+		Type: core.TypeEpisode, Title: "Obscure Show", Year: 1998, Season: 2, Episode: 7,
+	}, nil, nil, nil)
+	if err != nil || len(rels) != 1 || !strings.Contains(rels[0].Name, "S02.COMPLETE") {
+		t.Fatalf("cardigann season-pack fallback: got %+v err=%v", rels, err)
+	}
+}

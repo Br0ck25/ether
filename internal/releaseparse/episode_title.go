@@ -1,11 +1,51 @@
 package releaseparse
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
+
+var reMiniseriesPart = regexp.MustCompile(`(?i)\b(?:Part|Pt)\s*(0?[1-9]|[12]\d|I|II|III|IV|V|VI|VII|VIII|IX|X|One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten)\b`)
+
+var partNumbers = map[string]int{
+	"i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5,
+	"vi": 6, "vii": 7, "viii": 8, "ix": 9, "x": 10,
+	"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+	"six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+// MiniseriesPart extracts the series title and 1-based part number from a
+// miniseries release named "Show.Name.Part.3.Episode.Title.1080p.BluRay" or
+// "Show.Name.1990.Pt.01.720p". It is used only when resolving a Season 1
+// episode so movie titles ("Dune Part Two") are unaffected.
+func MiniseriesPart(name string) (seriesTitle string, part int, ok bool) {
+	spaced := spacify(name)
+	loc := reMiniseriesPart.FindStringSubmatchIndex(spaced)
+	if loc == nil || loc[0] == 0 {
+		return "", 0, false
+	}
+	tok := strings.ToLower(strings.TrimSpace(spaced[loc[2]:loc[3]]))
+	if n, err := strconv.Atoi(tok); err == nil && n > 0 {
+		part = n
+	} else if n, found := partNumbers[tok]; found {
+		part = n
+	}
+	if part <= 0 {
+		return "", 0, false
+	}
+	prefix := strings.Trim(spaced[:loc[0]], " -")
+	// Strip a trailing series premiere year from the prefix ("It 1990 Part 1").
+	if y, yAt := parseYearAt(prefix); y > 0 && yAt > 0 {
+		prefix = strings.Trim(prefix[:yAt], " -")
+	}
+	if prefix == "" {
+		return "", 0, false
+	}
+	return prefix, part, true
+}
 
 // EpisodeTitleMatches rejects an explicitly different episode title between
 // SxxExx and the technical metadata. Unnamed scene releases remain eligible.
@@ -21,9 +61,21 @@ func EpisodeTitleMatches(name, want string) bool {
 		}
 	}
 	spaced := spacify(name)
+	usedMiniseriesPart := false
 	loc := reSE.FindStringIndex(spaced)
 	if loc == nil {
+		loc = reSeasonAndEp.FindStringIndex(spaced)
+	}
+	if loc == nil {
 		loc = reXEpisode.FindStringIndex(spaced)
+	}
+	if loc == nil {
+		loc = reBareEpisode.FindStringIndex(spaced)
+	}
+	if loc == nil {
+		if loc = reMiniseriesPart.FindStringIndex(spaced); loc != nil {
+			usedMiniseriesPart = true
+		}
 	}
 	if loc == nil {
 		return true
@@ -48,7 +100,8 @@ func EpisodeTitleMatches(name, want string) bool {
 			}
 		}
 		switch u {
-		case "AAC", "AC3", "EAC3", "DDP", "DDP5", "DTS", "TRUEHD", "READNFO", "UNCENSORED", "EXTENDED",
+		case "AAC", "AC3", "EAC3", "DDP", "DDP5", "DTS", "TRUEHD", "MP3", "FLAC", "OPUS",
+			"READNFO", "UNCENSORED", "EXTENDED", "WS", "FS", "NTSC", "PAL",
 			// Release tags that can precede the resolution; they are not
 			// episode title words ("Show.S01E01.DV.2160p.WEB").
 			"DV", "DOVI", "HDR10PLUS", "SDR", "HYBRID", "RERIP", "REAL", "10BIT", "DUAL", "DL",
@@ -68,6 +121,17 @@ func EpisodeTitleMatches(name, want string) bool {
 	expected := normalizeEpisodeTitle(want)
 	if got == "" || got == "the" || got == "a" || got == "an" {
 		return true
+	}
+	if usedMiniseriesPart {
+		// When "Part N" was the episode marker itself ("Band.of.Brothers.Part.1.Currahee"),
+		// a catalogue episode titled "Part 1" / "Part One" (normalized to "1") or
+		// "Part 1: Currahee" (normalized to "1 currahee") matches the subtitle tail.
+		if _, err := strconv.Atoi(expected); err == nil {
+			return true
+		}
+		if strings.HasSuffix(expected, " "+got) {
+			return true
+		}
 	}
 	return got == expected || strings.HasPrefix(expected, got+" ")
 }
@@ -106,10 +170,19 @@ func EpisodeSeriesYear(name string, parsedYear int) int {
 	spaced := spacify(name)
 	loc := reSE.FindStringIndex(spaced)
 	if loc == nil {
+		loc = reSeasonAndEp.FindStringIndex(spaced)
+	}
+	if loc == nil {
 		loc = reXEpisode.FindStringIndex(spaced)
 	}
 	if loc == nil {
 		loc = reSeasonOnly.FindStringIndex(spaced)
+	}
+	if loc == nil {
+		loc = reSeasonWord.FindStringIndex(spaced)
+	}
+	if loc == nil {
+		loc = reMiniseriesPart.FindStringIndex(spaced)
 	}
 	if loc == nil {
 		return parsedYear

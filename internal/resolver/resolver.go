@@ -329,9 +329,9 @@ func searchRequestFor(t *core.Title) core.SearchRequest {
 		if title == "" {
 			title = t.Title
 		}
-		return core.SearchRequest{Type: core.TypeEpisode, IDs: ids, Title: title, Year: t.ShowYear, Season: season, Episode: episode, EpisodeTitle: t.Title}
+		return core.SearchRequest{Type: core.TypeEpisode, IDs: ids, Title: title, OriginalTitle: t.ShowOriginalTitle, Year: t.ShowYear, Season: season, Episode: episode, EpisodeTitle: t.Title}
 	}
-	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, Year: t.Year}
+	return core.SearchRequest{Type: core.TypeMovie, IDs: t.IDs, Title: t.Title, OriginalTitle: t.OriginalTitle, Year: t.Year}
 }
 
 func flightKey(req core.ResolveRequest, profile core.QualityProfile) string {
@@ -438,6 +438,26 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	if err != nil {
 		trace.Err = err.Error()
 		return nil, err
+	}
+	rescueTried := false
+	if len(cands) == 0 && searchErr == nil && ctx.Err() == nil {
+		if rescued := s.searchRescue(ctx, sreq); len(rescued) > 0 {
+			rescueTried = true
+			extra := novelReleases(results, rescued)
+			if len(extra) > 0 {
+				s.rememberReleases(t, extra)
+				results = append(results, extra...)
+				var extraRejected bool
+				cands, extraRejected, err = s.rankCandidates(ctx, req, sreq, profile, extra, &trace, pinID)
+				clientRejected = clientRejected || extraRejected
+				if err != nil {
+					trace.Err = err.Error()
+					return nil, err
+				}
+			}
+		} else {
+			rescueTried = true
+		}
 	}
 	failed := func(fallback error) error {
 		if searchErr != nil {
@@ -571,6 +591,36 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return s.resolution(t.Key, cands, index, nzb, &trace), nil
 	}
 
+	// Second-pass rescue: when every candidate from the initial search
+	// (often an ID-only query that returned expired posts or uncached
+	// single episodes) was unhealthy, fan out keyword, alias, OriginalTitle
+	// and season-pack rescue queries and validate any newly found releases.
+	if !rescueTried && searchErr == nil && ctx.Err() == nil {
+		if rescued := s.searchRescue(ctx, sreq); len(rescued) > 0 {
+			extra := novelReleases(results, rescued)
+			if len(extra) > 0 {
+				s.rememberReleases(t, extra)
+				results = append(results, extra...)
+				rescueCands, extraRejected, rerr := s.rankCandidates(ctx, req, sreq, profile, extra, &trace, pinID)
+				clientRejected = clientRejected || extraRejected
+				if rerr == nil && len(rescueCands) > 0 {
+					var rescueChecks candidateChecks
+					defer rescueChecks.close()
+					rescuePrepStart := time.Now()
+					rescueCands = s.prepareSources(ctx, rescueCands, req.Title, &trace, &rescueChecks)
+					trace.SourcePreparationDuration += time.Since(rescuePrepStart)
+					rIdx, rNZB, verr := s.validateCandidates(ctx, rescueCands, &trace, rcfg.HealthRace)
+					if verr == nil && rIdx >= 0 {
+						s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
+						trace.Winner = rescueCands[rIdx].rel.ID
+						return s.resolution(t.Key, rescueCands, rIdx, rNZB, &trace), nil
+					}
+					cands = append(cands, rescueCands...)
+				}
+			}
+		}
+	}
+
 	if optimisticErr != nil {
 		return nil, optimisticErr
 	}
@@ -591,6 +641,74 @@ func searchCacheKey(req core.SearchRequest) string {
 func (s *Service) search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
 	results, _, err := s.searchCached(ctx, req, false)
 	return results, err
+}
+
+type rescueSearcher interface {
+	SearchRescue(ctx context.Context, req core.SearchRequest) ([]core.Release, error)
+}
+
+func (s *Service) searchRescue(ctx context.Context, req core.SearchRequest) []core.Release {
+	rs, ok := s.indexer.(rescueSearcher)
+	if !ok {
+		return nil
+	}
+	key := searchCacheKey(req) + "|rescue"
+	s.mu.RLock()
+	e, ok := s.searchCache[key]
+	s.mu.RUnlock()
+	if ok && s.now().Before(e.expires) {
+		return append([]core.Release(nil), e.results...)
+	}
+	results, err := rs.SearchRescue(ctx, req)
+	if err != nil {
+		return nil
+	}
+	for i := range results {
+		if results[i].Info.Title == "" && results[i].Info.Height == 0 && results[i].Info.Source == core.SourceUnknown {
+			results[i].Info = releaseparse.Parse(results[i].Name)
+		}
+		results[i] = withTarget(results[i], req)
+	}
+	s.mu.Lock()
+	now := s.now()
+	boundMap(s.searchCache, maxSearchCache, func(e searchCacheEntry) bool { return !now.Before(e.expires) })
+	s.searchCache[key] = searchCacheEntry{results: append([]core.Release(nil), results...), expires: s.now().Add(s.searchTTL())}
+	s.mu.Unlock()
+	// Merge rescued results into the primary search cache entry so Play
+	// Version (Variants) and subsequent resolves see the full candidate set.
+	primaryKey := searchCacheKey(req)
+	s.mu.Lock()
+	if pe, ok := s.searchCache[primaryKey]; ok {
+		extra := novelReleases(pe.results, results)
+		if len(extra) > 0 {
+			pe.results = append(append([]core.Release(nil), pe.results...), extra...)
+			s.searchCache[primaryKey] = pe
+		}
+	}
+	s.mu.Unlock()
+	return results
+}
+
+func novelReleases(existing, incoming []core.Release) []core.Release {
+	seen := make(map[string]bool, len(existing))
+	for _, r := range existing {
+		seen[r.ID] = true
+		if r.InfoHash != "" {
+			seen["h:"+r.InfoHash] = true
+		}
+	}
+	var out []core.Release
+	for _, r := range incoming {
+		if seen[r.ID] || (r.InfoHash != "" && seen["h:"+r.InfoHash]) {
+			continue
+		}
+		seen[r.ID] = true
+		if r.InfoHash != "" {
+			seen["h:"+r.InfoHash] = true
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // searchCached answers from the search cache unless fresh is set; cached
@@ -828,9 +946,22 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	}
 	// Title / obfuscation.
 	wantTitle := sreq.Title
-	titleOK := releaseparse.TitleMatches(rel.Info, wantTitle) ||
+	miniseriesPart := 0
+	if isEpisode && sreq.Season == 1 && len(rel.Info.Episodes) == 0 && !rel.Info.FullSeason {
+		if partTitle, partNum, ok := releaseparse.MiniseriesPart(rel.Name); ok {
+			if releaseparse.TitlesMatch(partTitle, wantTitle) ||
+				(t.ShowOriginalTitle != "" && releaseparse.TitlesMatch(partTitle, t.ShowOriginalTitle)) {
+				miniseriesPart = partNum
+			}
+		}
+	}
+	titleOK := miniseriesPart > 0 ||
+		releaseparse.TitleMatches(rel.Info, wantTitle) ||
 		(!isEpisode && t.OriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.OriginalTitle)) ||
 		(isEpisode && t.ShowOriginalTitle != "" && releaseparse.TitleMatches(rel.Info, t.ShowOriginalTitle))
+	if titleOK && !idMatch && regionTagConflicts(rel.Info.Title, wantTitle, t.Countries) {
+		titleOK = false
+	}
 	if !titleOK && !idMatch {
 		obf := releaseparse.IsObfuscated(rel.Info.Title)
 		if obf && !releaseparse.HasUsableInfo(rel.Info) {
@@ -858,6 +989,10 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 			if !packCoversSeason(rel.Info, sreq.Season) {
 				return "season/episode mismatch"
 			}
+		} else if miniseriesPart > 0 {
+			if miniseriesPart != sreq.Episode {
+				return "season/episode mismatch"
+			}
 		} else if !releaseparse.EpisodeMatches(rel.Info, sreq.Season, sreq.Episode) {
 			return "season/episode mismatch"
 		}
@@ -865,7 +1000,7 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		if len(rel.Info.Episodes) > 0 || rel.Info.FullSeason {
 			return "episode release for a movie request"
 		}
-		if !releaseparse.YearMatches(rel.Info.Year, sreq.Year) {
+		if !movieYearMatches(rel.Info.Year, sreq.Year, idMatch && titleOK) {
 			return "year mismatch"
 		}
 	}
@@ -890,7 +1025,9 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		return "dolby vision not allowed for client"
 	}
 	if rel.Info.VideoCodec != "" && len(caps.VideoCodecs) > 0 && !caps.SupportsVideo(rel.Info.VideoCodec) {
-		return "video codec unsupported by client"
+		if caps.Download || !isLegacyTranscodableCodec(rel.Info.VideoCodec) {
+			return "video codec unsupported by client"
+		}
 	}
 	// Size sanity against runtime. The per-profile size range is policy
 	// (a 4K remux exceeds a 1080p profile's ceiling), so an explicit pick
@@ -902,7 +1039,8 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	}
 	if !preferred && size > 0 && t.Runtime > 0 {
 		mbPerMin := float64(size) / (1 << 20) / t.Runtime.Minutes()
-		if profile.MinSizeMBPerMin > 0 && mbPerMin < profile.MinSizeMBPerMin {
+		minMBPerMin := effectiveMinSizeMBPerMin(profile.MinSizeMBPerMin, rel.Info)
+		if minMBPerMin > 0 && mbPerMin < minMBPerMin {
 			return "size too small for runtime"
 		}
 		if profile.MaxSizeMBPerMin > 0 && mbPerMin > profile.MaxSizeMBPerMin {
@@ -910,6 +1048,93 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 		}
 	}
 	return ""
+}
+
+// movieYearMatches allows a ±2 year festival/theatrical gap when both the
+// title and an explicit indexer-reported identifier (IMDb/TMDB) agree.
+func movieYearMatches(got, want int, verifiedIdentity bool) bool {
+	if releaseparse.YearMatches(got, want) {
+		return true
+	}
+	if verifiedIdentity && got > 0 && want > 0 {
+		d := got - want
+		return d >= -2 && d <= 2
+	}
+	return false
+}
+
+// isLegacyTranscodableCodec reports codecs used by older DVD/TV/HD-DVD
+// releases ("xvid", "mpeg2", "vc1") that modern client direct-play lists
+// omit even though live playback transcodes them seamlessly.
+func isLegacyTranscodableCodec(codec string) bool {
+	switch codec {
+	case "xvid", "mpeg2", "vc1":
+		return true
+	default:
+		return false
+	}
+}
+
+// effectiveMinSizeMBPerMin scales a profile's size floor down for lower-resolution
+// or high-efficiency legacy encodes so a 4K/1080p profile does not reject valid
+// 480p/576p/720p DVDRip/PDTV/HEVC releases of older titles, while preserving the
+// full floor for 1080p H.264 and 2160p releases.
+func effectiveMinSizeMBPerMin(profileMin float64, info core.ReleaseInfo) float64 {
+	if profileMin <= 0 {
+		return 0
+	}
+	switch {
+	case info.Height > 0 && info.Height <= 576:
+		return min(profileMin, 1.2)
+	case info.Source == core.SourceDVD || info.VideoCodec == "xvid" || info.VideoCodec == "mpeg2":
+		return min(profileMin, 1.2)
+	case info.Height == 720:
+		return min(profileMin, 2.5)
+	case info.Height == 1080 && (info.VideoCodec == "hevc" || info.VideoCodec == "av1"):
+		return min(profileMin, 2.5)
+	case info.Height == 1080:
+		return min(profileMin, 5.0)
+	case info.Height == 0:
+		return min(profileMin, 1.5)
+	default:
+		return profileMin
+	}
+}
+
+// regionTagConflicts reports whether a release's trailing regional tag
+// ("The.Office.UK") conflicts with the catalogue title's known origin countries.
+func regionTagConflicts(releaseTitle, wantTitle string, countries []string) bool {
+	relRegion := releaseparse.TrailingRegionTag(releaseTitle)
+	if relRegion == "" || releaseparse.TrailingRegionTag(wantTitle) == relRegion {
+		return false
+	}
+	if wantRegion := releaseparse.TrailingRegionTag(wantTitle); wantRegion != "" && wantRegion != relRegion {
+		return true
+	}
+	var known []string
+	for _, c := range countries {
+		switch strings.ToLower(strings.TrimSpace(c)) {
+		case "us", "usa", "united states", "united states of america":
+			known = append(known, "us")
+		case "gb", "uk", "united kingdom", "great britain":
+			known = append(known, "uk")
+		case "au", "aus", "australia":
+			known = append(known, "au")
+		case "ca", "can", "canada":
+			known = append(known, "ca")
+		case "nz", "new zealand":
+			known = append(known, "nz")
+		}
+	}
+	if len(known) == 0 {
+		return false
+	}
+	for _, k := range known {
+		if k == relRegion {
+			return false
+		}
+	}
+	return true
 }
 
 // withTarget marks a torrent candidate for an episode request with the
