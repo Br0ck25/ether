@@ -80,6 +80,65 @@ class TestHonesty(unittest.TestCase):
         self.assertFalse(out["sessions"][1]["checked"])
 
 
+class TestWin32Safety(unittest.TestCase):
+    HANDLE_APIS = ("CreateToolhelp32Snapshot", "OpenProcess", "OpenThread",
+                   "CreateJobObjectW")
+
+    def test_handle_apis_are_pointer_safe_not_default_int(self):
+        for name in self.HANDLE_APIS:
+            self.assertEqual(win.WIN32_SIGNATURES[name][0], "HANDLE",
+                             f"{name} restype must be HANDLE")
+        self.assertEqual(win.WIN32_SIGNATURES["CreateProcessW"][0], "BOOL")
+        for name in ("CloseHandle", "GetProcessTimes", "AssignProcessToJobObject",
+                     "SetInformationJobObject", "ResumeThread", "WaitForSingleObject"):
+            self.assertIn(name, win.WIN32_SIGNATURES)
+
+    def test_configure_applies_signatures_to_dlls(self):
+        import ctypes
+        from unittest import mock
+        kernel, psapi = mock.MagicMock(), mock.MagicMock()
+        funcs = {}
+        for name in win.WIN32_SIGNATURES:
+            func = mock.MagicMock()
+            funcs[name] = func
+            setattr(psapi if name == "GetProcessMemoryInfo" else kernel, name, func)
+        win.configure_win32(kernel32=kernel, psapi=psapi)
+        self.assertIs(funcs["CreateToolhelp32Snapshot"].restype, ctypes.c_void_p)
+        self.assertIs(funcs["OpenProcess"].restype, ctypes.c_void_p)
+        self.assertIs(funcs["CreateJobObjectW"].restype, ctypes.c_void_p)
+
+    def test_suspended_launch_assigns_job_before_resume(self):
+        import inspect
+        src = inspect.getsource(win.launch_suspended) + inspect.getsource(win.PmsProcessWin.start)
+        self.assertIn("CREATE_SUSPENDED", src)
+        self.assertLess(src.index("AssignProcessToJobObject"), src.index(".resume()"))
+
+    def test_inaccessible_pid_marks_sample_unavailable(self):
+        from unittest import mock
+        with mock.patch.object(win, "_snapshot", return_value=({1: 0, 2: 1}, {1: "pms", 2: "child"})), \
+             mock.patch.object(win, "_proc_cpu_rss", side_effect=[(1.0, 100), None]):
+            sample = win.sample_tree_win(1)
+        self.assertFalse(sample["sampling_available"])
+        self.assertIsNone(sample["cpu_seconds"])
+        self.assertEqual(sample["inaccessible_pids"], [2])
+        delta = win.compute_tree_delta(sample, sample)
+        self.assertIsNone(delta["tree_cpu_delta_s"])
+        self.assertEqual(delta["cpu_sampling"], "unavailable")
+
+    def test_io_is_null_not_invented_zero(self):
+        from unittest import mock
+        with mock.patch.object(win, "_snapshot", return_value=({1: 0}, {1: "pms"})), \
+             mock.patch.object(win, "_proc_cpu_rss", return_value=(2.0, 100)):
+            sample = win.sample_tree_win(1)
+        self.assertIsNone(sample["read_bytes"])
+        start = dict(sample, cpu_seconds=1.0)
+        end = dict(sample, cpu_seconds=3.0)
+        delta = win.compute_tree_delta(start, end)
+        self.assertEqual(delta["tree_cpu_delta_s"], 2.0)
+        self.assertIsNone(delta["tree_io_delta"])
+        self.assertEqual(delta["io_sampling"], "unavailable")
+
+
 class TestProcessTree(unittest.TestCase):
     def test_tree_includes_only_descendants(self):
         ppid = {10: 1, 11: 10, 12: 11, 13: 10, 99: 1}

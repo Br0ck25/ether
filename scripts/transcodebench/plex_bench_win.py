@@ -102,6 +102,61 @@ def build_process_tree(ppid_map: dict, root_pid: int) -> list:
 
 
 # ---------- Windows process sampling (ctypes, stdlib) ----------
+# Pointer-safe Win32 signatures: every handle-returning API must use a
+# HANDLE (void*) restype, never the ctypes default c_int (truncates on x64).
+WIN32_SIGNATURES = {
+    "CreateToolhelp32Snapshot": ("HANDLE", ["DWORD", "DWORD"]),
+    "OpenProcess": ("HANDLE", ["DWORD", "BOOL", "DWORD"]),
+    "OpenThread": ("HANDLE", ["DWORD", "BOOL", "DWORD"]),
+    "CreateJobObjectW": ("HANDLE", ["LPVOID", "LPCWSTR"]),
+    "CreateProcessW": ("BOOL", ["LPCWSTR", "LPWSTR", "LPVOID", "LPVOID", "BOOL",
+                                "DWORD", "LPVOID", "LPCWSTR", "LPVOID", "LPVOID"]),
+    "CloseHandle": ("BOOL", ["HANDLE"]),
+    "Process32FirstW": ("BOOL", ["HANDLE", "LPVOID"]),
+    "Process32NextW": ("BOOL", ["HANDLE", "LPVOID"]),
+    "GetProcessTimes": ("BOOL", ["HANDLE", "LPVOID", "LPVOID", "LPVOID", "LPVOID"]),
+    "GetProcessMemoryInfo": ("BOOL", ["HANDLE", "LPVOID", "DWORD"]),
+    "SetInformationJobObject": ("BOOL", ["HANDLE", "INT", "LPVOID", "DWORD"]),
+    "AssignProcessToJobObject": ("BOOL", ["HANDLE", "HANDLE"]),
+    "ResumeThread": ("DWORD", ["HANDLE"]),
+    "WaitForSingleObject": ("DWORD", ["HANDLE", "DWORD"]),
+    "GetExitCodeProcess": ("BOOL", ["HANDLE", "LPDWORD"]),
+    "TerminateProcess": ("BOOL", ["HANDLE", "UINT"]),
+}
+_TYPE_MAP = None
+
+
+def _win32_type_map():
+    global _TYPE_MAP
+    if _TYPE_MAP is None:
+        _TYPE_MAP = {
+            "HANDLE": ctypes.c_void_p, "DWORD": ctypes.c_ulong, "BOOL": ctypes.c_int,
+            "INT": ctypes.c_int, "UINT": ctypes.c_uint, "LPVOID": ctypes.c_void_p,
+            "LPCWSTR": ctypes.c_wchar_p, "LPWSTR": ctypes.c_wchar_p,
+            "LPDWORD": ctypes.POINTER(ctypes.c_ulong),
+        }
+    return _TYPE_MAP
+
+
+def configure_win32(kernel32=None, psapi=None):
+    """Apply WIN32_SIGNATURES to real DLLs (win32 only; no-op target in tests)."""
+    if kernel32 is None:
+        kernel32 = ctypes.windll.kernel32
+    if psapi is None:
+        psapi = ctypes.windll.psapi
+    types = _win32_type_map()
+    for name, (restype, argtypes) in WIN32_SIGNATURES.items():
+        dll = psapi if name == "GetProcessMemoryInfo" else kernel32
+        func = getattr(dll, name)
+        func.restype = types[restype]
+        func.argtypes = [types[a] for a in argtypes]
+    return kernel32
+
+
+def _kernel32():
+    return configure_win32()
+
+
 def _snapshot():
     """Return (ppid_map, name_map) via Toolhelp32 snapshot."""
     class PE32(ctypes.Structure):
@@ -110,9 +165,9 @@ def _snapshot():
                     ("th32ModuleID", ctypes.c_ulong), ("cntThreads", ctypes.c_ulong),
                     ("th32ParentProcessID", ctypes.c_ulong), ("pcPriClassBase", ctypes.c_long),
                     ("dwFlags", ctypes.c_ulong), ("szExeFile", ctypes.c_wchar * 260)]
-    k32 = ctypes.windll.kernel32
+    k32 = _kernel32()
     snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
-    if snap == -1:
+    if not snap or snap == ctypes.c_void_p(-1).value:
         raise pb.BenchError("CreateToolhelp32Snapshot failed")
     ppid_map, name_map = {}, {}
     try:
@@ -129,20 +184,22 @@ def _snapshot():
 
 
 def _proc_cpu_rss(pid: int):
-    k32 = ctypes.windll.kernel32
+    """(cpu_seconds, rss_bytes) or None when the PID is inaccessible/unreadable.
+    Never fabricates 0/0 for an inaccessible process."""
+    k32 = _kernel32()
     handle = k32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
     if not handle:
-        return 0.0, 0
+        return None
     try:
         class FT(ctypes.Structure):
             _fields_ = [("lo", ctypes.c_ulong), ("hi", ctypes.c_ulong)]
             def seconds(self): return ((self.hi << 32) | self.lo) / 1e7
         c, e, kern, user = FT(), FT(), FT(), FT()
-        cpu = 0.0
-        if k32.GetProcessTimes(handle, ctypes.byref(c), ctypes.byref(e),
-                               ctypes.byref(kern), ctypes.byref(user)):
-            cpu = kern.seconds() + user.seconds()
-        rss = 0
+        if not k32.GetProcessTimes(handle, ctypes.byref(c), ctypes.byref(e),
+                                   ctypes.byref(kern), ctypes.byref(user)):
+            return None
+        cpu = kern.seconds() + user.seconds()
+        rss = None
         class PMC(ctypes.Structure):
             _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong),
                         ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
@@ -150,27 +207,37 @@ def _proc_cpu_rss(pid: int):
                         ("q4", ctypes.c_size_t), ("q5", ctypes.c_size_t), ("q6", ctypes.c_size_t)]
         counters = PMC()
         counters.cb = ctypes.sizeof(PMC)
-        try:
-            if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
-                rss = int(counters.WorkingSetSize)
-        except Exception:
-            pass
+        configure_win32()
+        if not ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return None
+        rss = int(counters.WorkingSetSize)
         return cpu, rss
     finally:
         k32.CloseHandle(handle)
 
 
 def sample_tree_win(root_pid: int) -> dict:
+    """Tree sample. IO is NOT sampled on Windows (null, never invented zero);
+    any inaccessible PID marks the whole sample unavailable."""
     ppid_map, name_map = _snapshot()
     total_cpu, total_rss, procs = 0.0, 0, []
+    inaccessible = []
     for pid in build_process_tree(ppid_map, root_pid):
-        cpu, rss = _proc_cpu_rss(pid)
+        measured = _proc_cpu_rss(pid)
+        if measured is None:
+            inaccessible.append(pid)
+            procs.append({"pid": pid, "comm": name_map.get(pid, ""), "cpu_seconds": None,
+                          "rss_bytes": None, "read_bytes": None, "write_bytes": None})
+            continue
+        cpu, rss = measured
         total_cpu += cpu
         total_rss += rss
         procs.append({"pid": pid, "comm": name_map.get(pid, ""), "cpu_seconds": round(cpu, 4),
-                      "rss_bytes": rss, "read_bytes": 0, "write_bytes": 0})
-    return {"cpu_seconds": total_cpu, "rss_bytes": total_rss, "read_bytes": 0,
-            "write_bytes": 0, "processes": procs}
+                      "rss_bytes": rss, "read_bytes": None, "write_bytes": None})
+    available = not inaccessible
+    return {"cpu_seconds": total_cpu if available else None, "rss_bytes": total_rss if available else None,
+            "read_bytes": None, "write_bytes": None, "processes": procs,
+            "sampling_available": available, "inaccessible_pids": inaccessible}
 
 
 def capture_transcoder_cmdlines_win(root_pid: int) -> list:
@@ -195,19 +262,27 @@ def capture_transcoder_cmdlines_win(root_pid: int) -> list:
 
 def compute_tree_delta(start, end) -> dict:
     """Honest CPU delta (ba985258 mirror): invalid/incomplete -> nulls, never 0/0."""
-    unavailable = {"tree_cpu_delta_s": None, "tree_io_delta": None,
+    unavailable = {"tree_cpu_delta_s": None, "tree_io_delta": None, "io_sampling": "unavailable",
                    "cpu_sampling": "unavailable",
                    "cpu_sampling_reason": "invalid/incomplete tree delta (no root pid, "
                                           "no samples, or children exited dropping counters)"}
-    if not start or not end or not end.get("processes"):
+    if (not start or not end or not end.get("processes")
+            or start.get("sampling_available") is False or end.get("sampling_available") is False
+            or start.get("cpu_seconds") is None or end.get("cpu_seconds") is None):
         return unavailable
-    cpu = end.get("cpu_seconds", 0) - start.get("cpu_seconds", 0)
-    read_b = end.get("read_bytes", 0) - start.get("read_bytes", 0)
-    write_b = end.get("write_bytes", 0) - start.get("write_bytes", 0)
-    if cpu < 0 or read_b < 0 or write_b < 0:
+    cpu = end["cpu_seconds"] - start["cpu_seconds"]
+    if cpu < 0:
         return unavailable
-    return {"tree_cpu_delta_s": round(cpu, 3),
-            "tree_io_delta": {"read_bytes": read_b, "write_bytes": write_b},
+    io_delta, io_sampling = None, "unavailable"  # Windows driver does not sample IO
+    if None not in (start.get("read_bytes"), start.get("write_bytes"),
+                    end.get("read_bytes"), end.get("write_bytes")):
+        read_b = end["read_bytes"] - start["read_bytes"]
+        write_b = end["write_bytes"] - start["write_bytes"]
+        if read_b < 0 or write_b < 0:
+            return unavailable
+        io_delta, io_sampling = {"read_bytes": read_b, "write_bytes": write_b}, "available"
+    return {"tree_cpu_delta_s": round(cpu, 3), "tree_io_delta": io_delta,
+            "io_sampling": io_sampling,
             "cpu_sampling": "available", "cpu_sampling_reason": None}
 
 
@@ -452,11 +527,139 @@ def read_local_app_data_path():
         return None
 
 
+CREATE_SUSPENDED = 0x00000004
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+STILL_ACTIVE = 259
+
+
+class WinProcess:
+    """Minimal process handle from CreateProcessW (suspended launch)."""
+
+    def __init__(self, handle, thread_handle, pid, tid):
+        self._handle = handle
+        self.thread_handle = thread_handle
+        self.pid = pid
+        self.tid = tid
+        self._returncode = None
+
+    @property
+    def returncode(self):
+        return self.poll()
+
+    def poll(self):
+        if self._returncode is not None:
+            return self._returncode
+        k32 = _kernel32()
+        code = ctypes.c_ulong()
+        if not k32.GetExitCodeProcess(self._handle, ctypes.byref(code)):
+            raise pb.BenchError(f"GetExitCodeProcess failed for pid {self.pid}")
+        if code.value == STILL_ACTIVE:
+            return None
+        self._returncode = int(code.value)
+        return self._returncode
+
+    def wait(self, timeout=None):
+        k32 = _kernel32()
+        ms = 0xFFFFFFFF if timeout is None else int(timeout * 1000)
+        if k32.WaitForSingleObject(self._handle, ms) == 0x00000102:  # WAIT_TIMEOUT
+            raise subprocess.TimeoutExpired(str(self.pid), timeout)
+        return self.poll()
+
+    def terminate(self):
+        if self.poll() is None:
+            if not _kernel32().TerminateProcess(self._handle, 1):
+                raise pb.BenchError(f"TerminateProcess failed for pid {self.pid}")
+
+    def resume(self):
+        previous = _kernel32().ResumeThread(self.thread_handle)
+        if previous == 0xFFFFFFFF:
+            raise pb.BenchError(f"ResumeThread failed for pid {self.pid}")
+        return previous
+
+    def close_handles(self):
+        k32 = _kernel32()
+        for handle in (self.thread_handle, self._handle):
+            if handle:
+                k32.CloseHandle(handle)
+        self.thread_handle = self._handle = None
+
+
+def create_job_object():
+    """Configured KILL_ON_JOB_CLOSE job handle, or raise (fail closed)."""
+    k32 = _kernel32()
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", ctypes.c_ulong), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", ctypes.c_ulong),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", ctypes.c_ulong),
+                    ("SchedulingClass", ctypes.c_ulong)]
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [(n, ctypes.c_uint64) for n in (
+            "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+            "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                    ("IoInfo", IO_COUNTERS), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        raise pb.BenchError("CreateJobObjectW failed")
+    info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        k32.CloseHandle(job)
+        raise pb.BenchError("SetInformationJobObject failed")
+    return job
+
+
+def launch_suspended(exe: Path, cwd: Path, env: dict) -> WinProcess:
+    """CreateProcessW with CREATE_SUSPENDED so no child can escape the job."""
+    k32 = _kernel32()
+
+    class STARTUPINFOW(ctypes.Structure):
+        _fields_ = [("cb", ctypes.c_ulong), ("lpReserved", ctypes.c_wchar_p),
+                    ("lpDesktop", ctypes.c_wchar_p), ("lpTitle", ctypes.c_wchar_p),
+                    ("dwX", ctypes.c_ulong), ("dwY", ctypes.c_ulong),
+                    ("dwXSize", ctypes.c_ulong), ("dwYSize", ctypes.c_ulong),
+                    ("dwXCountChars", ctypes.c_ulong), ("dwYCountChars", ctypes.c_ulong),
+                    ("dwFillAttribute", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                    ("wShowWindow", ctypes.c_ushort), ("cbReserved2", ctypes.c_ushort),
+                    ("lpReserved2", ctypes.c_void_p), ("hStdInput", ctypes.c_void_p),
+                    ("hStdOutput", ctypes.c_void_p), ("hStdError", ctypes.c_void_p)]
+
+    class PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [("hProcess", ctypes.c_void_p), ("hThread", ctypes.c_void_p),
+                    ("dwProcessId", ctypes.c_ulong), ("dwThreadId", ctypes.c_ulong)]
+
+    startup = STARTUPINFOW()
+    startup.cb = ctypes.sizeof(STARTUPINFOW)
+    proc_info = PROCESS_INFORMATION()
+    command = ctypes.create_unicode_buffer(f'"{exe}"')
+    env_block = ctypes.create_unicode_buffer(
+        "".join(f"{k}={v}\0" for k, v in env.items()) + "\0")
+    created = k32.CreateProcessW(None, command, None, None, False,
+                                 CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP,
+                                 env_block, str(cwd), ctypes.byref(startup),
+                                 ctypes.byref(proc_info))
+    if not created:
+        raise pb.BenchError(f"CreateProcessW failed for {exe} (err {ctypes.get_last_error()})")
+    return WinProcess(proc_info.hProcess, proc_info.hThread,
+                      int(proc_info.dwProcessId), int(proc_info.dwThreadId))
+
+
 class PmsProcessWin:
     def __init__(self, cfg):
         self.cfg = cfg
         self.proc = None
         self.pid = None
+        self.job = None
 
     def start(self):
         plan = isolation_plan(self.cfg.lab_root)
@@ -470,12 +673,28 @@ class PmsProcessWin:
             raise pb.BenchError(f"PMS binary missing: {exe}")
         env = dict(os.environ)
         env["TMP"] = env["TEMP"] = plan["transcode_dir"]
-        self.proc = subprocess.Popen(
-            [str(exe)], cwd=str(exe.parent), env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-        self.pid = self.proc.pid
-        self.job = self._assign_job()
+        self.job = create_job_object()
+        try:
+            self.proc = launch_suspended(exe, exe.parent, env)
+            self.pid = self.proc.pid
+            if not _kernel32().AssignProcessToJobObject(self.job, self.proc._handle):
+                raise pb.BenchError("AssignProcessToJobObject failed (fail closed)")
+            self.proc.resume()
+        except Exception:
+            # Fail closed: nothing suspended/running may survive a failed launch.
+            try:
+                if self.proc:
+                    self.proc.terminate()
+                    self.proc.wait(timeout=5)
+            finally:
+                if self.job:
+                    _kernel32().CloseHandle(self.job)
+                    self.job = None
+                if self.proc:
+                    self.proc.close_handles()
+                    self.proc = None
+                    self.pid = None
+            raise
         return self.pid
 
     def wait_identity(self):
@@ -495,67 +714,51 @@ class PmsProcessWin:
             time.sleep(0.5)
         raise pb.BenchError(f"PMS identity not ready in {self.cfg.startup_timeout_s}s: {last}")
 
-    def _assign_job(self):
-        """Job Object with KILL_ON_JOB_CLOSE: closing it kills the whole tree,
-        including reparented children that taskkill /T would leak."""
-        k32 = ctypes.windll.kernel32
-
-        class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
-            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
-                        ("PerJobUserTimeLimit", ctypes.c_int64),
-                        ("LimitFlags", ctypes.c_ulong), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", ctypes.c_ulong),
-                        ("Affinity", ctypes.c_size_t), ("PriorityClass", ctypes.c_ulong),
-                        ("SchedulingClass", ctypes.c_ulong)]
-
-        class IO_COUNTERS(ctypes.Structure):
-            _fields_ = [(n, ctypes.c_uint64) for n in (
-                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
-
-        class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
-            _fields_ = [("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
-                        ("IoInfo", IO_COUNTERS), ("ProcessMemoryLimit", ctypes.c_size_t),
-                        ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
-
-        job = k32.CreateJobObjectW(None, None)
-        if not job:
-            return None
-        info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-        info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
-            k32.CloseHandle(job)
-            return None
-        if not k32.AssignProcessToJobObject(job, int(self.proc._handle)):
-            k32.CloseHandle(job)
-            return None
-        return job
-
-    def stop(self):
+    def stop(self) -> bool:
+        """Stop the owned tree and VERIFY it. Raises BenchError on any failure;
+        returns True only once the root is exited and no descendant survives."""
         if not self.proc:
-            return
+            return True
         descendants = []
-        try:  # capture descendants BEFORE exit as a fallback audit/leak check
-            ppid_map, _ = _snapshot()
-            descendants = build_process_tree(ppid_map, self.pid)
-        except Exception:
-            pass
+        ppid_map, _ = _snapshot()  # capture descendants BEFORE exit (leak check)
+        descendants = build_process_tree(ppid_map, self.pid)
+        errors = []
+        if self.job:
+            if not _kernel32().CloseHandle(self.job):  # KILL_ON_JOB_CLOSE
+                errors.append("CloseHandle(job) failed")
+            self.job = None
         try:
-            if getattr(self, "job", None):
-                ctypes.windll.kernel32.CloseHandle(self.job)  # KILL_ON_JOB_CLOSE
-                self.job = None
             if self.proc.poll() is None:
                 self.proc.terminate()
+        except Exception as exc:  # noqa: BLE001 - collected, then raised below
+            errors.append(str(exc))
+        try:
+            self.proc.wait(timeout=10)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"PMS root did not exit: {exc}")
+            for pid in descendants:
+                subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                               capture_output=True, timeout=10)
             try:
                 self.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                for pid in descendants:  # job unavailable/failed: kill captured tree
-                    subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                                   capture_output=True, timeout=10)
-                self.proc.wait(timeout=10)
-        except Exception:
-            pass
+            except Exception as exc2:  # noqa: BLE001
+                errors.append(f"PMS root still alive after taskkill: {exc2}")
+        survivors = []
+        try:
+            ppid_map, _ = _snapshot()
+            alive = set(ppid_map)
+            survivors = [pid for pid in descendants if pid in alive and pid != self.pid]
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"post-stop audit failed: {exc}")
+        if survivors:
+            errors.append(f"descendant processes survived stop: {survivors}")
+        try:
+            self.proc.close_handles()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(str(exc))
+        if errors:
+            raise pb.BenchError("PMS stop failed: " + "; ".join(errors))
+        return True
 
 
 def main(argv=None):
@@ -657,14 +860,18 @@ def main(argv=None):
         meta["ok"] = False
         meta["error"] = pb.sanitize(str(exc))
         meta["sessions"] = sessions
-        (out_dir / "result.json").write_text(json.dumps(meta, indent=2))
-        print(json.dumps({"ok": False, "error": meta["error"], "out": str(out_dir)}))
-        return 1
     finally:
         if pms:
-            pms.stop()
-            meta["pms_stopped"] = True
+            try:
+                meta["pms_stopped"] = pms.stop()  # raises unless verified stopped
+            except Exception as exc:  # noqa: BLE001 - never claim stopped on failure
+                meta["pms_stopped"] = False
+                meta["ok"] = False
+                meta["error"] = (meta.get("error") or "") + f" PMS stop failed: {pb.sanitize(str(exc))}"
     (out_dir / "result.json").write_text(json.dumps(meta, indent=2))
+    if not meta.get("ok"):
+        print(json.dumps({"ok": False, "error": meta.get("error", ""), "out": str(out_dir)}))
+        return 1
     print(json.dumps({"ok": True, "out": str(out_dir), "sessions": len(sessions),
                       "actual_media_s": [s.get("actual_media_s") for s in sessions]}))
     return 0
