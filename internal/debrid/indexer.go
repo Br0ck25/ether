@@ -48,9 +48,7 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	}
 	var results []core.Release
 	var err error
-	if streaming, ok := x.inner.(interface {
-		SearchWith(context.Context, core.SearchRequest, func([]core.Release)) ([]core.Release, error)
-	}); ok && early != nil {
+	if streaming, ok := x.inner.(core.StreamingIndexer); ok && early != nil {
 		results, err = streaming.SearchWith(ctx, req, early.add)
 	} else {
 		results, err = x.inner.Search(ctx, req)
@@ -160,9 +158,7 @@ func (x *Indexer) searchSeasonPacks(ctx context.Context, req core.SearchRequest)
 	}
 	var results []core.Release
 	var err error
-	if streaming, ok := x.inner.(interface {
-		SearchWith(context.Context, core.SearchRequest, func([]core.Release)) ([]core.Release, error)
-	}); ok && early != nil {
+	if streaming, ok := x.inner.(core.StreamingIndexer); ok && early != nil {
 		results, err = streaming.SearchWith(ctx, packReq, early.add)
 	} else {
 		results, err = x.inner.Search(ctx, packReq)
@@ -208,9 +204,7 @@ func (x *Indexer) searchSeasonPacks(ctx context.Context, req core.SearchRequest)
 // SearchRescue implements second-pass rescue search through the inner
 // indexer, annotating discovered torrent releases with debrid cache status.
 func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
-	rs, ok := x.inner.(interface {
-		SearchRescue(context.Context, core.SearchRequest) ([]core.Release, error)
-	})
+	rs, ok := x.inner.(core.RescueIndexer)
 	if !ok {
 		return nil, nil
 	}
@@ -220,9 +214,7 @@ func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 	}
 	var results []core.Release
 	var err error
-	if streaming, ok := x.inner.(interface {
-		SearchRescueWith(context.Context, core.SearchRequest, func([]core.Release)) ([]core.Release, error)
-	}); ok && early != nil {
+	if streaming, ok := x.inner.(core.StreamingRescueIndexer); ok && early != nil {
 		results, err = streaming.SearchRescueWith(ctx, req, early.add)
 	} else {
 		results, err = rs.SearchRescue(ctx, req)

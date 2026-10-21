@@ -12,8 +12,16 @@ import (
 
 // Encoder output alone must never imply that the client has a buffer.
 func TestDASHHandoffRequiresDeliveredMedia(t *testing.T) {
-	s := &Session{proto: core.ProtocolDASH, m: &Manager{opts: options{rungDwell: 8 * time.Second}}, wantTrack: 2,
-		cur: &run{track: 0, started: time.Now(), produced: 100}}
+	s := &Session{
+		proto: core.ProtocolDASH,
+		m:     &Manager{opts: options{rungDwell: 8 * time.Second}},
+		sessionEncoding: sessionEncoding{
+			cur: &run{track: 0, started: time.Now(), produced: 100},
+		},
+		sessionAdaptation: sessionAdaptation{
+			wantTrack: 2,
+		},
+	}
 	if s.rungDwellLocked(false, 1) <= 0 || s.rungDwellLocked(true, 1) <= 0 {
 		t.Fatal("encoder output bypassed probe protection without completed delivery")
 	}

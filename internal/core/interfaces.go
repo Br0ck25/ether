@@ -463,3 +463,9 @@ type HWAccel struct {
 	Encoders []string `json:"encoders"`
 	Device   string   `json:"device,omitempty"`
 }
+
+// DelegationAuth issues expiring, server-local casting credentials. Implementations
+// must enforce current membership on use and must not delegate owner privileges.
+type DelegationAuth interface {
+	IssueDelegation(context.Context, int64) (string, error)
+}

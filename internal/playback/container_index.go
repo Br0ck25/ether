@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/core"
 	"io"
 	"sort"
 	"time"
@@ -34,13 +35,9 @@ func (r *indexReader) read(off int64, n int) ([]byte, error) {
 	r.left -= n
 	b := make([]byte, n)
 	var err error
-	if cr, ok := r.src.(interface {
-		ReadMetadataAtContext(context.Context, []byte, int64) (int, error)
-	}); ok {
+	if cr, ok := r.src.(core.MetadataReaderAt); ok {
 		_, err = cr.ReadMetadataAtContext(r.ctx, b, off)
-	} else if cr, ok := r.src.(interface {
-		ReadAtContext(context.Context, []byte, int64) (int, error)
-	}); ok {
+	} else if cr, ok := r.src.(core.ContextReaderAt); ok {
 		_, err = cr.ReadAtContext(r.ctx, b, off)
 	} else {
 		_, err = r.src.ReadAt(b, off)

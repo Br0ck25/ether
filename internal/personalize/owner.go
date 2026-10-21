@@ -206,7 +206,7 @@ func (e *Engine) recentlyAdded(ctx context.Context, user *core.User, t core.Medi
 // Refresh rebuilds a viewer's model now (and asks the LLM for fresh themed
 // rows when it supports invalidation).
 func (e *Engine) Refresh(ctx context.Context, user *core.User) error {
-	if inv, ok := e.llm.(interface{ Invalidate(userID int64) }); ok && e.llm != nil && user != nil {
+	if inv, ok := e.llm.(core.ViewerInvalidator); ok && e.llm != nil && user != nil {
 		inv.Invalidate(user.ID)
 	}
 	e.mu.Lock()
@@ -310,9 +310,7 @@ func (e *Engine) AvailableRows(ctx context.Context) ([]core.RowDescriptor, error
 				Description: "Owner collection row (" + st.hubID + ").", Sections: append([]string(nil), allSurfaces...), Group: groupCollections})
 		}
 	}
-	if source, ok := e.opts.Collections.(interface {
-		ListSpecs(context.Context) ([]core.CollectionSpec, error)
-	}); ok {
+	if source, ok := e.opts.Collections.(core.CollectionSpecSource); ok {
 		specs, err := source.ListSpecs(ctx)
 		if err != nil {
 			return nil, err

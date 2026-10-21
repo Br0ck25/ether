@@ -18,9 +18,7 @@ func mirroredTitles(ctx context.Context, cat core.Catalog, keys []core.RatingKey
 		}
 	}
 	keys = unique
-	if c, ok := cat.(interface {
-		CachedTitles(context.Context, []core.RatingKey) ([]core.Title, error)
-	}); ok {
+	if c, ok := cat.(core.CachedTitleSource); ok {
 		if ts, err := c.CachedTitles(ctx, keys); err == nil {
 			for _, t := range ts {
 				out[t.Key] = t

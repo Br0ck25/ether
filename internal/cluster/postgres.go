@@ -1007,7 +1007,7 @@ func connConfigOf(ctx context.Context, db *sql.DB) (*pgx.ConnConfig, error) {
 	defer conn.Close()
 	var cfg *pgx.ConnConfig
 	err = conn.Raw(func(dc any) error {
-		pc, ok := dc.(interface{ PgxConn() *pgx.Conn })
+		pc, ok := dc.(pgxConnection)
 		if !ok {
 			return errors.New("cluster: the database is not PostgreSQL")
 		}

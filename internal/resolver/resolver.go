@@ -462,24 +462,16 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 	rescueTried := false
 	if len(cands) == 0 && searchErr == nil && ctx.Err() == nil {
-		if rescued := s.searchRescue(ctx, sreq); len(rescued) > 0 {
-			rescueTried = true
-			extra := novelReleases(results, rescued)
-			if len(extra) > 0 {
-				s.rememberReleases(t, extra)
-				results = append(results, extra...)
-				var extraRejected bool
-				cands, extraRejected, err = s.rankCandidates(ctx, req, sreq, profile, extra, &trace, pinID)
-				clientRejected = clientRejected || extraRejected
-				if err != nil {
-					trace.Err = err.Error()
-					return nil, err
-				}
-			}
-		} else {
-			rescueTried = true
+		rescueTried = true
+		var rejected bool
+		cands, results, rejected, err = s.rescueCandidates(ctx, req, sreq, profile, results, &trace, pinID)
+		clientRejected = clientRejected || rejected
+		if err != nil {
+			trace.Err = err.Error()
+			return nil, err
 		}
 	}
+
 	failed := func(fallback error) error {
 		if searchErr != nil {
 			trace.Err = searchErr.Error()
@@ -513,77 +505,19 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, failed(fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable))
 	}
 
-	var optimisticErr error
-	// The viewer picked a version ("Play Version"), or the owner pinned a
-	// release: health-check that release first, ahead of the normal
-	// ranking. When it is gone or unhealthy, fall back to the normal
-	// choice below.
-	preferTried := false
-	prefer := req.Prefer
-	if prefer == "" {
-		prefer = pinID
-	}
-	if prefer != "" {
-		prefIdx := -1
-		for i := range cands {
-			if cands[i].rel.ID == prefer {
-				prefIdx = i
-				break
-			}
+	preferred, err := s.resolvePreferred(ctx, req, pin, cands, &trace, rcfg.HealthRace)
+	if err != nil {
+		if len(preferred.candidates) == 0 {
+			return nil, failed(err)
 		}
-		if prefIdx < 0 {
-			s.log.Info("preferred release not among candidates; using normal ranking",
-				"title", t.Key, "prefer", prefer)
-			if pin != nil {
-				reason := candidateReason(&trace, pinID)
-				s.notePin(ctx, t.Key, pinID, PinRejected, reason)
-				trace.PinStatus = "rejected: " + reason
-			}
-		} else {
-			preferTried = true
-			pref := cands[prefIdx]
-			idx, nzb, verr := s.validateCandidates(ctx, []candidate{pref}, &trace, rcfg.HealthRace)
-			switch {
-			case verr != nil:
-				if pin != nil {
-					s.notePin(ctx, t.Key, pinID, PinUnavailable, verr.Error())
-					trace.PinStatus = "unavailable: " + verr.Error()
-				}
-				if ctx.Err() != nil || len(cands) == 1 {
-					trace.Err = verr.Error()
-					return nil, verr
-				}
-				// A transient failure (its indexer's budget, a provider
-				// outage) must not block the title: fall back to the normal
-				// ranking like an unhealthy pick does, and report the
-				// failure only if nothing else plays.
-				s.log.Info("preferred release temporarily unavailable; falling back to normal ranking",
-					"title", t.Key, "prefer", prefer, "err", verr)
-				optimisticErr = verr
-			case idx >= 0:
-				if pin != nil {
-					s.notePin(ctx, t.Key, pinID, PinHealthy, "")
-					trace.PinStatus = "used"
-				}
-				s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
-				trace.Winner = pref.rel.ID
-				return s.resolution(t.Key, cands, prefIdx, nzb, &trace), nil
-			default:
-				if pin != nil {
-					reason := candidateReason(&trace, pinID)
-					s.notePin(ctx, t.Key, pinID, PinUnhealthy, reason)
-					trace.PinStatus = "unhealthy: " + reason
-				}
-				s.log.Info("preferred release unhealthy; falling back to normal ranking",
-					"title", t.Key, "prefer", prefer)
-			}
-			cands = append(cands[:prefIdx], cands[prefIdx+1:]...)
-			if len(cands) == 0 {
-				trace.Err = "preferred release unhealthy and no other candidates"
-				return nil, failed(fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable))
-			}
-		}
+		return nil, err
 	}
+	if preferred.resolution != nil {
+		return preferred.resolution, nil
+	}
+	cands = preferred.candidates
+	optimisticErr := preferred.transient
+	preferTried := preferred.attempted
 
 	prepareStart := time.Now()
 	var checks candidateChecks
@@ -618,38 +552,24 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return nil, err
 	}
 	if index >= 0 {
-		s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
-		trace.Winner = cands[index].rel.ID
-		return s.resolution(t.Key, cands, index, nzb, &trace), nil
+		return s.acceptResolution(ctx, t.Key, cands, index, nzb, &trace), nil
 	}
 
-	// Second-pass rescue: when every candidate from the initial search
-	// (often an ID-only query that returned expired posts or uncached
-	// single episodes) was unhealthy, fan out keyword, alias, OriginalTitle
-	// and season-pack rescue queries and validate any newly found releases.
+	// Retry discovery once after the initially ranked releases failed health.
 	if !rescueTried && searchErr == nil && ctx.Err() == nil {
-		if rescued := s.searchRescue(ctx, sreq); len(rescued) > 0 {
-			extra := novelReleases(results, rescued)
-			if len(extra) > 0 {
-				s.rememberReleases(t, extra)
-				results = append(results, extra...)
-				rescueCands, extraRejected, rerr := s.rankCandidates(ctx, req, sreq, profile, extra, &trace, pinID)
-				clientRejected = clientRejected || extraRejected
-				if rerr == nil && len(rescueCands) > 0 {
-					var rescueChecks candidateChecks
-					defer rescueChecks.close()
-					rescuePrepStart := time.Now()
-					rescueCands = s.prepareSources(ctx, rescueCands, req.Title, &trace, &rescueChecks)
-					trace.SourcePreparationDuration += time.Since(rescuePrepStart)
-					rIdx, rNZB, verr := s.validateCandidates(ctx, rescueCands, &trace, rcfg.HealthRace)
-					if verr == nil && rIdx >= 0 {
-						s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
-						trace.Winner = rescueCands[rIdx].rel.ID
-						return s.resolution(t.Key, rescueCands, rIdx, rNZB, &trace), nil
-					}
-					cands = append(cands, rescueCands...)
-				}
+		rescueCands, _, rejected, rerr := s.rescueCandidates(ctx, req, sreq, profile, results, &trace, pinID)
+		clientRejected = clientRejected || rejected
+		if rerr == nil && len(rescueCands) > 0 {
+			var rescueChecks candidateChecks
+			defer rescueChecks.close()
+			at := time.Now()
+			rescueCands = s.prepareSources(ctx, rescueCands, req.Title, &trace, &rescueChecks)
+			trace.SourcePreparationDuration += time.Since(at)
+			index, nzb, verr := s.validateCandidates(ctx, rescueCands, &trace, rcfg.HealthRace)
+			if verr == nil && index >= 0 {
+				return s.acceptResolution(ctx, t.Key, rescueCands, index, nzb, &trace), nil
 			}
+			cands = append(cands, rescueCands...)
 		}
 	}
 
@@ -1293,11 +1213,11 @@ func (s *Service) score(rel core.Release, profile core.QualityProfile, t *core.T
 	if info.Proper || info.Repack {
 		sc += 6
 	}
-	// Languages: foreign-only audio is a big penalty unless preferred.
-	if len(info.Languages) > 0 {
+	// Language preferences are opt-in; an unset profile is language-neutral.
+	if len(profile.PreferredLanguages) > 0 && len(info.Languages) > 0 {
 		ok := false
 		for _, l := range info.Languages {
-			if l == "english" || l == "multi" {
+			if l == "multi" {
 				ok = true
 			}
 			for _, pref := range profile.PreferredLanguages {

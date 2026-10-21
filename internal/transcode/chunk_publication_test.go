@@ -23,8 +23,22 @@ func TestMatroskaCollectorWaitsForClosedChunk(t *testing.T) {
 	t.Cleanup(p.Stop)
 	r := &run{proc: p, maxDone: -1, stderr: newTailBuffer(10), spec: runSpec{Dir: dir, Playlist: "run.m3u8", InitName: "header.mkv"}}
 	r.chunks = &chunkRun{dir: chunks, container: ContainerMatroska, initPath: filepath.Join(dir, "header.mkv"), sl: newSlotter(0, 4*time.Second, 2, 0)}
-	s := &Session{m: &Manager{}, dir: dir, container: ContainerMatroska, cur: r,
-		done: []map[int]bool{{}}, changed: make(chan struct{}), segDur: 4 * time.Second, total: 2, endSeg: -1, log: testLogger(t)}
+	s := &Session{
+		m:         &Manager{},
+		dir:       dir,
+		container: ContainerMatroska,
+		segDur:    4 * time.Second,
+		total:     2,
+		log:       testLogger(t),
+		sessionEncoding: sessionEncoding{
+			cur:    r,
+			endSeg: -1,
+		},
+		sessionDelivery: sessionDelivery{
+			done:    []map[int]bool{{}},
+			changed: make(chan struct{}),
+		},
+	}
 	chunk := filepath.Join(chunks, "00000.mkv")
 	write(chunk, nil)
 	write(filepath.Join(dir, "run.m3u8"), []byte("#EXTM3U\n#EXTINF:4,\n00000.mkv\n"))

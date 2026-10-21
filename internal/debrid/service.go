@@ -691,7 +691,7 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	findStarted := time.Now()
 	_, _, torrentID := s.knownFor(ctx, e.cfg.ID, hash)
 	if torrentID == "" {
-		if fast, ok := e.p.(interface{ findKnown(string) string }); ok {
+		if fast, ok := e.p.(knownTorrentFinder); ok {
 			// Providers with atomic cached-only create + duplicate recovery
 			// can reuse known IDs without listing the whole account first.
 			torrentID = fast.findKnown(hash)

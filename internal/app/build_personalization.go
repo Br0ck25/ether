@@ -1,0 +1,87 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/braedonsaunders/ether/internal/collections"
+	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/llm"
+	"github.com/braedonsaunders/ether/internal/personalize"
+	"github.com/braedonsaunders/ether/internal/recommend"
+	"github.com/braedonsaunders/ether/internal/state"
+	"github.com/braedonsaunders/ether/internal/subtitles"
+	"github.com/braedonsaunders/ether/internal/trakt"
+)
+
+func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error {
+	log := a.log
+	dataDir := a.opts.DataDir
+	var err error
+	// Watch state and recommendations.
+	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state"), Availability: a.dbAvail})
+	a.closers = append(a.closers, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := a.state.Close(ctx); err != nil {
+			a.log.Warn("state: watch progress lost at shutdown", "err", err)
+		}
+	})
+	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Sealer: a.cfg, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
+	a.trakt.SubscribeTo(a.state)
+	a.closers = append(a.closers, a.trakt.Close)
+	a.llm = llm.New(llm.ServiceOptions{
+		Client:  llm.NewClient(llm.ClientOptions{Config: cfg.LLM, Logger: log.With("component", "llm")}),
+		Catalog: a.catalog,
+		Logger:  log.With("component", "llm"),
+	})
+	// Per-viewer Homes, built in the background and served to Plex.
+	if a.personalize, err = personalize.New(personalize.Options{
+		DB: a.db, Catalog: a.catalog, State: a.state, Events: a.state, Users: a.users,
+		UserPolicy: a.safety.UserPolicy, Allowed: a.safety.Allowed,
+		LLM: a.llm, Trakt: a.trakt, Playlists: a.state.Playlists(),
+		ExtraHomeRows: a.extraHomeRows,
+		Dependencies: func(scorer core.PersonalScorer) (core.Recommender, core.CollectionRows, error) {
+			opts := append(a.collectionOptions(cfg), collections.WithState(a.state), collections.WithAuth(a.users), collections.WithScorer(scorer), collections.WithVibeRefiner(a.llm))
+			var err error
+			a.collections, err = collections.New(a.db, a.catalog, log.With("component", "collections"), opts...)
+			if err != nil {
+				return nil, nil, fmt.Errorf("collections: %w", err)
+			}
+			a.recommend = recommend.New(recommend.Options{Catalog: a.catalog, State: a.state, LLM: a.llm, Scorer: scorer, Logger: log.With("component", "recommend")})
+			return a.recommend, a.collections, nil
+		},
+		ServerName: func() string { return a.cfg.Get().Server.FriendlyName },
+		Logger:     log.With("component", "personalize"),
+		// Background training waits while anyone is streaming.
+		Busy: func() bool {
+			if a.playback != nil && len(a.playback.Sessions()) > 0 {
+				return true
+			}
+			return a.livetv != nil && len(a.livetv.ViewingSessions()) > 0
+		},
+		// Netflix-style hooks (#31/#32) follow the owner's live switches.
+		IntentEnabled: func() bool { return a.cfg.Get().Personalize.SessionIntent },
+		ClockFormat: func() string {
+			c := a.cfg.Get()
+			if c.Personalize.ClockFormat != "" {
+				return c.Personalize.ClockFormat
+			}
+			return c.Catalog.Language
+		},
+	}); err != nil {
+		return fmt.Errorf("personalization: %w", err)
+	}
+	a.closers = append(a.closers, a.personalize.Close)
+	a.subtitles = subtitles.New(subtitles.Options{
+		Config:    cfg.OpenSubtitles,
+		CacheDir:  filepath.Join(dataDir, "subtitles"),
+		Logger:    log.With("component", "subtitles"),
+		UserAgent: "Ether v" + a.opts.Version,
+	})
+
+	return nil
+}

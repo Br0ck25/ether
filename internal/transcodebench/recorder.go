@@ -3,6 +3,7 @@ package transcodebench
 import (
 	"bytes"
 	"context"
+	"github.com/braedonsaunders/ether/internal/core"
 	"io"
 	"strings"
 	"sync"
@@ -128,7 +129,7 @@ func (r *Recorder) Start(cmd transcode.Command) (transcode.Process, error) {
 		return nil, err
 	}
 	rec.proc = proc
-	if p, ok := proc.(interface{ PID() int }); ok {
+	if p, ok := proc.(core.ProcessIdentity); ok {
 		if pid := p.PID(); pid > 0 {
 			rec.launch.PID = pid
 		}
@@ -177,19 +178,17 @@ func (rec *launchRec) finalize() {
 		rec.launch.ExitError = err.Error()
 	}
 	if rec.launch.PID == 0 {
-		if p, ok := rec.proc.(interface{ PID() int }); ok && p.PID() > 0 {
+		if p, ok := rec.proc.(core.ProcessIdentity); ok && p.PID() > 0 {
 			rec.launch.PID = p.PID()
 		}
 	}
-	if p, ok := rec.proc.(interface {
-		CPUTime() (time.Duration, time.Duration)
-	}); ok {
+	if p, ok := rec.proc.(core.ProcessCPUTime); ok {
 		user, sys := p.CPUTime()
 		u, s := user.Milliseconds(), sys.Milliseconds()
 		rec.launch.CPUUserMs = &u
 		rec.launch.CPUSystemMs = &s
 	}
-	if p, ok := rec.proc.(interface{ PeakRSSBytes() (uint64, bool) }); ok {
+	if p, ok := rec.proc.(core.ProcessPeakMemory); ok {
 		if peak, available := p.PeakRSSBytes(); available {
 			rec.launch.PeakRSSBytes = &peak
 		}

@@ -341,9 +341,19 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSecurityToken(w http.ResponseWriter, r *http.Request) {
-	// Delegation tokens let a client hand access to another device (e.g.
-	// casting). The caller's own token carries exactly their access.
-	s.write(w, r, &model.MediaContainer{Extra: []model.Attr{model.A("token", FromContext(r.Context()).Token)}})
+	pr := FromContext(r.Context())
+	issuer, ok := s.d.Auth.(core.DelegationAuth)
+	if !ok || pr.User == nil || pr.User.Delegated {
+		writeHTTPError(w, http.StatusForbidden)
+		return
+	}
+	token, err := issuer.IssueDelegation(r.Context(), pr.User.ID)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	s.write(w, r, &model.MediaContainer{Extra: []model.Attr{model.A("token", token)}})
 }
 
 func (s *Server) handleUpdaterStatus(w http.ResponseWriter, r *http.Request) {

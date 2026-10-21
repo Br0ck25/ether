@@ -27,7 +27,7 @@ func (m *Manager) installDamageHandler(g *generation) {
 		return
 	}
 	g.damage.once.Do(func() {
-		if src, ok := g.src.(interface{ SetDamageHandler(func(int64, int64) bool) }); ok {
+		if src, ok := g.src.(core.DamageReporter); ok {
 			src.SetDamageHandler(func(offset, length int64) bool { return m.noteDamage(g, offset, length) })
 		}
 	})

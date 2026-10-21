@@ -31,10 +31,17 @@ func TestDASHUnreadableChunkIsNotSkipped(t *testing.T) {
 			write(dashChunkFile(0, 1), []byte("busy"))
 			write(dashChunkFile(0, 2), testChunk(2, 90000, 3750, 24, []byte("video")))
 			s := &Session{
-				proto: core.ProtocolDASH, m: &Manager{opts: options{}}, dir: dir,
-				segDur: 2 * time.Second, total: 1, log: testLogger(t),
-				done: []map[int]bool{{}}, changed: make(chan struct{}),
-				dash: newDASHState([]dashRep{{ID: 0, Kind: "video"}}, nil, "retry"),
+				proto:  core.ProtocolDASH,
+				m:      &Manager{opts: options{}},
+				dir:    dir,
+				segDur: 2 * time.Second,
+				total:  1,
+				log:    testLogger(t),
+				sessionDelivery: sessionDelivery{
+					done:    []map[int]bool{{}},
+					changed: make(chan struct{}),
+					dash:    newDASHState([]dashRep{{ID: 0, Kind: "video"}}, nil, "retry"),
+				},
 			}
 			proc := &fakeProc{done: make(chan struct{}), kill: make(chan struct{})}
 			close(proc.done)

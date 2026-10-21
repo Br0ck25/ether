@@ -154,7 +154,7 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 		return
 	}
 	hls, hasHLS := m.deps.HLSLookup(s.id)
-	if retry, ok := g.src.(interface{ RetryDirectPlay() bool }); ok && retry.RetryDirectPlay() && !hasHLS && decision == core.DecisionDirectPlay {
+	if retry, ok := g.src.(core.DirectPlayRetrier); ok && retry.RetryDirectPlay() && !hasHLS && decision == core.DecisionDirectPlay {
 		// Byte-range players do not renegotiate when delivery slows. Keep
 		// their representation intact; bitrate adaptation belongs to an
 		// actual HLS/DASH session, where SwapInput can restart the muxer.
@@ -190,7 +190,7 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 	slow := s.slowChecks
 	at := g.timeMapSnapshot().TimeAt(s.lastSrcPos)
 	s.speedMu.Unlock()
-	if position, ok := hls.(interface{ RequestedPosition() time.Duration }); ok {
+	if position, ok := hls.(core.PlaybackPosition); ok {
 		// The segment requested by the player is a better resume point
 		// than the encoder's source reads, which may probe the file tail.
 		at = position.RequestedPosition()

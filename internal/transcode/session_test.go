@@ -120,19 +120,25 @@ func TestSpikeGovernorReplansUpcomingCopySegment(t *testing.T) {
 	segDur := 4 * time.Second
 	plan := buildTimeline(time.Minute, segDur, timelineOptions{steadyMode: ModeCopy})
 	s := &Session{
-		m:          &Manager{opts: options{maxAhead: 20 * time.Second}},
-		id:         "governor-test",
-		dir:        t.TempDir(),
-		segDur:     segDur,
-		container:  ContainerMPEGTS,
-		plan:       plan,
-		adapt:      adaptiveSettings{Governor: true, SpikeMargin: 1.25},
-		governorOn: true,
-		lastReq:    0,
-		done:       []map[int]bool{{1: true}},
-		segSizes:   map[int]int64{1: 2_000_000}, // 4 Mbps over a four-second segment
-		log:        slog.Default(),
-		cur:        &run{track: 0, mode: ModeCopy, planEnd: -1, maxDone: 1},
+		m:         &Manager{opts: options{maxAhead: 20 * time.Second}},
+		id:        "governor-test",
+		dir:       t.TempDir(),
+		segDur:    segDur,
+		container: ContainerMPEGTS,
+		log:       slog.Default(),
+		sessionEncoding: sessionEncoding{
+			cur: &run{track: 0, mode: ModeCopy, planEnd: -1, maxDone: 1},
+		},
+		sessionDelivery: sessionDelivery{
+			lastReq: 0,
+			done:    []map[int]bool{{1: true}},
+		},
+		sessionAdaptation: sessionAdaptation{
+			plan:       plan,
+			adapt:      adaptiveSettings{Governor: true, SpikeMargin: 1.25},
+			governorOn: true,
+			segSizes:   map[int]int64{1: 2_000_000},
+		},
 	}
 	s.goodput.add(250_000, time.Second)
 	s.goodput.add(250_000, time.Second)

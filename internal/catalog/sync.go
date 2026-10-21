@@ -469,9 +469,7 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 	var personName, personThumb string
 	_ = c.db.QueryRowContext(ctx, `SELECT name, thumb FROM catalog_credits WHERE person_tmdb=? AND name<>'' LIMIT 1`, personID).Scan(&personName, &personThumb)
 	if personName == "" {
-		if pd, ok := c.client.(interface {
-			PersonDetails(ctx context.Context, id int64) (*tmdb.Person, error)
-		}); ok {
+		if pd, ok := c.client.(personDetailsSource); ok {
 			if p, err := pd.PersonDetails(bctx, personID); err == nil && p != nil {
 				personName, personThumb = p.Name, p.ProfilePath
 			}

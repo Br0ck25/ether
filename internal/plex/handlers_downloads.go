@@ -52,7 +52,7 @@ func (s *Server) downloadsAllowed(u *core.User) bool {
 	if u.IsOwner {
 		return true
 	}
-	if p, ok := s.d.AccessPolicy.(interface{ AllowDownloads(*core.User) bool }); ok {
+	if p, ok := s.d.AccessPolicy.(core.DownloadAccessPolicy); ok {
 		return p.AllowDownloads(u)
 	}
 	return s.cfg().Downloads.AllowFriends

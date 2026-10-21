@@ -698,9 +698,7 @@ func (e *Engine) fetchOwnerRows(key string, user *core.User, hc core.HubContext,
 		e.log.Debug("personalize: owner rows failed", "err", err)
 		return
 	}
-	if source, ok := e.opts.Collections.(interface {
-		LayoutRow(context.Context, *core.User, core.HubContext, string) (*core.CollectionRow, error)
-	}); ok {
+	if source, ok := e.opts.Collections.(core.CollectionLayoutSource); ok {
 		seen := map[string]bool{}
 		for _, row := range rows {
 			seen[row.CollectionID] = true

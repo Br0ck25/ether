@@ -151,9 +151,7 @@ func (c *reviewCollections) CollectionArtwork(ctx context.Context, u *core.User,
 	if _, _, ok := reviewCollectionParts(key); ok {
 		return nil, "", false, nil
 	}
-	if source, ok := c.base.(interface {
-		CollectionArtwork(context.Context, *core.User, core.RatingKey, string, int) ([]byte, string, bool, error)
-	}); ok {
+	if source, ok := c.base.(core.CollectionArtworkSource); ok {
 		return source.CollectionArtwork(ctx, u, key, element, width)
 	}
 	return nil, "", false, nil

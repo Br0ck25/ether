@@ -2,6 +2,7 @@ package playback
 
 import (
 	"context"
+	"github.com/braedonsaunders/ether/internal/core"
 	"net/url"
 	"strings"
 	"sync"
@@ -141,14 +142,10 @@ func (m *Manager) generationFor(inputURL string) *generation {
 // readMetadata reads without counting as the viewer's sequential position,
 // so warming never disturbs read-ahead or seek detection.
 func readMetadata(ctx context.Context, g *generation, p []byte, off int64) (int, error) {
-	if mr, ok := g.src.(interface {
-		ReadMetadataAtContext(context.Context, []byte, int64) (int, error)
-	}); ok {
+	if mr, ok := g.src.(core.MetadataReaderAt); ok {
 		return mr.ReadMetadataAtContext(ctx, p, off)
 	}
-	if cr, ok := g.src.(interface {
-		ReadAtContext(context.Context, []byte, int64) (int, error)
-	}); ok {
+	if cr, ok := g.src.(core.ContextReaderAt); ok {
 		return cr.ReadAtContext(ctx, p, off)
 	}
 	return g.src.ReadAt(p, off)

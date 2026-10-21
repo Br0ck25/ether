@@ -78,6 +78,12 @@ type Options struct {
 	Playlists   core.Playlists
 	// Base answers detail-page Related rows (internal/recommend).
 	Base core.Recommender
+	// Dependencies constructs consumers of this engine's scorer before any
+	// background work starts. This resolves the scorer/row-source construction
+	// cycle without publishing a partially wired engine through setters.
+	Dependencies func(core.PersonalScorer) (core.Recommender, core.CollectionRows, error)
+	// ExtraHomeRows supplies optional integration rows to owner previews.
+	ExtraHomeRows func(context.Context, *core.User, core.HubContext, string, int) []core.Hub
 	// Sections maps library section ids to their type, for per-user
 	// allowed sections (default 1 = movies, 2 = shows).
 	Sections map[int]core.MediaType
@@ -292,6 +298,13 @@ func New(opts Options) (*Engine, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.Dependencies != nil {
+		e.opts.Base, e.opts.Collections, err = opts.Dependencies(e)
+		if err != nil {
+			return nil, err
+		}
+	}
+	e.extraHomeRows = opts.ExtraHomeRows
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	e.startRanker() // learned ranker: load model, serve-log writer, training loop (ranker.go)
 	e.wg.Add(1)

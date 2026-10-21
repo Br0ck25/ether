@@ -9,17 +9,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
-	"net"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"time"
-
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/auth"
@@ -30,7 +19,6 @@ import (
 	"github.com/braedonsaunders/ether/internal/cluster"
 	"github.com/braedonsaunders/ether/internal/collections"
 	"github.com/braedonsaunders/ether/internal/config"
-	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/debrid"
 	"github.com/braedonsaunders/ether/internal/episodeorder"
 	"github.com/braedonsaunders/ether/internal/extras"
@@ -65,6 +53,15 @@ import (
 	"github.com/braedonsaunders/ether/internal/updater"
 	"github.com/braedonsaunders/ether/internal/usenet"
 	"github.com/braedonsaunders/ether/internal/watchlist"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Options configure a run.
@@ -142,9 +139,7 @@ type App struct {
 	cachefill  *cachefill.Manager
 	plextv     *plextv.Client
 	users      *auth.Service
-	// usersLate publishes users to components started before auth is
-	// built (the personalization scheduler); see usersSource.
-	usersLate atomic.Pointer[auth.Service]
+
 	certs     *plextv.CertManager
 	registrar *plextv.Registrar
 	gdm       *remote.GDMResponder
@@ -289,343 +284,21 @@ func New(ctx context.Context, opts Options) (*App, error) {
 
 func (a *App) build(ctx context.Context, cfg config.Config) error {
 	cfg.Cache = cfg.EffectiveCache()
-	log := a.log
-	dataDir := a.opts.DataDir
 	var err error
-
 	if a.safety, err = safety.New(ctx, a.db); err != nil {
 		return fmt.Errorf("safety: %w", err)
 	}
-	// Catalogue.
-	a.tmdb = tmdb.NewFromConfig(cfg.Catalog, log.With("component", "tmdb"))
-	a.closers = append(a.closers, a.tmdb.Close)
-	if a.catalog, err = catalog.New(a.db, a.tmdb, cfg.Catalog, log.With("component", "catalog"), a.catalogOptions()...); err != nil {
-		return fmt.Errorf("catalog: %w", err)
-	}
-	if a.collections, err = collections.New(a.db, a.catalog, log.With("component", "collections"), a.collectionOptions(cfg)...); err != nil {
-		return fmt.Errorf("collections: %w", err)
-	}
-
-	// Watch state and recommendations.
-	a.state = state.New(a.db, state.Options{Logger: log.With("component", "state"), Availability: a.dbAvail})
-	a.closers = append(a.closers, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := a.state.Close(ctx); err != nil {
-			a.log.Warn("state: watch progress lost at shutdown", "err", err)
-		}
-	})
-	a.trakt = trakt.New(trakt.Options{Config: cfg.Trakt, DB: a.db, Sealer: a.cfg, Catalog: a.catalog, NodeID: a.clusterNodeID(), Logger: log.With("component", "trakt")})
-	a.trakt.SubscribeTo(a.state)
-	a.collections.SetState(a.state)
-	a.closers = append(a.closers, a.trakt.Close)
-	a.llm = llm.New(llm.ServiceOptions{
-		Client:  llm.NewClient(llm.ClientOptions{Config: cfg.LLM, Logger: log.With("component", "llm")}),
-		Catalog: a.catalog,
-		Logger:  log.With("component", "llm"),
-	})
-	if a.collections != nil {
-		a.collections.SetVibeRefiner(a.llm)
-	}
-	a.recommend = recommend.New(recommend.Options{
-		Catalog: a.catalog, State: a.state, LLM: a.llm,
-		Logger: log.With("component", "recommend"),
-	})
-	a.closers = append(a.closers, a.recommend.Close)
-	// Per-viewer Homes, built in the background and served to Plex.
-	if a.personalize, err = personalize.New(personalize.Options{
-		DB: a.db, Catalog: a.catalog, State: a.state, Events: a.state, Users: a.usersSource(),
-		UserPolicy: a.safety.UserPolicy, Allowed: a.safety.Allowed,
-		LLM: a.llm, Trakt: a.trakt, Playlists: a.state.Playlists(), Base: a.recommend,
-		Collections: a.collections, // owner collections as targeted Home/section rows
-		ServerName:  func() string { return a.cfg.Get().Server.FriendlyName },
-		Logger:      log.With("component", "personalize"),
-		// Background training waits while anyone is streaming.
-		Busy: func() bool {
-			if a.playback != nil && len(a.playback.Sessions()) > 0 {
-				return true
-			}
-			return a.livetv != nil && len(a.livetv.ViewingSessions()) > 0
-		},
-		// Netflix-style hooks (#31/#32) follow the owner's live switches.
-		IntentEnabled: func() bool { return a.cfg.Get().Personalize.SessionIntent },
-		ClockFormat: func() string {
-			c := a.cfg.Get()
-			if c.Personalize.ClockFormat != "" {
-				return c.Personalize.ClockFormat
-			}
-			return c.Catalog.Language
-		},
-	}); err != nil {
-		return fmt.Errorf("personalization: %w", err)
-	}
-	a.recommend.SetScorer(a.personalize)
-	a.recommend.SetHomeSource(a.personalize)
-	a.collections.SetScorer(a.personalize) // "personal" collection sort
-	a.closers = append(a.closers, a.personalize.Close)
-	a.subtitles = subtitles.New(subtitles.Options{
-		Config:    cfg.OpenSubtitles,
-		CacheDir:  filepath.Join(dataDir, "subtitles"),
-		Logger:    log.With("component", "subtitles"),
-		UserAgent: "Ether v" + a.opts.Version,
-	})
-
-	// Usenet, cache, stream engine.
-	usenetDial, err := usenetProxyDialer(os.Getenv("ETHER_USENET_PROXY"))
-	if err != nil {
-		return err
-	}
-	a.fetcher = usenet.New(cfg.Usenet.Providers, usenet.Options{Logger: log.With("component", "usenet"), MinIdle: cfg.Usenet.MinIdle, DialContext: usenetDial})
-	a.closers = append(a.closers, func() { a.fetcher.Close() })
-	if cfg.Cache.Storage == "shared" {
-		if cfg.SharedCache == nil {
-			return errors.New("configure the shared cache policy in Server → Cache before starting a NAS-backed node")
-		}
-		a.cache, err = segcache.OpenShared(cfg.Cache.Dir, cfg.Cache.BudgetBytes, a.db, a.cacheNodeID(), log)
-	} else {
-		a.cache, err = segcache.Open(cfg.Cache.Dir, cfg.Cache.BudgetBytes, log)
-	}
-	if err != nil {
-		return fmt.Errorf("segment cache: %w", err)
-	}
-	a.closers = append(a.closers, func() { a.cache.Close() })
-	a.configureCache(cfg.Cache)
-	a.engine = stream.New(a.fetcher, a.cache, stream.OptionsFromConfig(cfg), log.With("component", "stream"))
-	a.closers = append(a.closers, func() { a.engine.Close() })
-
-	// Indexers and resolver.
-	siteOpts := cardigann.Options{DB: a.db, Sealer: a.cfg, Logger: log.With("component", "cardigann"), Sites: cfg.IndexerSites}
-	if a.clustered() {
-		siteOpts.LoginLock = a.clusterLoginLock // one login per site across nodes
-	}
-	a.sites = cardigann.New(siteOpts)
-	a.indexers = newznab.NewManager(a.db, cfg.Indexers, newznab.Options{
-		Logger:         log.With("component", "newznab"),
-		SearchCacheTTL: cfg.Resolver.SearchCacheTTL.D(),
-		NZBDir:         filepath.Join(dataDir, "nzb"),
-		Backend:        a.sites.Backend,
-	})
-	a.debrid = debrid.NewService(cfg.Debrid, debrid.Options{DB: a.db, Logger: log.With("component", "debrid")})
-	a.media = debrid.NewEngine(a.debrid, debrid.EngineOptions{Inner: a.engine, Health: a.engine, Cache: a.cache, Logger: log.With("component", "debrid")})
-	a.closers = append(a.closers, func() { a.media.Close() })
-	a.sources = debrid.NewIndexer(a.indexers, a.debrid)
-	a.resolver = resolver.New(a.sources, a.media, a.db, cfg, resolver.Options{Logger: log.With("component", "resolver")})
-	a.resolver.SetSourceSignals(a.debrid)
-	a.closers = append(a.closers, func() { a.resolver.Close() })
-
-	a.load = sysload.New(sysload.Options{Logger: log.With("component", "sysload")})
-
-	// Transcoder. A missing ffmpeg is not fatal: direct play still works.
-	a.transcoder, err = transcode.New(cfg.Transcode, log, transcode.WithRunStartHandler(func(input string, from, to time.Duration) {
-		if a.playback != nil {
-			a.playback.WarmInput(input, from, to)
-		}
-	}), transcode.WithInputFailureHandler(func(id, input string, at time.Duration, failure error) {
-		if a.plexServer == nil || ctx.Err() != nil {
-			return
-		}
-		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		log.Warn("recovering failed encoder input", "session", id, "at", at, "err", failure)
-		if err := a.plexServer.RecoverTranscode(rctx, id, input, at); err != nil {
-			log.Warn("encoder recovery exhausted", "session", id, "err", err)
-		}
-	}))
-	if err != nil {
-		log.Warn("transcoder unavailable; only direct play will work", "err", err)
-		a.transcoder = nil
-	} else {
-		a.closers = append(a.closers, func() { a.transcoder.Close() })
-	}
-	var tc core.Transcoder = directOnly{}
-	if a.transcoder != nil {
-		tc = a.transcoder
-	}
-
-	a.trackprefs = trackprefs.New(a.db, trackprefs.Options{ShowName: func(ctx context.Context, id int64) string {
-		if title, err := a.catalog.CachedTitle(ctx, core.ShowKey(id)); err == nil {
-			return title.Title
-		}
-		return ""
-	}})
-	a.markers = markers.New(markers.Options{DB: a.db, Logger: log.With("component", "markers"), Config: func() (bool, string) { c := a.cfg.Get().Markers; return c.TheIntroDB, c.APIKey }, Aligner: a.subtitles.TimelineAligner(), Dialogue: a.markerDialogue})
-	a.buildAdoption()
-	// Playback and prefetch.
-	a.playback, err = playback.New(playback.Deps{
-		AugmentMedia: a.enrichSubtitles,
-		NativeProbe: func(ctx context.Context, src core.MediaSource) (*core.MediaInfo, error) {
-			return transcode.ProbeSource(ctx, src, src.Size())
-		},
-		NativeTrailer: func(ctx context.Context, src core.MediaSource, info *core.MediaInfo) bool {
-			return transcode.ProbeTrailer(ctx, src, src.Size(), info)
-		},
-		Resolver:   a.resolver,
-		Engine:     a.media,
-		Transcoder: tc,
-		Catalog:    a.catalog,
-		Cache:      a.cache,
-		State:      a.state,
-		SelectProfile: func(caps core.ClientCaps, u *core.User) core.QualityProfile {
-			return resolver.SelectProfile(a.cfg.Get().Quality, caps, u)
-		},
-		FetchNZB: a.sources.FetchNZB,
-		Aligner: func() core.TimelineAligner {
-			if a.subtitles == nil {
-				return nil
-			}
-			return a.subtitles.TimelineAligner()
-		}(),
-		// Transcode sessions are keyed by the client's session id; the Plex
-		// front end (built below) maps playback sessions to them.
-		HLSLookup: func(id string) (core.HLSSession, bool) {
-			if a.plexServer != nil {
-				if hs, ok := a.plexServer.TranscodeFor(id); ok {
-					return hs, true
-				}
-			}
-			if a.transcoder != nil {
-				return a.transcoder.Session(id)
-			}
-			return nil, false
-		},
-		DB:            a.db,
-		Logger:        log,
-		Cluster:       a.clusterNode(),
-		DescribeGroup: a.describeLiveGroup,
-		Availability:  a.dbAvail,
-	}, cfg, playback.Options{DataDir: dataDir, VerifyNativeProbe: os.Getenv("ETHER_VERIFY_NATIVE_PROBE") == "1", TracePlayback: os.Getenv("ETHER_TRACE_PLAYBACK") == "1"})
-	if err != nil {
-		return fmt.Errorf("playback: %w", err)
-	}
-	a.closers = append(a.closers, func() { a.playback.Close() })
-	a.cache.Protect(a.protectedReleases)
-
-	// plex.tv, users, certificates, LAN discovery.
-	if a.plextv, err = plextv.New(plextv.Options{Identity: plextv.ServerIdentity(cfg, ""), VersionSource: func() string { return plextv.PMSVersion(a.cfg.Get()) }}); err != nil {
-		return fmt.Errorf("plex.tv client: %w", err)
-	}
-	if a.users, err = auth.New(context.Background(), a.db, auth.Options{
-		Validator: auth.PlexTVValidator{Client: a.plextv, MachineID: cfg.Server.MachineIdentifier},
-		Logger:    log.With("component", "auth"),
-	}); err != nil {
-		return fmt.Errorf("auth: %w", err)
-	}
-	a.usersLate.Store(a.users)
-	a.collections.SetAuth(a.users)
-	if cfg.Plex.Token != "" {
-		if err := a.users.BootstrapOwner(context.Background(), cfg.Plex); err != nil {
-			log.Warn("owner bootstrap", "err", err)
+	// Identity precedes model construction: background builders receive a fully
+	// initialized auth service. Scorer consumers are built inside the model's
+	// dependency phase before its workers start.
+	for _, build := range []func(context.Context, config.Config) error{
+		a.buildCatalogue, a.buildIdentity, a.buildPersonalization,
+		a.buildSources, a.buildPlayback, a.buildPrefetch, a.buildIntegrations,
+	} {
+		if err := build(ctx, cfg); err != nil {
+			return err
 		}
 	}
-	if a.certs, err = plextv.NewCertManager(plextv.CertManagerOptions{
-		Dir:            filepath.Join(dataDir, "certs"),
-		Client:         a.plextv,
-		CustomCertFile: cfg.Plex.CertFile,
-		CustomKeyFile:  cfg.Plex.KeyFile,
-		Shared:         a.sharedCerts(),
-		Logger:         log.With("component", "certs"),
-	}); err != nil {
-		return fmt.Errorf("certificates: %w", err)
-	}
-	ropts := plextv.RegistrarOptions{
-		Config: a.cfg,
-		Client: a.plextv,
-		Users:  a.users,
-		Certs:  a.certs,
-		Logger: log.With("component", "registrar"),
-	}
-	if a.clustered() {
-		ropts.PeerURIs = a.peers.get // publish the union of every live node
-		ropts.NodeMapping = true     // every node maps its own port (runRegistrarAsLeader)
-	}
-	if a.registrar, err = plextv.NewRegistrar(ropts); err != nil {
-		return fmt.Errorf("registrar: %w", err)
-	}
-	if cfg.Plex.Token != "" {
-		rctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := a.registrar.RefreshOwner(rctx); err != nil {
-			log.Warn("plex.tv owner refresh", "err", err)
-		}
-		cancel()
-	}
-	a.gdm = remote.NewGDMResponder(remote.GDMOptions{
-		Info: func() remote.GDMInfo {
-			c := a.cfg.Get()
-			return remote.GDMInfo{Name: c.Server.FriendlyName, MachineIdentifier: c.Server.MachineIdentifier,
-				Port: c.Server.Port, Version: plextv.PMSVersion(c), UpdatedAt: time.Now()}
-		},
-		Logger: log.With("component", "gdm"),
-	})
-
-	// Post-play pre-buffering (#30): prewarm through the playback manager
-	// once it implements core.Prewarmer; until then prefetch resolves and
-	// pulls the opening bytes itself.
-	var prewarmer core.Prewarmer
-	if pw, ok := any(a.playback).(core.Prewarmer); ok {
-		prewarmer = pw
-	}
-	a.prefetch, err = prefetch.New(prefetch.Deps{
-		Catalog: a.catalog, Resolver: a.resolver, Engine: a.media,
-		State: a.state, Auth: a.users, Hints: a.playback,
-		Logger:   log.With("component", "prefetch"),
-		PostPlay: a.personalize, Prewarmer: prewarmer, Markers: a.markers,
-		PostPlayEnabled: func() bool {
-			c := a.cfg.Get().Personalize
-			return c.PostPlay && c.PostPlayPrebuffer
-		},
-	}, cfg.Cache, prefetch.Options{})
-	if err != nil {
-		return fmt.Errorf("prefetch: %w", err)
-	}
-	a.closers = append(a.closers, func() { a.prefetch.Close() })
-
-	var sharedShelf *cachefill.SharedStore
-	if a.cache.Shared() {
-		sharedShelf = cachefill.NewSharedStore(a.db, a.cacheNodeID())
-	}
-	a.cachefill, err = cachefill.New(a.cache.Directory(), cachefill.Deps{
-		Shared:  sharedShelf,
-		Catalog: a.catalog, Resolver: a.resolver, Engine: a.media, Cache: a.cache,
-		State: a.state, Household: a.cacheHousehold,
-		Config: a.runningCacheConfig, Owner: a.users.Owner,
-		Active: func() bool {
-			if len(a.playback.Sessions()) > 0 {
-				return true
-			}
-			if a.cache.Shared() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				return len(a.playback.RemoteSessions(ctx)) > 0
-			}
-			return false
-		},
-		FreeBytes: func() (int64, error) { return admin.DiskFree(a.cache.Directory()) },
-		Remember:  a.playback.Remember, Logger: a.log,
-	})
-	if err != nil {
-		return fmt.Errorf("managed cache: %w", err)
-	}
-	a.buildInsights()
-	a.buildDiscovery()
-	a.episodeorder = episodeorder.New(a.db, a.tmdb, a.catalog)
-	if err := a.buildLiveTV(); err != nil {
-		return fmt.Errorf("live TV: %w", err)
-	}
-	a.personalize.SetExtraHomeRows(a.extraHomeRows)
-	a.cfg.Subscribe(a.applyConfig)
-
-	a.buildExtras()
-	plexHandler, err := a.buildPlex(cfg)
-	if err != nil {
-		return fmt.Errorf("plex front end: %w", err)
-	}
-	mux := http.NewServeMux()
-	mux.Handle("/ether/", lanOnly(a.buildAdmin()))
-	mux.HandleFunc("/ether", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ether/", http.StatusFound)
-	})
-	mux.Handle("/", plexHandler)
-	a.handler = mux
 	return nil
 }
 
@@ -846,18 +519,4 @@ func appendUnique(xs []string, more ...string) []string {
 		}
 	}
 	return xs
-}
-
-// usersSource lists Plex users for the personalization engine. Auth is
-// built later in New, so the lookup is resolved on use.
-func (a *App) usersSource() lateUsers { return lateUsers{a} }
-
-type lateUsers struct{ a *App }
-
-func (l lateUsers) Users(ctx context.Context) ([]core.User, error) {
-	users := l.a.usersLate.Load()
-	if users == nil {
-		return nil, nil
-	}
-	return users.Users(ctx)
 }

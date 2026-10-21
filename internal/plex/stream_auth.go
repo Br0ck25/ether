@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -45,9 +44,7 @@ func (s *Server) activeViewer(ctx context.Context, id int64) *core.User {
 	if s.d.Auth == nil {
 		return nil
 	}
-	if a, ok := s.d.Auth.(interface {
-		ActiveUser(context.Context, int64) (*core.User, error)
-	}); ok {
+	if a, ok := s.d.Auth.(core.ActiveUserSource); ok {
 		u, err := a.ActiveUser(ctx, id)
 		if err == nil {
 			return u
@@ -89,12 +86,10 @@ func (s *Server) authenticateStreamGrant(r *http.Request, pr *Request) bool {
 	if u == nil {
 		return false
 	}
-	if policy, ok := s.d.AccessPolicy.(interface{ UserPolicy(*core.User) *core.User }); ok {
+	if policy, ok := s.d.AccessPolicy.(core.UserPolicySource); ok {
 		u = policy.UserPolicy(u)
 	}
-	if policy, ok := s.d.AccessPolicy.(interface {
-		CanPlay(*core.User, bool, time.Time) bool
-	}); ok && !policy.CanPlay(u, pr.ClientCaps(0).Remote, s.now()) {
+	if policy, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !policy.CanPlay(u, pr.ClientCaps(0).Remote, s.now()) {
 		return false
 	}
 	pr.User = u

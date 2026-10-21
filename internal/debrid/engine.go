@@ -593,7 +593,7 @@ func (f *remoteFile) presentLocked(idx int64) bool {
 
 // presentOnDiskLocked reports a block the segment cache still holds.
 func (f *remoteFile) presentOnDiskLocked(idx int64) bool {
-	if h, ok := f.e.cache.(interface{ Has(string, int) bool }); ok {
+	if h, ok := f.e.cache.(core.SegmentPresence); ok {
 		if h.Has(f.id, int(idx)) {
 			f.stored[idx] = true
 			return true

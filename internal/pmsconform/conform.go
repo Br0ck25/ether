@@ -51,6 +51,7 @@ func headers(product, platform, platformVersion, device, deviceName, version str
 type Request struct {
 	Name, Method, Path string
 	Headers            map[string]http.Header
+	Body               []byte
 }
 
 // Corpus returns probes used when a Plex application connects and browses a server.
@@ -543,7 +544,7 @@ func Fetch(ctx context.Context, client *http.Client, base, token string, req Req
 		h = req.Headers[profile+"-json"]
 	}
 	u := strings.TrimRight(base, "/") + path
-	q, e := http.NewRequestWithContext(ctx, req.Method, u, nil)
+	q, e := http.NewRequestWithContext(ctx, req.Method, u, bytes.NewReader(req.Body))
 	if e != nil {
 		return Response{}, e
 	}

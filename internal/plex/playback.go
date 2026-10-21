@@ -238,12 +238,10 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if !s.visibleTitle(ctx, pr.User, t) {
 		return nil, nil, core.Decision{}, core.ErrNotFound
 	}
-	if policy, ok := s.d.AccessPolicy.(interface {
-		CanPlay(*core.User, bool, time.Time) bool
-	}); ok && !policy.CanPlay(pr.User, p.caps.Remote, s.now()) {
+	if policy, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !policy.CanPlay(pr.User, p.caps.Remote, s.now()) {
 		return nil, nil, core.Decision{}, core.ErrUnauthorized
 	}
-	if policy, ok := s.d.AccessPolicy.(interface{ BitrateLimit(*core.User) int }); ok {
+	if policy, ok := s.d.AccessPolicy.(core.BitrateAccessPolicy); ok {
 		if limit := policy.BitrateLimit(pr.User); limit > 0 && (p.caps.MaxBitrateKbps == 0 || limit < p.caps.MaxBitrateKbps) {
 			p.caps.MaxBitrateKbps = limit
 			p.opts.MaxBitrateKbps = limit
@@ -978,9 +976,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
-	if policy, ok := s.d.AccessPolicy.(interface {
-		CanPlay(*core.User, bool, time.Time) bool
-	}); ok && !policy.CanPlay(pr.User, pr.ClientCaps(0).Remote, s.now()) {
+	if policy, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !policy.CanPlay(pr.User, pr.ClientCaps(0).Remote, s.now()) {
 		writeHTTPError(w, http.StatusForbidden)
 		return
 	}

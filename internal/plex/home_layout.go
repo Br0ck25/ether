@@ -9,9 +9,7 @@ import (
 // Final placement preserves each producer's actual Plex metadata and tune URLs.
 // Only the order/visibility of rows is returned by the layout engine.
 func (s *Server) finalizeHomeRows(ctx context.Context, pr *Request, hc core.HubContext, section string, rows []model.Hub) []model.Hub {
-	engine, ok := s.d.Recommender.(interface {
-		FinalizeHome(context.Context, *core.User, core.HubContext, string, []core.Hub) ([]core.Hub, error)
-	})
+	engine, ok := s.d.Recommender.(core.HomeLayoutSource)
 	if !ok {
 		return rows
 	}

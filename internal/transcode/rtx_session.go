@@ -66,9 +66,7 @@ func (s *Session) startRTXRunLocked(spec runSpec, stdout, stderr *lineWriter) (P
 		return nil, nil, fmt.Errorf("RTX Video keyframe plan: %w", err)
 	}
 	start := s.m.runner.Start
-	if owner, ok := s.m.runner.(interface {
-		StartRTX(Command) (Process, error)
-	}); ok {
+	if owner, ok := s.m.runner.(RTXRunner); ok {
 		start = owner.StartRTX
 	}
 	p, err := start(Command{Path: path, Args: args, Dir: s.dir, Stdout: stdout, Stderr: stderr})
@@ -186,15 +184,13 @@ func redactRTXLine(line, input string, headers map[string]string) string {
 
 // Preserve optional runner diagnostics through the concurrency wrapper.
 func (p *rtxPermitProcess) PID() int {
-	if x, ok := p.Process.(interface{ PID() int }); ok {
+	if x, ok := p.Process.(core.ProcessIdentity); ok {
 		return x.PID()
 	}
 	return 0
 }
 func (p *rtxPermitProcess) CPUTime() (time.Duration, time.Duration) {
-	if x, ok := p.Process.(interface {
-		CPUTime() (time.Duration, time.Duration)
-	}); ok {
+	if x, ok := p.Process.(core.ProcessCPUTime); ok {
 		return x.CPUTime()
 	}
 	return 0, 0

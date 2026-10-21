@@ -111,7 +111,7 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 			// (a spliced lower-bitrate release): not a read failure.
 			return errShortSource
 		case recoverableSourceFailure(rerr) && ctx.Err() == nil:
-			if retry, ok := g.src.(interface{ RetryDirectPlay() bool }); ok && retry.RetryDirectPlay() && errors.Is(rerr, core.ErrSourceUnavailable) && !permanentSourceFailure(rerr) {
+			if retry, ok := g.src.(core.DirectPlayRetrier); ok && retry.RetryDirectPlay() && errors.Is(rerr, core.ErrSourceUnavailable) && !permanentSourceFailure(rerr) {
 				// Native players retry this part URL with its original byte
 				// coordinates. A temporary CDN error must not replace those
 				// bytes with a different encode or strand the client on 409.
@@ -204,20 +204,14 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			var err error
 			readAt := time.Now()
 			if background {
-				if cr, ok := g.src.(interface {
-					ReadAtPrefetchContext(context.Context, []byte, int64) (int, error)
-				}); ok {
+				if cr, ok := g.src.(core.PrefetchReaderAt); ok {
 					n, err = cr.ReadAtPrefetchContext(ctx, (*bp)[:want], pos)
-				} else if cr, ok := g.src.(interface {
-					ReadAtContext(context.Context, []byte, int64) (int, error)
-				}); ok {
+				} else if cr, ok := g.src.(core.ContextReaderAt); ok {
 					n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
 				} else {
 					n, err = g.src.ReadAt((*bp)[:want], pos)
 				}
-			} else if cr, ok := g.src.(interface {
-				ReadAtContext(context.Context, []byte, int64) (int, error)
-			}); ok {
+			} else if cr, ok := g.src.(core.ContextReaderAt); ok {
 				n, err = cr.ReadAtContext(ctx, (*bp)[:want], pos)
 			} else {
 				n, err = g.src.ReadAt((*bp)[:want], pos)

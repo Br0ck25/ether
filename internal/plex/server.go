@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"runtime"
@@ -237,7 +238,7 @@ func (s *Server) Close() error {
 	s.once.Do(func() {
 		s.releaseAllDownloads()
 		s.cancel()
-		if closer, ok := s.d.Trickplay.(interface{ Close() error }); ok {
+		if closer, ok := s.d.Trickplay.(io.Closer); ok {
 			_ = closer.Close()
 		}
 		s.notifier.close()

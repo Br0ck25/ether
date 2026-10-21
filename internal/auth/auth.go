@@ -388,6 +388,9 @@ func (s *Service) Authenticate(ctx context.Context, token string) (*core.User, e
 	if token == "" {
 		return nil, core.ErrUnauthorized
 	}
+	if strings.HasPrefix(token, delegationPrefix) {
+		return s.authenticateDelegation(ctx, token)
+	}
 	h := HashToken(token)
 	now := s.o.Now()
 

@@ -15,16 +15,13 @@ func twoPartFile() *postedFile {
 
 // A yEnc header is posted by strangers: a short article claiming a huge
 // part must not be zero-filled into a process-killing allocation.
-func TestNormalizeIgnoresImplausiblePartHeader(t *testing.T) {
+func TestNormalizeRejectsImplausiblePartHeader(t *testing.T) {
 	e := newTestEngine(t, newFakeFetcher(), nil, Options{})
 	pf := twoPartFile()
 	data := []byte("short article")
-	seg, err := e.normalize(pf, 0, data, core.ArticlePart{Name: "x.mkv", FileSize: 1 << 40, Part: 1, Total: 2, Begin: 1, End: 1 << 40})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(seg.data) != len(data) || seg.fileSize != 0 || seg.begin != 0 {
-		t.Fatalf("implausible header applied: len=%d fileSize=%d begin=%d", len(seg.data), seg.fileSize, seg.begin)
+	_, err := e.normalize(pf, 0, data, core.ArticlePart{Name: "x.mkv", FileSize: 1 << 40, Part: 1, Total: 2, Begin: 1, End: 1 << 40})
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("implausible header accepted: %v", err)
 	}
 	// A damaged decoded body is never silently turned into container bytes.
 	for _, data := range [][]byte{data, make([]byte, 200)} {

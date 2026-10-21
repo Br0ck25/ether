@@ -368,9 +368,7 @@ func (s *Service) prepareTrack(ctx context.Context, ss *session, p Programme) (*
 	caps.ClientID = "livetv-" + ss.info.ID + "-" + strconv.FormatInt(p.Start.UnixMilli(), 10)
 	var ps *core.PlaySession
 	var err error
-	if grouped, ok := s.o.Playback.(interface {
-		PrepareChannel(context.Context, *core.User, core.RatingKey, core.ClientCaps, string) (*core.PlaySession, error)
-	}); ok {
+	if grouped, ok := s.o.Playback.(core.ChannelPreparer); ok {
 		ps, err = grouped.PrepareChannel(ctx, &ss.user, p.Item.Key, caps, ss.info.ID)
 	} else {
 		ps, err = s.o.Playback.Prepare(ctx, &ss.user, p.Item.Key, caps)

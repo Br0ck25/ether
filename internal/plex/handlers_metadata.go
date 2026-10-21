@@ -128,9 +128,7 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if len(keys) == 1 && isPlayable(t.Type) {
-				if warm, ok := s.d.Playback.(interface {
-					PreResolve(context.Context, *core.User, core.RatingKey, core.ClientCaps) bool
-				}); ok {
+				if warm, ok := s.d.Playback.(core.PlaybackPreparer); ok {
 					warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
 				}
 			}
@@ -181,9 +179,7 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 			}
 			// The show page's Play button plays this episode: resolve,
 			// open and probe it while the viewer reads the page.
-			if warm, ok := s.d.Playback.(interface {
-				PreResolve(context.Context, *core.User, core.RatingKey, core.ClientCaps) bool
-			}); ok {
+			if warm, ok := s.d.Playback.(core.PlaybackPreparer); ok {
 				warm.PreResolve(ctx, pr.User, ep.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
 			}
 		}
@@ -221,9 +217,7 @@ func (s *Server) sameDayUnavailable(ctx context.Context, pr *Request, t *core.Ti
 	if age < 0 || age > 36*time.Hour {
 		return false
 	}
-	av, ok := s.d.Variants.(interface {
-		Available(context.Context, core.RatingKey) (bool, bool)
-	})
+	av, ok := s.d.Variants.(core.AvailabilitySource)
 	if !ok {
 		return false
 	}
@@ -232,9 +226,7 @@ func (s *Server) sameDayUnavailable(ctx context.Context, pr *Request, t *core.Ti
 		return !available
 	}
 	if pr != nil && s.d.Playback != nil {
-		if warm, ok := s.d.Playback.(interface {
-			PreResolve(context.Context, *core.User, core.RatingKey, core.ClientCaps) bool
-		}); ok {
+		if warm, ok := s.d.Playback.(core.PlaybackPreparer); ok {
 			warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
 		}
 	}

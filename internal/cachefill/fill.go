@@ -638,7 +638,7 @@ func (m *Manager) loadDocument(b []byte) error {
 }
 
 func (m *Manager) releaseSizes() func(string) int64 {
-	if c, ok := m.deps.Cache.(interface{ ReleaseSizes() map[string]int64 }); ok {
+	if c, ok := m.deps.Cache.(core.ReleaseSizeSource); ok {
 		sizes := c.ReleaseSizes()
 		return func(id string) int64 { return sizes[id] }
 	}

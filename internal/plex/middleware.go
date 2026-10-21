@@ -160,7 +160,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		u, err := s.d.Auth.Authenticate(r.Context(), pr.Token)
 		switch {
 		case err == nil && u != nil:
-			if policy, ok := s.d.AccessPolicy.(interface{ UserPolicy(*core.User) *core.User }); ok {
+			if policy, ok := s.d.AccessPolicy.(core.UserPolicySource); ok {
 				u = policy.UserPolicy(u)
 			}
 			if id := transcodeSessionID(r.URL.Path); id != "" {
@@ -232,7 +232,9 @@ func (s *Server) writeStatus(w http.ResponseWriter, r *http.Request, status int,
 	}
 	h := w.Header()
 	h.Set("Content-Type", pr.Format.ContentType())
-	h.Set("Cache-Control", "no-cache")
+	if h.Get("Cache-Control") == "" {
+		h.Set("Cache-Control", "no-cache")
+	}
 	if mc, ok := v.(*model.MediaContainer); ok && mc.Offset != nil {
 		h.Set("X-Plex-Container-Start", strconv.Itoa(*mc.Offset))
 		if mc.TotalSize != nil {

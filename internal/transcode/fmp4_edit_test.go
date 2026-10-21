@@ -235,8 +235,19 @@ func pollSession(t *testing.T, init []byte) (*Session, *run, *stopProc, string) 
 	p := &stopProc{}
 	r := &run{spec: runSpec{Dir: dir, InitName: "init.mp4", Playlist: "run.m3u8"}, proc: p, stderr: newTailBuffer(4096),
 		planEnd: -1, started: time.Now()}
-	s := &Session{m: &Manager{}, dir: dir, container: ContainerFMP4, done: []map[int]bool{{}}, log: testLogger(t),
-		changed: make(chan struct{}), cur: r}
+	s := &Session{
+		m:         &Manager{},
+		dir:       dir,
+		container: ContainerFMP4,
+		log:       testLogger(t),
+		sessionEncoding: sessionEncoding{
+			cur: r,
+		},
+		sessionDelivery: sessionDelivery{
+			done:    []map[int]bool{{}},
+			changed: make(chan struct{}),
+		},
+	}
 	return s, r, p, filepath.Join(dir, "run.m3u8")
 }
 

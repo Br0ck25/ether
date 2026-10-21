@@ -96,7 +96,7 @@ func (s *Server) cancelTrickplayIfIdle(ps *core.PlaySession) {
 			return
 		}
 	}
-	if canceler, ok := s.d.Trickplay.(interface{ CancelTrickplay(string) }); ok {
+	if canceler, ok := s.d.Trickplay.(core.TrickplayCanceler); ok {
 		canceler.CancelTrickplay(releaseID)
 	}
 }
@@ -143,9 +143,7 @@ func (s *Server) indexPart(r *http.Request) (core.RatingKey, string, bool) {
 	if err != nil || !s.visibleTitle(r.Context(), pr.User, title) {
 		return 0, "", false
 	}
-	if policy, ok := s.d.AccessPolicy.(interface {
-		CanPlay(*core.User, bool, time.Time) bool
-	}); ok && !policy.CanPlay(pr.User, pr.ClientCaps(0).Remote, s.now()) {
+	if policy, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !policy.CanPlay(pr.User, pr.ClientCaps(0).Remote, s.now()) {
 		return 0, "", false
 	}
 	ps, ok := s.d.Playback.SessionFor(pr.User.ID, pr.ClientID, key)

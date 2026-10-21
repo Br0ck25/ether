@@ -2,7 +2,7 @@
   <img src=".github/assets/ether-logo.svg" alt="Ether" width="360" />
 </p>
 
-<h2 align="center">The whole TMDB catalogue, inside the Plex app your family already uses.<br />No downloads. No mounts. One binary.</h2>
+<h2 align="center">The whole TMDB catalogue, inside the Plex app your family already uses.<br />Your on-demand server alongside Plex Media Server.</h2>
 
 <p align="center">
   Press <b>Play</b> on a title in any official Plex app. Ether resolves the best release across <b>your Usenet providers</b> and <b>your debrid accounts</b>, health-checks it, and streams the exact byte ranges the player asks for.
@@ -20,7 +20,7 @@
   <a href="#why-ether-exists">Why Ether Exists</a> ·
   <a href="#under-the-hood">Under the Hood</a> ·
   <a href="#the-owner-experience">Product Tour</a> ·
-  <a href="#what-it-can-replace">What It Replaces</a> ·
+  <a href="#alongside-your-local-library">Alongside Your Library</a> ·
   <a href="#install-in-five-minutes">Install in 5 Minutes</a> ·
   <a href="#questions-youre-about-to-ask">FAQ</a>
 </p>
@@ -48,13 +48,15 @@ When you open Plex, **the catalogue is already there.** When you press **Play**,
 
 ---
 
-## What it can replace
+## Alongside your local library
 
-The projects below are mature, well-loved, and still the right tools for curating a local library on disk. For on-demand streaming, Ether covers the same ground inside a single `CGO_ENABLED=0` Go binary with an embedded React control plane and SQLite (or PostgreSQL) storage.
+Keep Plex Media Server and the tools that curate the files you own. Ether adds a second server in the same Plex apps for titles outside that collection. Its availability depends on your configured sources; an on-demand catalogue is not a durable local library.
+
+The table maps familiar workflows to Ether’s on-demand features. It does not claim feature parity with these mature projects. Clustering, virtual Live TV, hardware enhancement and poster customization are optional integrations; ordinary playback needs none of them.
 
 | If you run today | What Ether does instead |
 | :--- | :--- |
-| **Plex Media Server** *(for streaming)* | Clean-room implementation of the PMS HTTP/HLS/DASH/GDM protocol, `*.plex.direct` TLS, and `plex.tv` sharing. *(Keep PMS only if you also curate local files on disk.)* |
+| **Plex Media Server** *(for streaming)* | Clean-room implementation of the PMS HTTP/HLS/DASH/GDM protocol, `*.plex.direct` TLS, and `plex.tv` sharing. *(Keep PMS for your local files.)* |
 | **Sonarr & Radarr** | Resolution happens at **Play** time (or during detail-page warmup) using your quality profiles, custom formats, edition rules, and release pins. |
 | **Prowlarr & Jackett** | Native Newznab and Torznab manager with daily quota tracking, Retry-After backoff, result caching, 1-click Prowlarr import, and a built-in **Cardigann YAML** engine. |
 | **SABnzbd, NZBGet, NzbDAV, AltMount** | Native NNTP connection pools, wire-pipelined `BODY` fetching, SWAR yEnc decoding, and direct byte-range seeking inside store-mode RAR4, RAR5, and 7z sets (including password-protected stored archives). |

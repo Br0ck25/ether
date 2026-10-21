@@ -45,13 +45,22 @@ func (w *pacedDeliveryWriter) Write(b []byte) (int, error) {
 func adaptationModel(t *testing.T, proto string) (*Session, *time.Time) {
 	t.Helper()
 	now := time.Unix(1000, 0)
-	s := &Session{proto: proto, segDur: 2 * time.Second,
-		m:    &Manager{opts: options{rungDwell: 8 * time.Second}},
-		info: ladderInfo(1080, 8000),
-		rungs: []rung{
-			{decision: core.Decision{BitrateKbps: 8000, VideoCodec: "h264"}},
-			{decision: core.Decision{BitrateKbps: 800, VideoCodec: "h264"}},
-		}, cur: &run{track: 0, started: now, produced: 100},
+	s := &Session{
+		proto:  proto,
+		segDur: 2 * time.Second,
+		m:      &Manager{opts: options{rungDwell: 8 * time.Second}},
+		sessionInput: sessionInput{
+			info: ladderInfo(1080, 8000),
+		},
+		sessionEncoding: sessionEncoding{
+			cur: &run{track: 0, started: now, produced: 100},
+		},
+		sessionAdaptation: sessionAdaptation{
+			rungs: []rung{
+				{decision: core.Decision{BitrateKbps: 8000, VideoCodec: "h264"}},
+				{decision: core.Decision{BitrateKbps: 800, VideoCodec: "h264"}},
+			},
+		},
 	}
 	s.goodput.clock = func() time.Time { return now }
 	return s, &now

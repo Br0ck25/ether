@@ -3,8 +3,11 @@ package transcode
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -55,39 +58,89 @@ type ExecRunner struct{}
 
 // Start implements Runner.
 func (ExecRunner) Start(c Command) (Process, error) {
-	cmd := exec.Command(c.Path, c.Args...)
-	cmd.Dir = c.Dir
-	cmd.Stdout = c.Stdout
-	cmd.Stderr = c.Stderr
-	hideWindow(cmd)
-	if err := cmd.Start(); err != nil {
+	path, err := exec.LookPath(c.Path)
+	if err != nil {
 		return nil, err
 	}
-	p := &execProcess{cmd: cmd, done: make(chan struct{})}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	control, lifetime, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(executable, append([]string{guardianArg, path}, c.Args...)...)
+	cmd.Env = append(os.Environ(), guardianEnv+"=1")
+	cmd.Stdin = control
+	cmd.WaitDelay = waitDelay
+	cmd.Dir = c.Dir
+	out := c.Stdout
+	if out == nil {
+		out = io.Discard
+	}
+	writeMu := &sync.Mutex{}
+	output := &encoderOutput{dst: &synchronizedWriter{mu: writeMu, dst: out}, pid: make(chan int, 1)}
+	cmd.Stdout = output
+	if c.Stderr != nil {
+		cmd.Stderr = &synchronizedWriter{mu: writeMu, dst: c.Stderr}
+	}
+	hideWindow(cmd)
+	if err := cmd.Start(); err != nil {
+		control.Close()
+		lifetime.Close()
+		return nil, err
+	}
+	control.Close()
+	p := &execProcess{cmd: cmd, lifetime: lifetime, done: make(chan struct{})}
 	go func() {
 		p.err = cmd.Wait()
+		lifetime.Close()
 		close(p.done)
 	}()
-	return p, nil
+	select {
+	case p.pid = <-output.pid:
+		return p, nil
+	case <-p.done:
+		select {
+		case p.pid = <-output.pid:
+			return p, nil
+		default:
+		}
+		return nil, fmt.Errorf("transcode: encoder guardian failed: %w", p.err)
+	}
 }
 
 // Run implements Runner.
 func (ExecRunner) Run(ctx context.Context, c Command) error {
-	cmd := exec.CommandContext(ctx, c.Path, c.Args...)
-	cmd.Dir = c.Dir
-	cmd.Stdout = c.Stdout
-	cmd.Stderr = c.Stderr
-	cmd.WaitDelay = waitDelay
-	hideWindow(cmd)
-	err := cmd.Run()
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return err
+	p, err := (ExecRunner{}).Start(c)
+	if err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		p.Stop()
+		return ctx.Err()
+	case <-p.Done():
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return p.Err()
+	}
+
 }
 
 type execProcess struct {
 	cmd      *exec.Cmd
+	lifetime *os.File
+	pid      int
 	done     chan struct{}
 	err      error
 	stopOnce sync.Once
@@ -100,7 +153,7 @@ func (p *execProcess) Done() <-chan struct{} { return p.done }
 // PID identifies the encoder for optional process-tree resource sampling.
 // It is deliberately not part of Process, so fake and alternate runners do
 // not need to expose an operating-system process.
-func (p *execProcess) PID() int { return p.cmd.Process.Pid }
+func (p *execProcess) PID() int { return p.pid }
 
 // CPUTime reports completed process CPU usage, excluding wall-clock waits.
 // While the process is running the values are zero; callers should sample
@@ -128,7 +181,7 @@ func (p *execProcess) Stop() {
 		default:
 			// Segments and playlists are written to temp files and renamed,
 			// so a hard kill never leaves a half-written segment visible.
-			_ = p.cmd.Process.Kill()
+			_ = p.lifetime.Close()
 		}
 	})
 	<-p.done
@@ -140,7 +193,12 @@ func (p *execProcess) Pause() error {
 	if p.paused {
 		return nil
 	}
-	if err := suspend(p.cmd.Process); err != nil {
+	proc, err := os.FindProcess(p.pid)
+	if err != nil {
+		return err
+	}
+	defer proc.Release()
+	if err := suspend(proc); err != nil {
 		return err
 	}
 	p.paused = true
@@ -153,9 +211,27 @@ func (p *execProcess) Resume() error {
 	if !p.paused {
 		return nil
 	}
-	if err := resume(p.cmd.Process); err != nil {
+	proc, err := os.FindProcess(p.pid)
+	if err != nil {
+		return err
+	}
+	defer proc.Release()
+	if err := resume(proc); err != nil {
 		return err
 	}
 	p.paused = false
 	return nil
+}
+
+// Commands frequently combine stdout and stderr into a bytes.Buffer. Preserve
+// os/exec's serialization even though stdout includes a private PID handshake.
+type synchronizedWriter struct {
+	mu  *sync.Mutex
+	dst io.Writer
+}
+
+func (w *synchronizedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dst.Write(p)
 }

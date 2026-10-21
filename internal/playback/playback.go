@@ -747,7 +747,7 @@ func (m *Manager) prepare(ctx context.Context, id identity, user *core.User, cap
 	}
 	m.reg.poke()
 	m.saveResume(ctx, s, g)
-	if c, ok := m.deps.Cache.(interface{ RecordPlay(string, string, int64) }); ok {
+	if c, ok := m.deps.Cache.(core.CachePlayRecorder); ok {
 		title := s.title.Title
 		if s.title.ShowTitle != "" {
 			title = s.title.ShowTitle + " · " + title

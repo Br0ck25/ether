@@ -326,12 +326,7 @@ const maxArticleBytes = 32 << 20
 // header, tolerating headers that are absent or inconsistent.
 func (e *Engine) normalize(pf *postedFile, i int, data []byte, part core.ArticlePart) (*segData, error) {
 	if part.Begin >= 1 && part.End >= part.Begin && part.End-part.Begin+1 > max(int64(len(data)), maxArticleBytes) {
-		// The header is untrusted: a part claiming far more bytes than any
-		// article carries would be zero-filled into a huge allocation.
-		// Treat the whole header as absent.
-		e.log.Warn("article yEnc part header claims an implausible size; ignoring it", "file", pf.Name(), "part", i+1,
-			"got", len(data), "begin", part.Begin, "end", part.End)
-		part = core.ArticlePart{Name: part.Name}
+		return nil, fmt.Errorf("stream: %s part %d implausible yEnc range %d-%d: %w", pf.Name(), i+1, part.Begin, part.End, ErrCorrupt)
 	}
 	seg := &segData{fileSize: part.FileSize, total: part.Total, name: part.Name}
 	if part.Begin >= 1 && part.End >= part.Begin {

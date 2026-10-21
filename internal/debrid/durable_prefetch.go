@@ -3,6 +3,7 @@ package debrid
 import (
 	"context"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 // DurablePrefetch also persists memory hits and verifies disk presence. Ordinary
@@ -10,9 +11,7 @@ import (
 // buffer or a failed cache write a completed preload.
 func (e *Engine) DurablePrefetch(ctx context.Context, id string, payload []byte, off, n int64) error {
 	if !IsPayload(payload) {
-		if inner, ok := e.inner.(interface {
-			DurablePrefetch(context.Context, string, []byte, int64, int64) error
-		}); ok {
+		if inner, ok := e.inner.(core.DurablePrefetcher); ok {
 			return inner.DurablePrefetch(ctx, id, payload, off, n)
 		}
 		return errors.New("debrid: durable prefetch unsupported by inner engine")

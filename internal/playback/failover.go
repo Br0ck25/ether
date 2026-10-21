@@ -736,7 +736,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 
 	newInfo := g.infoSnapshot()
 	if hasHLS {
-		if position, ok := hls.(interface{ RequestedPosition() time.Duration }); ok && fo.followPlayer {
+		if position, ok := hls.(core.PlaybackPosition); ok && fo.followPlayer {
 			// Read only now: the player may have sought while candidates
 			// were being opened.
 			requested := position.RequestedPosition()

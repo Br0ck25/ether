@@ -327,9 +327,7 @@ func (s *Server) hubContext(pr *Request, section int) core.HubContext {
 // recommendHome asks for Home rows, with the request context when the
 // recommender adapts to it.
 func (s *Server) recommendHome(ctx context.Context, pr *Request, hc core.HubContext, count int) ([]core.Hub, error) {
-	if c, ok := s.d.Recommender.(interface {
-		HomeCandidatesFor(context.Context, *core.User, core.HubContext, int) ([]core.Hub, error)
-	}); ok {
+	if c, ok := s.d.Recommender.(core.HomeCandidateSource); ok {
 		return c.HomeCandidatesFor(ctx, pr.User, hc, count)
 	}
 	if cr, ok := s.d.Recommender.(core.ContextualRecommender); ok {
@@ -340,9 +338,7 @@ func (s *Server) recommendHome(ctx context.Context, pr *Request, hc core.HubCont
 
 // recommendSection asks for a library section's rows.
 func (s *Server) recommendSection(ctx context.Context, pr *Request, t core.MediaType, hc core.HubContext, count int) ([]core.Hub, error) {
-	if c, ok := s.d.Recommender.(interface {
-		SectionCandidatesFor(context.Context, *core.User, core.MediaType, core.HubContext, int) ([]core.Hub, error)
-	}); ok {
+	if c, ok := s.d.Recommender.(core.SectionCandidateSource); ok {
 		return c.SectionCandidatesFor(ctx, pr.User, t, hc, count)
 	}
 	if cr, ok := s.d.Recommender.(core.ContextualRecommender); ok {

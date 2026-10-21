@@ -678,15 +678,17 @@ func TestDASHCollectPublishesAfterBoundedPass(t *testing.T) {
 		}
 	}
 	s := &Session{
-		proto:   core.ProtocolDASH,
-		m:       &Manager{opts: options{}},
-		dir:     dir,
-		segDur:  5 * time.Second,
-		total:   40,
-		log:     testLogger(t),
-		done:    []map[int]bool{{}, {}},
-		changed: make(chan struct{}),
-		dash:    newDASHState([]dashRep{{ID: 0, Kind: "video"}, {ID: 1, Kind: "audio"}}, nil, "bounded"),
+		proto:  core.ProtocolDASH,
+		m:      &Manager{opts: options{}},
+		dir:    dir,
+		segDur: 5 * time.Second,
+		total:  40,
+		log:    testLogger(t),
+		sessionDelivery: sessionDelivery{
+			done:    []map[int]bool{{}, {}},
+			changed: make(chan struct{}),
+			dash:    newDASHState([]dashRep{{ID: 0, Kind: "video"}, {ID: 1, Kind: "audio"}}, nil, "bounded"),
+		},
 	}
 	proc := &fakeProc{done: make(chan struct{})}
 	close(proc.done) // Err() == nil: a clean EOF exit for the final pass

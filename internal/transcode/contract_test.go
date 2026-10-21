@@ -274,7 +274,12 @@ func TestSessionCheckSwap(t *testing.T) {
 	estimated := mustParse(t, "mp4_h264_aac.json")
 	estimated.Estimated = true
 	c, _ := contractOf(hdr, copyMKV())
-	s := &Session{m: &Manager{feat: testFeatures()}, contract: c}
+	s := &Session{
+		m: &Manager{feat: testFeatures()},
+		sessionInput: sessionInput{
+			contract: c,
+		},
+	}
 	if err := s.CheckSwap(estimated); !errors.Is(err, ErrIncompatibleSwap) {
 		t.Fatalf("CheckSwap = %v", err)
 	}
@@ -282,7 +287,9 @@ func TestSessionCheckSwap(t *testing.T) {
 	if err := s.SwapInput(t.Context(), "http://x/y", estimated, 0); !errors.Is(err, ErrIncompatibleSwap) {
 		t.Fatalf("SwapInput = %v", err)
 	}
-	if err := (&Session{m: s.m}).CheckSwap(estimated); err != nil {
+	if err := (&Session{
+		m: s.m,
+	}).CheckSwap(estimated); err != nil {
 		t.Fatalf("no-contract session: %v", err)
 	}
 }

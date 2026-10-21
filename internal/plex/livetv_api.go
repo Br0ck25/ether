@@ -98,9 +98,7 @@ func (s *Server) registerLiveTVRoutes(r chi.Router) {
 				return
 			}
 			pr := FromContext(r.Context())
-			if p, ok := s.d.AccessPolicy.(interface {
-				CanPlay(*core.User, bool, time.Time) bool
-			}); ok && !p.CanPlay(pr.User, pr.Remote, s.now()) {
+			if p, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !p.CanPlay(pr.User, pr.Remote, s.now()) {
 				writeHTTPError(w, 403)
 				return
 			}
@@ -499,9 +497,7 @@ func (s *Server) handleLiveTVPlayback(w http.ResponseWriter, r *http.Request) bo
 		return true
 	}
 	pr := FromContext(r.Context())
-	if p, ok := s.d.AccessPolicy.(interface {
-		CanPlay(*core.User, bool, time.Time) bool
-	}); ok && !p.CanPlay(pr.User, pr.Remote, s.now()) {
+	if p, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !p.CanPlay(pr.User, pr.Remote, s.now()) {
 		writeHTTPError(w, 403)
 		return true
 	}

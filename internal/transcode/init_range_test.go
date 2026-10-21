@@ -30,8 +30,21 @@ func TestInitRangeWaitsForActiveEncoder(t *testing.T) {
 	for _, format := range []string{ContainerMatroska, ContainerFMP4, "dash-video", "dash-audio"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead} {
 			t.Run(format+"/"+method, func(t *testing.T) {
-				s := &Session{m: &Manager{opts: options{segmentTimeout: time.Second}}, dir: t.TempDir(), container: format,
-					done: []map[int]bool{{}, {}}, cur: &run{track: 0}, changed: make(chan struct{}), wantTrack: 0}
+				s := &Session{
+					m:         &Manager{opts: options{segmentTimeout: time.Second}},
+					dir:       t.TempDir(),
+					container: format,
+					sessionEncoding: sessionEncoding{
+						cur: &run{track: 0},
+					},
+					sessionDelivery: sessionDelivery{
+						done:    []map[int]bool{{}, {}},
+						changed: make(chan struct{}),
+					},
+					sessionAdaptation: sessionAdaptation{
+						wantTrack: 0,
+					},
+				}
 				track := 0
 				if format == "dash-video" || format == "dash-audio" {
 					s.proto = core.ProtocolDASH
@@ -93,8 +106,17 @@ func TestInitRangeWaitsForActiveEncoder(t *testing.T) {
 }
 
 func TestInitRangeDoesNotStartInactiveRendition(t *testing.T) {
-	s := &Session{m: &Manager{opts: options{segmentTimeout: time.Second}}, container: ContainerFMP4,
-		done: []map[int]bool{{}, {}}, cur: &run{track: 0}, changed: make(chan struct{})}
+	s := &Session{
+		m:         &Manager{opts: options{segmentTimeout: time.Second}},
+		container: ContainerFMP4,
+		sessionEncoding: sessionEncoding{
+			cur: &run{track: 0},
+		},
+		sessionDelivery: sessionDelivery{
+			done:    []map[int]bool{{}, {}},
+			changed: make(chan struct{}),
+		},
+	}
 	req := httptest.NewRequest(http.MethodGet, "/header", nil)
 	req.Header.Set("Range", "bytes=0-")
 	rec := httptest.NewRecorder()
