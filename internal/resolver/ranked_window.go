@@ -15,7 +15,9 @@ import (
 // the lead is still being checked, after rankedSourceGrace when the two are
 // equivalent under the owner's existing quality and score policy.
 // A failed lead hands leadership to the next candidate, whose own grace
-// starts when its check started.
+// starts when its check started. A lead still unanswered after its grace
+// stops holding a window slot for one equivalent backup: a slow-failing
+// lead must not delay the only checks that could overtake it.
 func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Trace) (int, []byte, error) {
 	ctx, cancelBudget := context.WithTimeout(ctx, validationBudget)
 	defer cancelBudget()
@@ -65,6 +67,11 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 			results <- v
 		}()
 	}
+	// stalled reports whether the lead is still checking past its grace,
+	// so that a healthy equivalent backup would already be allowed to win.
+	stalled := func(lead int) bool {
+		return lead < next && done[lead] == nil && time.Since(startedAt[lead]) >= rankedSourceGrace
+	}
 	// fill keeps width checks running, but a verified lead runs alone:
 	// reusing a known working release must not start speculative downloads.
 	fill := func(lead int) {
@@ -75,8 +82,13 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 				return
 			}
 		}
-		for inflight < width && next < limit {
+		for next < limit {
 			if next > lead && lead < limit && cands[lead].verified && done[lead] == nil {
+				return
+			}
+			// A stalled lead's slot goes to the next ranked candidate only
+			// when that candidate could overtake it (equivalentHedge).
+			if inflight >= width && !(inflight == width && stalled(lead) && equivalentHedge(cands[lead], cands[next], margin)) {
 				return
 			}
 			launch()
@@ -169,6 +181,13 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 				if left := rankedSourceGrace - age; wait < 0 || left < wait {
 					wait = left
 				}
+			}
+		}
+		// Wake when the lead's grace ends if an equivalent backup could then
+		// take its slot.
+		if lead < next && done[lead] == nil && next < limit && inflight == width && equivalentHedge(cands[lead], cands[next], margin) {
+			if left := rankedSourceGrace - age; left > 0 && (wait < 0 || left < wait) {
+				wait = left
 			}
 		}
 		var tick <-chan time.Time
