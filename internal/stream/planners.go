@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"path"
 	"sort"
@@ -384,20 +385,37 @@ func (b *builder) shouldProbe(cands []candidate) bool {
 	return unknown > best
 }
 
+// maxProbeRounds bounds identification past MaxProbes: when PAR2 or the
+// archive's own volume numbers prove the leading set has volumes the first
+// probes did not find, at most this many times MaxProbes heads are read.
+const maxProbeRounds = 4
+
+// errUnidentifiedVolumes reports a leading archive set with volumes that
+// files left unprobed (the probe budget) or unreadable (a transient fetch
+// error) may hold. It is neither a rejection nor a missing article: nothing
+// proves those volumes absent.
+var errUnidentifiedVolumes = errors.New("stream: archive volumes not identified")
+
 // unknownFiles lists the unidentified files, largest first, at most
 // MaxProbes of them.
 func (b *builder) unknownFiles() []*postedFile {
+	return b.unknownFilesExcept(nil, b.e.opts.MaxProbes)
+}
+
+// unknownFilesExcept lists unidentified files not in skip, largest first,
+// at most limit of them.
+func (b *builder) unknownFilesExcept(skip map[*postedFile]bool, limit int) []*postedFile {
 	b.rel.infoMu.RLock()
 	defer b.rel.infoMu.RUnlock()
 	var unknown []*postedFile
 	for _, pf := range b.rel.files {
-		if pf.file.Info.Kind == nzb.KindUnknown {
+		if pf.file.Info.Kind == nzb.KindUnknown && !skip[pf] {
 			unknown = append(unknown, pf)
 		}
 	}
 	sort.SliceStable(unknown, func(i, j int) bool { return unknown[i].file.Bytes() > unknown[j].file.Bytes() })
-	if len(unknown) > b.e.opts.MaxProbes {
-		unknown = unknown[:b.e.opts.MaxProbes]
+	if len(unknown) > limit {
+		unknown = unknown[:max(limit, 0)]
 	}
 	return unknown
 }
@@ -416,8 +434,7 @@ func (b *builder) identifyObfuscated(ctx context.Context) error {
 	}
 	idx := b.rel.par2IndexFile()
 	if idx == nil {
-		_, err := b.probeObfuscated(ctx, unknown, nil)
-		return err
+		return b.probeAll(ctx, unknown, nil)
 	}
 	wave := unknown
 	if len(unknown) > 1 && unknown[0].file.Bytes() >= 2*unknown[1].file.Bytes() {
@@ -434,7 +451,7 @@ func (b *builder) identifyObfuscated(ctx context.Context) error {
 		return ctx.Err()
 	}
 	if len(wave) < len(unknown) {
-		named, err := b.probeObfuscated(ctx, wave, set)
+		named, _, err := b.probeObfuscated(ctx, wave, set)
 		if err != nil {
 			return err
 		}
@@ -446,16 +463,98 @@ func (b *builder) identifyObfuscated(ctx context.Context) error {
 			return nil
 		}
 	}
-	_, err := b.probeObfuscated(ctx, unknown, set)
-	return err
+	return b.probeAll(ctx, unknown, set)
+}
+
+// probeAll probes the unknown files, then once more with the rest of the
+// unidentified files (up to maxProbeRounds*MaxProbes in total) when, with
+// PAR2 loaded, the leading archive set is short of volumes no probed file
+// turned out to be. Re-probing the first files reads their heads from the caches and
+// keeps fallback volume numbering consistent across the whole list. A
+// leading set still short of volumes that unprobed or unreadable files may
+// hold is reported as errUnidentifiedVolumes, never as missing articles.
+func (b *builder) probeAll(ctx context.Context, unknown []*postedFile, set *par2.Set) error {
+	_, unreadable, err := b.probeObfuscated(ctx, unknown, set)
+	if err != nil {
+		return err
+	}
+	if set == nil {
+		set = b.rel.par2Ready() // an obfuscated index found among the heads
+	}
+	probed := make(map[*postedFile]bool, len(unknown))
+	for _, pf := range unknown {
+		probed[pf] = true
+	}
+	if _, short := b.leadingSetShort(set); short && set != nil {
+		if more := b.unknownFilesExcept(probed, maxProbeRounds*b.e.opts.MaxProbes-len(unknown)); len(more) > 0 {
+			unknown = append(append([]*postedFile(nil), unknown...), more...)
+			for _, pf := range more {
+				probed[pf] = true
+			}
+			if _, unreadable, err = b.probeObfuscated(ctx, unknown, set); err != nil {
+				return err
+			}
+		}
+	}
+	lead, short := b.leadingSetShort(set)
+	if !short {
+		return nil
+	}
+	unprobed := len(b.unknownFilesExcept(probed, len(b.rel.files)))
+	stillUnknown := 0
+	b.rel.infoMu.RLock()
+	for pf := range unreadable {
+		if pf.file.Info.Kind == nzb.KindUnknown {
+			stillUnknown++
+		}
+	}
+	b.rel.infoMu.RUnlock()
+	if unprobed == 0 && stillUnknown == 0 {
+		return nil // every file was read: planning reports the gaps as missing
+	}
+	return fmt.Errorf("%w: %s set %q is short of volumes; %d files beyond the probe budget, %d unreadable",
+		errUnidentifiedVolumes, lead.kind, lead.set.Name, unprobed, stillUnknown)
+}
+
+// leadingSetShort reports whether the set planning would try first has
+// volumes still unaccounted for: gaps in its volume numbers, or volumes
+// PAR2 names that no posted file carries.
+func (b *builder) leadingSetShort(set *par2.Set) (candidate, bool) {
+	cands := b.candidates(b.rel.files)
+	if len(cands) == 0 || cands[0].set == nil {
+		return candidate{}, false
+	}
+	lead := cands[0]
+	if len(lead.set.Missing) > 0 {
+		return lead, true
+	}
+	if set == nil {
+		return lead, false
+	}
+	posted := map[string]bool{}
+	b.rel.infoMu.RLock()
+	for _, pf := range b.rel.files {
+		posted[pf.file.Name] = true
+	}
+	b.rel.infoMu.RUnlock()
+	for _, f := range set.Files {
+		name := f.BaseName()
+		if posted[name] {
+			continue
+		}
+		if info := nzb.Classify(name); info.Kind == lead.kind && info.SetName == lead.set.Name {
+			return lead, true
+		}
+	}
+	return lead, false
 }
 
 // probeObfuscated fetches the first article of the given unidentified files
 // and re-classifies them: from the PAR2 description their head matches
 // (set may be nil; a PAR2 index found among the heads is used too), else
 // from the yEnc name or the content's magic bytes. It returns the files
-// named from PAR2.
-func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, set *par2.Set) (map[*postedFile]bool, error) {
+// named from PAR2 and those whose head failed other than as missing.
+func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, set *par2.Set) (map[*postedFile]bool, map[*postedFile]bool, error) {
 	type probe struct {
 		seg *segData
 		err error
@@ -467,7 +566,13 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 		return nil // one dead file must not stop the others
 	})
 	if ctx.Err() != nil {
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
+	}
+	unreadable := map[*postedFile]bool{}
+	for i, pr := range probes {
+		if pr.err != nil && !isMissing(pr.err) {
+			unreadable[unknown[i]] = true
+		}
 	}
 	if set == nil {
 		// An obfuscated PAR2 index among the heads: the smallest readable
@@ -539,7 +644,7 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 		}
 	}
 	if len(rars) == 0 {
-		return named, nil
+		return named, unreadable, nil
 	}
 	allNumbered := true
 	for _, r := range rars {
@@ -569,7 +674,7 @@ func (b *builder) probeObfuscated(ctx context.Context, unknown []*postedFile, se
 			r.pf.file.Info = nzb.FileInfo{Kind: nzb.KindRAR, Ext: "rar", Volume: vol, SetName: "\x00obfuscated-rar", NewStyle: true}
 		})
 	}
-	return named, nil
+	return named, unreadable, nil
 }
 
 // looksLikeVideo recognises common container signatures.
