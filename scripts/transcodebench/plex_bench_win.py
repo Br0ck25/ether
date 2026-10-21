@@ -117,6 +117,7 @@ WIN32_SIGNATURES = {
     "GetProcessTimes": ("BOOL", ["HANDLE", "LPVOID", "LPVOID", "LPVOID", "LPVOID"]),
     "GetProcessMemoryInfo": ("BOOL", ["HANDLE", "LPVOID", "DWORD"]),
     "SetInformationJobObject": ("BOOL", ["HANDLE", "INT", "LPVOID", "DWORD"]),
+    "QueryInformationJobObject": ("BOOL", ["HANDLE", "INT", "LPVOID", "DWORD", "LPDWORD"]),
     "AssignProcessToJobObject": ("BOOL", ["HANDLE", "HANDLE"]),
     "ResumeThread": ("DWORD", ["HANDLE"]),
     "WaitForSingleObject": ("DWORD", ["HANDLE", "DWORD"]),
@@ -172,6 +173,97 @@ def configure_win32(kernel32=None, psapi=None, ntdll=None):
 
 def _kernel32():
     return configure_win32()
+
+
+JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1  # JobObjectBasicAccountingInformation
+JOB_CPU_SCOPE = ("PMS owned job tree including exited children; cumulative "
+                 "Job Object accounting since PMS assignment to the job, "
+                 "wave delta covers setup, delivery, and session cleanup "
+                 "inside the wave (not output verification or PMS stop)")
+
+
+class JOBOBJECT_BASIC_ACCOUNTING_INFORMATION(ctypes.Structure):
+    """Fixed-width JOBOBJECT_BASIC_ACCOUNTING_INFORMATION (48 bytes on Win64).
+
+    LARGE_INTEGER counters use c_int64 and DWORD counters c_uint32 so the
+    layout is 48 bytes on any host, not just where c_ulong is 4 bytes.
+    Times are 100ns intervals, cumulative for every process ever assigned
+    to the job, including processes that have already exited.
+    """
+    _fields_ = [("TotalUserTime", ctypes.c_int64),
+                ("TotalKernelTime", ctypes.c_int64),
+                ("ThisPeriodTotalUserTime", ctypes.c_int64),
+                ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+                ("TotalPageFaultCount", ctypes.c_uint32),
+                ("TotalProcesses", ctypes.c_uint32),
+                ("ActiveProcesses", ctypes.c_uint32),
+                ("TotalTerminatedProcesses", ctypes.c_uint32)]
+
+
+def _job_accounting_unavailable(reason: str) -> dict:
+    return {"available": False, "reason": reason, "scope": JOB_CPU_SCOPE,
+            "user_cpu_s": None, "kernel_cpu_s": None, "total_cpu_s": None,
+            "total_processes": None, "active_processes": None,
+            "total_terminated_processes": None}
+
+
+def query_job_accounting(job, kernel32=None) -> dict:
+    """Cumulative Job Object CPU accounting for a borrowed job handle.
+
+    Returns user/kernel/total CPU seconds plus total (ever assigned,
+    including exited) and active process counts. On any failure every
+    numeric field is None with ``available=False`` and a reason; zeros are
+    never fabricated. The handle is borrowed: it is never closed here, so
+    no handle/PID is leaked or released early.
+    Peak committed memory is deliberately omitted: no queried field here
+    has verified commit (not RSS) semantics for this use.
+    """
+    if not job:
+        return _job_accounting_unavailable("no job handle")
+    try:
+        k32 = kernel32 if kernel32 is not None else _kernel32()
+        info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION()
+        ret_len = ctypes.c_ulong(0)
+        ok = k32.QueryInformationJobObject(
+            job, JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS,
+            ctypes.byref(info), ctypes.sizeof(info), ctypes.byref(ret_len))
+        if not ok:
+            return _job_accounting_unavailable(
+                f"QueryInformationJobObject failed (err {_last_error()})")
+    except Exception as exc:  # noqa: BLE001 - reported, never fabricated
+        return _job_accounting_unavailable(f"QueryInformationJobObject unavailable: {exc}")
+    user_s = info.TotalUserTime / 1e7
+    kernel_s = info.TotalKernelTime / 1e7
+    return {"available": True, "reason": None, "scope": JOB_CPU_SCOPE,
+            "user_cpu_s": round(user_s, 6), "kernel_cpu_s": round(kernel_s, 6),
+            "total_cpu_s": round(user_s + kernel_s, 6),
+            "total_processes": int(info.TotalProcesses),
+            "active_processes": int(info.ActiveProcesses),
+            "total_terminated_processes": int(info.TotalTerminatedProcesses)}
+
+
+def compute_job_delta(start, end) -> dict:
+    """Wave Job Object CPU delta; null (never negative/zero-faked) if invalid."""
+    unavailable = {"job_cpu_delta_s": None, "job_user_cpu_delta_s": None,
+                   "job_kernel_cpu_delta_s": None, "job_cpu_sampling": "unavailable",
+                   "job_cpu_sampling_reason": None, "job_cpu_scope": JOB_CPU_SCOPE}
+    for label, snap in (("start", start), ("end", end)):
+        if not snap or snap.get("available") is not True:
+            reason = (snap or {}).get("reason") or "missing accounting snapshot"
+            unavailable["job_cpu_sampling_reason"] = f"{label} job accounting unavailable: {reason}"
+            return unavailable
+        if snap.get("total_cpu_s") is None:
+            unavailable["job_cpu_sampling_reason"] = f"{label} job accounting has no CPU total"
+            return unavailable
+    total = end["total_cpu_s"] - start["total_cpu_s"]
+    user = end["user_cpu_s"] - start["user_cpu_s"]
+    kernel = end["kernel_cpu_s"] - start["kernel_cpu_s"]
+    if total < 0 or user < 0 or kernel < 0:
+        unavailable["job_cpu_sampling_reason"] = "negative job CPU delta (counters reset or job recreated)"
+        return unavailable
+    return {"job_cpu_delta_s": round(total, 3), "job_user_cpu_delta_s": round(user, 3),
+            "job_kernel_cpu_delta_s": round(kernel, 3), "job_cpu_sampling": "available",
+            "job_cpu_sampling_reason": None, "job_cpu_scope": JOB_CPU_SCOPE}
 
 
 def _snapshot():
@@ -391,6 +483,20 @@ def compute_tree_delta(start, end) -> dict:
             or start.get("sampling_available") is False or end.get("sampling_available") is False
             or start.get("cpu_seconds") is None or end.get("cpu_seconds") is None):
         return unavailable
+    # Snapshot sums only cover PIDs alive at each sample: when the PID sets
+    # differ, exited children drop their counters and new children add
+    # unrelated ones, so even a positive delta is incomplete/unreliable.
+    start_pids = {p.get("pid") for p in start.get("processes") or []}
+    end_pids = {p.get("pid") for p in end.get("processes") or []}
+    if start_pids != end_pids:
+        marked = dict(unavailable)
+        marked["cpu_sampling_reason"] = (
+            "snapshot delta incomplete/unreliable: PID identities differ "
+            f"between samples (start={sorted(p for p in start_pids if p is not None)}, "
+            f"end={sorted(p for p in end_pids if p is not None)}); exited "
+            "children's CPU is missing - use Job Object accounting instead")
+        marked["snapshot_delta_reliable"] = False
+        return marked
     cpu = end["cpu_seconds"] - start["cpu_seconds"]
     if cpu < 0:
         return unavailable
@@ -404,7 +510,8 @@ def compute_tree_delta(start, end) -> dict:
         io_delta, io_sampling = {"read_bytes": read_b, "write_bytes": write_b}, "available"
     return {"tree_cpu_delta_s": round(cpu, 3), "tree_io_delta": io_delta,
             "io_sampling": io_sampling,
-            "cpu_sampling": "available", "cpu_sampling_reason": None}
+            "cpu_sampling": "available", "cpu_sampling_reason": None,
+            "snapshot_delta_reliable": True}
 
 
 def verify_output_win(cfg, out_dir: Path, sessions: list) -> dict:
@@ -829,8 +936,15 @@ def create_job_object():
     return job
 
 
-def launch_suspended(exe: Path, cwd: Path, env: dict) -> WinProcess:
-    """CreateProcessW with CREATE_SUSPENDED so no child can escape the job."""
+def launch_suspended(exe: Path, cwd: Path, env: dict, args=None) -> WinProcess:
+    """CreateProcessW with CREATE_SUSPENDED so no child can escape the job.
+
+    ``args`` (default None) is an optional list of extra argument strings
+    appended after the executable, quoted with subprocess.list2cmdline so
+    callers reusing the private job (e.g. an Ether harness root process)
+    get safe quoting. With args=None the historical command line
+    (``"<exe>"`` only) is preserved exactly.
+    """
     k32 = _kernel32()
 
     class STARTUPINFOW(ctypes.Structure):
@@ -851,7 +965,9 @@ def launch_suspended(exe: Path, cwd: Path, env: dict) -> WinProcess:
     startup = STARTUPINFOW()
     startup.cb = ctypes.sizeof(STARTUPINFOW)
     proc_info = PROCESS_INFORMATION()
-    command = ctypes.create_unicode_buffer(f'"{exe}"')
+    cmdline = (f'"{exe}"' if args is None
+               else subprocess.list2cmdline([str(exe)] + [str(a) for a in args]))
+    command = ctypes.create_unicode_buffer(cmdline)
     env_block = ctypes.create_unicode_buffer(build_env_block(env))
     created = k32.CreateProcessW(None, command, None, None, False,
                                  LAUNCH_FLAGS,
@@ -905,6 +1021,10 @@ class PmsProcessWin:
                     self.pid = None
             raise
         return self.pid
+
+    def job_accounting(self) -> dict:
+        """Cumulative accounting for this PMS instance's private job."""
+        return query_job_accounting(self.job)
 
     def wait_identity(self):
         deadline = time.monotonic() + self.cfg.startup_timeout_s
@@ -1044,12 +1164,16 @@ def main(argv=None):
         waves = []
         for wave in range(cfg.repeats):
             wave_start = time.monotonic()  # setup-inclusive wave wall
+            job_start = query_job_accounting(pms.job if pms else None)
             wave_sessions = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.concurrency) as ex:
                 futs = [ex.submit(run_session_win, cfg, root_pid, out_dir,
                                   wave * cfg.concurrency + i) for i in range(cfg.concurrency)]
                 for fut in futs:
                     wave_sessions.append(fut.result())
+            # After wave completion, BEFORE any verification: cumulative
+            # job counters still include encoders that already exited.
+            job_end = query_job_accounting(pms.job if pms else None)
             wall_s = round(time.monotonic() - wave_start, 3)
             # Measurement wall: setup-inclusive, ends at last segment
             # delivery (max measurement_end), excluding poller cleanup.
@@ -1060,7 +1184,10 @@ def main(argv=None):
             measurement_wall_s = delivery_wall_s
             cleanup_overhead_s = round(max(0.0, wall_s - delivery_wall_s), 3)
             media_total = round(sum(s["actual_media_s"] for s in wave_sessions), 3)
-            waves.append({"wave": wave, "wall_s": wall_s,
+            waves.append({"wave": wave, "job_accounting_start": job_start,
+                          "job_accounting_end": job_end,
+                          **compute_job_delta(job_start, job_end),
+                          "wall_s": wall_s,
                           "delivery_wall_s": delivery_wall_s,
                           "measurement_wall_s": measurement_wall_s,
                           "cleanup_s": cleanup_overhead_s,

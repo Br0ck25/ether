@@ -398,6 +398,163 @@ class TestFakeServerSessions(unittest.TestCase):
                          "HANDLE")
 
 
+class TestJobAccounting(unittest.TestCase):
+    def _fake_kernel(self, *, ok=True, user100ns=0, kernel100ns=0,
+                     total=0, active=0, terminated=0):
+        import ctypes
+        from unittest import mock
+        fake = mock.MagicMock()
+
+        def query(job, cls, ptr, length, ret_ptr):
+            self.assertEqual(cls, 1)
+            self.assertEqual(length, 48)
+            if not ok:
+                return 0
+            info = ctypes.cast(ptr, ctypes.POINTER(
+                win.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)).contents
+            info.TotalUserTime = user100ns
+            info.TotalKernelTime = kernel100ns
+            info.TotalProcesses = total
+            info.ActiveProcesses = active
+            info.TotalTerminatedProcesses = terminated
+            return 1
+
+        fake.QueryInformationJobObject.side_effect = query
+        return fake
+
+    def test_struct_is_48_bytes_fixed_width(self):
+        import ctypes
+        s = win.JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+        self.assertEqual(ctypes.sizeof(s), 48)
+        offsets = {n: getattr(s, n).offset for n, _ in s._fields_}
+        self.assertEqual(offsets, {"TotalUserTime": 0, "TotalKernelTime": 8,
+                                   "ThisPeriodTotalUserTime": 16,
+                                   "ThisPeriodTotalKernelTime": 24,
+                                   "TotalPageFaultCount": 32, "TotalProcesses": 36,
+                                   "ActiveProcesses": 40, "TotalTerminatedProcesses": 44})
+        for name in ("TotalUserTime", "TotalKernelTime"):
+            self.assertIs(s._fields_[["TotalUserTime", "TotalKernelTime",
+                                      "ThisPeriodTotalUserTime",
+                                      "ThisPeriodTotalKernelTime",
+                                      "TotalPageFaultCount", "TotalProcesses",
+                                      "ActiveProcesses",
+                                      "TotalTerminatedProcesses"].index(name)][1],
+                          ctypes.c_int64)
+
+    def test_query_signature_pointer_safe(self):
+        import ctypes
+        restype, argtypes = win.WIN32_SIGNATURES["QueryInformationJobObject"]
+        self.assertEqual((restype, argtypes),
+                         ("BOOL", ["HANDLE", "INT", "LPVOID", "DWORD", "LPDWORD"]))
+        from unittest import mock
+        kernel, psapi = mock.MagicMock(), mock.MagicMock()
+        funcs = {}
+        for name in win.WIN32_SIGNATURES:
+            func = mock.MagicMock()
+            funcs[name] = func
+            setattr(psapi if name == "GetProcessMemoryInfo" else kernel, name, func)
+        win.configure_win32(kernel32=kernel, psapi=psapi)
+        self.assertIs(funcs["QueryInformationJobObject"].argtypes[0], ctypes.c_void_p)
+        self.assertIs(funcs["QueryInformationJobObject"].restype, ctypes.c_int)
+
+    def test_query_failure_is_null_with_reason_no_fabricated_zeros(self):
+        out = win.query_job_accounting(1234, kernel32=self._fake_kernel(ok=False))
+        self.assertFalse(out["available"])
+        self.assertIn("QueryInformationJobObject failed", out["reason"])
+        for key in ("user_cpu_s", "kernel_cpu_s", "total_cpu_s",
+                    "total_processes", "active_processes"):
+            self.assertIsNone(out[key], key)
+        self.assertIsNone(win.query_job_accounting(None)["total_cpu_s"])
+        self.assertFalse(win.query_job_accounting(None)["available"])
+
+    def test_query_counts_exited_children_cumulatively(self):
+        # TotalProcesses/terminated include encoders already exited; CPU
+        # counters remain cumulative even with zero active processes.
+        fake = self._fake_kernel(user100ns=25_000_000, kernel100ns=15_000_000,
+                                 total=7, active=1, terminated=6)
+        out = win.query_job_accounting(99, kernel32=fake)
+        self.assertTrue(out["available"])
+        self.assertEqual(out["user_cpu_s"], 2.5)
+        self.assertEqual(out["kernel_cpu_s"], 1.5)
+        self.assertEqual(out["total_cpu_s"], 4.0)
+        self.assertEqual(out["total_processes"], 7)
+        self.assertEqual(out["active_processes"], 1)
+        self.assertEqual(out["total_terminated_processes"], 6)
+        self.assertIn("exited children", out["scope"])
+        fake.CloseHandle.assert_not_called()  # borrowed handle, no leak/close
+
+    def test_job_delta_nonnegative_and_honest(self):
+        start = win.query_job_accounting(1, kernel32=self._fake_kernel(
+            user100ns=10_000_000, kernel100ns=10_000_000, total=2, active=2))
+        end = win.query_job_accounting(1, kernel32=self._fake_kernel(
+            user100ns=40_000_000, kernel100ns=20_000_000, total=5, active=1, terminated=3))
+        delta = win.compute_job_delta(start, end)
+        self.assertEqual(delta["job_cpu_delta_s"], 4.0)
+        self.assertEqual(delta["job_user_cpu_delta_s"], 3.0)
+        self.assertEqual(delta["job_cpu_sampling"], "available")
+        backwards = win.compute_job_delta(end, start)
+        self.assertIsNone(backwards["job_cpu_delta_s"])
+        self.assertEqual(backwards["job_cpu_sampling"], "unavailable")
+        failed = win.compute_job_delta(start, win.query_job_accounting(None))
+        self.assertIsNone(failed["job_cpu_delta_s"])
+
+    def test_snapshot_delta_unreliable_when_pid_identities_differ(self):
+        start = {"cpu_seconds": 1.0, "read_bytes": None, "write_bytes": None,
+                 "processes": [{"pid": 1}, {"pid": 2}], "sampling_available": True}
+        end = {"cpu_seconds": 63.0, "read_bytes": None, "write_bytes": None,
+               "processes": [{"pid": 1}], "sampling_available": True}
+        out = win.compute_tree_delta(start, end)  # positive yet bogus
+        self.assertIsNone(out["tree_cpu_delta_s"])
+        self.assertEqual(out["cpu_sampling"], "unavailable")
+        self.assertFalse(out["snapshot_delta_reliable"])
+        self.assertIn("incomplete/unreliable", out["cpu_sampling_reason"])
+
+    def test_launch_suspended_args_quoted_via_list2cmdline(self):
+        import ctypes, inspect, subprocess
+        from unittest import mock
+        self.assertIsNone(inspect.signature(win.launch_suspended).parameters["args"].default)
+        self.assertIn("list2cmdline", inspect.getsource(win.launch_suspended))
+
+        class PI(ctypes.Structure):
+            _fields_ = [("hProcess", ctypes.c_void_p), ("hThread", ctypes.c_void_p),
+                        ("dwProcessId", ctypes.c_ulong), ("dwThreadId", ctypes.c_ulong)]
+
+        captured = {}
+
+        def create(app, cmd, *rest):
+            captured["cmd"] = cmd.value if hasattr(cmd, "value") else str(cmd)
+            info = ctypes.cast(rest[-1], ctypes.POINTER(PI)).contents
+            info.hProcess, info.hThread, info.dwProcessId, info.dwThreadId = 11, 12, 42, 43
+            return 1
+
+        fake = mock.MagicMock()
+        fake.CreateProcessW.side_effect = create
+        with mock.patch.object(win, "_kernel32", return_value=fake):
+            proc = win.launch_suspended(Path(r"D:\lab\Plex Media Server.exe"),
+                                        Path(r"D:\lab"), {}, args=["--flag", "a b", 'x"y'])
+            self.assertEqual(proc.pid, 42)
+            win.launch_suspended(Path(r"D:\lab\Plex Media Server.exe"),
+                                 Path(r"D:\lab"), {})
+        self.assertEqual(captured["cmd"], '"D:\\lab\\Plex Media Server.exe"')
+        # Re-run quoted case and compare to list2cmdline exactly.
+        with mock.patch.object(win, "_kernel32", return_value=fake):
+            win.launch_suspended(Path(r"D:\lab\Plex Media Server.exe"),
+                                 Path(r"D:\lab"), {}, args=["--flag", "a b", 'x"y'])
+        expected = subprocess.list2cmdline(
+            [r"D:\lab\Plex Media Server.exe", "--flag", "a b", 'x"y'])
+        self.assertEqual(captured["cmd"], expected)
+        self.assertIn('"a b"', captured["cmd"])
+
+    def test_wave_queries_job_before_verification(self):
+        import inspect
+        src = inspect.getsource(win.main)
+        self.assertLess(src.index("job_start = query_job_accounting"),
+                        src.index("job_end = query_job_accounting"))
+        self.assertLess(src.index("job_end = query_job_accounting"),
+                        src.index("verify_output_win"))
+        self.assertIn('"job_accounting_start": job_start', src)
+
+
 class TestProcessTree(unittest.TestCase):
     def test_tree_includes_only_descendants(self):
         ppid = {10: 1, 11: 10, 12: 11, 13: 10, 99: 1}
