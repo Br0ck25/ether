@@ -9,8 +9,8 @@ performance leadership.
 ## Verdict
 
 Ether is the better fit for serving official Plex applications with one portable
-Go server. AIOStreams has broader Stremio aggregation and encrypted stored-archive
-support. Both have substantial native Usenet engines; neither can be declared
+Go server. AIOStreams has broader Stremio aggregation. Ether now also supports encrypted
+stored RAR4/RAR5/7z archives, with the limits described in [encrypted archives](encrypted-archives.md). Both have substantial native Usenet engines; neither can be declared
 universally faster or more reliable from architecture alone. AIOStreams also has
 its own applications and Jellyfin compatibility, so describing it as merely an
 addon wrapper would understate its scope. See its pinned [README][aio-readme].
@@ -24,7 +24,7 @@ addon wrapper would understate its scope. See its pinned [README][aio-readme].
 | Urgent playback | Reserved live capacity, bounded speculative depth, separate queued priorities | Priority classes with configurable background share | Ether favors foreground latency; AIO offers a fairness tradeoff |
 | Provider failure | Missing/corrupt/transport/auth distinction, backfill, single half-open probe | Provider health, retries/backoff and backup order | Ether has tested fault regressions here; AIO's tests were not run |
 | Decoded cache | Shared bounded hot LRU, persistent local/NAS cache, trusted-range metadata | Pinned arena, disk cache, shared fetches and negative misses | Neither memory model is universally superior; pressure and concurrent seeks matter |
-| Stored archives | Indexed RAR4/RAR5/7z/split ranges with checked offsets | Stored archive readers including supported AES paths | AIO has the encrypted-archive capability advantage |
+| Stored archives | Indexed RAR4/RAR5/7z/split ranges, including supported AES paths and encrypted headers | Stored archive readers including supported AES paths | Both support encrypted stored archives; compatibility and fault tests remain workload-specific |
 | Damaged sources | Bounded proven frame-payload concealment plus background alternate preparation | Hole policies and Matroska transformation | Different recovery policies; neither guarantees artifact-free playback |
 | Product integration | Official Plex clients and PMS-compatible session orchestration | Stremio aggregation, its own apps and Jellyfin support | Ether fits this repository's Plex goal; AIO covers other clients |
 
@@ -92,14 +92,16 @@ retention, and duplicate work need measurement together.
 
 Both engines map stored archive contents to byte ranges instead of extracting an
 entire movie first. Ether supports stored RAR4/RAR5, stored 7z, and split files;
-its [archive readers](../internal/archive) reject encrypted or compressed media
-members. It validates lazy volume assumptions and falls back to full inspection
+its [archive readers](../internal/archive) support password-protected stored
+members and reject unsupported encryption or compressed media. It validates lazy volume assumptions and falls back to full inspection
 when necessary. Checked offsets and indexed extent mapping address malformed
 layouts and large packs.
 
-AIOStreams has an explicit capability advantage for password-protected stored
-archives: its [RAR reader][aio-rar] and [7z parser][aio-7z] support applicable AES
-paths. That does not imply arbitrary compressed archives are seekable.
+Both engines now support applicable AES paths for password-protected stored
+archives, including encrypted headers. AIOStreams implements these in its
+[RAR reader][aio-rar] and [7z parser][aio-7z]; Ether adapts the original BSD Go
+implementations and adds bounded range decryption. This does not imply arbitrary
+compressed archives are seekable. See [scope and verification](encrypted-archives.md).
 
 Ether's [health checks](../internal/stream/health.go) combine archive validation,
 spread STAT samples, actual mid-file BODY header probes, and best-effort PAR2
@@ -130,7 +132,7 @@ making a reliability ranking.
 
 ## Remaining evidence and capability gaps
 
-This work does not establish “best in the world.” Ether still rejects encrypted
+This work does not establish “best in the world.” Ether still rejects unsupported legacy encryption and compressed
 media archives; the native Go decoder has not been directly benchmarked against
 AIOStreams' C++ decoder here; and some queued-priority races still cause repeated
 article transfers. The impaired-network report includes a deep-buffer 1 Mb/s

@@ -319,6 +319,7 @@ func TestEpisodeFiltering(t *testing.T) {
 		rel("good", "Boundary.Bay.S01E01.720p.HDTV.x264-CTU", 1500),
 	}}
 	idx.releases[3].Password = true
+	idx.releases[3].Protocol = core.ProtocolTorrent
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
 	title := &core.Title{
 		Key: core.EpisodeKey(1396, 1, 1), Type: core.TypeEpisode,

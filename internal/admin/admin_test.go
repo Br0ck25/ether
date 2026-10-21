@@ -768,10 +768,11 @@ func TestSetupRejectsRebindingHost(t *testing.T) {
 }
 
 func TestSharedCacheSectionEditsEffectivePolicy(t *testing.T) {
+	nasDir := t.TempDir()
 	s := newStore(t, func(c *config.Config) {
 		seededConfig(c)
 		c.Cache.Storage = "shared"
-		c.Cache.Dir = "/mnt/nas"
+		c.Cache.Dir = nasDir
 		p := c.Cache
 		p.Dir = ""
 		p.Storage = ""
@@ -784,7 +785,7 @@ func TestSharedCacheSectionEditsEffectivePolicy(t *testing.T) {
 		t.Fatalf("save: %d %s", rec.Code, rec.Body)
 	}
 	got := s.Get()
-	if got.SharedCache.RetentionDays != 21 || got.SharedCache.BudgetBytes != 100<<30 || got.SharedCache.Dir != "" || got.Cache.Dir != "/mnt/nas" {
+	if got.SharedCache.RetentionDays != 21 || got.SharedCache.BudgetBytes != 100<<30 || got.SharedCache.Dir != "" || got.Cache.Dir != nasDir {
 		t.Fatalf("bad shared policy: %+v", got.SharedCache)
 	}
 	rec = serve(h, req(http.MethodGet, "/ether/api/config/cache", ""))

@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -118,10 +119,21 @@ func buildArgs(s runSpec) []string {
 		// child otherwise shifts a zero-origin B-frame run to positive DTS.
 		args = append(args, "-muxdelay", "0", "-muxpreload", "0", "-hls_segment_options", "mpegts_copyts=1:avoid_negative_ts=disabled")
 	}
-	if s.RTXTimeline && s.Decision.Container == ContainerFMP4 && s.InitName != "" && !filepath.IsAbs(s.InitName) {
+	if runtime.GOOS == "windows" && s.Decision.Container == ContainerFMP4 && s.InitName != "" && !filepath.IsAbs(s.InitName) {
 		// Windows FFmpeg otherwise resolves this against the process's
 		// working directory, which is the session root even for lower rungs.
 		s.InitName = filepath.Join(s.Dir, s.InitName)
+	}
+	// x264 reorders two frames with its default B-frame pyramid. Interleave
+	// copied audio that far ahead so an HLS cut closes with audio reaching
+	// the video boundary. Otherwise restarting at that boundary drops the
+	// ~80ms of audio left in the next old fragment (at 24fps).
+	if s.Decision.Container == ContainerFMP4 && !s.Decision.VideoCopy && s.Decision.AudioCopy {
+		if v := s.Info.Video(); v != nil && v.FrameRate >= 1 && !v.VariableFrameRate {
+			if encoder, _ := videoEncoder(s.Decision.VideoCodec, s.Accel, s.Features); encoder == "libx264" {
+				args = append(args, "-audio_preload", strconv.FormatInt(int64(math.Ceil(2_000_000/v.FrameRate)), 10))
+			}
+		}
 	}
 	return append(args, hlsMuxArgs(s)...)
 }
@@ -623,7 +635,10 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	switch enc {
 	case "libx264":
-		crf := "21"
+		// Preserve fine detail at the bounded software thread budget. The
+		// natural-footage baseline validates CRF 18 at the same VBV cap;
+		// throughput improvements must not rely on lowering image quality.
+		crf := "18"
 		threads := strconv.Itoa(softwareThreadBudget(w, h, runtime.GOMAXPROCS(0)))
 		if s.Rate.Quality {
 			e = append(e, "-preset", xPreset, "-crf", crf, "-maxrate", maxr, "-bufsize", buf, "-profile:v", "high", "-threads", threads)

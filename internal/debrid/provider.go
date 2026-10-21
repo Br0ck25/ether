@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,17 +405,26 @@ func ChooseFile(files []File, target *core.ReleaseTarget) (File, error) {
 	if target == nil || target.Episode <= 0 {
 		return videos[0], nil
 	}
+	// Pass 1: explicit season + episode match on base name or full path.
 	for _, f := range videos {
-		info := releaseparse.Parse(path.Base(strings.ReplaceAll(f.Path, "\\", "/")))
-		if releaseparse.EpisodeMatches(info, target.Season, target.Episode) {
+		normPath := strings.ReplaceAll(f.Path, "\\", "/")
+		baseInfo := releaseparse.Parse(path.Base(normPath))
+		fullInfo := releaseparse.Parse(strings.ReplaceAll(normPath, "/", " "))
+		if len(baseInfo.Seasons) == 0 && len(fullInfo.Seasons) > 0 {
+			baseInfo.Seasons = fullInfo.Seasons
+		}
+		if releaseparse.EpisodeMatches(baseInfo, target.Season, target.Episode) ||
+			releaseparse.EpisodeMatches(fullInfo, target.Season, target.Episode) {
 			return f, nil
 		}
 	}
-	// Path components can carry the season ("Season 2/Episode 05.mkv").
-	for _, f := range videos {
-		info := releaseparse.Parse(strings.NewReplacer("/", " ", "\\", " ").Replace(f.Path))
-		if releaseparse.EpisodeMatches(info, target.Season, target.Episode) {
-			return f, nil
+	// Pass 2: classic pack numbering ("Season 2/05 - Title.mkv", "205 - Title.avi",
+	// or miniseries "Part 2 - Title.mkv") when no standard SxxExx matched.
+	if len(videos) > 1 {
+		for _, f := range videos {
+			if classicPackEpisodeMatches(f.Path, target.Season, target.Episode) {
+				return f, nil
+			}
 		}
 	}
 	// A single-episode torrent whose file name carries no episode number.
@@ -422,11 +432,66 @@ func ChooseFile(files []File, target *core.ReleaseTarget) (File, error) {
 	// in for the wanted one.
 	if len(videos) == 1 {
 		info := releaseparse.Parse(strings.NewReplacer("/", " ", "\\", " ").Replace(videos[0].Path))
-		if len(info.Episodes) == 0 {
+		if len(info.Episodes) == 0 && !namesOtherClassicEpisode(videos[0].Path, target.Season, target.Episode) {
 			return videos[0], nil
 		}
 	}
 	return File{}, fmt.Errorf("debrid: no file for S%02dE%02d in torrent: %w", target.Season, target.Episode, errNoVideo)
+}
+
+var (
+	rePartEpisode    = regexp.MustCompile(`(?i)\b(?:Part|Pt)\.?\s*(\d{1,2})\b`)
+	reLeadingEpisode = regexp.MustCompile(`^\s*(\d{2,3})(?:\s*[-._]\s*|\s+)`)
+)
+
+func classicPackEpisodeMatches(filePath string, wantSeason, wantEp int) bool {
+	normPath := strings.ReplaceAll(filePath, "\\", "/")
+	dirInfo := releaseparse.Parse(strings.ReplaceAll(path.Dir(normPath), "/", " "))
+	if len(dirInfo.Seasons) > 0 {
+		seasonOK := false
+		for _, s := range dirInfo.Seasons {
+			if s == wantSeason {
+				seasonOK = true
+			}
+		}
+		if !seasonOK {
+			return false
+		}
+	}
+	base := path.Base(normPath)
+	if wantSeason == 1 {
+		if m := rePartEpisode.FindStringSubmatch(base); m != nil {
+			if ep, err := strconv.Atoi(m[1]); err == nil && ep == wantEp {
+				return true
+			}
+		}
+	}
+	if m := reLeadingEpisode.FindStringSubmatch(base); m != nil {
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			return false
+		}
+		// Avoid mistaking 4-digit years or resolutions ("1080p") for episode numbers.
+		if n == wantEp && (len(dirInfo.Seasons) > 0 || wantSeason == 1) {
+			return true
+		}
+		if wantSeason > 0 && wantEp > 0 && wantEp < 100 && n == wantSeason*100+wantEp {
+			return true
+		}
+	}
+	return false
+}
+
+func namesOtherClassicEpisode(filePath string, wantSeason, wantEp int) bool {
+	base := path.Base(strings.ReplaceAll(filePath, "\\", "/"))
+	if wantSeason == 1 {
+		if m := rePartEpisode.FindStringSubmatch(base); m != nil {
+			if ep, err := strconv.Atoi(m[1]); err == nil && ep > 0 && ep != wantEp {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sameFile chooses the file a payload already names (link refresh after

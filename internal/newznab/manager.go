@@ -52,7 +52,7 @@ var _ core.Indexer = (*Manager)(nil)
 func NewManager(db *sql.DB, cfgs []config.Indexer, opts Options) *Manager {
 	m := &Manager{db: db, opts: opts, par: opts.MaxParallel}
 	if m.par <= 0 {
-		m.par = 4
+		m.par = 16
 	}
 	m.log = opts.Logger
 	if m.log == nil {
@@ -140,6 +140,68 @@ func (m *Manager) Remaining(ctx context.Context) ([]Remaining, error) {
 // and de-duplicates by normalised name + size.
 func (m *Manager) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
 	return m.SearchWith(ctx, req, nil)
+}
+
+// SearchRescue runs a second-pass rescue fan-out across all enabled indexers
+// when the primary Search results had no playable candidate.
+func (m *Manager) SearchRescue(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	return m.SearchRescueWith(ctx, req, nil)
+}
+
+// SearchRescueWith is SearchRescue with per-indexer early arrival callbacks.
+func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
+	clients := m.Clients()
+	type slot struct {
+		results []core.Release
+		err     error
+	}
+	slots := make([]slot, len(clients))
+	sem := make(chan struct{}, m.par)
+	var wg sync.WaitGroup
+	for i, cl := range clients {
+		if !cl.Config().Enabled {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, cl *Client) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				slots[i].err = ctx.Err()
+				return
+			}
+			res, err := cl.SearchRescue(ctx, req)
+			slots[i].results, slots[i].err = res, err
+			if arrived != nil && err == nil && len(res) > 0 {
+				arrived(res)
+			}
+		}(i, cl)
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	var merged []core.Release
+	for _, s := range slots {
+		for _, r := range s.results {
+			key := strings.ToLower(strings.TrimSpace(r.Name)) + "|" + fmt.Sprint(r.Size)
+			if r.Size == 0 {
+				key = strings.ToLower(strings.TrimSpace(r.Name))
+			}
+			if r.Protocol != core.ProtocolUsenet {
+				key = r.Protocol + "|" + key
+				if r.InfoHash != "" {
+					key = r.Protocol + "|" + r.InfoHash
+				}
+			}
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, r)
+		}
+	}
+	return merged, nil
 }
 
 // SearchWith is Search, also handing each indexer's results to arrived as

@@ -236,16 +236,65 @@ func andMatch(title, query string, limit int) bool {
 		query = query[:limit]
 	}
 	split := func(s string) []string {
-		return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+		s = strings.ToLower(s)
+		if out, _, err := transform.String(transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC), s); err == nil {
+			s = out
+		}
+		return strings.FieldsFunc(s, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 	}
+	titleTokens := split(title)
 	words := map[string]bool{}
-	for _, w := range split(title) {
+	for _, w := range titleTokens {
 		words[w] = true
 	}
-	for _, w := range split(query) {
-		if !words[w] {
-			return false
+	// Index collapsed runs of single-letter initialisms ("l a" <-> "la").
+	for i := 0; i < len(titleTokens); i++ {
+		if len(titleTokens[i]) == 1 && titleTokens[i][0] >= 'a' && titleTokens[i][0] <= 'z' {
+			j := i + 1
+			for j < len(titleTokens) && len(titleTokens[j]) == 1 && titleTokens[j][0] >= 'a' && titleTokens[j][0] <= 'z' {
+				j++
+			}
+			if j-i >= 2 {
+				words[strings.Join(titleTokens[i:j], "")] = true
+			}
+		} else if len(titleTokens[i]) >= 2 && len(titleTokens[i]) <= 5 {
+			// Also allow an initialism in the title ("la", "mash") to satisfy
+			// split single-letter tokens when query was sanitized from "L.A.".
 		}
+	}
+	qTokens := split(query)
+	for i := 0; i < len(qTokens); i++ {
+		w := qTokens[i]
+		if words[w] {
+			continue
+		}
+		// Single-letter initialism run in query ("l", "a") matched against
+		// joined token ("la") in title.
+		if len(w) == 1 && w[0] >= 'a' && w[0] <= 'z' {
+			j := i + 1
+			for j < len(qTokens) && len(qTokens[j]) == 1 && qTokens[j][0] >= 'a' && qTokens[j][0] <= 'z' {
+				j++
+			}
+			if j-i >= 2 && words[strings.Join(qTokens[i:j], "")] {
+				i = j - 1
+				continue
+			}
+		}
+		// S02E03 in query also matches S02.E03 ("s02" + "e03") or 2x03 ("2x03" / "02x03").
+		if len(w) == 6 && w[0] == 's' && w[3] == 'e' {
+			sPart, ePart := w[:3], w[3:]
+			if words[sPart] && words[ePart] {
+				continue
+			}
+			sNum, sErr := strconv.Atoi(w[1:3])
+			eNum, eErr := strconv.Atoi(w[4:6])
+			if sErr == nil && eErr == nil {
+				if words[fmt.Sprintf("%dx%02d", sNum, eNum)] || words[fmt.Sprintf("%02dx%02d", sNum, eNum)] {
+					continue
+				}
+			}
+		}
+		return false
 	}
 	return true
 }

@@ -765,31 +765,30 @@ func (s *Session) needsRestartLocked(n int) bool {
 	return n > r.next()+ahead
 }
 
-// rungDwellLocked is how much longer the current run must keep producing
-// its track before a request on another track may replace it; zero when
-// no switch is pending or the dwell has passed. Rungs share one encoder,
-// so a player that probes every rendition's opening segments would stop
-// the run on each probe and never let it get ahead. Waiting out the dwell
-// bounds that to one restart per dwell; a real quality switch still
-// retains the dwell for probes and recovery; progressing media downshifts
-// can bypass it using completed delivery evidence.
+// rungDwellLocked protects the sole encoder from rendition probes. Completed
+// delivery followed by the next media GET is playback progress, in either
+// direction. Holding an upshift for eight seconds after delivering two seconds
+// of video starves the player just as surely as holding a downshift.
 func (s *Session) rungDwellLocked(media bool, n int) time.Duration {
 	r := s.cur
 	if r == nil || r.finished || r.stopped || r.err != nil || r.track == s.wantTrack || s.m.opts.rungDwell <= 0 {
 		return 0
 	}
-	// Encoder production is not client buffer. Only a progressing media GET
-	// on a lower rung can bypass probe protection, after actual delivery.
-	// A slow completed delivery can justify downshifting after the first
-	// segment; otherwise require two sequential deliveries. Recovery retains
-	// the normal dwell. The client still chooses which rung to request.
-	if media && s.deliveredTrack == r.track && s.deliveredCount > 0 &&
-		n == s.deliveredSeg+1 {
-		current, next := s.trackDecisionLocked(r.track), s.trackDecisionLocked(s.wantTrack)
-		currentRate, nextRate := decisionTotalKbps(s.info, current), decisionTotalKbps(s.info, next)
-		gp := s.goodput.Kbps()
-		pressure := gp > 0 && gp < currentRate
-		if nextRate > 0 && nextRate < currentRate && (pressure || s.deliveredCount >= 2) {
+	// The eager base encoder is not yet a player choice. Honor the first
+	// requested rendition immediately, including init-first HLS startup.
+	// A restart increments runSeq, so this cannot excuse repeated probes.
+	if s.runSeq == 1 && s.deliveredCount == 0 {
+		return 0
+	}
+	if s.deliveredTrack == r.track && s.deliveredCount > 0 {
+		if media && n == s.deliveredSeg+1 {
+			return 0
+		}
+		// fMP4/DASH players load initialization before the next media GET.
+		// Permit one such switch after delivery on the active track. Once
+		// switched, that evidence belongs to the old track, so further init
+		// probes still wait until the new track actually delivers media.
+		if !media {
 			return 0
 		}
 	}

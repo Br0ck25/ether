@@ -162,6 +162,9 @@ func (s *source) read(ctx context.Context, p []byte, off int64, prio core.Priori
 // readPlan reads video bytes through the plan's layout, verifying volumes
 // before serving from them.
 func readPlan(ctx context.Context, e *Engine, rel *release, p *plan, buf []byte, off int64, prio core.Priority, fo fetchOpts) (int, error) {
+	if p.encrypted != nil {
+		return readEncryptedPlan(ctx, e, rel, p, buf, off, prio, fo)
+	}
 	v := verifier{e: e, prio: prio, fo: fo}
 	for attempt := 0; ; attempt++ {
 		lay := p.layout()
@@ -451,11 +454,11 @@ func (e *Engine) prefetchRange(ctx context.Context, rel *release, p *plan, relea
 	if offset >= p.size || length <= 0 {
 		return nil
 	}
-	if offset+length > p.size {
+	if length > p.size-offset {
 		length = p.size - offset
 	}
 	fo := fetchOpts{cacheID: releaseID, noHot: e.cache != nil && releaseID != ""}
-	if err := p.ensure(ctx, verifier{e: e, prio: core.PriorityPrefetch, fo: fo}, volsOf(p.layout().pieces(offset, length))); err != nil {
+	if err := p.ensure(ctx, verifier{e: e, prio: core.PriorityPrefetch, fo: fo}, volsOf(p.fetchPieces(offset, length))); err != nil {
 		return err
 	}
 	type job struct {
@@ -464,7 +467,7 @@ func (e *Engine) prefetchRange(ctx context.Context, rel *release, p *plan, relea
 	}
 	var jobs []job
 	hc, _ := e.cache.(hasCache)
-	for _, pc := range p.layout().pieces(offset, length) {
+	for _, pc := range p.fetchPieces(offset, length) {
 		pf := p.vols[pc.vol]
 		for _, i := range pf.slotsFor(pc.off, pc.n) {
 			if fo.noHot && hc != nil && hc.Has(releaseID, pf.segBase+i) {

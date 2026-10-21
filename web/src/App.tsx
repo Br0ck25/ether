@@ -39,6 +39,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type AnchorHTMLAttributes,
 } from "react";
@@ -49,6 +50,8 @@ import {
   Routes,
   useLocation,
   useNavigate,
+  useOutlet,
+  useOutletContext,
   useParams,
   useSearchParams,
 } from "react-router-dom";
@@ -221,25 +224,45 @@ function versionLabel(v: string): string {
   return /^\d/.test(v) ? `v${v}` : v;
 }
 
-/** Collection Studio opens over the gallery: a collection is a record, so it gets a drawer. */
-function CollectionDrawer({ fresh = false }: { fresh?: boolean }) {
+/** Keep the library mounted behind every collection drawer, including lazy editor loads. */
+function CollectionsLayout() {
+  const location = useLocation();
   const navigate = useNavigate();
-  const [search] = useSearchParams();
+  const editing = location.pathname.replace(/\/$/, "") !== "/collections";
+  const browseSearch = useRef(editing ? "" : location.search);
+  if (!editing) browseSearch.current = location.search;
+  const outlet = useOutlet({ close: () => navigate(`/collections${browseSearch.current}`) });
   return (
     <>
-      <div aria-hidden="true" inert className="flex min-h-0 flex-1 flex-col">
-        <CollectionsGallery />
-      </div>
-      <Drawer
-        open
-        onClose={() => navigate("/collections")}
-        title={fresh ? "New collection" : "Edit collection"}
-        size="2xl"
-        bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0"
+      <div
+        aria-hidden={editing ? true : undefined}
+        inert={editing}
+        className="flex min-h-0 flex-1 flex-col"
       >
-        {fresh ? <CollectionEditor key={search.get("draft") ?? "new"} /> : <CollectionEditor />}
-      </Drawer>
+        <CollectionsGallery
+          browseSearch={editing ? browseSearch.current : undefined}
+          active={!editing}
+        />
+      </div>
+      {outlet}
     </>
+  );
+}
+
+/** Collection Studio opens over the persistent library as a record drawer. */
+function CollectionDrawer({ fresh = false }: { fresh?: boolean }) {
+  const { close } = useOutletContext<{ close: () => void }>();
+  const [search] = useSearchParams();
+  return (
+    <Drawer
+      open
+      onClose={close}
+      title={fresh ? "New collection" : "Edit collection"}
+      size="2xl"
+      bodyClassName="flex min-h-0 flex-1 flex-col overflow-hidden p-0"
+    >
+      {fresh ? <CollectionEditor key={search.get("draft") ?? "new"} /> : <CollectionEditor />}
+    </Drawer>
   );
 }
 
@@ -325,9 +348,10 @@ function Shell() {
             <Route path="/viewers/:id/:tab?" element={<ViewerProfile />} />
             <Route path="/home" element={<Designer />} />
             <Route path="/home-screens" element={<Navigate to="/home" replace />} />
-            <Route path="/collections" element={<CollectionsGallery />} />
-            <Route path="/collections/new" element={<CollectionDrawer fresh />} />
-            <Route path="/collections/:id" element={<CollectionDrawer />} />
+            <Route path="/collections" element={<CollectionsLayout />}>
+              <Route path="new" element={<CollectionDrawer fresh />} />
+              <Route path=":id" element={<CollectionDrawer />} />
+            </Route>
             <Route path="/livetv/:tab?" element={<LiveTV />} />
             <Route path="/metadata/:tab?" element={<Metadata />} />
             <Route path="/sources/:tab?" element={<Sources />} />

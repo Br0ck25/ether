@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -16,6 +17,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/newznab"
+	"github.com/braedonsaunders/ether/internal/releaseparse"
 )
 
 // Reserver reserves one unit of an indexer's daily budget ("hit" or
@@ -193,6 +195,88 @@ func pathApplies(pathCats, cats []string) bool {
 	return hit
 }
 
+// fallbackAttempts builds secondary queries tried only when the primary
+// attempts return no results (without error): OriginalTitle, structural
+// aliases, and season-pack / complete-series queries for TV episodes on
+// torrent trackers.
+func (r *Runner) fallbackAttempts(req core.SearchRequest, movieCats, tvCats []int) []query {
+	isTV := req.Type == core.TypeEpisode || req.Type == core.TypeShow || req.Season > 0
+	base := query{wanted: movieCats, year: req.Year, mode: "movie-search"}
+	if isTV {
+		base = query{wanted: tvCats, year: req.Year, mode: "tv-search", season: req.Season, ep: req.Episode}
+	}
+	if len(base.wanted) == 0 {
+		base.wanted = []int{2000}
+		if isTV {
+			base.wanted = []int{5000}
+		}
+	}
+	if _, ok := r.modeParams(base.mode); !ok {
+		base.mode = "search"
+	}
+	epString := ""
+	if isTV && req.Season > 0 {
+		epString = fmt.Sprintf("S%02d", req.Season)
+		if req.Episode > 0 {
+			epString += fmt.Sprintf("E%02d", req.Episode)
+		}
+	}
+	primarySanitized := strings.ToLower(sanitizeTitle(req.Title))
+	seenTitle := map[string]bool{primarySanitized: true}
+	var altTitles []string
+	addTitle := func(raw string) {
+		s := sanitizeTitle(raw)
+		k := strings.ToLower(s)
+		if s == "" || seenTitle[k] {
+			return
+		}
+		seenTitle[k] = true
+		altTitles = append(altTitles, s)
+	}
+	if req.OriginalTitle != "" {
+		addTitle(req.OriginalTitle)
+	}
+	for _, a := range releaseparse.TitleAliases(req.Title) {
+		addTitle(a)
+	}
+	if req.OriginalTitle != "" {
+		for _, a := range releaseparse.TitleAliases(req.OriginalTitle) {
+			addTitle(a)
+		}
+	}
+	var out []query
+	for _, t := range altTitles {
+		kq := base
+		kq.q = t
+		if req.Year > 0 && !isTV {
+			kq.q = fmt.Sprintf("%s %d", t, req.Year)
+		}
+		kq.keywords = strings.TrimSpace(kq.q + " " + epString)
+		out = append(out, kq)
+	}
+	// Torrent season-pack / complete-series rescue when an episode search
+	// returned 0 single-episode rows.
+	if isTV && req.Season > 0 && req.Episode > 0 && !strings.EqualFold(r.def.Protocol, "usenet") {
+		allTitles := []string{}
+		if primary := sanitizeTitle(req.Title); primary != "" {
+			allTitles = append(allTitles, primary)
+		}
+		allTitles = append(allTitles, altTitles...)
+		seasonStr := fmt.Sprintf("S%02d", req.Season)
+		for _, t := range allTitles {
+			sq := base
+			sq.ep = 0
+			sq.q = t
+			sq.keywords = strings.TrimSpace(t + " " + seasonStr)
+			out = append(out, sq)
+			sqWord := sq
+			sqWord.keywords = strings.TrimSpace(fmt.Sprintf("%s Season %d", t, req.Season))
+			out = append(out, sqWord)
+		}
+	}
+	return out
+}
+
 // Search runs a request's attempts in order and returns the first
 // non-empty result set.
 func (r *Runner) Search(ctx context.Context, req core.SearchRequest, movieCats, tvCats []int, reserve Reserver) ([]core.Release, error) {
@@ -221,6 +305,75 @@ func (r *Runner) Search(ctx context.Context, req core.SearchRequest, movieCats, 
 		}
 		if len(res) > 0 {
 			return res, nil
+		}
+	}
+	if firstErr == nil {
+		fallbacks := r.fallbackAttempts(req, movieCats, tvCats)
+		if len(fallbacks) > 0 && r.def.RequestDelay <= 0 {
+			const burstWidth = 4
+			for base := 0; base < len(fallbacks); base += burstWidth {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				batch := fallbacks[base:min(base+burstWidth, len(fallbacks))]
+				type slot struct {
+					res []core.Release
+					err error
+				}
+				slots := make([]slot, len(batch))
+				var wg sync.WaitGroup
+				for i, q := range batch {
+					wg.Add(1)
+					go func(i int, q query) {
+						defer wg.Done()
+						slots[i].res, slots[i].err = r.search(ctx, q, reserve)
+					}(i, q)
+				}
+				wg.Wait()
+				var merged []core.Release
+				seen := map[string]bool{}
+				var budgetErr error
+				for _, s := range slots {
+					if s.err != nil {
+						if errors.Is(s.err, core.ErrBudgetExhausted) && budgetErr == nil {
+							budgetErr = s.err
+						}
+						continue
+					}
+					for _, rel := range s.res {
+						k := rel.GUID
+						if rel.InfoHash != "" {
+							k = rel.InfoHash
+						}
+						if !seen[k] {
+							seen[k] = true
+							merged = append(merged, rel)
+						}
+					}
+				}
+				if len(merged) > 0 {
+					return merged, nil
+				}
+				if budgetErr != nil {
+					return nil, budgetErr
+				}
+			}
+		} else {
+			for _, q := range fallbacks {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				res, err := r.search(ctx, q, reserve)
+				if err != nil {
+					if errors.Is(err, core.ErrBudgetExhausted) {
+						return nil, err
+					}
+					continue
+				}
+				if len(res) > 0 {
+					return res, nil
+				}
+			}
 		}
 	}
 	return nil, firstErr

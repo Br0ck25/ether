@@ -2,6 +2,7 @@ package transcode
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestVBVReservoirArgs(t *testing.T) {
 	s := baseSpec(info, d)
 	s.Rate = rateControl{Quality: true, MaxrateKbps: 2400, BufsizeKbps: 19200, TargetKbps: 1800}
 	args := buildArgs(s)
-	mustContain(t, args, "-crf 21", "-maxrate 2400k", "-bufsize 19200k")
+	mustContain(t, args, "-crf 18", "-maxrate 2400k", "-bufsize 19200k")
 	mustNotContain(t, args, "-b:v 1800k")
 }
 
@@ -133,7 +134,12 @@ func TestBuildArgsRemuxHEVCfMP4(t *testing.T) {
 	s := baseSpec(info, d)
 	s.Start, s.StartSeg = 0, 0
 	args := buildArgs(s)
-	mustContain(t, args, "-c:v copy -tag:v hvc1", "-c:a copy", "-hls_segment_type fmp4 -hls_fmp4_init_filename init-3.mp4",
+	mustContain(t, args, "-c:v copy -tag:v hvc1", "-c:a copy", "-hls_segment_type fmp4 -hls_fmp4_init_filename "+func() string {
+		if runtime.GOOS == "windows" {
+			return filepath.Join(s.Dir, s.InitName)
+		}
+		return s.InitName
+	}(),
 		filepath.Join("/tmp/sess", "%05d.m4s"), "-start_number 0")
 	mustNotContain(t, args, "-ss ")
 }
@@ -315,5 +321,35 @@ func TestVideoBitrate(t *testing.T) {
 	d := core.Decision{Kind: core.DecisionTranscode, AudioStream: 1, AudioCopy: true, BitrateKbps: 4192, VideoCodec: "h264", MaxHeight: 720}
 	if got := videoBitrate(mp4, d); got != 4000 {
 		t.Errorf("videoBitrate = %d", got)
+	}
+}
+
+func TestFMP4CopiedAudioPreloadScope(t *testing.T) {
+	info := mustParse(t, "mkv_hevc_hdr10.json")
+	for _, tc := range []struct {
+		name, container, accel string
+		fps                    float64
+		copyVideo, copyAudio   bool
+		want                   string
+	}{
+		{"24fps", ContainerFMP4, AccelNone, 24, false, true, "83334"},
+		{"60fps", ContainerFMP4, AccelNone, 60, false, true, "33334"},
+		{"unknown fps", ContainerFMP4, AccelNone, 0, false, true, ""},
+		{"copy", ContainerFMP4, AccelNone, 24, true, true, ""},
+		{"encode audio", ContainerFMP4, AccelNone, 24, false, false, ""},
+		{"ts", ContainerMPEGTS, AccelNone, 24, false, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := baseSpec(info, core.Decision{Kind: core.DecisionTranscode, Container: tc.container, VideoCodec: "h264", VideoCopy: tc.copyVideo, AudioCopy: tc.copyAudio})
+			s.Info.Streams = append([]core.StreamInfo(nil), info.Streams...)
+			for i := range s.Info.Streams {
+				if s.Info.Streams[i].Type == "video" {
+					s.Info.Streams[i].FrameRate = tc.fps
+				}
+			}
+			if got := argValue(buildArgs(s), "-audio_preload"); got != tc.want {
+				t.Fatalf("preload=%q want=%q", got, tc.want)
+			}
+		})
 	}
 }

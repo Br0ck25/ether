@@ -1,11 +1,8 @@
 import {
   Badge,
   Button,
-  Card,
   EmptyState,
   Input,
-  ListPageLayout,
-  PageHeader,
   Skeleton,
   SubtabNav,
   confirmDialog,
@@ -13,11 +10,14 @@ import {
   cn,
 } from "@braedonsaunders/appkit-ui";
 import {
+  ArrowRight,
   Copy,
-  Globe2,
   EyeOff,
-  LayoutTemplate,
+  Globe2,
   Layers,
+  LayoutGrid,
+  PanelLeft,
+  LayoutTemplate,
   Pencil,
   Plus,
   RefreshCw,
@@ -26,180 +26,131 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ActionMenu } from "../../components/ActionMenu";
 import { Artwork } from "../../components/Artwork";
 import { ErrorPanel } from "../../components/feedback";
-import { ChipGroup } from "../../components/fields";
+import { ToolbarPicker } from "../../components/ToolbarPicker";
+import { PanelHead, Workspace } from "../../components/workspace";
 import { api, errorMessage } from "../../lib/api";
-import type { CollectionSpec, CollectionTemplate } from "../../lib/contract";
+import type { CollectionSpec } from "../../lib/contract";
 import { relativeTime } from "../../lib/format";
 import { clearDraft, draftKey, listDrafts } from "../../lib/history";
 import { useAsync } from "../../lib/hooks";
-import { describeRule, describeSource, describeTargets, normalizeSpec } from "../../lib/rules";
+import { normalizeSpec } from "../../lib/rules";
+import { CollectionDetail } from "./CollectionDetail";
 import { DescribeDialog } from "./DescribeDialog";
 import { newCollectionHref } from "./links";
 
 type Tab = "mine" | "templates" | "builtin";
+type Filter = "all" | "live" | "draft";
 
-export default function CollectionsGallery() {
-  const [params, setParams] = useSearchParams();
-  const tab = (params.get("tab") as Tab) || "mine";
-  const setTab = (t: Tab) => {
-    const p = new URLSearchParams(params);
-    p.set("tab", t);
-    setParams(p, { replace: true });
-  };
+export default function CollectionsGallery({
+  browseSearch,
+  active = true,
+}: {
+  browseSearch?: string;
+  active?: boolean;
+}) {
+  const [routeParams, setParams] = useSearchParams();
+  const params = browseSearch === undefined ? routeParams : new URLSearchParams(browseSearch);
+  const rawTab = params.get("tab");
+  const tab: Tab = rawTab === "templates" || rawTab === "builtin" ? rawTab : "mine";
   const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [category, setCategory] = useState("all");
   const [describe, setDescribe] = useState(false);
+  const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
   const collections = useAsync(() => api.collections(), []);
   const templates = useAsync(() => api.templates(), []);
   const [drafts, setDrafts] = useState(() =>
     listDrafts<CollectionSpec>("collection").filter((d) => d.id.startsWith("new-")),
   );
-
+  const wasActive = useRef(active);
+  useEffect(() => {
+    if (active && !wasActive.current) {
+      void collections.reload();
+      setDrafts(listDrafts<CollectionSpec>("collection").filter((d) => d.id.startsWith("new-")));
+    }
+    wasActive.current = active;
+  }, [active, collections.reload]);
   const mine = (collections.data ?? []).filter((c) => !c.builtIn);
   const builtIn = (collections.data ?? []).filter((c) => c.builtIn);
   const needle = q.trim().toLowerCase();
   const match = (s: { name: string; description?: string }) =>
-    !needle ||
-    s.name.toLowerCase().includes(needle) ||
-    (s.description ?? "").toLowerCase().includes(needle);
-
-  return (
-    <ListPageLayout
-      header={
-        <>
-          <PageHeader
-            title="Collections"
-            description="Design collections and rows that show up in Plex for the people you choose."
-            actions={
-              <>
-                <Button variant="outline" size="sm" onClick={() => setDescribe(true)}>
-                  <Sparkles size={15} /> Describe it
-                </Button>
-                <Button size="sm" onClick={() => navigate(newCollectionHref())}>
-                  <Plus size={15} /> New collection
-                </Button>
-              </>
-            }
-          />
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <SubtabNav
-              ariaLabel="Collection views"
-              active={tab}
-              onSelect={(k) => setTab(k as Tab)}
-              tabs={[
-                {
-                  key: "mine",
-                  label: "Your collections",
-                  count: collections.data ? mine.length : undefined,
-                },
-                { key: "templates", label: "Templates", count: templates.data?.length },
-                {
-                  key: "builtin",
-                  label: "Built-in",
-                  count: collections.data ? builtIn.length : undefined,
-                },
-              ]}
-            />
-            <div className="relative w-full pb-2 sm:w-64">
-              <Search
-                size={14}
-                className="pointer-events-none absolute left-3 top-[calc(50%-4px)] -translate-y-1/2 text-fg-subtle"
-                aria-hidden
-              />
-              <Input
-                value={q}
-                onChange={(e) => setQ(e.currentTarget.value)}
-                placeholder="Search…"
-                aria-label="Search collections"
-                className="h-9 pl-8"
-              />
-            </div>
-          </div>
-        </>
-      }
-    >
-      {tab === "mine" ? (
-        <MineTab
-          state={collections}
-          items={mine.filter(match)}
-          total={mine.length}
-          drafts={drafts.filter((d) => match({ name: d.draft.value.name || "Untitled" }))}
-          onDiscardDraft={(id) => {
-            clearDraft(draftKey("collection", id));
-            setDrafts((d) => d.filter((x) => x.id !== id));
-          }}
-          onOpenTemplates={() => setTab("templates")}
-        />
-      ) : tab === "templates" ? (
-        <TemplatesTab state={templates} q={needle} />
-      ) : (
-        <BuiltInTab state={collections} items={builtIn.filter(match)} />
-      )}
-      <DescribeDialog
-        open={describe}
-        onClose={() => setDescribe(false)}
-        onApply={(spec) => navigate(newCollectionHref(), { state: { spec } })}
-      />
-    </ListPageLayout>
+    !needle || `${s.name} ${s.description ?? ""}`.toLowerCase().includes(needle);
+  const items = (tab === "builtin" ? builtIn : mine).filter(
+    (c) => match(c) && (tab !== "mine" || filter === "all" || c.enabled === (filter === "live")),
   );
-}
-
-const GRID = "grid grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] gap-5";
-
-function GallerySkeleton() {
-  return (
-    <div className={GRID} role="status" aria-label="Loading collections">
-      {Array.from({ length: 8 }, (_, i) => (
-        <div key={i}>
-          <Skeleton className="aspect-[2/3] w-full rounded-lg" />
-          <Skeleton className="mt-2 h-4 w-3/4" />
-        </div>
-      ))}
-    </div>
+  const categories = [...new Set((templates.data ?? []).map((t) => t.category))];
+  const shownTemplates = (templates.data ?? []).filter(
+    (t) => match(t) && (category === "all" || t.category === category),
   );
-}
-
-function MineTab({
-  state,
-  items,
-  total,
-  drafts,
-  onDiscardDraft,
-  onOpenTemplates,
-}: {
-  state: ReturnType<typeof useAsync<CollectionSpec[]>>;
-  items: CollectionSpec[];
-  total: number;
-  drafts: { id: string; draft: { value: CollectionSpec; savedAt: string } }[];
-  onDiscardDraft: (id: string) => void;
-  onOpenTemplates: () => void;
-}) {
-  const navigate = useNavigate();
-  if (state.error) return <ErrorPanel error={state.error} onRetry={() => void state.reload()} />;
-  if (!state.data) return <GallerySkeleton />;
-
+  const template =
+    tab === "templates"
+      ? (shownTemplates.find((t) => t.id === params.get("template")) ?? shownTemplates[0])
+      : undefined;
+  const selected =
+    tab !== "templates"
+      ? (items.find((c) => c.id === params.get("collection")) ?? items[0])
+      : undefined;
+  const state = tab === "templates" ? templates : collections;
+  const posterView = tab !== "templates" && params.get("view") === "posters";
+  const setView = (posters: boolean) => {
+    const p = new URLSearchParams(params);
+    if (posters) p.set("view", "posters");
+    else p.delete("view");
+    setParams(p);
+  };
+  const setTab = (next: Tab) => {
+    const p = new URLSearchParams(params);
+    p.set("tab", next);
+    p.delete("collection");
+    p.delete("template");
+    setParams(p);
+    setQ("");
+  };
+  const select = (key: "collection" | "template", id: string, openPreview = false) => {
+    const p = new URLSearchParams(params);
+    p.set(key, id);
+    if (openPreview) p.delete("view");
+    setParams(p);
+    if (window.matchMedia("(max-width: 1023px)").matches)
+      document
+        .querySelector('[aria-label="Collection preview"]')
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+  const edit = (c: CollectionSpec, section?: "artwork") =>
+    navigate(`/collections/${encodeURIComponent(c.id!)}${section ? `?section=${section}` : ""}`);
+  const duplicate = (c: CollectionSpec) =>
+    navigate(newCollectionHref(), {
+      state: {
+        spec: { ...c, id: undefined, builtIn: undefined, name: `${c.name} (copy)`, enabled: false },
+      },
+    });
   const act = async (c: CollectionSpec, action: "publish" | "unpublish" | "rebuild" | "delete") => {
-    if (!c.id) return;
+    if (!c.id || busy) return;
+    if (
+      action === "delete" &&
+      !(await confirmDialog({
+        title: "Delete collection?",
+        message: `“${c.name}” disappears from Plex for everyone.`,
+        confirmLabel: "Delete",
+        tone: "danger",
+      }))
+    )
+      return;
+    setBusy(true);
     try {
       if (action === "delete") {
-        const ok = await confirmDialog({
-          title: "Delete collection?",
-          message: `“${c.name}” disappears from Plex for everyone.`,
-          confirmLabel: "Delete",
-          tone: "danger",
-        });
-        if (!ok) return;
         await api.deleteCollection(c.id);
-        state.setData((list) => (list ?? []).filter((x) => x.id !== c.id));
+        collections.setData((list) => (list ?? []).filter((x) => x.id !== c.id));
         toast.success("Collection deleted");
       } else if (action === "rebuild") {
         const r = await api.rebuildCollection(c.id);
-        state.setData((list) =>
+        collections.setData((list) =>
           (list ?? []).map((x) =>
             x.id === c.id ? { ...x, itemCount: r.itemCount, lastBuiltAt: r.lastBuiltAt } : x,
           ),
@@ -210,317 +161,456 @@ function MineTab({
           ...normalizeSpec(c),
           enabled: action === "publish",
         });
-        state.setData((list) => (list ?? []).map((x) => (x.id === c.id ? saved : x)));
+        collections.setData((list) => (list ?? []).map((x) => (x.id === c.id ? saved : x)));
         toast.success(action === "publish" ? "Published" : "Unpublished", { description: c.name });
       }
     } catch (e) {
       toast.error("That didn't work", { description: errorMessage(e) });
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <div className="space-y-8">
-      {drafts.length ? (
-        <section aria-labelledby="drafts-h">
-          <h2 id="drafts-h" className="mb-3 text-sm font-semibold text-fg">
-            Unsaved drafts on this device
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {drafts.map((d) => (
+    <>
+      <Workspace
+        title="Collections"
+        subtitle="Curate what shows up in Plex."
+        actions={
+          <>
+            {tab !== "templates" ? (
               <div
-                key={d.id}
-                className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-surface py-1.5 pl-3 pr-1.5"
+                role="group"
+                aria-label="Collection layout"
+                className="flex rounded-lg border border-border bg-bg-subtle p-0.5"
               >
-                <Link
-                  to={`/collections/new?draft=${encodeURIComponent(d.id)}`}
-                  className="text-sm font-medium text-fg hover:underline"
-                >
-                  {d.draft.value.name || "Untitled collection"}
-                </Link>
-                <span className="text-xs text-fg-subtle">{relativeTime(d.draft.savedAt)}</span>
                 <Button
-                  variant="ghost"
+                  variant={posterView ? "ghost" : "secondary"}
                   size="icon"
                   className="size-7"
-                  onClick={() => onDiscardDraft(d.id)}
-                  aria-label={`Discard draft ${d.draft.value.name || "Untitled"}`}
+                  aria-label="Show collection preview"
+                  aria-pressed={!posterView}
+                  onClick={() => setView(false)}
                 >
-                  <Undo2 size={13} />
+                  <PanelLeft size={14} />
+                </Button>
+                <Button
+                  variant={posterView ? "secondary" : "ghost"}
+                  size="icon"
+                  className="size-7"
+                  aria-label="Show poster gallery"
+                  aria-pressed={posterView}
+                  onClick={() => setView(true)}
+                >
+                  <LayoutGrid size={14} />
                 </Button>
               </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {total === 0 ? (
-        <EmptyState
-          icon={<Layers />}
-          title="No collections yet"
-          description="Start from one of the templates, describe what you want in plain English, or build one from scratch."
-          action={
-            <div className="flex flex-wrap justify-center gap-2">
-              <Button onClick={onOpenTemplates}>
-                <LayoutTemplate size={15} /> Browse templates
-              </Button>
-              <Button variant="outline" onClick={() => navigate(newCollectionHref())}>
-                <Plus size={15} /> Start from scratch
-              </Button>
-            </div>
-          }
-        />
-      ) : items.length === 0 ? (
-        <EmptyState
-          icon={<Search />}
-          title="No matches"
-          description="No collection matches your search."
-        />
-      ) : (
-        <div className={GRID}>
-          {items.map((c) => (
-            <CollectionCard
-              key={c.id}
-              c={c}
-              onOpen={() => navigate(`/collections/${encodeURIComponent(c.id!)}`)}
-              menu={[
-                {
-                  key: "edit",
-                  label: "Edit",
-                  icon: Pencil,
-                  onSelect: () => navigate(`/collections/${encodeURIComponent(c.id!)}`),
-                },
-                {
-                  key: "dup",
-                  label: "Duplicate",
-                  icon: Copy,
-                  onSelect: () =>
-                    navigate(newCollectionHref(), {
-                      state: {
-                        spec: { ...c, id: undefined, name: `${c.name} (copy)`, enabled: false },
-                      },
-                    }),
-                },
-                {
-                  key: "rebuild",
-                  label: "Rebuild now",
-                  icon: RefreshCw,
-                  onSelect: () => void act(c, "rebuild"),
-                },
-                c.enabled
-                  ? {
-                      key: "unpub",
-                      label: "Unpublish",
-                      icon: EyeOff,
-                      onSelect: () => void act(c, "unpublish"),
-                    }
-                  : {
-                      key: "pub",
-                      label: "Publish",
-                      icon: Globe2,
-                      onSelect: () => void act(c, "publish"),
-                    },
-                { key: "sep", separator: true },
-                {
-                  key: "del",
-                  label: "Delete",
-                  icon: Trash2,
-                  danger: true,
-                  onSelect: () => void act(c, "delete"),
-                },
-              ]}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CollectionCard({
-  c,
-  onOpen,
-  menu,
-}: {
-  c: CollectionSpec;
-  onOpen?: () => void;
-  menu?: Parameters<typeof ActionMenu>[0]["items"];
-}) {
-  const targets = describeTargets(c);
-  return (
-    <article className="group relative">
-      <button
-        type="button"
-        onClick={onOpen}
-        className="block w-full rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-        aria-label={`Open ${c.name}`}
-      >
-        <div className="relative aspect-[2/3] overflow-hidden rounded-lg shadow-sm ring-1 ring-border-subtle transition duration-200 group-hover:shadow-md motion-safe:group-hover:-translate-y-0.5">
-          <Artwork
-            src={c.id ? api.artworkUrl(c.id, 360, c.updatedAt) : undefined}
-            alt={`${c.name} artwork`}
-            title={c.name}
-            className="size-full"
-          />
-          <div className="absolute left-2 top-2 flex gap-1">
-            {c.builtIn ? (
-              <Badge variant="secondary">Built-in</Badge>
-            ) : c.enabled ? (
-              <Badge variant="success">Live</Badge>
-            ) : (
-              <Badge variant="secondary">Draft</Badge>
-            )}
-          </div>
-        </div>
-      </button>
-      <div className="mt-2 flex items-start gap-1">
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-fg" title={c.name}>
-            {c.name}
-          </p>
-          <p className="truncate text-xs text-fg-muted">
-            {typeof c.itemCount === "number"
-              ? `${c.itemCount.toLocaleString()} titles`
-              : "Not built yet"}
-            {c.lastBuiltAt ? ` · ${relativeTime(c.lastBuiltAt)}` : ""}
-          </p>
-          {targets.length ? (
-            <p className="truncate text-[11px] text-fg-subtle">{targets.join(" · ")}</p>
-          ) : null}
-        </div>
-        {menu ? <ActionMenu items={menu} label={`Actions for ${c.name}`} /> : null}
-      </div>
-    </article>
-  );
-}
-
-function TemplatesTab({
-  state,
-  q,
-}: {
-  state: ReturnType<typeof useAsync<CollectionTemplate[]>>;
-  q: string;
-}) {
-  const navigate = useNavigate();
-  const [cats, setCats] = useState<string[]>([]);
-  const categories = useMemo(
-    () => [...new Set((state.data ?? []).map((t) => t.category))],
-    [state.data],
-  );
-  if (state.error) return <ErrorPanel error={state.error} onRetry={() => void state.reload()} />;
-  if (!state.data) return <GallerySkeleton />;
-  const shown = state.data.filter(
-    (t) =>
-      (!cats.length || cats.includes(t.category)) &&
-      (!q || `${t.name} ${t.description} ${t.category}`.toLowerCase().includes(q)),
-  );
-  const grouped = categories
-    .map((c) => ({ c, items: shown.filter((t) => t.category === c) }))
-    .filter((g) => g.items.length);
-  return (
-    <div className="space-y-6">
-      <ChipGroup
-        ariaLabel="Template categories"
-        size="sm"
-        value={cats}
-        onChange={setCats}
-        options={categories.map((c) => ({ value: c, label: c }))}
-      />
-      {grouped.length === 0 ? (
-        <EmptyState
-          icon={<Search />}
-          title="No templates match"
-          description="Try another search or category."
-        />
-      ) : (
-        grouped.map((g) => (
-          <section key={g.c} aria-labelledby={`cat-${g.c}`}>
-            <h2 id={`cat-${g.c}`} className="mb-3 text-sm font-semibold text-fg">
-              {g.c} <span className="font-normal text-fg-subtle">{g.items.length}</span>
-            </h2>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-3">
-              {g.items.map((t) => (
-                <Card
-                  key={t.id}
-                  interactive
-                  onClick={() => navigate(newCollectionHref({ template: t.id }))}
-                  className="flex flex-col p-4"
-                  aria-label={`Use template ${t.name}`}
+            ) : null}
+            <Button variant="outline" size="sm" onClick={() => setDescribe(true)}>
+              <Sparkles size={14} /> Describe it
+            </Button>
+            <Button size="sm" onClick={() => navigate(newCollectionHref())}>
+              <Plus size={14} /> New collection
+            </Button>
+          </>
+        }
+        asideLabel="Collection library"
+        mainLabel="Collection preview"
+        asideClassName="max-lg:max-h-[45vh]"
+        aside={
+          <>
+            <PanelHead>
+              <div className="flex items-center gap-1.5">
+                <div className="relative min-w-0 flex-1">
+                  <Search
+                    size={13}
+                    className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-subtle"
+                    aria-hidden
+                  />
+                  <Input
+                    type="search"
+                    value={q}
+                    onChange={(e) => setQ(e.currentTarget.value)}
+                    placeholder={tab === "templates" ? "Find a template…" : "Find a collection…"}
+                    aria-label="Search collections"
+                    className="h-8 pl-7 text-sm"
+                  />
+                </div>
+                {tab === "mine" ? (
+                  <ToolbarPicker
+                    ariaLabel="Collection status"
+                    value={filter}
+                    onChange={setFilter}
+                    options={[
+                      { value: "all", label: "All statuses" },
+                      { value: "live", label: "Published" },
+                      { value: "draft", label: "Drafts" },
+                    ]}
+                  />
+                ) : null}
+                {tab === "templates" ? (
+                  <ToolbarPicker
+                    ariaLabel="Template category"
+                    value={category}
+                    onChange={setCategory}
+                    options={[
+                      { value: "all", label: "All categories" },
+                      ...categories.map((c) => ({ value: c, label: c })),
+                    ]}
+                  />
+                ) : null}
+              </div>
+              <SubtabNav
+                ariaLabel="Collection views"
+                active={tab}
+                onSelect={(t) => setTab(t as Tab)}
+                tabs={[
+                  {
+                    key: "mine",
+                    label: "Yours",
+                    count: collections.data ? mine.length : undefined,
+                  },
+                  { key: "templates", label: "Templates", count: templates.data?.length },
+                  {
+                    key: "builtin",
+                    label: "Built-in",
+                    count: collections.data ? builtIn.length : undefined,
+                  },
+                ]}
+              />
+            </PanelHead>
+            <div className="app-scroll min-h-0 flex-1 space-y-4 overflow-y-auto p-2 sm:p-3">
+              {tab === "mine" && drafts.length ? (
+                <section
+                  aria-label="Unsaved drafts"
+                  className="rounded-lg border border-dashed border-border-strong p-2.5"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-semibold text-fg">{t.name}</p>
-                    <Badge variant="secondary" className="shrink-0">
-                      {t.spec.mediaType === "show"
-                        ? "TV"
-                        : t.spec.mediaType === "mixed"
-                          ? "Mixed"
-                          : "Movies"}
-                    </Badge>
-                  </div>
-                  <p className="mt-1 text-sm text-fg-muted">{t.description}</p>
-                  <div className="mt-3 flex flex-wrap gap-1">
-                    {t.spec.sources
-                      .filter((s) => s.kind !== "catalog")
-                      .map((s, i) => (
-                        <span
-                          key={`s${i}`}
-                          className="rounded bg-info-subtle px-1.5 py-0.5 text-[11px] text-info"
+                  <h2 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+                    On this device
+                  </h2>
+                  {drafts
+                    .filter((d) => match({ name: d.draft.value.name || "Untitled" }))
+                    .map((d) => (
+                      <div key={d.id} className="flex items-center gap-2 py-1">
+                        <Link
+                          to={`/collections/new?draft=${encodeURIComponent(d.id)}`}
+                          className="min-w-0 flex-1 truncate text-xs font-medium text-fg hover:underline"
                         >
-                          {describeSource(s)}
-                        </span>
-                      ))}
-                    {t.spec.rules.slice(0, 3).map((r, i) => (
-                      <span
-                        key={`r${i}`}
-                        className="rounded bg-bg-subtle px-1.5 py-0.5 text-[11px] text-fg-muted"
-                      >
-                        {describeRule(r)}
-                      </span>
+                          {d.draft.value.name || "Untitled collection"}
+                          <span className="block font-normal text-fg-subtle">
+                            {relativeTime(d.draft.savedAt)}
+                          </span>
+                        </Link>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7"
+                          aria-label={`Discard draft ${d.draft.value.name || "Untitled"}`}
+                          onClick={() => {
+                            clearDraft(draftKey("collection", d.id));
+                            setDrafts((ds) => ds.filter((x) => x.id !== d.id));
+                          }}
+                        >
+                          <Undo2 size={13} />
+                        </Button>
+                      </div>
                     ))}
-                    {t.spec.rules.length > 3 ? (
-                      <span className="px-1 text-[11px] text-fg-subtle">
-                        +{t.spec.rules.length - 3} more
-                      </span>
-                    ) : null}
+                </section>
+              ) : null}
+              {state.error ? (
+                <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
+              ) : !state.data ? (
+                <div role="status" aria-label="Loading collections" className="space-y-2">
+                  {Array.from({ length: 5 }, (_, i) => (
+                    <Skeleton key={i} className="h-20 w-full rounded-lg" />
+                  ))}
+                </div>
+              ) : tab === "templates" ? (
+                <>
+                  <p className="px-2 text-xs text-fg-muted">
+                    A starting point for your next collection.
+                  </p>
+                  <ul className="space-y-1">
+                    {shownTemplates.map((t) => (
+                      <li key={t.id}>
+                        <button
+                          type="button"
+                          aria-label={`Preview template ${t.name}`}
+                          aria-current={template?.id === t.id ? "true" : undefined}
+                          onClick={() => select("template", t.id)}
+                          className={cn(ROW, template?.id === t.id ? ACTIVE : INACTIVE)}
+                        >
+                          <span className="grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-surface text-primary">
+                            <LayoutTemplate size={18} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">{t.name}</span>
+                            <span className="mt-0.5 block text-[11px] text-fg-muted">
+                              {t.category} · {mediaLabel(t.spec)}
+                            </span>
+                          </span>
+                          <ArrowRight size={14} className="shrink-0 text-fg-subtle" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {!shownTemplates.length ? <ListEmpty /> : null}
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between px-2 text-[11px] text-fg-subtle">
+                    <span>{tab === "builtin" ? "Managed by Ether" : "Your library"}</span>
+                    <span>{items.length} collections</span>
                   </div>
-                  <span className={cn("mt-auto pt-3 text-xs font-medium text-primary")}>
-                    Use template →
-                  </span>
-                </Card>
-              ))}
+                  <ul className="space-y-1">
+                    {items.map((c) => (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          onClick={() => select("collection", c.id!)}
+                          aria-label={`Preview ${c.name}`}
+                          aria-current={selected?.id === c.id ? "true" : undefined}
+                          className={cn(ROW, selected?.id === c.id ? ACTIVE : INACTIVE)}
+                        >
+                          <Artwork
+                            src={c.id ? api.artworkUrl(c.id, 120, c.updatedAt) : undefined}
+                            alt=""
+                            title={c.name}
+                            className="aspect-[2/3] w-10 shrink-0 rounded shadow-sm ring-1 ring-border"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-sm font-medium">{c.name}</span>
+                            <span className="mt-1 block text-[11px] text-fg-muted">
+                              {c.itemCount === undefined
+                                ? "Not built yet"
+                                : `${c.itemCount.toLocaleString()} titles`}{" "}
+                              · {mediaLabel(c)}
+                            </span>
+                          </span>
+                          <span
+                            className={cn(
+                              "size-1.5 shrink-0 rounded-full",
+                              c.enabled ? "bg-success" : "bg-fg-subtle",
+                            )}
+                            aria-hidden
+                          />
+                          <span className="sr-only">{c.enabled ? "Published" : "Draft"}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {!items.length ? <ListEmpty /> : null}
+                </>
+              )}
             </div>
-          </section>
-        ))
-      )}
-    </div>
+            <div className="mt-auto hidden shrink-0 border-t border-border px-4 py-3 lg:block">
+              <Link
+                to="/home"
+                className="flex items-center justify-between gap-2 text-xs font-medium text-fg-muted hover:text-primary"
+              >
+                <span>Arrange your Plex Home rows</span>
+                <ArrowRight size={13} />
+              </Link>
+            </div>
+          </>
+        }
+        main={
+          state.error ? (
+            <div className="p-6">
+              <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
+            </div>
+          ) : !state.data ? (
+            <div className="space-y-5 p-6">
+              <Skeleton className="h-56 w-full rounded-xl" />
+              <Skeleton className="h-60 w-full rounded-xl" />
+            </div>
+          ) : posterView && items.length ? (
+            <section className="p-5 sm:p-6" aria-label="Collection posters">
+              <div className="mb-5 flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-sm font-semibold text-fg">
+                  {tab === "builtin" ? "Built-in collections" : "Your collections"}
+                </h2>
+                <span className="text-xs text-fg-muted">
+                  {items.length} collections · Artwork shown in Plex
+                </span>
+              </div>
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-x-4 gap-y-6">
+                {items.map((c) => (
+                  <article key={c.id} className="group min-w-0">
+                    <button
+                      type="button"
+                      aria-label={`Open ${c.name} preview`}
+                      onClick={() => select("collection", c.id!, true)}
+                      className="block w-full rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                    >
+                      <div className="relative aspect-[2/3] overflow-hidden rounded-lg ring-1 ring-border transition group-hover:ring-primary/50">
+                        <Artwork
+                          src={api.artworkUrl(
+                            c.id!,
+                            450,
+                            [c.updatedAt, c.lastBuiltAt].filter(Boolean).join("-"),
+                          )}
+                          alt={`${c.name} collection poster`}
+                          title={c.name}
+                          className="size-full"
+                        />
+                        <span className="absolute left-2 top-2">
+                          <Badge variant={c.enabled ? "success" : "secondary"}>
+                            {c.enabled ? "Published" : "Draft"}
+                          </Badge>
+                        </span>
+                      </div>
+                      <span className="mt-2 block truncate text-sm font-medium text-fg">
+                        {c.name}
+                      </span>
+                      <span className="mt-0.5 block text-xs text-fg-muted">
+                        {c.itemCount === undefined
+                          ? "Not built yet"
+                          : `${c.itemCount.toLocaleString()} titles`}
+                      </span>
+                    </button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-1 h-7 px-0 text-xs text-fg-muted"
+                      aria-label={`Customise ${c.name} artwork`}
+                      onClick={() => edit(c, "artwork")}
+                    >
+                      <Pencil size={12} /> Customise artwork
+                    </Button>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : selected || template ? (
+            <CollectionDetail
+              key={`${tab}-${template?.id ?? selected?.id}`}
+              spec={
+                template
+                  ? normalizeSpec({
+                      ...template.spec,
+                      name: template.name,
+                      description: template.description,
+                    })
+                  : selected!
+              }
+              template={template}
+              actions={
+                template ? (
+                  <Button
+                    size="sm"
+                    aria-label={`Use template ${template.name}`}
+                    onClick={() => navigate(newCollectionHref({ template: template.id }))}
+                  >
+                    <Plus size={14} /> Use template
+                  </Button>
+                ) : (
+                  <>
+                    {selected?.builtIn ? (
+                      <Button size="sm" onClick={() => edit(selected, "artwork")}>
+                        <Pencil size={14} /> Customise collection
+                      </Button>
+                    ) : (
+                      <>
+                        <Button size="sm" onClick={() => edit(selected!)}>
+                          <Pencil size={14} /> Edit collection
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => edit(selected!, "artwork")}
+                        >
+                          <LayoutGrid size={14} /> Artwork
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() =>
+                            void act(selected!, selected!.enabled ? "unpublish" : "publish")
+                          }
+                        >
+                          {selected!.enabled ? <EyeOff size={14} /> : <Globe2 size={14} />}
+                          {selected!.enabled ? "Unpublish" : "Publish"}
+                        </Button>
+                      </>
+                    )}
+                    <ActionMenu
+                      label="Collection actions"
+                      items={[
+                        {
+                          key: "duplicate",
+                          label: "Duplicate",
+                          icon: Copy,
+                          onSelect: () => duplicate(selected!),
+                        },
+                        ...(!selected?.builtIn
+                          ? [
+                              {
+                                key: "rebuild",
+                                label: "Rebuild now",
+                                icon: RefreshCw,
+                                disabled: busy,
+                                onSelect: () => void act(selected!, "rebuild"),
+                              },
+                              { key: "sep", separator: true as const },
+                              {
+                                key: "delete",
+                                label: "Delete",
+                                icon: Trash2,
+                                danger: true,
+                                disabled: busy,
+                                onSelect: () => void act(selected!, "delete"),
+                              },
+                            ]
+                          : []),
+                      ]}
+                    />
+                  </>
+                )
+              }
+            />
+          ) : (
+            <EmptyState
+              icon={<Layers />}
+              title={
+                needle || filter !== "all" || category !== "all"
+                  ? "No matches"
+                  : tab === "mine"
+                    ? "Make room for a great collection"
+                    : "No collections yet"
+              }
+              description={
+                needle || filter !== "all" || category !== "all"
+                  ? "Try another search or filter."
+                  : "Start with a template, describe an idea, or build a collection from scratch."
+              }
+              className="px-6 py-20"
+              action={
+                <Button variant="outline" onClick={() => setTab("templates")}>
+                  <LayoutTemplate size={14} /> Browse templates
+                </Button>
+              }
+            />
+          )
+        }
+      />
+      <DescribeDialog
+        open={describe}
+        onClose={() => setDescribe(false)}
+        onApply={(spec) => navigate(newCollectionHref(), { state: { spec } })}
+      />
+    </>
   );
 }
 
-function BuiltInTab({
-  state,
-  items,
-}: {
-  state: ReturnType<typeof useAsync<CollectionSpec[]>>;
-  items: CollectionSpec[];
-}) {
-  const navigate = useNavigate();
-  if (state.error) return <ErrorPanel error={state.error} onRetry={() => void state.reload()} />;
-  if (!state.data) return <GallerySkeleton />;
-  if (items.length === 0)
-    return (
-      <EmptyState
-        icon={<Layers />}
-        title="No built-in collections"
-        description="Franchise and system collections Ether manages for you appear here."
-      />
-    );
-  return (
-    <div className={GRID}>
-      {items.map((c) => (
-        <CollectionCard
-          key={c.id}
-          c={c}
-          onOpen={() => navigate(`/collections/${encodeURIComponent(c.id!)}`)}
-        />
-      ))}
-    </div>
-  );
+const ROW =
+  "flex w-full items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
+const ACTIVE = "bg-primary-subtle text-fg ring-1 ring-inset ring-primary/30";
+const INACTIVE = "text-fg hover:bg-surface-hover";
+function mediaLabel(c: CollectionSpec) {
+  return c.mediaType === "show" ? "TV shows" : c.mediaType === "mixed" ? "Movies & TV" : "Movies";
+}
+function ListEmpty() {
+  return <p className="px-3 py-8 text-center text-xs text-fg-muted">No collections to show.</p>;
 }

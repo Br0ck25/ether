@@ -203,7 +203,7 @@ func TestRungSwitchWaitsOutDwell(t *testing.T) {
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
 		rec := httptest.NewRecorder()
-		s.ServeRungSegment(rec, httptest.NewRequest(http.MethodGet, "/720p4m/00001.ts", nil), "720p4m", 1)
+		s.ServeRungSegment(rec, httptest.NewRequest(http.MethodGet, "/720p4m/00000.ts", nil), "720p4m", 0)
 		done <- rec
 	}()
 	time.Sleep(150 * time.Millisecond)
@@ -211,7 +211,7 @@ func TestRungSwitchWaitsOutDwell(t *testing.T) {
 		t.Fatalf("a rung probe replaced the encoder inside the dwell: starts=%d killed=%v", fr.startCount(), primary.wasKilled())
 	}
 	rec := <-done
-	if rec.Code != 200 || !strings.HasPrefix(rec.Body.String(), "segment 1") {
+	if rec.Code != 200 || !strings.HasPrefix(rec.Body.String(), "segment 0") {
 		t.Fatalf("rung segment after dwell: %d %q", rec.Code, rec.Body.String())
 	}
 	if waited := time.Since(started); waited < 350*time.Millisecond {
@@ -220,5 +220,5 @@ func TestRungSwitchWaitsOutDwell(t *testing.T) {
 	if fr.startCount() != 2 || !primary.wasKilled() {
 		t.Errorf("encoder not switched to the rung after the dwell: starts=%d", fr.startCount())
 	}
-	mustContain(t, fr.lastStart(), "scale_vt=w=1280:h=720", "-start_number 1")
+	mustContain(t, fr.lastStart(), "scale_vt=w=1280:h=720", "-start_number 0")
 }

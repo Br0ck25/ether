@@ -156,13 +156,21 @@ func SplitExtents(vols []Volume, exts []Extent) ([]Extent, error) {
 
 // MemberReader is an io.ReaderAt over a stored member's bytes.
 type MemberReader struct {
-	sr spanReader
+	sr        spanReader
+	encrypted io.ReaderAt
 }
 
 // NewMemberReader returns a reader over the bytes of a stored member. It
 // fails with the Streamable error if the member cannot be read directly, and
 // with ErrMissingVolume or ErrCorrupt if the extents do not fit vols.
 func NewMemberReader(m Member, vols []Volume) (*MemberReader, error) {
+	if m.Encryption != nil {
+		r, err := newEncryptedMemberReader(vols, m)
+		if err != nil {
+			return nil, err
+		}
+		return &MemberReader{sr: spanReader{size: m.Size}, encrypted: r}, nil
+	}
 	if err := m.Streamable(); err != nil {
 		return nil, err
 	}
@@ -204,7 +212,12 @@ func NewMemberReader(m Member, vols []Volume) (*MemberReader, error) {
 
 // ReadAt implements io.ReaderAt: it returns io.EOF when fewer than len(p)
 // bytes are available at off.
-func (r *MemberReader) ReadAt(p []byte, off int64) (int, error) { return r.sr.readAt(p, off) }
+func (r *MemberReader) ReadAt(p []byte, off int64) (int, error) {
+	if r.encrypted != nil {
+		return r.encrypted.ReadAt(p, off)
+	}
+	return r.sr.readAt(p, off)
+}
 
 // Size returns the member size.
 func (r *MemberReader) Size() int64 { return r.sr.size }

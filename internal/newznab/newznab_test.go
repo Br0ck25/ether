@@ -358,3 +358,31 @@ func TestManagerMergeDedupeSkipExhausted(t *testing.T) {
 		t.Fatalf("manager fetch err=%v", err)
 	}
 }
+
+func TestParallelRescueBurstFindsObscureAliasAndSeasonPack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		switch q.Get("t") {
+		case "caps":
+			fmt.Fprint(w, `<caps><searching><search available="yes" supportedParams="q"/><tv-search available="yes" supportedParams="q,tvdbid,season,ep"/></searching></caps>`)
+		default:
+			// Only the season-pack query ("Show Name S02") has a release;
+			// tvdbid and S02E07 return empty feeds.
+			if q.Get("q") == "Show Name S02" {
+				fmt.Fprint(w, `<rss version="2.0" xmlns:torznab="http://torznab.com/schemas/2015/feed"><channel><item><title>Show.Name.S02.COMPLETE.1080p.BluRay.x264-GRP</title><guid>pack-s02</guid><link>magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567</link><size>12000000000</size></item></channel></rss>`)
+				return
+			}
+			fmt.Fprint(w, `<rss version="2.0"><channel></channel></rss>`)
+		}
+	}))
+	defer srv.Close()
+	cfg := testConfig(srv.URL)
+	cfg.Protocol = "torrent"
+	c := New(cfg, nil, Options{SearchCacheTTL: -1})
+	res, err := c.Search(context.Background(), core.SearchRequest{
+		Type: core.TypeEpisode, IDs: core.IDs{TVDB: 999}, Title: "Show Name", Season: 2, Episode: 7,
+	})
+	if err != nil || len(res) != 1 || !res[0].Info.FullSeason {
+		t.Fatalf("season pack fallback: got %+v err=%v", res, err)
+	}
+}

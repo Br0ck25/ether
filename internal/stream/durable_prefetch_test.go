@@ -22,4 +22,7 @@ func TestDurablePrefetchRequiresRetainedSegments(t *testing.T) {
 	if err = e.DurablePrefetch(context.Background(), "disabled", doc, 0, 500_000); err == nil {
 		t.Fatal("a bypassed cache reported durable success")
 	}
+	if err = e.DurablePrefetch(context.Background(), "disabled", doc, -10, 8); err == nil {
+		t.Fatal("negative offset skipped retained-span verification")
+	}
 }

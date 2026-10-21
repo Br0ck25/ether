@@ -28,7 +28,7 @@ import (
 // blocked terms and groups, CAM, sample detection) do not apply, because
 // the owner matched the release to the title by hand. It still respects
 // what would make playback fail or misbehave regardless of policy:
-//   - a passworded release, a blocklisted release, or one already tried in
+//   - a passworded torrent release, a blocklisted release, or one already tried in
 //     this playback (failover Exclude);
 //   - a season pack for an episode (playback cannot pick the episode);
 //   - a video codec the client cannot decode (direct play is impossible and
@@ -288,7 +288,7 @@ func (s *Service) pinForResolve(req core.ResolveRequest) (*Pin, string) {
 // comment above): "" to accept.
 func (s *Service) pinRejectReason(rel core.Release, sreq core.SearchRequest, caps core.ClientCaps, exclude map[string]bool) string {
 	switch {
-	case rel.Password:
+	case rel.Password && rel.Protocol == core.ProtocolTorrent:
 		return "passworded"
 	case exclude[rel.ID]:
 		return "excluded (already tried)"

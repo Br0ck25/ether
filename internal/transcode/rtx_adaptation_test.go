@@ -3,6 +3,7 @@ package transcode
 import (
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -89,7 +90,7 @@ func TestRTXOrdinaryClockArgsAreScoped(t *testing.T) {
 				a := buildArgs(spec)
 				if proto == core.ProtocolHLS && container == ContainerFMP4 {
 					want := spec.InitName
-					if origin {
+					if runtime.GOOS == "windows" {
 						want = filepath.Join(spec.Dir, spec.InitName)
 					}
 					if got := argValue(a, "-hls_fmp4_init_filename"); got != want {

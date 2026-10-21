@@ -197,15 +197,15 @@ func TestAdaptiveDwellClassifiesMediaAndRecovery(t *testing.T) {
 				n     int
 				rapid bool
 			}{
-				{false, 2, false}, {true, 0, false}, {true, 1, false}, {true, 20, false}, {true, 2, true},
+				{false, 2, true}, {true, 0, false}, {true, 1, false}, {true, 20, false}, {true, 2, true},
 			} {
 				if got := s.rungDwellLocked(q.media, q.n) == 0; got != q.rapid {
 					t.Fatalf("request %+v rapid=%v", q, got)
 				}
 			}
 			s.deliveredCount = 1
-			if s.rungDwellLocked(true, 2) == 0 {
-				t.Fatal("single fast startup delivery bypassed dwell")
+			if s.rungDwellLocked(true, 2) != 0 {
+				t.Fatal("next media after startup delivery was held")
 			}
 			s.goodput.add(125000, time.Second)
 			if s.rungDwellLocked(true, 2) != 0 {
@@ -215,8 +215,13 @@ func TestAdaptiveDwellClassifiesMediaAndRecovery(t *testing.T) {
 			s.wantTrack = 0
 			s.deliveredTrack = low
 			s.deliveredCount = 5
-			if s.rungDwellLocked(true, 2) <= 0 {
-				t.Fatal("recovery bypassed dwell")
+			if s.rungDwellLocked(true, 2) != 0 {
+				t.Fatal("sequential recovery media was held")
+			}
+			s.cur.track = 0 // init switched, but no media delivered on new track
+			s.wantTrack = low
+			if s.rungDwellLocked(false, 2) <= 0 {
+				t.Fatal("repeated init probe reused old-track delivery evidence")
 			}
 			*now = now.Add(9 * time.Second)
 			if s.rungDwellLocked(true, 2) != 0 {
@@ -299,5 +304,19 @@ func TestCanceledRenditionDemandCannotSteerEncoder(t *testing.T) {
 				t.Fatalf("canceled request left track%d selected", want)
 			}
 		})
+	}
+}
+
+func TestFirstRenditionChoiceDoesNotWaitForEagerBase(t *testing.T) {
+	for _, media := range []bool{false, true} {
+		s, _ := adaptationModel(t, core.ProtocolHLS)
+		s.wantTrack, s.runSeq = 1, 1
+		if s.rungDwellLocked(media, 0) != 0 {
+			t.Fatal("initial player choice waited for unused base")
+		}
+		s.runSeq = 2
+		if s.rungDwellLocked(media, 0) <= 0 {
+			t.Fatal("repeated startup probe bypassed protection")
+		}
 	}
 }

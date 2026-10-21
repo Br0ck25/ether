@@ -114,7 +114,7 @@ func TestAdaptiveBrowserLab(t *testing.T) {
 		}
 		mu.Unlock()
 	})
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+	snapshot := func() map[string]any {
 		s.mu.Lock()
 		state := map[string]any{"runSeq": s.runSeq, "wantTrack": s.wantTrack, "deliveredSegment": s.deliveredSeg, "deliveredCount": s.deliveredCount, "goodputKbps": s.GoodputKbps(), "container": s.container}
 		s.mu.Unlock()
@@ -122,8 +122,21 @@ func TestAdaptiveBrowserLab(t *testing.T) {
 		state["requests"] = append([]trace(nil), traces...)
 		state["events"] = append([]json.RawMessage(nil), events...)
 		mu.Unlock()
+		return state
+	}
+	defer func() {
+		data, err := json.MarshalIndent(snapshot(), "", "  ")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if err := os.WriteFile(ready+".metrics.json", data, 0600); err != nil {
+			t.Error(err)
+		}
+	}()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(state)
+		_ = json.NewEncoder(w).Encode(snapshot())
 	})
 	stopped := make(chan struct{})
 	var stopOnce sync.Once

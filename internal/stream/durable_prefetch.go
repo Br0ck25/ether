@@ -9,6 +9,7 @@ import (
 // DurablePrefetch is for managed preloading: unlike best-effort startup warming,
 // success requires every segment covering the requested span to remain on disk.
 func (e *Engine) DurablePrefetch(ctx context.Context, id string, payload []byte, off, n int64) error {
+	off = max(off, 0) // match Prefetch normalization before checking retained spans
 	hc, ok := e.cache.(hasCache)
 	if !ok {
 		return errors.New("stream: persistent cache unavailable")
@@ -25,7 +26,7 @@ func (e *Engine) DurablePrefetch(ctx context.Context, id string, payload []byte,
 	if err != nil {
 		return err
 	}
-	for _, pc := range p.layout().pieces(off, n) {
+	for _, pc := range p.fetchPieces(off, n) {
 		pf := p.vols[pc.vol]
 		for _, i := range pf.slotsFor(pc.off, pc.n) {
 			if !hc.Has(id, pf.segBase+i) {

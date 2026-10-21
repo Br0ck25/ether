@@ -30,6 +30,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ActionMenu } from "../../components/ActionMenu";
+import { Artwork } from "../../components/Artwork";
 import { ErrorPanel, PosterSkeletons } from "../../components/feedback";
 import { Segmented } from "../../components/fields";
 import { PosterGrid } from "../../components/Poster";
@@ -143,7 +144,7 @@ export default function CollectionEditor() {
   // Autosave the working copy locally.
   const debouncedSpec = useDebouncedValue(spec, 600);
   useEffect(() => {
-    if (!ready || readOnly) return;
+    if (!ready) return;
     if (!same(debouncedSpec, baseline)) {
       saveDraft(dKey, debouncedSpec, baseline?.updatedAt);
       setSavedLocallyAt(new Date().toISOString());
@@ -200,13 +201,15 @@ export default function CollectionEditor() {
   const [problems, setProblems] = useState<string[]>([]);
   const [rebuilding, setRebuilding] = useState(false);
   const [describeOpen, setDescribeOpen] = useState(false);
-  const [tab, setTab] = useState<Tab>("build");
+  const [tab, setTab] = useState<Tab>(() => {
+    const section = search.get("section");
+    return section === "artwork" || section === "audience" ? section : "build";
+  });
   const wide = useMediaQuery("(min-width: 1024px)");
   const [pane, setPane] = useState<"edit" | "preview">("edit");
 
   const save = useCallback(
     async (publish?: boolean) => {
-      if (readOnly) return;
       const next = publish === undefined ? spec : { ...spec, enabled: publish };
       const found = specProblems(next);
       setProblems(found);
@@ -379,7 +382,7 @@ export default function CollectionEditor() {
               size="icon"
               className="size-9"
               onClick={history.undo}
-              disabled={!history.canUndo || readOnly}
+              disabled={!history.canUndo}
               aria-label="Undo"
               title="Undo (⌘Z)"
             >
@@ -390,7 +393,7 @@ export default function CollectionEditor() {
               size="icon"
               className="size-9"
               onClick={history.redo}
-              disabled={!history.canRedo || readOnly}
+              disabled={!history.canRedo}
               aria-label="Redo"
               title="Redo (⇧⌘Z)"
             >
@@ -420,7 +423,7 @@ export default function CollectionEditor() {
                   label: "Unpublish",
                   icon: EyeOff,
                   onSelect: () => void save(false),
-                  disabled: isNew || !baseline?.enabled || readOnly,
+                  disabled: isNew || !baseline?.enabled,
                 },
                 {
                   key: "discard",
@@ -440,33 +443,22 @@ export default function CollectionEditor() {
                 },
               ]}
             />
-            {!readOnly ? (
-              <>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-9"
-                  onClick={() => void save()}
-                  disabled={saving || (!dirty && !isNew)}
-                >
-                  <Save size={15} /> {saving ? "Saving…" : "Save"}
-                </Button>
-                {!spec.enabled || dirty || isNew ? (
-                  <Button
-                    size="sm"
-                    className="h-9"
-                    onClick={() => void save(true)}
-                    disabled={saving}
-                  >
-                    <Globe2 size={15} /> {spec.enabled && !isNew ? "Save & publish" : "Publish"}
-                  </Button>
-                ) : null}
-              </>
-            ) : (
-              <Button size="sm" className="h-9" onClick={duplicate}>
-                <Copy size={15} /> Duplicate to edit
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9"
+                onClick={() => void save()}
+                disabled={saving || (!dirty && !isNew)}
+              >
+                <Save size={15} /> {saving ? "Saving…" : "Save"}
               </Button>
-            )}
+              {!spec.enabled || dirty || isNew ? (
+                <Button size="sm" className="h-9" onClick={() => void save(true)} disabled={saving}>
+                  <Globe2 size={15} /> {spec.enabled && !isNew ? "Save & publish" : "Publish"}
+                </Button>
+              ) : null}
+            </>
           </div>
         </div>
       </header>
@@ -476,7 +468,8 @@ export default function CollectionEditor() {
           {readOnly ? (
             <Alert variant="info">
               <AlertDescription>
-                Built-in collections are managed by Ether. Duplicate this one to customise it.
+                Ether manages this collection’s name and rules. Customise its artwork and audience
+                here, or duplicate it to change the title selection.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -529,7 +522,7 @@ export default function CollectionEditor() {
           <aside
             className={cn(
               "app-scroll min-h-0 overflow-y-auto bg-surface",
-              wide ? "w-[30rem] shrink-0 border-r border-border xl:w-[34rem]" : "w-full",
+              wide ? "w-1/3 shrink-0 border-r border-border" : "w-full",
             )}
             aria-label="Collection editor"
           >
@@ -546,7 +539,10 @@ export default function CollectionEditor() {
                 ]}
               />
             </div>
-            <fieldset disabled={readOnly} className="min-w-0 p-3 sm:p-5">
+            <fieldset
+              disabled={readOnly && (tab === "build" || tab === "schedule")}
+              className="min-w-0 p-3 sm:p-5"
+            >
               {tab === "build" ? <BuildPanel spec={spec} update={update} region={region} /> : null}
               {tab === "schedule" ? (
                 <SchedulePanel
@@ -571,12 +567,25 @@ export default function CollectionEditor() {
           >
             <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
               <div className="flex flex-wrap items-start gap-4 rounded-xl border border-border bg-surface p-4">
-                <ArtworkPreview
-                  spec={spec}
-                  items={preview?.items ?? []}
-                  size="sm"
-                  className="w-20 shrink-0 sm:w-24"
-                />
+                {!dirty && spec.id ? (
+                  <Artwork
+                    src={api.artworkUrl(
+                      spec.id,
+                      300,
+                      [spec.updatedAt, spec.lastBuiltAt].filter(Boolean).join("-"),
+                    )}
+                    alt={`${spec.name} collection poster`}
+                    title={spec.name}
+                    className="aspect-[2/3] w-20 shrink-0 rounded-md sm:w-24"
+                  />
+                ) : (
+                  <ArtworkPreview
+                    spec={spec}
+                    items={preview?.items ?? []}
+                    size="sm"
+                    className="w-20 shrink-0 sm:w-24"
+                  />
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium uppercase tracking-wider text-fg-subtle">
                     How it appears in Plex

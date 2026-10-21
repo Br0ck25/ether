@@ -379,6 +379,9 @@ func cacheKey(c *Client, req core.SearchRequest) string {
 	fmt.Fprintf(h, "%s|%s|%d|%s|%d|%s|%d|%d|%d",
 		c.indexerID(), req.Type, req.IDs.TMDB, req.IDs.IMDB, req.IDs.TVDB,
 		strings.ToLower(strings.TrimSpace(req.Title)), req.Year, req.Season, req.Episode)
+	if orig := strings.ToLower(strings.TrimSpace(req.OriginalTitle)); orig != "" && orig != strings.ToLower(strings.TrimSpace(req.Title)) {
+		fmt.Fprintf(h, "|%s", orig)
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
@@ -388,6 +391,38 @@ func joinCats(cats []int) string {
 		parts[i] = strconv.Itoa(n)
 	}
 	return strings.Join(parts, ",")
+}
+
+// queryTitles returns the distinct search titles to try for req: Title
+// first, then OriginalTitle (when distinct), then structural aliases.
+func queryTitles(req core.SearchRequest) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		k := strings.ToLower(s)
+		if seen[k] {
+			return
+		}
+		seen[k] = true
+		out = append(out, s)
+	}
+	add(req.Title)
+	if req.OriginalTitle != "" && !releaseparse.TitlesMatch(req.OriginalTitle, req.Title) {
+		add(req.OriginalTitle)
+	}
+	for _, a := range releaseparse.TitleAliases(req.Title) {
+		add(a)
+	}
+	if req.OriginalTitle != "" {
+		for _, a := range releaseparse.TitleAliases(req.OriginalTitle) {
+			add(a)
+		}
+	}
+	return out
 }
 
 // searchAttempts builds the ordered fallback queries for a request.
@@ -412,6 +447,7 @@ func (c *Client) searchAttempts(req core.SearchRequest, caps *Caps) []url.Values
 		return v
 	}
 	imdb := strings.TrimPrefix(req.IDs.IMDB, "tt")
+	titles := queryTitles(req)
 	var attempts []url.Values
 	if isTV {
 		mk := func(idKey, idVal string) url.Values {
@@ -437,10 +473,13 @@ func (c *Client) searchAttempts(req core.SearchRequest, caps *Caps) []url.Values
 		if imdb != "" && (caps == nil || (!caps.TVAvail || hasParam(caps.TVParams, "imdbid"))) {
 			attempts = append(attempts, mk("imdbid", imdb))
 		}
-		if req.Title != "" {
-			q := req.Title
-			if req.Season > 0 && req.Episode > 0 {
-				q = fmt.Sprintf("%s S%02dE%02d", req.Title, req.Season, req.Episode)
+		for _, title := range titles {
+			q := title
+			switch {
+			case req.Season > 0 && req.Episode > 0:
+				q = fmt.Sprintf("%s S%02dE%02d", title, req.Season, req.Episode)
+			case req.Season > 0:
+				q = fmt.Sprintf("%s S%02d", title, req.Season)
 			}
 			v := mk("", "")
 			v.Set("q", q)
@@ -449,6 +488,51 @@ func (c *Client) searchAttempts(req core.SearchRequest, caps *Caps) []url.Values
 			v2.Set("t", "search")
 			v2.Set("q", q)
 			attempts = append(attempts, v2)
+		}
+		// Torznab season-pack and complete-series fallback: older TV shows
+		// on torrent indexers often exist only as full-season or complete
+		// packs, which an episode-specific query (ep=N / SxxExx) misses.
+		if cfg.IsTorrent() && req.Season > 0 {
+			mkSeason := func(idKey, idVal string) url.Values {
+				v := base()
+				v.Set("t", "tvsearch")
+				if idKey != "" {
+					v.Set(idKey, idVal)
+				}
+				v.Set("season", strconv.Itoa(req.Season))
+				return v
+			}
+			if req.Episode > 0 {
+				if req.IDs.TVDB > 0 && (caps == nil || (!caps.TVAvail || hasParam(caps.TVParams, "tvdbid"))) {
+					attempts = append(attempts, mkSeason("tvdbid", strconv.FormatInt(req.IDs.TVDB, 10)))
+				}
+				if req.IDs.TMDB > 0 && (caps == nil || (!caps.TVAvail || hasParam(caps.TVParams, "tmdbid"))) {
+					attempts = append(attempts, mkSeason("tmdbid", strconv.FormatInt(req.IDs.TMDB, 10)))
+				}
+				if imdb != "" && (caps == nil || (!caps.TVAvail || hasParam(caps.TVParams, "imdbid"))) {
+					attempts = append(attempts, mkSeason("imdbid", imdb))
+				}
+				for _, title := range titles {
+					q := fmt.Sprintf("%s S%02d", title, req.Season)
+					v := mkSeason("", "")
+					v.Set("q", q)
+					attempts = append(attempts, v)
+					v2 := base()
+					v2.Set("t", "search")
+					v2.Set("q", q)
+					attempts = append(attempts, v2)
+				}
+			}
+			for _, title := range titles {
+				v := base()
+				v.Set("t", "search")
+				v.Set("q", fmt.Sprintf("%s Season %d", title, req.Season))
+				attempts = append(attempts, v)
+				vc := base()
+				vc.Set("t", "search")
+				vc.Set("q", title+" Complete")
+				attempts = append(attempts, vc)
+			}
 		}
 		return attempts
 	}
@@ -464,10 +548,10 @@ func (c *Client) searchAttempts(req core.SearchRequest, caps *Caps) []url.Values
 		v.Set("tmdbid", strconv.FormatInt(req.IDs.TMDB, 10))
 		attempts = append(attempts, v)
 	}
-	if req.Title != "" {
-		q := req.Title
+	for _, title := range titles {
+		q := title
 		if req.Year > 0 {
-			q = fmt.Sprintf("%s %d", req.Title, req.Year)
+			q = fmt.Sprintf("%s %d", title, req.Year)
 		}
 		v := base()
 		v.Set("t", "search")
@@ -528,24 +612,102 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 		return nil, fmt.Errorf("newznab: search request has no usable identifiers")
 	}
 	var firstErr error
-	for _, params := range attempts {
-		if err := ctx.Err(); err != nil {
+	results, err := c.doSearch(ctx, attempts[0])
+	if err != nil {
+		if errors.Is(err, core.ErrBudgetExhausted) {
 			return nil, err
 		}
-		results, err := c.doSearch(ctx, params)
-		if err != nil {
-			if errors.Is(err, core.ErrBudgetExhausted) {
+		firstErr = err
+		c.log.Debug("newznab search attempt failed", "indexer", c.Name(), "t", attempts[0].Get("t"), "err", err)
+	} else if len(results) > 0 {
+		c.cachePut(ctx, key, results)
+		return results, nil
+	}
+	rest := attempts[1:]
+	if len(rest) == 0 {
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		c.cachePut(ctx, key, nil)
+		return nil, nil
+	}
+	// When the primary attempt misses on an uncapped indexer, fan out the
+	// fallback queries (alternate IDs, keyword search, OriginalTitle/aliases,
+	// season packs) in bounded parallel bursts so obscure titles resolve in
+	// a single round-trip instead of N serial timeouts.
+	if c.Config().DailyLimit == 0 && firstErr == nil {
+		const burstWidth = 4
+		for base := 0; base < len(rest); base += burstWidth {
+			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			if firstErr == nil {
-				firstErr = err
+			end := min(base+burstWidth, len(rest))
+			batch := rest[base:end]
+			type outSlot struct {
+				res []core.Release
+				err error
 			}
-			c.log.Debug("newznab search attempt failed", "indexer", c.Name(), "t", params.Get("t"), "err", err)
-			continue
+			slots := make([]outSlot, len(batch))
+			var wg sync.WaitGroup
+			for i, p := range batch {
+				wg.Add(1)
+				go func(i int, p url.Values) {
+					defer wg.Done()
+					slots[i].res, slots[i].err = c.doSearch(ctx, p)
+				}(i, p)
+			}
+			wg.Wait()
+			var merged []core.Release
+			seen := map[string]bool{}
+			var budgetErr error
+			for _, s := range slots {
+				if s.err != nil {
+					if errors.Is(s.err, core.ErrBudgetExhausted) && budgetErr == nil {
+						budgetErr = s.err
+					} else if firstErr == nil {
+						firstErr = s.err
+					}
+					continue
+				}
+				for _, r := range s.res {
+					k := r.ID
+					if r.InfoHash != "" {
+						k = r.InfoHash
+					}
+					if !seen[k] {
+						seen[k] = true
+						merged = append(merged, r)
+					}
+				}
+			}
+			if len(merged) > 0 {
+				c.cachePut(ctx, key, merged)
+				return merged, nil
+			}
+			if budgetErr != nil {
+				return nil, budgetErr
+			}
 		}
-		if len(results) > 0 {
-			c.cachePut(ctx, key, results)
-			return results, nil
+	} else {
+		for _, params := range rest {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			results, err := c.doSearch(ctx, params)
+			if err != nil {
+				if errors.Is(err, core.ErrBudgetExhausted) {
+					return nil, err
+				}
+				if firstErr == nil {
+					firstErr = err
+				}
+				c.log.Debug("newznab search attempt failed", "indexer", c.Name(), "t", params.Get("t"), "err", err)
+				continue
+			}
+			if len(results) > 0 {
+				c.cachePut(ctx, key, results)
+				return results, nil
+			}
 		}
 	}
 	if firstErr != nil {
@@ -553,6 +715,222 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	}
 	c.cachePut(ctx, key, nil)
 	return nil, nil
+}
+
+// rescueAttempts builds broader keyword, alias, season-pack and miniseries
+// queries for a second-pass rescue when the primary search returned only
+// dead/unhealthy or non-matching releases.
+func (c *Client) rescueAttempts(req core.SearchRequest, caps *Caps) []url.Values {
+	cfg := c.Config()
+	isTV := req.Type == core.TypeEpisode || req.Season > 0 || req.Type == core.TypeShow
+	base := func() url.Values {
+		v := url.Values{"extended": {"1"}, "limit": {strconv.Itoa(defaultSearchLimit)}}
+		if isTV {
+			cats := cfg.TVCategories
+			if len(cats) == 0 {
+				cats = []int{5000}
+			}
+			v.Set("cat", joinCats(cats))
+		} else {
+			cats := cfg.MovieCategories
+			if len(cats) == 0 {
+				cats = []int{2000}
+			}
+			v.Set("cat", joinCats(cats))
+		}
+		return v
+	}
+	primary := c.searchAttempts(req, caps)
+	alreadyFirst := ""
+	if len(primary) > 0 {
+		alreadyFirst = primary[0].Encode()
+	}
+	seen := map[string]bool{}
+	if alreadyFirst != "" {
+		seen[alreadyFirst] = true
+	}
+	var out []url.Values
+	add := func(v url.Values) {
+		enc := v.Encode()
+		if enc == "" || seen[enc] {
+			return
+		}
+		seen[enc] = true
+		out = append(out, v)
+	}
+	for _, p := range primary[min(1, len(primary)):] {
+		add(p)
+	}
+	titles := queryTitles(req)
+	if isTV {
+		for _, title := range titles {
+			if req.Season > 0 && req.Episode > 0 {
+				// Season pack queries (S01 / Season 1 / Complete).
+				vS := base()
+				vS.Set("t", "search")
+				vS.Set("q", fmt.Sprintf("%s S%02d", title, req.Season))
+				add(vS)
+				vSeason := base()
+				vSeason.Set("t", "search")
+				vSeason.Set("q", fmt.Sprintf("%s Season %d", title, req.Season))
+				add(vSeason)
+				if req.Season == 1 && req.Episode <= 20 {
+					vPart := base()
+					vPart.Set("t", "search")
+					vPart.Set("q", fmt.Sprintf("%s Part %d", title, req.Episode))
+					add(vPart)
+					vEp := base()
+					vEp.Set("t", "search")
+					vEp.Set("q", fmt.Sprintf("%s E%02d", title, req.Episode))
+					add(vEp)
+				}
+			}
+			vComp := base()
+			vComp.Set("t", "search")
+			vComp.Set("q", title+" Complete")
+			add(vComp)
+		}
+		return out
+	}
+	// Movies: also try bare title without year for uploads whose indexed
+	// release name omitted the year or used a festival release year.
+	for _, title := range titles {
+		v := base()
+		v.Set("t", "search")
+		v.Set("q", title)
+		add(v)
+	}
+	return out
+}
+
+// SearchRescue runs broader keyword, alias, OriginalTitle, miniseries and
+// season-pack queries when the primary Search results had no playable
+// candidate. Results are cached under a separate rescue key and respect
+// the indexer's daily budget and rate-limit state.
+func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	if cfg := c.Config(); !cfg.Enabled {
+		return nil, fmt.Errorf("indexer %q is disabled", c.Name())
+	}
+	key := cacheKey(c, req) + "|rescue"
+	if cached, ok := c.cacheGet(ctx, key); ok {
+		return cached, nil
+	}
+	if c.Exhausted(ctx) {
+		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
+	}
+	if c.Config().IsBuiltin() {
+		// Built-in sites: if Episode > 0, rescue via season-level search
+		// and OriginalTitle/aliases.
+		var merged []core.Release
+		seen := map[string]bool{}
+		appendUnique := func(rs []core.Release) {
+			for _, r := range rs {
+				k := r.ID
+				if r.InfoHash != "" {
+					k = r.InfoHash
+				}
+				if !seen[k] {
+					seen[k] = true
+					merged = append(merged, r)
+				}
+			}
+		}
+		if req.OriginalTitle != "" && !releaseparse.TitlesMatch(req.OriginalTitle, req.Title) {
+			alt := req
+			alt.Title, alt.OriginalTitle = req.OriginalTitle, ""
+			if rs, err := c.backendSearch(ctx, alt); err == nil {
+				appendUnique(rs)
+			}
+		}
+		if req.Season > 0 && req.Episode > 0 {
+			packReq := req
+			packReq.Episode = 0
+			if rs, err := c.backendSearch(ctx, packReq); err == nil {
+				appendUnique(rs)
+			}
+		}
+		c.cachePut(ctx, key, merged)
+		return merged, nil
+	}
+	caps, _ := c.Caps(ctx)
+	attempts := c.rescueAttempts(req, caps)
+	if len(attempts) == 0 {
+		return nil, nil
+	}
+	if len(attempts) > 6 {
+		attempts = attempts[:6]
+	}
+	var merged []core.Release
+	seen := map[string]bool{}
+	var firstErr error
+	if c.Config().DailyLimit == 0 {
+		type slot struct {
+			res []core.Release
+			err error
+		}
+		slots := make([]slot, len(attempts))
+		var wg sync.WaitGroup
+		for i, p := range attempts {
+			wg.Add(1)
+			go func(i int, p url.Values) {
+				defer wg.Done()
+				slots[i].res, slots[i].err = c.doSearch(ctx, p)
+			}(i, p)
+		}
+		wg.Wait()
+		for _, s := range slots {
+			if s.err != nil {
+				if firstErr == nil {
+					firstErr = s.err
+				}
+				continue
+			}
+			for _, r := range s.res {
+				k := r.ID
+				if r.InfoHash != "" {
+					k = r.InfoHash
+				}
+				if !seen[k] {
+					seen[k] = true
+					merged = append(merged, r)
+				}
+			}
+		}
+	} else {
+		for _, p := range attempts {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			res, err := c.doSearch(ctx, p)
+			if err != nil {
+				if errors.Is(err, core.ErrBudgetExhausted) {
+					break
+				}
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			for _, r := range res {
+				k := r.ID
+				if r.InfoHash != "" {
+					k = r.InfoHash
+				}
+				if !seen[k] {
+					seen[k] = true
+					merged = append(merged, r)
+				}
+			}
+			if len(merged) > 0 {
+				break
+			}
+		}
+	}
+	if len(merged) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	c.cachePut(ctx, key, merged)
+	return merged, nil
 }
 
 // nzbDiskPath returns the on-disk NZB path for a release id, or "".

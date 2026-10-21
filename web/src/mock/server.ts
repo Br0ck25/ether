@@ -2238,8 +2238,17 @@ export function createFakeServer(opts: FakeOptions = {}) {
       }
       if (method === "GET") return json(current);
       if (method === "PUT") {
-        if (current.builtIn) return err(400, "read_only", "built-in collections can't be edited");
-        const spec = normalizeSpec(body as CollectionSpec);
+        const input = normalizeSpec(body as CollectionSpec);
+        const spec = current.builtIn
+          ? {
+              ...current,
+              artwork: input.artwork,
+              targets: input.targets,
+              enabled: input.enabled,
+              rotate: input.rotate,
+              limit: input.limit > 0 && input.limit <= 100 ? input.limit : current.limit,
+            }
+          : input;
         const saved = {
           ...spec,
           id,

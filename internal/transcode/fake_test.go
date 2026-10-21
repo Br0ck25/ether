@@ -322,7 +322,11 @@ func (p *fakeProc) simulate(cmd Command, delay time.Duration, lastSeg, failAfter
 		return
 	}
 	if init != "" {
-		_ = os.WriteFile(filepath.Join(filepath.Dir(playlist), init), []byte("init"), 0o644)
+		initPath := init
+		if !filepath.IsAbs(initPath) {
+			initPath = filepath.Join(filepath.Dir(playlist), initPath)
+		}
+		_ = os.WriteFile(initPath, []byte("init"), 0o644)
 	}
 	var list strings.Builder
 	list.WriteString("#EXTM3U\n#EXT-X-PLAYLIST-TYPE:EVENT\n")
@@ -393,7 +397,10 @@ func (p *fakeProc) simulateChunks(cmd Command, delay, gop, end time.Duration, la
 	pattern := argValue(args, "-hls_segment_filename")
 	init := ""
 	if v := argValue(args, "-hls_fmp4_init_filename"); v != "" {
-		init = filepath.Join(filepath.Dir(playlist), v)
+		init = v
+		if !filepath.IsAbs(init) {
+			init = filepath.Join(filepath.Dir(playlist), init)
+		}
 	}
 	mkv := argValue(args, "-segment_format") == "matroska"
 	if mkv {
