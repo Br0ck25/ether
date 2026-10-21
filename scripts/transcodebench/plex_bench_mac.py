@@ -330,9 +330,16 @@ def run_session_mac(cfg: MacConfig, root_pid: int | None, out_dir: Path, idx: in
                 pass
             stop_poll.wait(0.1)
     th = threading.Thread(target=poller, daemon=True); th.start()
+    # Header auth on every HTTP request (incl. segments/playlist/stop, which
+    # pb calls without profile headers). If an outer scope (prepare-hold /
+    # _run_waves caller) already installed the wrapper, reuse it.
+    _token = getattr(cfg.profile, "_token", "")
+    _restore = (lambda: None) if getattr(pb.http_get, "_is_auth_wrapper", False) \
+        else _install_auth_http(_token, cfg.base_url)
     try:
         result = pb.run_session(pbcfg, None, out_dir, idx)
     finally:
+        _restore()
         stop_poll.set(); th.join(timeout=3)
     if root_pid:
         state["end"] = sample_tree(root_pid)
@@ -399,18 +406,37 @@ def verify_all(cfg: MacConfig, out_dir: Path, sessions: list) -> dict:
 # ------------------------------------------------------- prepare / hold --
 class TokenProfile(pb.Profile):
     """pb.Profile plus an in-memory X-Plex-Token (never a dataclass field,
-    so asdict()/result.json never contain it; pb.sanitize redacts it in text)."""
+    so asdict()/result.json never contain it; pb.sanitize redacts it in text).
+    The token is sent ONLY as a header (see _install_auth_http), never as a
+    URL/query parameter and never inside profile JSON."""
     _token = ""
     def headers(self) -> dict:
         h = super().headers()
         if self._token:
             h["X-Plex-Token"] = self._token
         return h
-    def decision_params(self, rating_key: str, session: str) -> dict:
-        p = super().decision_params(rating_key, session)
-        if self._token:
-            p["X-Plex-Token"] = self._token
-        return p
+
+_auth_lock = threading.Lock()
+def _install_auth_http(token: str, base_url: str):
+    """Wrap pb.http_get so EVERY driver request (decision, start, playlist,
+    segments, stop, identity) carries X-Plex-Token as a header when the URL
+    is under base_url. Returns a restore callable. No-op without a token."""
+    if not token:
+        return lambda: None
+    original = pb.http_get
+    def wrapper(url, timeout, headers=None):
+        h = dict(headers or {})
+        if url.startswith(base_url):
+            h["X-Plex-Token"] = token
+        return original(url, timeout, headers=h)
+    wrapper._is_auth_wrapper = True  # type: ignore[attr-defined]
+    with _auth_lock:
+        pb.http_get = wrapper
+    def restore():
+        with _auth_lock:
+            if getattr(pb.http_get, "_is_auth_wrapper", False):
+                pb.http_get = original
+    return restore
 
 def load_token_file(path: str) -> str:
     """Read a private token file. Content is never logged or returned in metadata."""
@@ -482,7 +508,7 @@ def wait_for_signal(signal_path: Path, run_id: str, not_before_mtime: float,
 
 def run_prepare_hold(cfg: MacConfig, out_dir: Path, ready_path: Path, signal_path: Path,
                      window_deadline_s: float = 300.0, stop_reserve_s: float = 30.0,
-                     token: str = "", pms=None, run_bench=None) -> dict:
+                     token: str = "", token_file: str = "", pms=None, run_bench=None) -> dict:
     """Launch -> identity -> publish readiness -> hold for root signal ->
     tiny benchmark for the signal's ratingKey -> always stop within deadline.
 
@@ -504,14 +530,36 @@ def run_prepare_hold(cfg: MacConfig, out_dir: Path, ready_path: Path, signal_pat
             "window_deadline_s": window_deadline_s, "stop_reserve_s": stop_reserve_s,
             "auth": "token-file (content never logged)" if token else "loopback-unauth (no token)",
             "token_present": bool(token), "sessions": [], "waves": []}
+    binary = Path(cfg.app) / "Contents" / "MacOS" / "Plex Media Server"
+    config_paths = {"app": cfg.app, "binary": str(binary),
+                    "lab_root": str(iso.lab), "support_dir": str(iso.lab_support),
+                    "tmp_dir": str(iso.lab_tmp), "media_dir": str(iso.lab_media),
+                    "default_support_path": str(iso.default_support),
+                    "prefs_plist_path": str(iso.prefs_plist),
+                    "prefs_domain": PREFS_DOMAIN,
+                    "pms_log": str(Path(cfg.lab_root) / "pms.log"),
+                    "out_dir": str(out_dir), "result_file": str(out_dir / "result.json"),
+                    "ready_file": str(ready_path), "signal_file": str(signal_path),
+                    "fixture": cfg.fixture or None,
+                    "profile": asdict(cfg.profile)}  # fields only; token is not a field
+    meta["config_paths"] = config_paths
+    meta["token_file"] = token_file or None  # path only, never content
     ready = {"run_id": run_id, "state": "starting", "base_url": cfg.base_url,
              "signal_file": str(signal_path), "ready_file": str(ready_path),
              "window_deadline_s": window_deadline_s, "stop_reserve_s": stop_reserve_s,
              "deadline_epoch": time.time() + window_deadline_s,
-             "auth": meta["auth"], "token_present": bool(token)}
+             "auth": meta["auth"], "token_present": bool(token),
+             "token_file": token_file or None,  # path only; root creates it 0600
+             "config": config_paths,
+             "log_paths": {"pms_log": config_paths["pms_log"],
+                           "result_file": config_paths["result_file"]}}
+    restore_auth = _install_auth_http(token, cfg.base_url)
     try:
         meta["pms_pid"] = pms.start(); root_pid = pms.pid
         ready.update({"pid": pms.pid, "pgid": getattr(pms, "pgid", None)})
+        if getattr(pms, "log_path", None):
+            ready["log_paths"]["pms_log"] = str(pms.log_path); ready["config"]["pms_log"] = str(pms.log_path)
+            meta["config_paths"]["pms_log"] = str(pms.log_path)
         meta["identity"] = pms.wait_identity(); ready["identity"] = meta["identity"]
         ready["state"] = "waiting_for_signal"
         ready["hint"] = ("root: claim privately + create/scan library, then write signal JSON "
@@ -588,6 +636,7 @@ def run_prepare_hold(cfg: MacConfig, out_dir: Path, ready_path: Path, signal_pat
             publish_ready(ready_path, ready)
         except Exception:
             pass
+        restore_auth()
     return meta
 
 def _run_waves(cfg: MacConfig, root_pid, out_dir: Path) -> dict:
@@ -690,7 +739,7 @@ def main(argv=None):
         signal_path = Path(a.signal_file) if a.signal_file else Path(cfg.lab_root) / "continue.json"
         meta = run_prepare_hold(cfg, out_dir, ready_path, signal_path,
                                 window_deadline_s=a.window_deadline_s, stop_reserve_s=a.stop_reserve_s,
-                                token=token)
+                                token=token, token_file=a.token_file)
         meta["config"] = {**asdict(cfg), "profile": asdict(cfg.profile)}  # profile fields only; token is not a field
         meta["fixture"] = fixture_info(cfg.fixture) if cfg.fixture else None
         (out_dir / "result.json").write_text(json.dumps(meta, indent=2))
@@ -705,6 +754,12 @@ def main(argv=None):
             "fixture": fixture_info(cfg.fixture) if cfg.fixture else None,
             "preflight": preflight(cfg), "plan": START_PLAN}
     pms = None; root_pid = a.pms_pid; sessions = []; waves = []
+    _token = load_token_file(a.token_file) if a.token_file else ""
+    if _token:
+        cfg.profile._token = _token
+    meta["auth"] = "token-file (content never logged)" if _token else "loopback-unauth (no token)"
+    meta["token_file"] = a.token_file or None
+    restore_auth = _install_auth_http(_token, cfg.base_url)
     try:
         if not a.no_launch:
             pms = PmsProcessMac(cfg, iso); meta["pms_pid"] = pms.start(); root_pid = pms.pid
@@ -744,6 +799,7 @@ def main(argv=None):
         if pms:
             meta["pms_stop"] = pms.stop(); meta["isolation_restore"] = iso.restore()
             meta["port_32400_connectable_after"] = port_connectable(cfg.base_url)
+        restore_auth()
     (out_dir / "result.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps({"ok": meta["ok"], "out": str(out_dir), "sessions": len(sessions),
                       **({"error": meta["error"]} if not meta["ok"] else {}),

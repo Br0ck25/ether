@@ -148,7 +148,8 @@ class TestPrepareHold(unittest.TestCase):
             tok = pm.load_token_file(str(tf)); self.assertEqual(tok, SECRET)
             prof = pm.TokenProfile(); prof._token = tok
             self.assertEqual(prof.headers()["X-Plex-Token"], SECRET)
-            self.assertEqual(prof.decision_params("7", "s")["X-Plex-Token"], SECRET)
+            self.assertNotIn("X-Plex-Token", prof.decision_params("7", "s"))  # never a param
+            self.assertNotIn(SECRET, json.dumps(prof.decision_params("7", "s")))
             import dataclasses
             self.assertNotIn(SECRET, json.dumps(dataclasses.asdict(prof)))
             self.assertNotIn(SECRET, json.dumps({"auth": "token-file (content never logged)", "token_present": True}))
@@ -185,7 +186,8 @@ class TestPrepareHold(unittest.TestCase):
             calls["rating"] = cfg.rating_key; calls["duration"] = cfg.duration_s; calls["timeout"] = cfg.timeout_s
             return {"sessions": [{"session_index": 0, "actual_media_s": 10.0}], "waves": [{"wave": 0, "wall_s": 1.0}]}
         meta = pm.run_prepare_hold(cfg, Path(td), ready, sigp, window_deadline_s=deadline,
-                                   stop_reserve_s=2.0, token=SECRET, pms=pms, run_bench=bench)
+                                   stop_reserve_s=2.0, token=SECRET, token_file="/private/root-token-0600",
+                                   pms=pms, run_bench=bench)
         return meta, pms, ready, calls
     def test_hold_continue_runs_chosen_ratingkey_and_stops(self):
         with tempfile.TemporaryDirectory() as td:
@@ -197,6 +199,13 @@ class TestPrepareHold(unittest.TestCase):
             self.assertNotIn(SECRET, blob)  # token never in readiness or result
             r = json.loads(ready.read_text())
             self.assertEqual(r["pid"], 4242); self.assertIn("run_id", r); self.assertEqual(r["final_state"], "done")
+            # readiness carries actual config/log/token paths (paths only)
+            self.assertEqual(r["token_file"], "/private/root-token-0600")
+            self.assertTrue(r["config"]["pms_log"].endswith("pms.log"))
+            self.assertTrue(r["log_paths"]["pms_log"].endswith("pms.log"))
+            self.assertIn("support_dir", r["config"]); self.assertIn("binary", r["config"])
+            self.assertEqual(meta["token_file"], "/private/root-token-0600")
+            self.assertFalse(hasattr(pb, "_leaked"))
     def test_hold_abort_stops_without_benchmark(self):
         with tempfile.TemporaryDirectory() as td:
             cfg = self.cfg(td); pms = FakePms()
@@ -226,6 +235,36 @@ class TestPrepareHold(unittest.TestCase):
             meta = pm.run_prepare_hold(cfg, Path(td), Path(td) / "ready.json", Path(td) / "continue.json",
                                        window_deadline_s=10.0, stop_reserve_s=2.0)
             self.assertFalse(meta["ok"]); self.assertIn("window-granted", meta["error"])
+
+class RecordingHandler(fake.Handler):
+    seen = []  # list of (path, token_header)
+    def do_GET(self):
+        type(self).seen.append((self.path, self.headers.get("X-Plex-Token")))
+        super().do_GET()
+
+class TestTokenEverywhereHeaderOnly(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RecordingHandler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+    @classmethod
+    def tearDownClass(cls): cls.srv.shutdown()
+    def test_every_request_header_no_param_no_result_leak(self):
+        fake.Handler.mode = "ok"; RecordingHandler.mode = "ok"; RecordingHandler.seen = []
+        prof = pm.TokenProfile(); prof._token = SECRET
+        cfg = pm.MacConfig(base_url=f"http://127.0.0.1:{self.port}", duration_s=10.0,
+                           timeout_s=20, profile=prof)
+        with tempfile.TemporaryDirectory() as d:
+            r = pm.run_session_mac(cfg, None, Path(d), 0)
+        self.assertGreaterEqual(len(RecordingHandler.seen), 5)  # decision,start,media,segs,stop
+        for path, tok in RecordingHandler.seen:
+            self.assertEqual(tok, SECRET, f"missing token header on {path}")
+            self.assertNotIn(SECRET, path); self.assertNotIn("X-Plex-Token", path)
+        self.assertNotIn(SECRET, json.dumps(r))  # sanitized result excludes credential
+        self.assertNotIn(SECRET, json.dumps(r.get("profile") or {}))
+        # wrapper restored after the session
+        self.assertFalse(getattr(pb.http_get, "_is_auth_wrapper", False))
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
