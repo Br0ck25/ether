@@ -52,10 +52,6 @@ The best release from the other source is checked at the same time, and both
 remain available for failover. **Releases › Pinned** (when you find a title) and **History** show when
 routing moved a release, and why.
 
-The debrid integrations were built from each service's public API
-documentation and tested against simulated services, not live accounts. If a
-service misbehaves, check **Logs** and its status on **Sources › Debrid**.
-
 ## Built-in indexers
 
 Ether can search sites itself, without a separate indexer manager. Each
@@ -291,10 +287,29 @@ when Ether maps the playback timestamp.
 ## Cache management
 
 **Server → Cache** controls media retention, opening and resume warming, and an
-optional managed shelf of movies and TV episodes. Presets range from no persistent media
-through small caches to multi-terabyte preloading. Every budget is adjustable;
-selecting a preset only changes the draft until you save. See [Cache management](cache.md)
-for retention, preload limits, pause behaviour, and storage accounting.
+optional managed shelf of preloaded movies and TV episodes. Selecting a preset
+only updates the draft until you review and save.
+
+- **Presets:** **Pass-through** stores no persistent media segments on disk.
+  **Feather / Everyday** (256 MiB / 32 GiB) keep small opening windows and
+  short retention. **Encore / Deep shelf** (250 / 750 GiB) retain fetched
+  segments and favour repeat watches without downloading whole titles ahead of
+  time. **Cinema node / Edge library** (2 / 20 TiB) dedicate space inside the
+  cache budget to proactive full-title preloading.
+- **Retention & warming:** Demand mode evicts the oldest unprotected segments;
+  adaptive mode gives repeat watches extra retention credit. Detail-page opening
+  windows, resume windows and next-episode warming are independently
+  configurable and always yield priority to active streams.
+- **Managed preloading:** Opt-in movie and TV preloading ranks candidates using
+  a configurable blend of household watch history and catalogue popularity, with
+  a rolling episode window around each active viewer's progress. Preloading
+  pauses while anyone is streaming unless explicitly allowed, respects a
+  bandwidth cap and free-space reserve, and never writes watch history.
+- **Shared NAS storage:** Under **Edit policy → Where your cache lives → Shared
+  NAS**, point a standalone server or every participating PostgreSQL cluster
+  node at the same dedicated folder on an OS-mounted NFS or SMB share. Keep
+  Ether's SQLite database and transcode temp directory on local storage, never
+  on the NAS share.
 
 ## Metadata artwork
 

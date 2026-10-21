@@ -15,10 +15,10 @@ node_modules/
 
 # Keep research, plans, agent instructions and development notes local.
 *.md
+/docs/benchmarks/
 !/README.md
 !/LEGAL.md
 !/THIRD_PARTY_NOTICES.md
-!/docs/design.md
 !/docs/install.md
 !/docs/user-guide.md
 !/packaging/community/README.md
