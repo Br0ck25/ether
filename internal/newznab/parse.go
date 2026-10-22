@@ -105,7 +105,11 @@ func parseFeed(body []byte, indexer string) ([]core.Release, error) {
 }
 
 func parseXMLFeed(body []byte, indexer string) ([]core.Release, error) {
-	dec := xml.NewDecoder(bytes.NewReader(body))
+	return parseXMLStream(bytes.NewReader(body), indexer, nil)
+}
+
+func parseXMLStream(reader io.Reader, indexer string, arrived func([]core.Release)) ([]core.Release, error) {
+	dec := xml.NewDecoder(reader)
 	// Indexer feeds are often not well-formed XML: a bare "&" in a link or
 	// description, or an HTML entity ("&nbsp;"). One bad character must not
 	// fail the whole search.
@@ -198,11 +202,15 @@ func parseXMLFeed(body []byte, indexer string) ([]core.Release, error) {
 		case xml.EndElement:
 			if t.Name.Local == "item" && cur != nil {
 				out = append(out, cur.toRelease(indexer))
+				if arrived != nil {
+					arrived([]core.Release{out[len(out)-1]})
+				}
 				cur = nil
 			}
 			field = ""
 		}
 	}
+
 	return out, nil
 }
 

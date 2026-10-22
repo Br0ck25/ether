@@ -20,6 +20,17 @@ func (s *Service) prepareSources(ctx context.Context, cands []candidate, title *
 	if !ok || len(cands) < 2 {
 		return cands
 	}
+	if prepared := cands[0].prepared; prepared != nil {
+		select {
+		case <-prepared.done:
+			if prepared.result.healthy && prepared.result.err == nil {
+				// Discovery already produced a playable leading candidate;
+				// descriptor preparation must not add another network wait.
+				return cands
+			}
+		default:
+		}
+	}
 	if cands[0].verified && (s.resolverCfg().SourcePreference != PreferDebrid || protocolOf(cands[0].rel) == core.ProtocolTorrent) {
 		return cands
 	}

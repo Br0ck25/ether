@@ -57,7 +57,7 @@ type Options struct {
 	NZBDir         string        // directory for downloaded NZBs; "" keeps them in memory only
 	MaxNZBBytes    int64
 	Now            func() time.Time // injected clock (tests)
-	MaxParallel    int              // Manager fan-out; 0 = 4
+	MaxParallel    int              // Manager fan-out; 0 dispatches every configured indexer
 	// Backend builds the search backend for an indexer whose Kind is not
 	// Newznab (built-in sites, internal/cardigann). Nil disables them.
 	Backend func(config.Indexer) (Backend, error)
@@ -569,11 +569,16 @@ func (c *Client) doSearch(ctx context.Context, params url.Values) ([]core.Releas
 	if err != nil {
 		return nil, err
 	}
-	body, err := c.get(ctx, u, 20<<20)
-	if err != nil {
-		return nil, err
+	var results []core.Release
+	if emit, ok := ctx.Value(searchArrivalKey{}).(func([]core.Release)); ok {
+		results, err = c.getSearchStream(ctx, u, emit)
+	} else {
+		var body []byte
+		body, err = c.get(ctx, u, 20<<20)
+		if err == nil {
+			results, err = parseFeed(body, c.Name())
+		}
 	}
-	results, err := parseFeed(body, c.Name())
 	if err == nil && c.Config().IsTorrent() {
 		// A Torznab indexer's results are torrents even when an item
 		// carries only a .torrent download link.

@@ -435,27 +435,51 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		trace.Pinned = pinID
 	}
 
+	sreq := searchRequestFor(t)
+	early := newSearchPreparation(ctx, s, req, sreq, profile, pinID)
+	defer early.close()
+	ctx = context.WithValue(ctx, searchPreparationKey{}, early)
 	var discovered []core.Release
 	if s.discovered != nil && pin == nil && req.Prefer == "" && len(req.Exclude) == 0 {
 		discovered = s.discovered(ctx, t)
-		candidates, _, rankErr := s.rankCandidates(ctx, req, searchRequestFor(t), profile, discovered, &trace, "")
-		if rankErr == nil && len(candidates) > 0 {
-			// Only a small shortlist is tried ahead of normal search. A stale
-			// feed must never consume the full interactive resolution budget.
-			candidates = candidates[:min(2, len(candidates))]
-			checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			idx, payload, checkErr := s.validateCandidates(checkCtx, candidates, &trace, 0)
-			cancel()
-			if checkErr == nil && idx >= 0 {
-				trace.Winner = candidates[idx].rel.ID
-				s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
-				return s.resolution(t.Key, candidates, idx, payload, &trace), nil
+		early.arrived(discovered)
+		// A locally verified feed answer can avoid a search. A slow feed
+		// gets only 100ms head start, then keeps checking alongside search.
+		if len(discovered) > 0 && !early.disabled {
+			deadline := time.NewTimer(100 * time.Millisecond)
+			tick := time.NewTicker(5 * time.Millisecond)
+		feedWait:
+			for {
+				if ready := early.readyResultsAfter(0); len(ready) > 0 {
+					candidates, _, rankErr := s.rankCandidates(ctx, req, sreq, profile, ready, &trace, "")
+					if rankErr == nil && len(candidates) > 0 {
+						early.attach(candidates)
+						idx, payload, checkErr := s.validateCandidates(ctx, candidates, &trace, 0)
+						if checkErr == nil && idx >= 0 {
+							deadline.Stop()
+							tick.Stop()
+							trace.Winner = candidates[idx].rel.ID
+							s.setAvailability(ctx, int64(t.Key), true, s.searchTTL())
+							return s.resolution(t.Key, candidates, idx, payload, &trace), nil
+						}
+					}
+					break feedWait
+				}
+				select {
+				case <-deadline.C:
+					break feedWait
+				case <-ctx.Done():
+					deadline.Stop()
+					tick.Stop()
+					return nil, ctx.Err()
+				case <-tick.C:
+				}
 			}
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
+			deadline.Stop()
+			tick.Stop()
 		}
 	}
+
 	// Fast path: cached unavailable answer, unless this is a failover
 	// request that already knows about specific releases, the viewer
 	// picked a specific version, or the owner pinned a release.
@@ -466,15 +490,11 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 	}
 
-	sreq := searchRequestFor(t)
-	early := newSearchPreparation(ctx, s, req, sreq, profile, pinID)
-	defer early.close()
-	ctx = context.WithValue(ctx, searchPreparationKey{}, early)
 	searchStart := time.Now()
 	results, searchErr := s.search(ctx, sreq)
 	trace.SearchDuration = time.Since(searchStart)
 	if searchErr != nil {
-		if pin == nil {
+		if pin == nil && len(discovered) == 0 {
 			trace.Err = searchErr.Error()
 			return nil, searchErr
 		}
@@ -483,6 +503,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		results = nil
 	}
 	s.rememberReleases(t, results)
+	for _, r := range discovered {
+		results = withRelease(results, r)
+	}
 	if pin != nil {
 		results = withRelease(results, pin.Release)
 	}
@@ -707,9 +730,10 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 	if ok && !fresh && s.now().Before(e.expires) {
 		return append([]core.Release(nil), e.results...), true, nil
 	}
+	partial := false
 	if early, ok := ctx.Value(searchPreparationKey{}).(*searchPreparation); ok {
 		if streaming, ok := s.indexer.(core.StreamingIndexer); ok {
-			results, err = streaming.SearchWith(ctx, req, early.arrived)
+			results, partial, err = early.searchLive(ctx, streaming, req)
 		} else {
 			results, err = s.indexer.Search(ctx, req)
 		}
@@ -729,6 +753,10 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 		// sees the same per-episode release ID.
 		results[i] = withTarget(results[i], req)
 	}
+	if partial {
+		return results, false, nil
+	} // Never cache an incomplete fleet answer.
+
 	s.mu.Lock()
 	now := s.now()
 	boundMap(s.searchCache, maxSearchCache, func(e searchCacheEntry) bool { return !now.Before(e.expires) })
@@ -831,6 +859,10 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 		}
 		cands = append(cands, candidate{rel: rel, trace: tr, verified: verified, bandwidth: s.deliveryFit(sizedForEpisode(rel), req.Client, t)})
 	}
+	return s.orderCandidates(cands, req.Title, trace), clientRejected, nil
+}
+
+func (s *Service) orderCandidates(cands []candidate, title *core.Title, trace *Trace) []candidate {
 	sort.SliceStable(cands, func(i, j int) bool {
 		// A previously working LAN remux must not outrank a source that
 		// fits this client's slower connection. Unknown sizes remain usable
@@ -845,8 +877,7 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 		}
 		return cands[i].rel.Score > cands[j].rel.Score
 	})
-	cands = s.routeSources(cands, req.Title, trace)
-	return cands, clientRejected, nil
+	return s.routeSources(cands, title, trace)
 }
 
 // releaseScore is one release's total ranking score and its parts.

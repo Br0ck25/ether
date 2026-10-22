@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -32,15 +33,19 @@ func (s *Service) validateOne(ctx context.Context, rel core.Release) validation 
 }
 
 type candidateCheck struct {
-	started time.Time // includes time spent checking during source discovery
-	done    chan struct{}
-	cancel  context.CancelFunc
-	result  validation // immutable after done closes
+	started          time.Time // includes time spent checking during source discovery
+	done             chan struct{}
+	cancel           context.CancelFunc
+	result           validation                       // immutable after done closes
+	retrySpeculative func(context.Context) validation // foreground may admit work speculation refused
 }
 
 func (c *candidateCheck) wait(ctx context.Context) validation {
 	select {
 	case <-c.done:
+		if c.retrySpeculative != nil && (errors.Is(c.result.err, core.ErrNotCached) || errors.Is(c.result.err, core.ErrBudgetExhausted)) {
+			return c.retrySpeculative(ctx)
+		}
 		return c.result
 	case <-ctx.Done():
 		return validation{err: ctx.Err()}

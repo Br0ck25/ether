@@ -51,9 +51,6 @@ var _ core.Indexer = (*Manager)(nil)
 // NewManager builds a Manager from indexer configs.
 func NewManager(db *sql.DB, cfgs []config.Indexer, opts Options) *Manager {
 	m := &Manager{db: db, opts: opts, par: opts.MaxParallel}
-	if m.par <= 0 {
-		m.par = 16
-	}
 	m.log = opts.Logger
 	if m.log == nil {
 		m.log = slog.Default()
@@ -156,7 +153,11 @@ func (m *Manager) SearchRescueWith(ctx context.Context, req core.SearchRequest, 
 		err     error
 	}
 	slots := make([]slot, len(clients))
-	sem := make(chan struct{}, m.par)
+	parallel := m.par
+	if parallel <= 0 {
+		parallel = max(1, len(clients))
+	}
+	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	for i, cl := range clients {
 		if !cl.Config().Enabled {
@@ -217,7 +218,11 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		duration time.Duration
 	}
 	slots := make([]slot, len(clients))
-	sem := make(chan struct{}, m.par)
+	parallel := m.par
+	if parallel <= 0 {
+		parallel = max(1, len(clients))
+	}
+	sem := make(chan struct{}, parallel)
 	var wg sync.WaitGroup
 	for i, cl := range clients {
 		if !cl.Config().Enabled {
@@ -235,12 +240,9 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 				return
 			}
 			started := time.Now()
-			res, err := cl.Search(ctx, req)
+			res, err := cl.SearchWith(ctx, req, arrived)
 			slots[i].duration = time.Since(started)
 			slots[i].results, slots[i].err = res, err
-			if arrived != nil && err == nil && len(res) > 0 {
-				arrived(res)
-			}
 		}(i, cl)
 	}
 	wg.Wait()
@@ -258,7 +260,7 @@ func (m *Manager) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		if dated > 0 {
 			age /= time.Duration(dated)
 		}
-		if !s.skipped || errors.Is(s.err, core.ErrBudgetExhausted) {
+		if (!s.skipped || errors.Is(s.err, core.ErrBudgetExhausted)) && !errors.Is(s.err, context.Canceled) {
 			m.emitEvent(Event{Indexer: clients[i].Name(), Kind: "search", Success: s.err == nil, BudgetExhausted: errors.Is(s.err, core.ErrBudgetExhausted), Results: len(s.results), Duration: s.duration, AverageAge: age, At: now})
 		}
 		if !s.skipped {

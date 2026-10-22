@@ -44,13 +44,13 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	return x.SearchWith(ctx, req, nil)
 }
 
-// SearchWith exposes safe early Usenet results while torrent cache discovery
-// continues. Torrents remain on the normal cache/episode-filtered final result path.
+// SearchWith exposes arrivals from both sources while cache discovery continues.
+// The resolver targets and validates speculative torrents before selecting one.
 func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
 	started := time.Now()
 	early := x.earlyCacheChecks(ctx)
 	if early != nil {
-		defer early.cancel()
+		defer func() { early.cancel(); early.wg.Wait() }()
 	}
 	var results []core.Release
 	var err error
@@ -59,14 +59,14 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 			early.add(batch)
 		}
 		if arrived != nil {
-			var usenet []core.Release
+			var eligible []core.Release
 			for _, r := range batch {
-				if r.Protocol != core.ProtocolTorrent {
-					usenet = append(usenet, r)
+				if r.Protocol != core.ProtocolTorrent || x.svc.Enabled() {
+					eligible = append(eligible, r)
 				}
 			}
-			if len(usenet) > 0 {
-				arrived(usenet)
+			if len(eligible) > 0 {
+				arrived(eligible)
 			}
 		}
 	}
@@ -176,7 +176,7 @@ func (x *Indexer) searchSeasonPacks(ctx context.Context, req core.SearchRequest)
 	packReq.Episode = 0
 	early := x.earlyCacheChecks(ctx)
 	if early != nil {
-		defer early.cancel()
+		defer func() { early.cancel(); early.wg.Wait() }()
 	}
 	var results []core.Release
 	var err error
@@ -232,7 +232,7 @@ func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 	}
 	early := x.earlyCacheChecks(ctx)
 	if early != nil {
-		defer early.cancel()
+		defer func() { early.cancel(); early.wg.Wait() }()
 	}
 	var results []core.Release
 	var err error
@@ -335,14 +335,16 @@ func (x *Indexer) fetchTorrentOnce(ctx context.Context, r core.Release) (data []
 
 // earlyChecks runs debrid cache checks per indexer as results arrive.
 type earlyChecks struct {
-	x      *Indexer
-	ctx    context.Context
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	wg     sync.WaitGroup
-	asked  map[string]bool
-	cached map[string]bool
-	sure   bool // every check so far was definitive
+	x       *Indexer
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	asked   map[string]bool
+	cached  map[string]bool
+	pending []string
+	running bool
+	sure    bool // every check so far was definitive
 }
 
 func (x *Indexer) earlyCacheChecks(ctx context.Context) *earlyChecks {
@@ -355,30 +357,56 @@ func (x *Indexer) earlyCacheChecks(ctx context.Context) *earlyChecks {
 
 // add starts a cache check for the torrent hashes in one indexer's results.
 func (e *earlyChecks) add(rs []core.Release) {
-	var hashes []string
 	e.mu.Lock()
 	for _, r := range rs {
 		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && !e.asked[r.InfoHash] {
 			e.asked[r.InfoHash] = true
-			hashes = append(hashes, r.InfoHash)
+			e.pending = append(e.pending, r.InfoHash)
 		}
 	}
-	e.mu.Unlock()
-	if len(hashes) == 0 {
+	if len(e.pending) == 0 || e.running || e.ctx.Err() != nil {
+		e.mu.Unlock()
 		return
 	}
+	e.running = true
 	e.wg.Add(1)
+	e.mu.Unlock()
 	go func() {
 		defer e.wg.Done()
-		cached, definitive := e.x.svc.CheckCached(e.ctx, hashes)
-		e.mu.Lock()
-		for h, ok := range cached {
-			if ok {
-				e.cached[h] = true
+		for {
+			// Streaming feeds emit individual items. Coalesce those into bulk
+			// provider calls, with one bounded consumer rather than one HTTP
+			// request goroutine for every torrent in a large feed.
+			timer := time.NewTimer(20 * time.Millisecond)
+			select {
+			case <-e.ctx.Done():
+				timer.Stop()
+			case <-timer.C:
 			}
+			e.mu.Lock()
+			if e.ctx.Err() != nil || len(e.pending) == 0 {
+				e.running = false
+				e.mu.Unlock()
+				return
+			}
+			hashes := e.pending
+			e.pending = nil
+			e.mu.Unlock()
+			cached, definitive := e.x.svc.CheckCached(e.ctx, hashes)
+			e.mu.Lock()
+			for h, ok := range cached {
+				if ok {
+					e.cached[h] = true
+				}
+			}
+			e.sure = e.sure && definitive
+			if len(e.pending) == 0 {
+				e.running = false
+				e.mu.Unlock()
+				return
+			}
+			e.mu.Unlock()
 		}
-		e.sure = e.sure && definitive
-		e.mu.Unlock()
 	}()
 }
 

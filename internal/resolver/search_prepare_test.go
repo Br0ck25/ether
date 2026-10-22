@@ -16,6 +16,39 @@ type pipelinedIndexer struct {
 	grabs        atomic.Int32
 }
 
+type slowTailIndexer struct {
+	fakeIndexer
+	joined atomic.Bool
+}
+
+func (p *slowTailIndexer) SearchWith(ctx context.Context, _ core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
+	arrived(p.releases)
+	<-ctx.Done() // Represents an indexer whose trailing response never finishes.
+	p.joined.Store(true)
+	return nil, ctx.Err()
+}
+
+func TestPlayableCandidateDoesNotWaitForSlowIndexer(t *testing.T) {
+	r := rel("fast", "The.Signal.1999.1080p.BluRay.x264-GROUP", 6000)
+	idx := &slowTailIndexer{fakeIndexer: fakeIndexer{releases: []core.Release{r}}}
+	s := New(idx, fakeHealth{}, nil, testCfg(), Options{})
+	defer s.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	start := time.Now()
+	result, err := s.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: webCaps()})
+	if err != nil || result.Release.ID != "fast" {
+		t.Fatalf("live selection: %v %v", result, err)
+	}
+	if !idx.joined.Load() {
+		t.Fatal("search worker escaped resolution")
+	}
+	if len(s.searchCache) != 0 {
+		t.Fatal("partial fleet answer cached as complete")
+	}
+	t.Logf("playable source selected in %s while the remaining search was blocked", time.Since(start))
+}
+
 func (p *pipelinedIndexer) SearchWith(ctx context.Context, _ core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
 	arrived(p.first)
 	select {

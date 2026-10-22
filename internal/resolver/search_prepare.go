@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/releaseparse"
@@ -13,9 +14,9 @@ import (
 type searchPreparationKey struct{}
 type speculativeHealthKey struct{}
 
-// Start at most two independent validations during indexer discovery. Selection
-// still uses the complete, normally ranked result: a fast indexer cannot bypass
-// an owner's pin, edition/language rules, or a better result from a slower one.
+// Validate a bounded frontier while discovery is still arriving. Hard profile
+// rules and explicit picks remain authoritative; a healthy eligible source can
+// finish discovery without waiting for an unrelated slow indexer.
 // All workers are cancelled and joined by the Resolve that owns them.
 type searchPreparation struct {
 	mu         sync.Mutex
@@ -29,46 +30,178 @@ type searchPreparation struct {
 	byID       map[string]*candidateCheck
 	identities map[string]bool
 	releases   map[string]core.Release
+	all        []core.Release
+	seen       map[string]bool
+	ranked     []candidate
+	first      time.Time
 }
 
 func newSearchPreparation(ctx context.Context, s *Service, req core.ResolveRequest, search core.SearchRequest, profile core.QualityProfile, pin string) *searchPreparation {
 	return &searchPreparation{ctx: ctx, svc: s, req: req, search: search, profile: profile,
 		disabled: pin != "" || req.Prefer != "" || s.resolverCfg().OptimisticStart,
-		byID:     map[string]*candidateCheck{}, identities: map[string]bool{}, releases: map[string]core.Release{}}
+		byID:     map[string]*candidateCheck{}, identities: map[string]bool{}, releases: map[string]core.Release{}, seen: map[string]bool{}}
 }
 
 func (p *searchPreparation) arrived(batch []core.Release) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.disabled || p.ctx.Err() != nil || len(p.byID) >= 2 {
+	if p.disabled || p.ctx.Err() != nil {
 		return
 	}
-	rs := append([]core.Release(nil), batch...)
-	for i := range rs {
-		if rs[i].Info.Height == 0 && rs[i].Info.Title == "" {
-			rs[i].Info = releaseparse.Parse(rs[i].Name)
+	var added []core.Release
+	for _, r := range batch {
+		r = withTarget(r, p.search)
+		if p.seen[r.ID] || len(p.all) >= 4000 {
+			continue
 		}
+		p.seen[r.ID] = true
+		if r.Info.Height == 0 && r.Info.Title == "" {
+			r.Info = releaseparse.Parse(r.Name)
+		}
+		p.all = append(p.all, r)
+		added = append(added, r)
 	}
-	cs, _, err := p.svc.rankCandidates(p.ctx, p.req, p.search, p.profile, rs, nil, "")
+	if p.first.IsZero() {
+		p.first = time.Now()
+	}
+	if len(added) == 0 {
+		return
+	}
+	ranked, _, err := p.svc.rankCandidates(p.ctx, p.req, p.search, p.profile, added, nil, "")
 	if err != nil {
 		return
 	}
-	for _, c := range cs {
-		if len(p.byID) >= 2 {
+	p.ranked = p.svc.orderCandidates(append(p.ranked, ranked...), p.req.Title, nil)
+	p.pumpLocked()
+}
+
+// Four in flight, twelve total, with the next ranked candidate replacing a
+// failed check immediately. Reposts do not consume every speculative slot.
+func (p *searchPreparation) pumpLocked() {
+	active := 0
+	for _, c := range p.byID {
+		select {
+		case <-c.done:
+		default:
+			active++
+		}
+	}
+	for _, c := range p.ranked {
+		if active >= 4 || len(p.byID) >= 12 {
 			break
 		}
-		if c.rel.Protocol == core.ProtocolTorrent || p.byID[c.rel.ID] != nil {
+		if prior := p.byID[c.rel.ID]; prior != nil {
+			select {
+			case <-prior.done:
+				if prior.result.healthy && prior.result.err == nil {
+					return
+				}
+			default:
+			}
 			continue
 		}
-		// Same named/size reposts are correlated; do not spend both speculative
-		// slots on them. Full validation may still use either after discovery.
-		identity := strings.ToLower(strings.TrimSpace(c.rel.Name)) + "|" + strconv.FormatInt(c.rel.Size, 10)
+		identity := c.rel.Protocol + "|" + strings.ToLower(strings.TrimSpace(c.rel.Name)) + "|" + strconv.FormatInt(c.rel.Size, 10)
 		if p.identities[identity] {
 			continue
 		}
 		p.identities[identity] = true
 		p.releases[c.rel.ID] = c.rel
-		p.byID[c.rel.ID] = p.checks.start(context.WithValue(p.ctx, speculativeHealthKey{}, true), p.svc, c.rel)
+		spec := core.WithBackgroundBudget(p.ctx, func(ctx context.Context, resource, source string, amount int64) error {
+			return core.SpendBackground(p.ctx, resource, source, amount)
+		})
+		check := p.checks.start(context.WithValue(spec, speculativeHealthKey{}, true), p.svc, c.rel)
+		if !core.IsBackgroundCheck(p.ctx) {
+			check.retrySpeculative = func(ctx context.Context) validation { return p.svc.validateOne(ctx, c.rel) }
+		}
+		p.byID[c.rel.ID] = check
+		active++
+	}
+}
+
+// A short discovery window gives concurrently dispatched indexers a chance to
+// answer. Never wait for their entire bodies or timeouts once a suitable source
+// really passed health. Known better candidates retain the normal grace.
+func (p *searchPreparation) readyResults() []core.Release {
+	return p.readyResultsAfter(500 * time.Millisecond)
+}
+
+func (p *searchPreparation) readyResultsAfter(window time.Duration) []core.Release {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.disabled || p.first.IsZero() || time.Since(p.first) < window {
+		return nil
+	}
+	p.pumpLocked()
+	margin := p.svc.resolverCfg().SourceScoreMargin
+	if margin <= 0 {
+		margin = defaultSourceScoreMargin
+	}
+	lead := -1
+	for i, c := range p.ranked {
+		f := p.byID[c.rel.ID]
+		if f == nil {
+			if lead < 0 {
+				lead = i
+			}
+			continue
+		}
+		select {
+		case <-f.done:
+			if f.result.err != nil || !f.result.healthy {
+				continue
+			}
+			if lead >= 0 && (!equivalentHedge(p.ranked[lead], c, margin) || time.Since(p.first) < rankedSourceGrace) {
+				continue
+			}
+			preference := p.svc.resolverCfg().SourcePreference
+			other := preference == PreferDebrid && protocolOf(c.rel) != core.ProtocolTorrent || preference == PreferUsenet && protocolOf(c.rel) != core.ProtocolUsenet
+			if other && time.Since(p.first) < rankedSourceGrace {
+				continue
+			}
+			return append([]core.Release(nil), p.all...)
+		default:
+			if lead < 0 {
+				lead = i
+			}
+		}
+	}
+	return nil
+}
+
+func (p *searchPreparation) searchLive(ctx context.Context, indexer core.StreamingIndexer, req core.SearchRequest) ([]core.Release, bool, error) {
+	if p.disabled {
+		r, e := indexer.SearchWith(ctx, req, p.arrived)
+		return r, false, e
+	}
+	searchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type answer struct {
+		releases []core.Release
+		err      error
+	}
+	done := make(chan answer, 1)
+	go func() { r, e := indexer.SearchWith(searchCtx, req, p.arrived); done <- answer{r, e} }()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case a := <-done:
+			return a.releases, false, a.err
+		case <-ticker.C:
+			if ready := p.readyResults(); len(ready) > 0 {
+				cancel()
+				<-done // Every search/cache-check worker is joined before returning.
+				if ctx.Err() != nil {
+					return nil, false, ctx.Err()
+				}
+				p.svc.log.Info("source discovery finished on playable candidate", "candidates", len(ready), "elapsed", time.Since(p.first))
+				return ready, true, nil
+			}
+		case <-ctx.Done():
+			cancel()
+			<-done
+			return nil, false, ctx.Err()
+		}
 	}
 }
 
