@@ -58,6 +58,7 @@ type runSpec struct {
 	// every encode must deliver (contract.go).
 	Target      *videoContract
 	PictureCrop *pictureCrop
+	AudioGainDB float64
 }
 
 // segmentExt is the segment file extension for a decision's container.
@@ -329,8 +330,15 @@ func buildCodecArgs(s runSpec) []string {
 			}
 			args = append(args, "-c:a", enc, "-ac", strconv.Itoa(ch), "-ar", strconv.Itoa(decisionAudioRate(d)),
 				"-b:a", fmt.Sprintf("%dk", audioBitrateKbps(codec, ch)))
-			if len(d.AudioFilters) > 0 {
-				args = append(args, "-af", strings.Join(d.AudioFilters, ","))
+			filters := append([]string(nil), d.AudioFilters...)
+			if s.AudioGainDB != 0 {
+				filters = append(filters, fmt.Sprintf("volume=%.1fdB", s.AudioGainDB))
+				if s.AudioGainDB > 0 {
+					filters = append(filters, "alimiter=limit=0.891251:level=false:latency=true")
+				}
+			}
+			if len(filters) > 0 {
+				args = append(args, "-af", strings.Join(filters, ","))
 			}
 			if enc == "opus" {
 				args = append(args, "-strict", "-2")

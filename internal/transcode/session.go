@@ -65,6 +65,7 @@ type sessionInput struct {
 	contract       *videoContract
 	inputCrop      *pictureCrop
 	pictureSamples map[string]*pictureCrop
+	audioMatch     audioMatchState
 }
 
 // sessionEncoding owns one aspect of the session. Fields are guarded by Session.mu.

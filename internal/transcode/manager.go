@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -148,6 +149,7 @@ func withFinder(f finder) Option { return func(o *options) { o.finder = &f } }
 
 // Manager runs ffmpeg for Ether. It implements core.Transcoder.
 type Manager struct {
+	audioMatchBusy atomic.Bool
 	rtx            rtxBackendState
 	pendingEncodes int
 

@@ -83,7 +83,8 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 			}
 		}
 	}
-	next := adaptToContract(s.decision, s.info, info, s.container, s.contract)
+	next := adaptToContract(s.audioMatchBaseDecision(), s.info, info, s.container, s.contract)
+	next = s.applyAudioMatchLocked(inputURL, next)
 	if inputURL == s.input {
 		next.AudioStream = s.decision.AudioStream
 		next.SubtitleStream = s.decision.SubtitleStream

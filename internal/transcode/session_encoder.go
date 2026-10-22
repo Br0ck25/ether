@@ -140,6 +140,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	s.seekRampSeg = -1
 	spec := runSpec{
 		RTXTimeline:  s.rtxTimeline,
+		AudioGainDB:  s.audioMatch.gain,
 		LiveInput:    s.liveInput,
 		InputHeaders: s.inputHeaders,
 		Input:        s.input,

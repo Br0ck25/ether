@@ -222,6 +222,30 @@ internal snapshots remain unencrypted on disk and include the credentials and
 key needed to restore your server. Password protection applies to downloaded
 `.etherbackup` files, not existing snapshots or older downloads.
 
+## Volume when a source changes
+
+For native Plex playback using segmented Matroska, Ether can match the level
+of a replacement release to the one already playing. It compares a short,
+corresponding audio passage only when there is enough published media ahead.
+The passage must match both in waveform and in its loud/quiet pattern. Silence,
+different languages or channel layouts, changing mixes, and unavailable samples
+leave the audio unchanged. Analysis is optional and bounded; it never rejects a
+playable replacement or runs on an unbuffered rescue.
+
+A difference below 1.5 dB keeps audio copying. Larger differences use a fixed
+adjustment, capped at 6 dB quieter or 3 dB louder, with peak limiting for boosts.
+Only the audio is encoded for this adjustment; copied video stays copied. The
+level does not continuously rise and fall with dialogue. Corrections are cached
+for the session and do not stack across repeated replacements.
+
+Viewer loudness normalization, night mode and dialogue processing take
+precedence. This matching does not change direct play, Live TV, adaptive ladders,
+or RTX enhancement sessions. It preserves passthrough for lossless audio, copied
+E-AC-3 (which may carry Atmos), and HE-AAC rather than converting those formats
+solely to change their volume. AAC-LC and AC-3 copy, and compatible audio that is
+already being encoded, can be matched. It is a best-effort reduction in volume
+jumps, not a guarantee that differently mastered releases sound identical.
+
 ## Live TV
 
 Open **Live TV & IPTV** to create a virtual channel or import an M3U source.

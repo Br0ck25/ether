@@ -98,6 +98,9 @@ func (s *Session) PrepareSwap(ctx context.Context, input string, info core.Media
 		return err
 	}
 	_, err := s.swapPictureCrop(ctx, input, info, at)
+	if err == nil {
+		s.prepareAudioMatch(ctx, input, info, at)
+	}
 	return err
 }
 
