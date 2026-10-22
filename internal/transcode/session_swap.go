@@ -33,7 +33,17 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	}
 	// Decode a tiny bounded sample outside the session lock. Only proven
 	// embedded side bars matching the existing picture are removed.
-	crop := s.swapPictureCrop(ctx, inputURL, info, at)
+	sampleAt := at
+	if preserve {
+		b := s.RecoveryBuffer()
+		if b.ReadyUntil > sampleAt && b.ReadyUntil < info.Duration {
+			sampleAt = b.ReadyUntil
+		}
+	}
+	crop, err := s.swapPictureCrop(ctx, inputURL, info, sampleAt)
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

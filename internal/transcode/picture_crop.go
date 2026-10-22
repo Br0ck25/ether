@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -17,48 +19,86 @@ import (
 type pictureCrop struct{ x, y, width, height int }
 
 // swapPictureCrop never holds the session lock while reading the replacement.
-// The sample is small, bounded in time and memory, and optional: an unreadable,
-// dark, changing or inconclusive picture retains the normal fit/pad behavior.
-func (s *Session) swapPictureCrop(ctx context.Context, input string, info core.MediaInfo, at time.Duration) *pictureCrop {
+// The sample is small and bounded. Unreadable samples reject the candidate
+// before publication; complete samples without proven bars retain normal fit.
+func (s *Session) swapPictureCrop(ctx context.Context, input string, info core.MediaInfo, at time.Duration) (*pictureCrop, error) {
 	s.mu.Lock()
 	if input == s.input {
 		crop := s.inputCrop
 		s.mu.Unlock()
-		return crop
+		return crop, nil
+	}
+	if sample, ok := s.pictureSamples[input]; ok {
+		s.mu.Unlock()
+		return sample, nil
 	}
 	c, live, burn := s.contract, s.liveInput, s.decision.BurnSubtitles
 	s.mu.Unlock()
 	v := info.Video()
 	if c == nil || live || burn || v == nil || v.Width <= 0 || v.Height <= 0 || c.rng != rangeSDR || encodedRange(v) != rangeSDR {
-		return nil
+		return nil, nil
 	}
 	pic := pictureOf(v)
 	aspect := float64(v.Width*pic.sarNum) / float64(v.Height*pic.sarDen)
 	target := float64(c.width*c.pic.sarNum) / float64(c.height*c.pic.sarDen)
 	// Only the wider replacement that would otherwise gain horizontal bars.
 	if aspect < target*1.08 || aspect > target*1.6 {
-		return nil
+		return nil, nil
 	}
 	const width, frames = 320, 8
 	height := even(int(float64(width) * float64(v.Height) / float64(v.Width)))
 	if height < 64 || height > 320 {
-		return nil
+		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	args := []string{"-hide_banner", "-v", "error", "-nostdin", "-threads", "1", "-filter_threads", "1", "-probesize", "1048576", "-analyzeduration", "500000"}
 	args = append(args, inputSafetyArgs(input, false)...)
 	args = append(args, httpInputArgs(input, false)...)
-	args = append(args, "-ss", secs(max(0, at)), "-i", input, "-map", fmt.Sprintf("0:%d", v.Index), "-an", "-sn", "-vf", fmt.Sprintf("fps=4,scale=%d:%d,format=gray", width, height), "-frames:v", strconv.Itoa(frames), "-threads", "1", "-f", "rawvideo", "-")
+	sampleInput := input
+	if u, err := url.Parse(input); err == nil && u.Hostname() == "127.0.0.1" && strings.HasPrefix(u.Path, "/src/") {
+		q := u.Query()
+		q.Set("background", "1")
+		u.RawQuery = q.Encode()
+		sampleInput = u.String()
+	}
+	args = append(args, "-ss", secs(max(0, at)), "-i", sampleInput, "-map", fmt.Sprintf("0:%d", v.Index), "-an", "-sn", "-vf", fmt.Sprintf("fps=4,scale=%d:%d,format=gray", width, height), "-frames:v", strconv.Itoa(frames), "-threads", "1", "-f", "rawvideo", "-")
 	out := &pictureSample{limit: width * height * frames}
 	if err := s.m.runner.Run(ctx, Command{Path: s.m.ffmpeg, Args: args, Stdout: out, Stderr: io.Discard}); err != nil {
-		return nil
+		s.log.Warn("replacement picture sample failed", "at", at, "timedOut", ctx.Err() != nil)
+		return nil, fmt.Errorf("%w: replacement picture sample unavailable", ErrIncompatibleSwap)
+	}
+	if out.Len() != width*height*frames {
+		return nil, fmt.Errorf("%w: incomplete replacement picture sample", ErrIncompatibleSwap)
 	}
 	crop := detectPictureBars(out.Bytes(), width, height, v, c)
 	if crop != nil {
 		s.log.Info("removing embedded side bars from replacement", "sourceWidth", v.Width, "sourceHeight", v.Height, "x", crop.x, "width", crop.width)
 	}
-	return crop
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	if s.pictureSamples == nil {
+		s.pictureSamples = make(map[string]*pictureCrop)
+	}
+	if len(s.pictureSamples) >= 64 {
+		clear(s.pictureSamples)
+	}
+	s.pictureSamples[input] = crop
+	s.mu.Unlock()
+	s.log.Info("replacement picture checked", "at", at, "cropped", crop != nil)
+	return crop, nil
+}
+
+// PrepareSwap checks real replacement pixels while the old generation still
+// owns playback. Failed reads reject only this candidate, never the title.
+func (s *Session) PrepareSwap(ctx context.Context, input string, info core.MediaInfo, at time.Duration) error {
+	if err := s.CheckSwap(info); err != nil {
+		return err
+	}
+	_, err := s.swapPictureCrop(ctx, input, info, at)
+	return err
 }
 
 type pictureSample struct {

@@ -184,7 +184,7 @@ func (m *Manager) prepareSpeedAlternate(g *generation) {
 				continue
 			}
 			bps := mediaBps(next.infoSnapshot(), next.src.Size())
-			if bps <= 0 || bps >= mediaBps(g.infoSnapshot(), g.src.Size()) || m.preflightSwap(s, next) != nil {
+			if bps <= 0 || bps >= mediaBps(g.infoSnapshot(), g.src.Size()) || m.preflightSwap(ctx, s, next) != nil {
 				m.dropGeneration(next)
 				continue
 			}

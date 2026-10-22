@@ -2,7 +2,11 @@ package transcode
 
 import (
 	"context"
+	"github.com/braedonsaunders/ether/internal/core"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -49,7 +53,10 @@ func TestIntegrationMatroskaReplacementRemovesEmbeddedPillars(t *testing.T) {
 	}
 	c, _ := contractOf(*orig, copyMKV())
 	s := &Session{m: e.m, sessionInput: sessionInput{contract: c}, log: testLogger(t)}
-	crop := s.swapPictureCrop(context.Background(), e.url("pillar.mkv"), *info, 4*time.Second)
+	crop, err := s.swapPictureCrop(context.Background(), e.url("pillar.mkv"), *info, 4*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if crop == nil || crop.x != 80 || crop.width != 480 {
 		t.Fatalf("crop=%+v", crop)
 	}
@@ -59,4 +66,35 @@ func TestIntegrationMatroskaReplacementRemovesEmbeddedPillars(t *testing.T) {
 	if y < 900 {
 		t.Fatalf("replacement corner Y=%d, want white, not double padding", y)
 	}
+}
+
+func TestIntegrationPicturePreparationSurvivesColdHeader(t *testing.T) {
+	e := newRealEnv(t, WithoutHWDetection())
+	args := sdrBars("480:360")
+	args[1] += ",setsar=1,pad=640:360:80:0"
+	e.gen(t, "pillar.mkv", 8, args...)
+	info, err := e.m.Probe(t.Context(), e.url("pillar.mkv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := *info
+	orig.Streams = append([]core.StreamInfo(nil), info.Streams...)
+	orig.Video().Width = 480
+	c, _ := contractOf(orig, copyMKV())
+	var once sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { time.Sleep(1700 * time.Millisecond) })
+		http.FileServer(http.Dir(e.dir)).ServeHTTP(w, r)
+	}))
+	defer server.Close()
+	s := &Session{m: e.m, sessionInput: sessionInput{contract: c}, log: testLogger(t)}
+	began := time.Now()
+	if err := s.PrepareSwap(t.Context(), server.URL+"/pillar.mkv", *info, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	crop, err := s.swapPictureCrop(t.Context(), server.URL+"/pillar.mkv", *info, 2*time.Second)
+	if err != nil || crop == nil || crop.width != 480 {
+		t.Fatalf("cold crop=%+v err=%v", crop, err)
+	}
+	t.Logf("cold header delay preserved detected crop in %v", time.Since(began))
 }

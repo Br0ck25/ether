@@ -51,7 +51,7 @@ func (m *Manager) raceAlternates(ctx context.Context, s *session, tried []string
 			res := &core.Resolution{Title: s.ident.key, Release: alt, NZB: nzb, ResolvedAt: m.now()}
 			g, err := m.openGeneration(rctx, s, res, fallback)
 			if err == nil {
-				if perr := m.preflightSwap(s, g); perr != nil {
+				if perr := m.preflightSwap(rctx, s, g); perr != nil {
 					m.dropGeneration(g)
 					g, err = nil, perr
 				}

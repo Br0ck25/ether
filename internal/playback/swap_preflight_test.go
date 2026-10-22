@@ -3,6 +3,7 @@ package playback
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -124,5 +125,37 @@ func TestFailoverWithOnlyIncompatibleReplacementsKeepsStream(t *testing.T) {
 	}
 	if h.resolver.isBad("B") {
 		t.Fatal("format mismatch marked the release bad")
+	}
+}
+
+type picturePreparedHLS struct{ *fixedFormatHLS }
+
+func (h *picturePreparedHLS) PrepareSwap(ctx context.Context, input string, info core.MediaInfo, at time.Duration) error {
+	if info.Video().Width == 1280 {
+		return errors.New("picture sample timed out")
+	}
+	return nil
+}
+func TestFailoverRejectsUnreadablePictureBeforePublication(t *testing.T) {
+	for _, race := range []bool{false, true} {
+		t.Run(fmt.Sprint(race), func(t *testing.T) {
+			b := mkv("B", 100_000, time.Minute)
+			h := newHarness(t, []*fakeRelease{mkv("A", 100_000, time.Minute), b, mkv("C", 100_000, time.Minute)}, []string{"A", "B", "C"})
+			if race {
+				h.m.deps.FetchNZB = func(ctx context.Context, r core.Release) ([]byte, error) { return []byte("nzb-" + r.ID), nil }
+			}
+			ps := h.prepare(owner, movieKey, "picture-preflight")
+			hls := &picturePreparedHLS{&fixedFormatHLS{fakeHLS: h.tr.addHLS(ps.ID)}}
+			h.m.deps.HLSLookup = func(string) (core.HLSSession, bool) { return hls, true }
+			// Only B's picture probe is unavailable; it is otherwise healthy.
+			h.m.deps.AugmentMedia = func(ctx context.Context, title *core.Title, user *core.User, res *core.Resolution, src core.MediaSource, info *core.MediaInfo) {
+				if res.Release.ID == "B" {
+					info.Video().Width = 1280
+				}
+			}
+			h.m.SetDecision(ps.ID, core.Decision{Kind: core.DecisionRemux, VideoCopy: true, AudioCopy: true})
+			next, err := h.m.Failover(t.Context(), ps.ID, 10*time.Second)
+			assertPreflightSkipped(t, h, hls.fixedFormatHLS, next, err)
+		})
 	}
 }
