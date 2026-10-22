@@ -68,7 +68,11 @@ func (p *pool) body(ctx context.Context, id string, groups []string, prio core.P
 			p.bodyAdmission.Release(prio)
 			return nil, ErrPoolClosed
 		}
-		fctx, cancel := context.WithCancel(context.Background())
+		base := context.Background()
+		if until := burstUntil(ctx); time.Now().Before(until) {
+			base = context.WithValue(base, burstKey{}, until)
+		}
+		fctx, cancel := context.WithCancel(base)
 		f = &bodyFlight{key: key, ctx: fctx, cancel: cancel, done: make(chan struct{}), waiters: 1}
 		p.bodyFlights[key] = f
 		p.bodyQueue[prio] = append(p.bodyQueue[prio], f)
@@ -182,7 +186,9 @@ func (p *pool) bodyWorker(prio core.Priority) {
 		p.bodyMu.Lock()
 		ss := p.sem.stats()
 		if prio == core.PriorityReadahead {
-			depth = min(depth, 2)
+			if !time.Now().Before(burstUntil(f.ctx)) {
+				depth = min(depth, 2)
+			}
 			if ss.Size < 2 {
 				depth = 1
 			}

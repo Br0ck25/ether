@@ -91,6 +91,7 @@ type Plex struct {
 }
 
 type Usenet struct {
+	Repair    Repair           `json:"repair"`
 	Providers []UsenetProvider `json:"providers"`
 	// MinIdle is how many connections per primary (non-backfill) provider
 	// are kept warm (dialled, authenticated, DATE-pinged) at all times so
@@ -98,6 +99,17 @@ type Usenet struct {
 	// (connections are dialled lazily and expire when idle). A provider's
 	// own MinIdle overrides this.
 	MinIdle int `json:"minIdle"`
+}
+
+// Repair bounds opportunistic PAR2 reconstruction. Disabled until the owner
+// opts in; the live benchmark enables it explicitly without editing config.
+type Repair struct {
+	Enabled          bool     `json:"enabled"`
+	WholeSlices      bool     `json:"wholeSlices,omitempty"`
+	SummaryRows      int      `json:"summaryRows"`
+	MaxDownloadBytes int64    `json:"maxDownloadBytes"`
+	LiveWait         Duration `json:"liveWait"`
+	AheadWait        Duration `json:"aheadWait"`
 }
 
 type UsenetProvider struct {

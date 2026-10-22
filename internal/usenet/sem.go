@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"sync"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -38,9 +39,10 @@ type prioSem struct {
 }
 
 type semWaiter struct {
-	prio  core.Priority
-	ready chan struct{} // closed when granted (or the semaphore closed)
-	ok    bool          // granted (false + ready closed = semaphore closed)
+	burstUntil time.Time
+	prio       core.Priority
+	ready      chan struct{} // closed when granted (or the semaphore closed)
+	ok         bool          // granted (false + ready closed = semaphore closed)
 }
 
 func newPrioSem(size, prefetchMax int) *prioSem {
@@ -59,11 +61,19 @@ func newPrioSem(size, prefetchMax int) *prioSem {
 // grantableLocked reports whether a request of prio may take a slot now,
 // ignoring queue order.
 func (s *prioSem) grantableLocked(prio core.Priority) bool {
+	return s.grantableBurstLocked(prio, time.Time{})
+}
+
+func (s *prioSem) grantableBurstLocked(prio core.Priority, until time.Time) bool {
 	if s.inUse >= s.size {
 		return false
 	}
 	if s.reserveLive && s.size >= 2 && prio != core.PriorityLive && s.nonLive >= s.size-1 {
-		return false
+		// Borrow the idle reserved slot only during an explicit short burst,
+		// with no live owner or live waiter. Existing transfers are not aborted.
+		if prio != core.PriorityReadahead || !time.Now().Before(until) || s.inUse != s.nonLive || s.waiters[core.PriorityLive].Len() != 0 {
+			return false
+		}
 	}
 	if prio == core.PriorityPrefetch && s.prefetching >= s.prefetchMax {
 		return false
@@ -133,7 +143,7 @@ func (s *prioSem) Acquire(ctx context.Context, prio core.Priority) error {
 		s.mu.Unlock()
 		return ErrPoolClosed
 	}
-	if !s.mustQueueLocked(prio) && s.grantableLocked(prio) {
+	if !s.mustQueueLocked(prio) && s.grantableBurstLocked(prio, burstUntil(ctx)) {
 		s.takeLocked(prio)
 		s.mu.Unlock()
 		return nil
@@ -142,7 +152,7 @@ func (s *prioSem) Acquire(ctx context.Context, prio core.Priority) error {
 		s.mu.Unlock()
 		return err
 	}
-	w := &semWaiter{prio: prio, ready: make(chan struct{})}
+	w := &semWaiter{prio: prio, burstUntil: burstUntil(ctx), ready: make(chan struct{})}
 	elem := s.waiters[prio].PushBack(w)
 	s.mu.Unlock()
 
@@ -201,7 +211,7 @@ func (s *prioSem) dispatchLocked() {
 	for p := core.PriorityLive; p <= core.PriorityPrefetch; p++ {
 		q := &s.waiters[p]
 		for q.Len() > 0 {
-			if !s.grantableLocked(p) {
+			if !s.grantableBurstLocked(p, q.Front().Value.(*semWaiter).burstUntil) {
 				break
 			}
 			w := q.Remove(q.Front()).(*semWaiter)

@@ -12,9 +12,8 @@ import (
 	"github.com/braedonsaunders/ether/internal/par2"
 )
 
-// PAR2 use. The engine never repairs: a recovery block mixes every slice of
-// the set, so rebuilding one article means reading the whole file. It reads
-// only the release's PAR2 index file (a few KB of metadata packets) to
+// PAR2 metadata use. Optional bounded repair lives in repair.go. This path
+// reads the release's small PAR2 index file to
 //
 //   - name obfuscated files: the MD5 of a file's first 16 KiB, taken from
 //     its first article, identifies the file description carrying its real

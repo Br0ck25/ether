@@ -11,6 +11,22 @@ async function choose(label: string, option: string) {
 }
 
 describe("Sources", () => {
+  it("enables bounded repair without changing provider credentials", async () => {
+    const { fake } = renderApp("/sources/usenet");
+    fireEvent.click(await screen.findByRole("button", { name: "Configure repair" }, WAIT));
+    const enabled = await screen.findByRole("switch", { name: "Enable repair" });
+    expect(enabled).not.toBeChecked();
+    fireEvent.click(enabled);
+    fireEvent.change(screen.getByLabelText("Extra download budget"), { target: { value: "256" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save repair settings" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/usenet")).toHaveLength(1), WAIT);
+    const body = calls(fake, "PUT", "/config/usenet")[0]!.body as EtherConfig["usenet"];
+    expect(body.repair).toMatchObject({ enabled: true, maxDownloadBytes: 256 * 1024 * 1024 });
+    expect(body.providers).toHaveLength(2);
+    expect(body.providers?.[0]?.password).toBe("••••");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("discards unsaved provider edits when its drawer closes", async () => {
     const { fake } = renderApp("/sources/usenet");
     fireEvent.click(await screen.findByRole("button", { name: "Edit Primary news" }, WAIT));

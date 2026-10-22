@@ -37,6 +37,7 @@ import (
 
 // Options tune the engine. Zero values take the defaults noted.
 type Options struct {
+	Repair config.Repair
 	// HotBufferBytes bounds decoded segments kept in memory across all
 	// sources (default 256 MiB).
 	HotBufferBytes int64
@@ -75,7 +76,7 @@ type Options struct {
 
 // OptionsFromConfig derives options from the owner settings.
 func OptionsFromConfig(cfg config.Config) Options {
-	return Options{HealthSamples: cfg.Resolver.HealthSamples}
+	return Options{HealthSamples: cfg.Resolver.HealthSamples, Repair: cfg.Usenet.Repair}
 }
 
 func (o Options) withDefaults() Options {
@@ -116,15 +117,21 @@ func (o Options) withDefaults() Options {
 
 // Stats are engine counters for diagnostics.
 type Stats struct {
-	Fetches       int64 // articles fetched from Usenet
-	FetchedBytes  int64 // decoded bytes fetched from Usenet
-	HotHits       int64 // segments served from memory
-	CacheHits     int64 // segments served from the disk cache
-	Missing       int64 // articles missing on every provider
-	Coalesced     int64 // requests that joined an in-flight fetch
-	HotBytes      int64 // bytes currently in the hot buffer
-	OpenReleases  int   // release indexes held
-	ActiveSources int64
+	RepairLastReason   string
+	RepairAttempts     int64
+	RepairSuccesses    int64
+	RepairFailures     int64
+	RepairInputBytes   int64
+	RepairSummaryBytes int64
+	Fetches            int64 // articles fetched from Usenet
+	FetchedBytes       int64 // decoded bytes fetched from Usenet
+	HotHits            int64 // segments served from memory
+	CacheHits          int64 // segments served from the disk cache
+	Missing            int64 // articles missing on every provider
+	Coalesced          int64 // requests that joined an in-flight fetch
+	HotBytes           int64 // bytes currently in the hot buffer
+	OpenReleases       int   // release indexes held
+	ActiveSources      int64
 
 	// PAR2 (see par2.go): index files parsed, unusable (fetched but not
 	// parseable) and skipped as oversize; obfuscated files named from PAR2;
@@ -147,6 +154,17 @@ type hasCache interface {
 
 // Engine implements core.Engine and core.HealthChecker.
 type Engine struct {
+	repairConfig       atomic.Pointer[config.Repair]
+	repairLast         atomic.Pointer[string]
+	repairGate         chan struct{}
+	repairPersist      chan struct{}
+	repairMemory       atomic.Int64
+	repairAttempts     atomic.Int64
+	repairSuccesses    atomic.Int64
+	repairFailures     atomic.Int64
+	repairInputBytes   atomic.Int64
+	repairSummaryBytes atomic.Int64
+
 	fetcher    core.ArticleFetcher
 	cache      core.SegmentCache
 	opts       Options
@@ -211,17 +229,19 @@ func New(fetcher core.ArticleFetcher, cache core.SegmentCache, opts Options, log
 	opts = opts.withDefaults()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Engine{
-		fetcher:    fetcher,
-		cache:      cache,
-		opts:       opts,
-		log:        logger.With("component", "stream"),
-		hot:        newHotBuffer(opts.HotBufferBytes),
-		hedgeDelay: liveHedgeDelay,
-		ctx:        ctx,
-		cancel:     cancel,
-		releases:   map[string]*list.Element{},
-		relLRU:     list.New(),
-		flights:    map[flightKey]*flight{},
+		repairGate:    make(chan struct{}, 1),
+		repairPersist: make(chan struct{}, 1),
+		fetcher:       fetcher,
+		cache:         cache,
+		opts:          opts,
+		log:           logger.With("component", "stream"),
+		hot:           newHotBuffer(opts.HotBufferBytes),
+		hedgeDelay:    liveHedgeDelay,
+		ctx:           ctx,
+		cancel:        cancel,
+		releases:      map[string]*list.Element{},
+		relLRU:        list.New(),
+		flights:       map[flightKey]*flight{},
 	}
 }
 
@@ -241,16 +261,26 @@ func (e *Engine) Stats() Stats {
 	e.mu.Lock()
 	n := len(e.releases)
 	e.mu.Unlock()
+	var reason string
+	if p := e.repairLast.Load(); p != nil {
+		reason = *p
+	}
 	return Stats{
-		Fetches:       e.fetches.Load(),
-		FetchedBytes:  e.fetchedBytes.Load(),
-		HotHits:       e.hotHits.Load(),
-		CacheHits:     e.cacheHits.Load(),
-		Missing:       e.missing.Load(),
-		Coalesced:     e.coalesced.Load(),
-		HotBytes:      e.hot.usage(),
-		OpenReleases:  n,
-		ActiveSources: e.active.Load(),
+		RepairLastReason:   reason,
+		RepairAttempts:     e.repairAttempts.Load(),
+		RepairSuccesses:    e.repairSuccesses.Load(),
+		RepairFailures:     e.repairFailures.Load(),
+		RepairInputBytes:   e.repairInputBytes.Load(),
+		RepairSummaryBytes: e.repairSummaryBytes.Load(),
+		Fetches:            e.fetches.Load(),
+		FetchedBytes:       e.fetchedBytes.Load(),
+		HotHits:            e.hotHits.Load(),
+		CacheHits:          e.cacheHits.Load(),
+		Missing:            e.missing.Load(),
+		Coalesced:          e.coalesced.Load(),
+		HotBytes:           e.hot.usage(),
+		OpenReleases:       n,
+		ActiveSources:      e.active.Load(),
 
 		Par2Loaded:      e.par2Loaded.Load(),
 		Par2Failed:      e.par2Failed.Load(),
@@ -284,6 +314,14 @@ func (e *Engine) Open(ctx context.Context, releaseID string, nzbData []byte) (co
 	if done, err := p.par2Verdict(); done && err != nil {
 		e.release(rel)
 		return nil, err
+	}
+	if e.repairOptions().Enabled {
+		warmCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if rel.repairMu.TryLock() {
+			e.prepareRepair(warmCtx, rel, core.PriorityReadahead, fetchOpts{cacheID: releaseID, noRepair: true})
+			rel.repairMu.Unlock()
+		}
+		cancel()
 	}
 	return newSource(e, rel, p, releaseID), nil
 }
@@ -352,9 +390,14 @@ func (e *Engine) trimReleasesLocked() {
 	for el := e.relLRU.Back(); el != nil && e.relLRU.Len() > e.opts.MaxReleases; {
 		prev := el.Prev()
 		rel := el.Value.(*release)
-		if rel.refs <= 0 {
+		if rel.refs <= 0 && rel.repairMu.TryLock() {
 			e.relLRU.Remove(el)
 			delete(e.releases, rel.digest)
+			if rel.repair != nil {
+				e.repairMemory.Add(-rel.repair.reserved)
+				rel.repair = nil
+			}
+			rel.repairMu.Unlock()
 			// Drop synchronously (hot.mu never waits on e.mu): a deferred
 			// drop could run after the same NZB was acquired again and
 			// evict the new release state's segments.

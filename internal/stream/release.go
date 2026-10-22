@@ -38,6 +38,8 @@ type release struct {
 	planErr  error // permanent rejection, cached
 
 	p2           par2State
+	repairMu     sync.Mutex
+	repair       *repairSession
 	rarPasswords archive.RARPasswordCache
 }
 

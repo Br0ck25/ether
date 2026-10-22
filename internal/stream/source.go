@@ -20,16 +20,18 @@ const backSlack = 1 << 20
 
 // cursor follows one sequential reader.
 type cursor struct {
-	next      int64 // offset after the last byte read
-	window    int64 // current read-ahead window
-	frontier  int64 // read-ahead scheduled up to here
-	used      time.Time
-	verifying bool // one archive-layout verification per cursor
-	blocked   bool // failed verification waits for a new foreground read
+	requestBegin int64 // foreground start; next includes bytes still being read
+	next         int64 // offset after the last byte read
+	window       int64 // current read-ahead window
+	frontier     int64 // read-ahead scheduled up to here
+	used         time.Time
+	verifying    bool // one archive-layout verification per cursor
+	blocked      bool // failed verification waits for a new foreground read
 }
 
 // source implements core.MediaSource.
 type source struct {
+	bulk      *bulkReader
 	e         *Engine
 	rel       *release
 	plan      *plan
@@ -56,6 +58,7 @@ func newSource(e *Engine, rel *release, p *plan, releaseID string) *source {
 	e.active.Add(1)
 	return &source{
 		e: e, rel: rel, plan: p, releaseID: releaseID,
+		bulk:   &bulkReader{e: e, r: rel, prio: core.PriorityReadahead, fo: fetchOpts{cacheID: releaseID}},
 		fo:     fetchOpts{cacheID: releaseID},
 		ctx:    ctx,
 		cancel: cancel,
@@ -239,7 +242,11 @@ func (s *source) readAhead(off, n int64) {
 		}
 	}
 	if c == nil {
-		c = &cursor{next: end, window: min(opts.ReadAheadMin, windowCap), frontier: end}
+		initial := opts.ReadAheadMin
+		if s.e.repairOptions().Enabled {
+			initial = max(initial, 32<<20)
+		}
+		c = &cursor{next: end, window: min(initial, windowCap), frontier: end}
 		if len(s.cursors) < maxCursors {
 			s.cursors = append(s.cursors, c)
 		} else {
@@ -258,6 +265,7 @@ func (s *source) readAhead(off, n int64) {
 		}
 		c.next = max(c.next, end)
 	}
+	c.requestBegin = off
 	c.window = min(c.window, windowCap)
 	c.used = now
 	c.blocked = false // a new demand read permits retrying a failed layout check
@@ -347,6 +355,25 @@ func (s *source) cursorWindow(c *cursor) (int64, int64, bool) {
 	return 0, 0, false
 }
 
+// repairNeeded includes the current demand read, not only the speculative
+// window: advancing next before reading must not cancel the repair being joined.
+func (s *source) repairNeeded(c *cursor, begin, end int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if c == nil {
+		return true
+	}
+	for _, current := range s.cursors {
+		if current == c {
+			return !c.blocked && end > c.requestBegin && begin < min(c.next+c.window, s.plan.size)
+		}
+	}
+	return false
+}
+
 // schedule starts read-ahead fetches for [from, to) without blocking and
 // returns how far it got (the start of the first slot it could not start).
 func (s *source) schedule(from, to int64) int64 { return s.scheduleCursor(from, to, nil) }
@@ -400,7 +427,15 @@ func (s *source) scheduleCursor(from, to int64, c *cursor) int64 {
 				continue
 			}
 			started := s.startRA(func() bool {
-				_, err := s.e.segment(s.ctx, s.rel, pf, i, core.PriorityReadahead, s.fo)
+				fo := s.fo
+				if s.e.repairOptions().Enabled {
+					fo = s.bulk.options()
+					fo.noRepair = false
+				}
+				fo.repairValid = func() bool {
+					return s.repairNeeded(c, inner, innerEnd)
+				}
+				_, err := s.e.segment(s.ctx, s.rel, pf, i, core.PriorityReadahead, fo)
 				if err != nil && s.ctx.Err() == nil && !isMissing(err) {
 					s.e.log.Debug("read-ahead fetch failed", "name", s.plan.name, "part", i+1, "err", err)
 				}

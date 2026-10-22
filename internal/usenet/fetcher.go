@@ -48,8 +48,9 @@ const (
 // Options tune the fetcher. Zero values take the defaults above.
 type Options struct {
 	// BodyPipelineDepth bounds queued BODY commands per socket (default 4,
-	// maximum 16). One disables pipelining. Readahead uses at most two, with a reserved live
-	// connection; prefetch, recovery probes and single-connection readahead
+	// maximum 16). One disables pipelining. Readahead normally uses at most two,
+	// with a reserved live connection; explicit short bursts can borrow idle
+	// capacity and use this depth. Prefetch, recovery probes and single-connection readahead
 	// use one. Speculative batches stop growing when live work waits.
 	BodyPipelineDepth int
 	Logger            *slog.Logger

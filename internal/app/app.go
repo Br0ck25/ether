@@ -310,6 +310,7 @@ func (a *App) applyConfig(c config.Config) {
 	a.fetcher.UpdateConfig(c.Usenet)
 	a.sites.ApplyConfig(c)
 	a.indexers.ApplyConfig(c)
+	a.engine.UpdateRepair(c.Usenet.Repair)
 	a.debrid.UpdateConfig(c.Debrid)
 	a.resolver.UpdateConfig(c)
 	a.catalog.UpdateConfig(c.Catalog)

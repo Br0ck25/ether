@@ -1,14 +1,7 @@
-// Package par2 parses the metadata packets of PAR2 2.0 files.
-//
-// Ether never repairs with PAR2: a recovery block is a linear combination of
-// every slice of the set, so rebuilding one missing article would mean
-// reading the whole file, which defeats streaming. What it does use is the
-// cheap part of a PAR2 set, the index file: File Description packets give
-// every file's real name, exact length, MD5 of the whole file and MD5 of its
-// first 16 KiB, and Input File Slice Checksum packets give the MD5 and CRC32
-// of each slice. That lets the stream engine name obfuscated posts from the
-// first article of each file and check that what it serves is the content
-// the poster hashed.
+// Package par2 parses PAR2 2.0 metadata and performs bounded GF16 recovery.
+// File descriptions name obfuscated posts and authenticate source slices.
+// recovery.go reconstructs selected byte intervals, verifies complete target
+// slices, and can subtract retained summaries of already verified input.
 //
 // The parser is defensive: packets are located by scanning for the magic,
 // every packet's MD5 is verified, corrupt, truncated and unknown packets are
@@ -46,6 +39,7 @@ const (
 	TypeIFSC     = "PAR 2.0\x00IFSC\x00\x00\x00\x00"
 	TypeCreator  = "PAR 2.0\x00Creator\x00"
 	TypeUniName  = "PAR 2.0\x00UniFileN"
+	TypeRecovery = "PAR 2.0\x00RecvSlic"
 )
 
 // ErrNoFiles is returned by Parse when the data holds no valid File
@@ -81,6 +75,8 @@ type File struct {
 // Set is everything usable found in one or more PAR2 files. Files from
 // several recovery sets may be present.
 type Set struct {
+	// Main retains the protected-file order required by the recovery equations.
+	Main map[ID]Main
 	// Files in order of first appearance.
 	Files []*File
 	// Creator is the first Creator packet's text, for diagnostics.
@@ -97,7 +93,7 @@ type fileKey struct{ set, file ID }
 // or gaps from missing articles) for packets. It returns ErrNoFiles if no
 // valid File Description packet is found.
 func Parse(data []byte) (*Set, error) {
-	s := &Set{}
+	s := &Set{Main: map[ID]Main{}}
 	seen := map[[16]byte]bool{}
 	descs := map[fileKey]*File{}
 	var order []fileKey
@@ -142,6 +138,19 @@ func Parse(data []byte) (*Set, error) {
 			}
 			if _, dup := sliceSize[setID]; !dup {
 				sliceSize[setID] = int64(ss)
+			}
+			count := int(binary.LittleEndian.Uint32(body[8:12]))
+			if count <= (len(body)-12)/16 {
+				m := Main{SliceSize: int64(ss)}
+				for j := 0; j < count; j++ {
+					var id ID
+					copy(id[:], body[12+16*j:12+16*(j+1)])
+					m.Files = append(m.Files, id)
+				}
+				if old, ok := s.Main[setID]; ok && !sameMain(old, m) {
+					m.Invalid = true
+				}
+				s.Main[setID] = m
 			}
 		case TypeFileDesc:
 			if len(body) < 56 {

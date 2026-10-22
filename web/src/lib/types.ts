@@ -223,7 +223,17 @@ export interface EtherConfig {
     certHash: string;
     secureConnections: string;
   };
-  usenet: { providers: UsenetProvider[] | null };
+  usenet: {
+    providers: UsenetProvider[] | null;
+    repair?: {
+      enabled: boolean;
+      wholeSlices?: boolean;
+      summaryRows: number;
+      maxDownloadBytes: number;
+      liveWait: string;
+      aheadWait: string;
+    };
+  };
   indexers: Indexer[] | null;
   indexerSites?: IndexerSitesConfig;
   /** Absent on servers without debrid support. */

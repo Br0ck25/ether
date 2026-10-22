@@ -77,6 +77,9 @@ export function connectionText(stat: Record<string, unknown> | undefined, config
 export function UsenetProviders() {
   const { dashboard, refreshDashboard } = useApp();
   const config = useAsync(() => api.getConfig(), []);
+  const [repairDraft, setRepairDraft] = useState<NonNullable<
+    EtherConfig["usenet"]["repair"]
+  > | null>(null);
   const [editing, setEditing] = useState<{ index: number; draft: UsenetProvider } | null>(null);
   const [errors, setErrors] = useState<Errors>({});
   const [error, setError] = useState<unknown>(null);
@@ -100,6 +103,21 @@ export function UsenetProviders() {
     void refreshDashboard();
   }
 
+  async function saveRepair() {
+    if (!cfg || !repairDraft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.putSection("usenet", { ...cfg.usenet, repair: repairDraft });
+      toast.success("Repair settings saved");
+      setRepairDraft(null);
+      await config.reload();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
   const open = (index: number, draft: UsenetProvider) => {
     setErrors({});
     setError(null);
@@ -234,6 +252,78 @@ export function UsenetProviders() {
           </ul>
         )}
       </Section>
+
+      <Section
+        title="Repair Ahead"
+        description="Restore missing source data during readahead when it can finish within your limits."
+      >
+        <SettingsRow
+          title={cfg?.usenet.repair?.enabled ? "Repair enabled" : "Repair disabled"}
+          description="Repair uses additional download bandwidth. Playback can still switch sources when repair cannot finish in time."
+          control={
+            <Button
+              variant="outline"
+              onClick={() => {
+                setError(null);
+                setRepairDraft(
+                  cfg?.usenet.repair ?? {
+                    enabled: false,
+                    summaryRows: 4,
+                    maxDownloadBytes: 512 * 1024 * 1024,
+                    liveWait: "2s",
+                    aheadWait: "1m30s",
+                  },
+                );
+              }}
+            >
+              Configure repair
+            </Button>
+          }
+        />
+      </Section>
+      <RecordDrawer
+        open={repairDraft !== null}
+        onClose={() => {
+          if (!saving) setRepairDraft(null);
+        }}
+        title="Repair Ahead"
+        onSave={() => void saveRepair()}
+        saving={saving}
+        saveLabel="Save repair settings"
+        error={error}
+      >
+        {repairDraft ? (
+          <SettingsSection title="Recovery">
+            <BoolRow
+              label="Enable repair"
+              value={repairDraft.enabled}
+              onChange={(enabled) => setRepairDraft({ ...repairDraft, enabled })}
+            />
+            <NumRow
+              label="Extra download budget"
+              value={Math.round((repairDraft.maxDownloadBytes || 512 * 1024 * 1024) / 1024 / 1024)}
+              min={32}
+              max={4096}
+              unit="MiB"
+              help="Additional transfer budget per repair attempt; requests already in flight can finish."
+              onChange={(n) =>
+                setRepairDraft({
+                  ...repairDraft,
+                  maxDownloadBytes: Math.min(4096, Math.max(32, n)) * 1024 * 1024,
+                })
+              }
+            />
+            <BoolRow
+              label="Remember downloaded data"
+              value={repairDraft.summaryRows > 0}
+              help="Keep compact repair information after cached bytes are evicted. This uses additional memory and CPU."
+              onChange={(enabled) =>
+                setRepairDraft({ ...repairDraft, summaryRows: enabled ? 4 : 0 })
+              }
+            />
+          </SettingsSection>
+        ) : null}
+      </RecordDrawer>
 
       <RecordDrawer
         open={editing !== null}

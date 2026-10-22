@@ -294,6 +294,13 @@ type ArticleFetcher interface {
 	Stat(ctx context.Context, messageID string) (bool, error)
 }
 
+// BurstArticleFetcher optionally borrows idle live-reserved capacity for a
+// short, explicitly bounded bulk-read burst. Live waiters retain precedence.
+// The deadline limits new burst admission, not already transmitted bytes.
+type BurstArticleFetcher interface {
+	BodyPartBurst(ctx context.Context, messageID string, groups []string, prio Priority, until time.Time) ([]byte, ArticlePart, error)
+}
+
 // ArticlePart is the yEnc header of one article. Begin and End are 1-based
 // inclusive offsets in the posted file, as in =ypart; for single-part posts
 // Begin is 1 and End is FileSize.

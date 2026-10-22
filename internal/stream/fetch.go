@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -32,14 +33,19 @@ type flight struct {
 
 // fetchOpts says where a fetched segment may be stored.
 type fetchOpts struct {
-	cacheID string // release ID for the disk cache; "" = don't use it
-	noHot   bool   // don't fill the hot buffer (background prefetch)
+	burstUntil   time.Time
+	parallel     int         // independent bulk-reader window concurrency
+	repairValid  func() bool // readahead cursor still needs this work
+	deferObserve bool        // readFile observes assembled segments in file order
+	noRepair     bool        // dependency reads must never recursively enter repair
+	cacheID      string      // release ID for the disk cache; "" = don't use it
+	noHot        bool        // don't fill the hot buffer (background prefetch)
 }
 
 // segment returns slot i of pf: from the hot buffer, the disk cache, or
 // Usenet, coalescing concurrent requests. The slot's index entry is
 // updated from the article's yEnc header.
-func (e *Engine) segment(ctx context.Context, rel *release, pf *postedFile, i int, prio core.Priority, fo fetchOpts) (*segData, error) {
+func (e *Engine) segmentRaw(ctx context.Context, rel *release, pf *postedFile, i int, prio core.Priority, fo fetchOpts) (*segData, error) {
 	if prio == core.PriorityLive {
 		if seg, handled, err := e.hedgeSpeculative(ctx, rel, pf, i, fo); handled {
 			return seg, err
@@ -57,10 +63,7 @@ func (e *Engine) segment(ctx context.Context, rel *release, pf *postedFile, i in
 
 func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, i int, prio core.Priority, fo fetchOpts) (_ *segData, abandoned bool, _ error) {
 	id := pf.msgID(i)
-	if id == "" {
-		e.missing.Add(1)
-		return nil, false, fmt.Errorf("stream: %s part %d not in nzb: %w", pf.Name(), i+1, core.ErrArticleMissing)
-	}
+
 	key := segKey{rel.digest, pf.segBase + i}
 	if seg, ok := e.hot.get(key); ok {
 		e.hotHits.Add(1)
@@ -68,6 +71,19 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 		return seg, false, nil
 	}
 
+	if id == "" {
+		if fo.cacheID != "" && e.cache != nil {
+			if data, ok := e.cache.Get(fo.cacheID, key.seg); ok {
+				if seg, ok := decodeSegment(data); ok {
+					e.learnHot(rel, pf, i, seg)
+					return seg, false, nil
+				}
+			}
+		}
+
+		e.missing.Add(1)
+		return nil, false, fmt.Errorf("stream: %s part %d not in nzb: %w", pf.Name(), i+1, core.ErrArticleMissing)
+	}
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
@@ -227,7 +243,7 @@ func (e *Engine) hedgeSpeculative(ctx context.Context, rel *release, pf *postedF
 // them (a fetch finishing after its release was trimmed), so a fresh state
 // for the same NZB would otherwise locate offsets from estimates forever.
 func (e *Engine) learnHot(rel *release, pf *postedFile, i int, seg *segData) {
-	if pf.slotKnown(i) {
+	if seg.repairedSpan || pf.slotKnown(i) {
 		return
 	}
 	pf.learn(i, seg.begin, seg.end(), seg.fileSize, seg.total)
@@ -240,8 +256,10 @@ func (e *Engine) run(ctx context.Context, fl *flight, key flightKey, rel *releas
 	defer fl.cancel()
 	seg, fromCache, err := e.load(ctx, pf, i, id, key.seg, prio, fo)
 	if err == nil {
-		pf.learn(i, seg.begin, seg.end(), seg.fileSize, seg.total)
-		rel.notePartSize(pf)
+		if !seg.repairedSpan {
+			pf.learn(i, seg.begin, seg.end(), seg.fileSize, seg.total)
+			rel.notePartSize(pf)
+		}
 		if !fo.noHot {
 			e.hot.put(key.segKey, seg)
 		}
@@ -298,7 +316,14 @@ func (e *Engine) load(ctx context.Context, pf *postedFile, i int, id string, glo
 			case <-t.C:
 			}
 		}
-		data, part, err := e.fetcher.BodyPart(ctx, id, pf.groups, prio)
+		var data []byte
+		var part core.ArticlePart
+		var err error
+		if burst, ok := e.fetcher.(core.BurstArticleFetcher); ok && time.Now().Before(fo.burstUntil) {
+			data, part, err = burst.BodyPartBurst(ctx, id, pf.groups, prio, fo.burstUntil)
+		} else {
+			data, part, err = e.fetcher.BodyPart(ctx, id, pf.groups, prio)
+		}
 		if err == nil {
 			e.fetches.Add(1)
 			e.fetchedBytes.Add(int64(len(data)))
@@ -350,7 +375,9 @@ func (e *Engine) normalize(pf *postedFile, i int, data []byte, part core.Article
 // Disk cache encoding: a small header so a cached segment restores its
 // position in the posted file without the article.
 //
-//	"ETS2" | begin u64 | fileSize u64 | total u32 | nameLen u16 | exact u8 | name | data
+//	"ETS2" | begin u64 | fileSize u64 | total u32 | nameLen u16 | flags u8 | name | data
+//
+// Multi-article repaired spans use ETS3 so older binaries ignore those entries.
 const segMagic = "ETS2"
 
 func encodeSegment(s *segData) []byte {
@@ -367,13 +394,17 @@ func encodeSegment(s *segData) []byte {
 	if s.rangeExact {
 		b[26] = 1
 	}
+	if s.repairedSpan {
+		copy(b, "ETS3")
+		b[26] |= 2
+	}
 	copy(b[27:], name)
 	copy(b[27+len(name):], s.data)
 	return b
 }
 
 func decodeSegment(b []byte) (*segData, bool) {
-	if len(b) < 27 || string(b[:4]) != segMagic {
+	if len(b) < 27 || (string(b[:4]) != segMagic && string(b[:4]) != "ETS3") {
 		return nil, false
 	}
 	begin := int64(binary.LittleEndian.Uint64(b[4:]))
@@ -383,7 +414,7 @@ func decodeSegment(b []byte) (*segData, bool) {
 	if begin < 0 || size < 0 || 27+nl > len(b) {
 		return nil, false
 	}
-	return &segData{begin: begin, fileSize: size, total: total, name: string(b[27 : 27+nl]), data: b[27+nl:], rangeExact: b[26] == 1}, true
+	return &segData{begin: begin, fileSize: size, total: total, name: string(b[27 : 27+nl]), data: b[27+nl:], rangeExact: b[26]&1 != 0, repairedSpan: b[26]&2 != 0}, true
 }
 
 // readFile fills p from posted file pf at off, fetching the covering
@@ -393,6 +424,10 @@ func (e *Engine) readFile(ctx context.Context, rel *release, pf *postedFile, p [
 	if len(p) == 0 {
 		return 0, nil
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() { cancel(); workers.Wait() }()
+	fo.deferObserve = true
 	size := pf.Size()
 	if off >= size && pf.SizeKnown() {
 		return 0, errEOF
@@ -405,28 +440,53 @@ func (e *Engine) readFile(ctx context.Context, rel *release, pf *postedFile, p [
 	}
 	results := make(map[int]chan res, len(slots))
 	if len(slots) > 1 {
-		sem := make(chan struct{}, e.opts.ReadParallel)
+		parallel := e.opts.ReadParallel
+		if fo.parallel > 0 {
+			parallel = fo.parallel
+		}
+		// Keep goroutine count bounded even for tiny/malformed NZB segments.
 		for _, i := range slots {
-			ch := make(chan res, 1)
-			results[i] = ch
-			go func(i int, ch chan res) {
+			results[i] = make(chan res, 1)
+		}
+		jobs := make(chan int)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			defer close(jobs)
+			for _, i := range slots {
 				select {
-				case sem <- struct{}{}:
+				case jobs <- i:
 				case <-ctx.Done():
-					ch <- res{err: ctx.Err()}
 					return
 				}
-				seg, err := e.segment(ctx, rel, pf, i, prio, fo)
-				<-sem
-				ch <- res{seg, err}
-			}(i, ch)
+			}
+		}()
+		// Workers capture their channels before assembly starts deleting map
+		// entries; the immutable queue avoids concurrent access to results.
+		channels := make(map[int]chan res, len(results))
+		for i, ch := range results {
+			channels[i] = ch
+		}
+		for range min(parallel, len(slots)) {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for i := range jobs {
+					seg, err := e.segment(ctx, rel, pf, i, prio, fo)
+					channels[i] <- res{seg, err}
+				}
+			}()
 		}
 	}
 	get := func(i int) (*segData, error) {
 		if ch, ok := results[i]; ok {
 			delete(results, i)
-			r := <-ch
-			return r.seg, r.err
+			select {
+			case r := <-ch:
+				return r.seg, r.err
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 		return e.segment(ctx, rel, pf, i, prio, fo)
 	}
@@ -454,6 +514,9 @@ func (e *Engine) readFile(ctx context.Context, rel *release, pf *postedFile, p [
 				return n, errEOF
 			}
 			continue
+		}
+		if !fo.noRepair && e.repairOptions().Enabled {
+			e.observeRepair(rel, pf, seg)
 		}
 		c := copy(p[n:], seg.data[cur-seg.begin:])
 		n += c
