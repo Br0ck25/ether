@@ -23,6 +23,7 @@ type standbyState struct {
 	started  bool
 	ready    *generation
 	consumed chan struct{}
+	prepared chan struct{}
 	elapsed  time.Duration
 }
 
@@ -139,12 +140,14 @@ func (m *Manager) prepareSpeedAlternate(g *generation) {
 	}
 	d.started = true
 	d.consumed = make(chan struct{})
+	d.prepared = make(chan struct{})
 	d.mu.Unlock()
 	m.mu.Lock()
 	if m.closed || m.standbyActive >= 2 {
 		m.mu.Unlock()
 		d.mu.Lock()
 		d.started = false
+		close(d.prepared)
 		d.mu.Unlock()
 		return
 	}
@@ -153,6 +156,10 @@ func (m *Manager) prepareSpeedAlternate(g *generation) {
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
+		var signal sync.Once
+		readySignal := d.prepared
+		notify := func() { signal.Do(func() { close(readySignal) }) }
+		defer notify()
 		defer func() { m.mu.Lock(); m.standbyActive--; m.mu.Unlock() }()
 		s := g.sess
 		ctx, cancel := context.WithTimeout(g.ctx, 20*time.Second)
@@ -181,31 +188,23 @@ func (m *Manager) prepareSpeedAlternate(g *generation) {
 				m.dropGeneration(next)
 				continue
 			}
+			// Read real upcoming bytes before calling an alternate ready. A
+			// successful header probe does not establish that its first articles
+			// or seek target exist (the Friends failure was at byte 1,433,600).
+			if err := m.warmAlternateWindow(ctx, g, next); err != nil {
+				m.log.Debug("alternate preparation failed", "session", s.id, "release", next.releaseID(), "err", err)
+				if permanentSourceFailure(err) {
+					m.markBad(next.releaseID(), "missing media while preparing alternate")
+				}
+				m.dropGeneration(next)
+				continue
+			}
 			prepared = next
 			break
 		}
 		if prepared == nil {
 			return
 		}
-		// Resolve/open/probe and a bounded upcoming window are ready before use.
-		position, _, _ := m.repairHorizon(g, core.RepairEvent{Offset: -1})
-		// Warm where an encoder takeover will begin, not stale source-read
-		// offsets. Keep the opening header cached independently.
-		if hls, ok := m.deps.HLSLookup(s.id); ok {
-			if source, ok := hls.(core.RecoveryBufferSource); ok {
-				b := source.RecoveryBuffer()
-				if b.ReadyUntil > position && b.ReadyUntil < prepared.infoSnapshot().Duration {
-					position = m.alignForFailover(ctx, s, g, prepared, b.ReadyUntil)
-				}
-			}
-		}
-		tm := prepared.timeMapSnapshot()
-		lo := tm.KeyframeOffsetAt(max(0, position-4*time.Second))
-		if len(tm.Points) == 0 {
-			lo = tm.OffsetAt(max(0, position-8*time.Second))
-		}
-		_ = m.deps.Engine.Prefetch(ctx, prepared.releaseID(), prepared.res.NZB, 0, 256<<10)
-		_ = m.deps.Engine.Prefetch(ctx, prepared.releaseID(), prepared.res.NZB, lo, min(int64(16<<20), max(0, tm.Size-lo)))
 		if ctx.Err() != nil || s.current() != g {
 			m.dropGeneration(prepared)
 			return
@@ -214,6 +213,7 @@ func (m *Manager) prepareSpeedAlternate(g *generation) {
 		d.ready = prepared
 		d.elapsed = time.Since(started)
 		d.mu.Unlock()
+		notify()
 		m.log.Info("playback alternate prepared", "session", s.id, "release", prepared.releaseID(), "took", time.Since(started))
 		select {
 		case <-d.consumed:
@@ -280,4 +280,54 @@ func (p *pendingSourceReads) longest(now time.Time) time.Duration {
 		elapsed = max(elapsed, now.Sub(*start))
 	}
 	return elapsed
+}
+
+func (m *Manager) warmAlternateWindow(ctx context.Context, current, next *generation) error {
+	position, _, _ := m.repairHorizon(current, core.RepairEvent{Offset: -1})
+	if hls, ok := m.deps.HLSLookup(current.sess.id); ok {
+		if source, ok := hls.(core.RecoveryBufferSource); ok {
+			b := source.RecoveryBuffer()
+			if b.ReadyUntil > position && b.ReadyUntil < next.infoSnapshot().Duration {
+				position = b.ReadyUntil
+			}
+		}
+	}
+	position = m.alignForFailover(ctx, current.sess, current, next, position)
+	tm := next.timeMapSnapshot()
+	lo := tm.KeyframeOffsetAt(max(0, position-4*time.Second))
+	if len(tm.Points) == 0 {
+		lo = tm.OffsetAt(max(0, position-8*time.Second))
+	}
+	if err := m.deps.Engine.Prefetch(ctx, next.releaseID(), next.res.NZB, 0, min(int64(2<<20), tm.Size)); err != nil {
+		return err
+	}
+	return m.deps.Engine.Prefetch(ctx, next.releaseID(), next.res.NZB, lo, min(int64(4<<20), max(0, tm.Size-lo)))
+}
+
+// Spend at most a small fraction of proven runway joining work already in
+// progress. Do not race a duplicate grab/probe while the standby warms bytes.
+func (m *Manager) joinSpeedAlternate(ctx context.Context, g *generation, tried []string) *generation {
+	if ready := g.takeSpeedAlternate(tried); ready != nil {
+		return ready
+	}
+	_, buffer, known := m.repairHorizon(g, core.RepairEvent{Offset: -1})
+	if !known || buffer < 4*time.Second {
+		return nil
+	}
+	g.standby.mu.Lock()
+	done := g.standby.prepared
+	g.standby.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	timer := time.NewTimer(min(2*time.Second, buffer/4))
+	defer timer.Stop()
+	select {
+	case <-done:
+		return g.takeSpeedAlternate(tried)
+	case <-ctx.Done():
+		return nil
+	case <-timer.C:
+		return nil
+	}
 }

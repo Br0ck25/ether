@@ -188,7 +188,12 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		if err != nil || title == nil || title.Type == core.TypeShow || title.Type == core.TypeSeason {
 			return
 		}
-		res, err := m.deps.Resolver.Resolve(ctx, core.ResolveRequest{Title: title, Client: caps, User: &u})
+		// Warming must not override the source that actually survived the
+		// previous playback with the original, slower top-ranked release.
+		res := m.resumeResolution(ctx, u.ID, key, e.profile, caps)
+		if res == nil || !releaseMatchesTitle(res.Release, title) {
+			res, err = m.deps.Resolver.Resolve(ctx, core.ResolveRequest{Title: title, Client: caps, User: &u})
+		}
 		if err != nil || res == nil {
 			return
 		}

@@ -269,7 +269,11 @@ func (s *Service) ObservePlayback(ev playback.Event) {
 	if ev.Kind == "update" {
 		return
 	}
-	e := Event{Kind: "playback." + ev.Kind, Title: "Ether playback " + ev.Kind, At: ev.At}
+	kind := ev.Kind
+	if kind == "downfailover" {
+		kind = "failover"
+	}
+	e := Event{Kind: "playback." + kind, Title: "Ether playback " + ev.Kind, At: ev.At}
 	if ev.Session != nil {
 		e.Message = ev.Session.Username + ": " + ev.Session.TitleName
 	}

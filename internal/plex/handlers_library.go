@@ -749,6 +749,19 @@ func (s *Server) inProgressTitles(ctx context.Context, pr *Request, t core.Media
 		state[st.Key] = st
 	}
 	titles := s.getTitles(ctx, keys)
+	// Resume unfinished media and advance recently completed series. A
+	// completed episode has no offset, so InProgress alone loses the show.
+	if t != core.TypeMovie {
+		titles = s.appendNextContinue(ctx, pr, titles, state, limit)
+	}
+	sort.SliceStable(titles, func(i, j int) bool {
+		a, b := state[titles[i].Key].LastViewedAt, state[titles[j].Key].LastViewedAt
+		if !a.Equal(b) {
+			return a.After(b)
+		}
+		return titles[i].Key < titles[j].Key
+	})
+	seenShows := map[int64]bool{}
 	out := titles[:0:0]
 	for _, ti := range titles {
 		if t != "" {
@@ -763,6 +776,12 @@ func (s *Server) inProgressTitles(ctx context.Context, pr *Request, t core.Media
 		sec, ok := s.sectionFor(ti.Type)
 		if ok && !s.canSeeSection(pr.User, sec.ID) {
 			continue
+		}
+		if ti.Type == core.TypeEpisode {
+			if seenShows[ti.Key.TMDB()] {
+				continue
+			}
+			seenShows[ti.Key.TMDB()] = true
 		}
 		out = append(out, ti)
 		if limit > 0 && len(out) >= limit {

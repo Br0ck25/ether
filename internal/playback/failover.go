@@ -597,7 +597,7 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		lastErr     error
 	)
 	if fo.down {
-		g = cur.takeSpeedAlternate(tried)
+		g = m.joinSpeedAlternate(ctx, cur, tried)
 		if g != nil && m.preflightSwap(s, g) != nil {
 			m.dropGeneration(g)
 			g = nil
