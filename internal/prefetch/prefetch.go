@@ -433,6 +433,19 @@ func (p *Prefetcher) nextEpisode(ctx context.Context, user *core.User, key core.
 	}
 	length := p.config().PrefetchBytes
 	log := p.log.With("user", user.ID, "episode", next.Key)
+	// Reuse the same opened-source/probe preparation as detail and post-play
+	// warming. Merely remembering an NZB still leaves container probing on
+	// the critical path when the player advances to this episode.
+	if p.deps.Prewarmer != nil {
+		if p.deps.Prewarmer.Prewarm(ctx, user, next.Key, caps, core.PrewarmOptions{
+			Reason: core.PrewarmPostPlay, PrefetchBytes: length, DuringPlayback: true,
+		}) {
+			log.Info("preparing next episode for playback")
+		} else {
+			log.Debug("next episode preparation already present or budget unavailable")
+		}
+		return nil
+	}
 
 	if p.deps.Hints != nil {
 		rp, err := p.deps.Hints.ResumeFor(ctx, user, next.Key, caps)

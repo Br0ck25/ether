@@ -262,6 +262,21 @@ func TestNextEpisodeUsesStoredRelease(t *testing.T) {
 	}
 }
 
+func TestNextEpisodePreparesProbeThroughPlayback(t *testing.T) {
+	f := newFixture(t, Options{}, nil)
+	w := &fakePrewarmer{}
+	f.p.deps.Prewarmer = w
+	f.p.OnTimeline(user, ep1, 41*time.Minute, 50*time.Minute, "playing")
+	f.wait(t)
+	calls := w.got()
+	if len(calls) != 1 || calls[0].key != ep2 || calls[0].caps.ClientID != "tv" || !calls[0].opts.DuringPlayback || calls[0].opts.PrefetchBytes != f.p.config().PrefetchBytes {
+		t.Fatalf("next episode preparation = %+v", calls)
+	}
+	if f.resolver.count() != 0 || len(f.engine.got()) != 0 {
+		t.Fatal("duplicated playback's source preparation")
+	}
+}
+
 func TestNextEpisodeDisabledAndThreshold(t *testing.T) {
 	f := newFixture(t, Options{}, nil)
 	cfg := config.Defaults(t.TempDir()).Cache
