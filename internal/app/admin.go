@@ -11,6 +11,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/llm"
 	"github.com/braedonsaunders/ether/internal/newznab"
 	"github.com/braedonsaunders/ether/internal/plextv"
@@ -107,6 +108,7 @@ func (a *App) buildAdmin() http.Handler {
 		},
 		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
 		Users:           a.users,
+		ViewerDirectory: a.viewerDirectory,
 		Personalization: a.personalize,
 		Collections:     a.collections,
 		CatalogHelper:   a.collections,
@@ -283,4 +285,17 @@ func rememberPIN(pins map[string]*plextv.PIN, id string, pin *plextv.PIN) {
 		delete(pins, oldest)
 	}
 	pins[id] = pin
+}
+
+// Keep historical/imported identities visible without changing active membership.
+func (a *App) viewerDirectory(ctx context.Context) ([]core.User, error) {
+	stored, err := a.users.AllUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.User, 0, len(stored))
+	for _, u := range stored {
+		out = append(out, u.User)
+	}
+	return out, nil
 }

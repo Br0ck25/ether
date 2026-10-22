@@ -524,7 +524,7 @@ func (h *Handler) handleDisk(w http.ResponseWriter, r *http.Request) {
 // ---- Users ----
 
 func (h *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.deps.Users.Users(r.Context())
+	users, err := h.viewerDirectory(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
 		return
@@ -543,7 +543,7 @@ func (h *Handler) handleUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// Merge onto the stored user so PATCH-style partial bodies work and
 	// identity fields the client omitted are not blanked.
-	existing, err := h.deps.Users.Users(r.Context())
+	existing, err := h.viewerDirectory(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
 		return

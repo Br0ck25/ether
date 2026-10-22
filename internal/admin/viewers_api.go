@@ -119,7 +119,7 @@ func (h *Handler) viewerByID(w http.ResponseWriter, r *http.Request) (*core.User
 		writeError(w, http.StatusBadRequest, "bad_id", "viewer id must be a number")
 		return nil, false
 	}
-	users, err := h.deps.Users.Users(r.Context())
+	users, err := h.viewerDirectory(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
 		return nil, false
@@ -135,7 +135,7 @@ func (h *Handler) viewerByID(w http.ResponseWriter, r *http.Request) (*core.User
 }
 
 func (h *Handler) handleViewers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.deps.Users.Users(r.Context())
+	users, err := h.viewerDirectory(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
 		return
@@ -375,4 +375,12 @@ func homeCard(t core.Title) homeTitleCard {
 		c.Backdrop = adminImageURL(t.StillPath, 780)
 	}
 	return c
+}
+
+// viewerDirectory is owner-facing identity/history browsing, not membership.
+func (h *Handler) viewerDirectory(ctx context.Context) ([]core.User, error) {
+	if h.deps.ViewerDirectory != nil {
+		return h.deps.ViewerDirectory(ctx)
+	}
+	return h.deps.Users.Users(ctx)
 }

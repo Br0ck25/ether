@@ -114,7 +114,7 @@ func (h *Handler) handleLayoutPreview(w http.ResponseWriter, r *http.Request) {
 	u := &core.User{IsOwner: true}
 	var viewer any
 	if b.ViewerID != nil {
-		users, err := h.deps.Users.Users(r.Context())
+		users, err := h.viewerDirectory(r.Context())
 		if err != nil {
 			writeEngineError(w, err)
 			return
@@ -160,7 +160,7 @@ func (h *Handler) handleLayoutImpact(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	users, err := h.deps.Users.Users(r.Context())
+	users, err := h.viewerDirectory(r.Context())
 	if err != nil {
 		writeEngineError(w, err)
 		return

@@ -321,3 +321,28 @@ func TestRankerInsightUntrained(t *testing.T) {
 		t.Fatalf("failing engine: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestImportedViewersRemainVisibleOutsideActiveMembership(t *testing.T) {
+	store := newStore(t, nil)
+	active := &fakeUsers{users: []core.User{{ID: 1, Username: "owner", IsOwner: true}}}
+	directory := func(context.Context) ([]core.User, error) {
+		return []core.User{{ID: 1, Username: "owner", IsOwner: true}, {ID: 32, Username: "imported-viewer"}}, nil
+	}
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Users: active, ViewerDirectory: directory, Personalization: &fakeEngine{}})
+	for _, path := range []string{"/ether/api/viewers", "/ether/api/users", "/ether/api/viewers/32"} {
+		rec := serve(h, req(http.MethodGet, path, ""))
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "imported-viewer") {
+			t.Fatalf("%s hid imported history: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	for _, path := range []string{"/ether/api/viewers/32/taste", "/ether/api/viewers/32/home"} {
+		rec := serve(h, req(http.MethodGet, path, ""))
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	users, _ := active.Users(context.Background())
+	if len(users) != 1 || users[0].ID != 1 {
+		t.Fatal("historical directory changed membership")
+	}
+}

@@ -143,6 +143,11 @@ type Deps struct {
 	// Users backs the user-administration and viewer endpoints.
 	Users UserStore
 
+	// ViewerDirectory lists stored identities for owner administration, including
+	// imported or inactive viewers. It must never be used for authentication.
+	// Nil preserves the active-user fallback for smaller integrations.
+	ViewerDirectory func(context.Context) ([]core.User, error)
+
 	// TestTimeout bounds each wizard test call (default 20s).
 	TestTimeout time.Duration
 	// StatusTimeout bounds each status provider call (default 5s).
