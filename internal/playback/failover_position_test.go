@@ -116,3 +116,24 @@ func TestEncoderInputFailoverKeepsEncoderTime(t *testing.T) {
 		t.Fatalf("encoder input failover resumed at %v, want 30s", sw.At)
 	}
 }
+
+type bufferedPlayerHLS struct{ *bufferedReserveHLS }
+
+func (h *bufferedPlayerHLS) RequestedPosition() time.Duration { return h.buffer.Position }
+
+// A missing future article must not throw away the healthy media the player
+// already buffered, even though the failed byte read maps far ahead of it.
+func TestLoopbackReadFailurePreservesReadyMedia(t *testing.T) {
+	a := mkv("A", 100_000, 100*time.Second)
+	h := newHarness(t, []*fakeRelease{a, mkv("B", 100_000, 100*time.Second)}, []string{"A", "B"})
+	ps := h.prepare(owner, movieKey, "buffered-read-failure")
+	actual := h.tr.addHLS(ps.ID)
+	f := &bufferedReserveHLS{repairHLS: &repairHLS{fakeHLS: actual, buffer: core.RecoveryBuffer{Position: 12 * time.Second, ReadyUntil: 40 * time.Second}}}
+	h.m.deps.HLSLookup = func(string) (core.HLSSession, bool) { return &bufferedPlayerHLS{f}, true }
+	a.setFail(99_000, 100_000, nil)
+	get(t, h.m.InputURL(ps.ID), map[string]string{"Range": "bytes=99000-"})
+	awaitSwap(t, actual)
+	if !f.preserved {
+		t.Fatal("read failure discarded already produced media")
+	}
+}

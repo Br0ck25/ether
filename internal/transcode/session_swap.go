@@ -31,6 +31,12 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	if err := s.CheckSwap(info); err != nil {
 		return err
 	}
+	// Decode a tiny bounded sample outside the session lock. Only proven
+	// embedded side bars matching the existing picture are removed.
+	crop := s.swapPictureCrop(ctx, inputURL, info, at)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -101,6 +107,7 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 		// old provider's credentials onto an independently resolved URL.
 		s.inputHeaders = nil
 	}
+	s.inputCrop = crop
 	s.input = inputURL
 	s.info = info
 	s.decision = next

@@ -56,7 +56,8 @@ type runSpec struct {
 	KeyTimes []time.Duration
 	// Target, when set, is the static-header session's video contract
 	// every encode must deliver (contract.go).
-	Target *videoContract
+	Target      *videoContract
+	PictureCrop *pictureCrop
 }
 
 // segmentExt is the segment file extension for a decision's container.
@@ -565,8 +566,12 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	if t := s.Target; t != nil {
 		// A static-header session: encode the contract's picture
 		// whatever this source is (contract.go).
-		w, h = t.fit(v)
-		scaling = w != v.Width || h != v.Height
+		picture := *v
+		if s.PictureCrop != nil {
+			picture.Width, picture.Height = s.PictureCrop.width, s.PictureCrop.height
+		}
+		w, h = t.fit(&picture)
+		scaling = w != picture.Width || h != picture.Height
 		pad = w != t.width || h != t.height
 		tenBit, outRange = t.depth == 10, t.rng
 		tonemap = t.tonemaps(v)
@@ -575,7 +580,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 		}
 		// scale keeps the display aspect: its output SAR follows the source's.
 		src := pictureOf(v)
-		if n, dd := reduce(src.sarNum*v.Width*h, src.sarDen*v.Height*w); pad || n != t.pic.sarNum || dd != t.pic.sarDen {
+		if n, dd := reduce(src.sarNum*picture.Width*h, src.sarDen*picture.Height*w); pad || n != t.pic.sarNum || dd != t.pic.sarDen {
 			setSAR = fmt.Sprintf("setsar=%d/%d", t.pic.sarNum, t.pic.sarDen)
 		}
 	}
@@ -594,6 +599,9 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	// finish sizes, pads and formats software frames for the encoder.
 	finish := func(c []string) []string {
+		if crop := s.PictureCrop; crop != nil {
+			c = append(c, fmt.Sprintf("crop=%d:%d:%d:%d", crop.width, crop.height, crop.x, crop.y))
+		}
 		if scaling {
 			c = append(c, fmt.Sprintf("scale=%d:%d", w, h))
 		}
@@ -611,7 +619,7 @@ func planVideo(s runSpec, v *core.StreamInfo) videoPlan {
 	}
 	// Software filters only: GPU scalers neither pad nor convert SDR to
 	// HDR, and their 8-bit tone-map paths cannot feed a 10-bit contract.
-	gpuOff := pad || convert != "" || (tonemap && tenBit)
+	gpuOff := s.PictureCrop != nil || pad || convert != "" || (tonemap && tenBit)
 
 	in := fmt.Sprintf("[0:%d]", v.Index)
 	var chain []string

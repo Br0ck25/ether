@@ -62,7 +62,8 @@ type sessionInput struct {
 	inputFailed        bool // exhausted this input; HTTP retries cannot restart it
 	// contract is the delivered video a static-header session keeps
 	// across failovers; nil for every other session (contract.go).
-	contract *videoContract
+	contract  *videoContract
+	inputCrop *pictureCrop
 }
 
 // sessionEncoding owns one aspect of the session. Fields are guarded by Session.mu.

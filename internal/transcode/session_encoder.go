@@ -163,6 +163,7 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}
 	if s.contract != nil && !rp.decision.VideoCopy {
 		spec.Target = s.contract
+		spec.PictureCrop = s.inputCrop
 	}
 	if err := os.MkdirAll(spec.Dir, 0o755); err != nil {
 		return fmt.Errorf("transcode: run dir: %w", err)
@@ -324,13 +325,15 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 //     Regrouped, every segment starts on a keyframe (or, inside a GOP
 //     longer than a segment, repeats the GOP covering it).
 //
-// Encodes on a nominal plan force keyframes at its uniform boundaries,
-// where ffmpeg cuts exactly.
+// Matroska encodes also use the collector: after a copy-to-encode swap,
+// the previous published GOP may extend beyond the nominal boundary.
+// The collector removes that already-held media before publishing.
+// Other encodes on nominal plans cut at uniform boundaries directly.
 func (s *Session) chunkedLocked(d core.Decision) bool {
 	if s.isDASH() || s.plan == nil || s.info.Video() == nil {
 		return false
 	}
-	return s.plan.Keyframed() || d.VideoCopy
+	return s.plan.Keyframed() || d.VideoCopy || s.container == ContainerMatroska
 }
 
 // stopRunLocked detaches the current run immediately. Process reaping happens
