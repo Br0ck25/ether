@@ -291,7 +291,7 @@ func (e *entry) observe(now time.Time, err error) *backoffEvent {
 		}
 		return nil
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, core.ErrBudgetExhausted) {
 		return nil
 	}
 	e.stats.Failures++
@@ -704,6 +704,11 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 			}
 		}
 	}
+	// Background validation never creates torrents or starts downloads. An
+	// existing account item can be inspected; unknown remains unknown.
+	if core.IsBackgroundCheck(ctx) && torrentID == "" {
+		return Payload{}, ErrUnsupported
+	}
 	findDuration = time.Since(findStarted)
 	readyStarted := time.Now()
 	if torrentID == "" {
@@ -716,10 +721,10 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 		defer release()
 		torrentID = id
 	}
-	req := AcquireRequest{InfoHash: hash, Magnet: base.Magnet, TorrentID: torrentID, Choose: choose, CachedOnly: cfg.CachedOnly,
+	req := AcquireRequest{InfoHash: hash, Magnet: base.Magnet, TorrentID: torrentID, Choose: choose, CachedOnly: cfg.CachedOnly || core.IsBackgroundCheck(ctx),
 		RemoveUncached: cfg.RemoveUncached, MayRemove: s.mayRemove(e.cfg.ID)}
 	acq, err := e.p.Acquire(ctx, req)
-	if err != nil && torrentID != "" && (errors.Is(err, ErrGone) || errors.Is(err, core.ErrNotCached)) {
+	if err != nil && !core.IsBackgroundCheck(ctx) && torrentID != "" && (errors.Is(err, ErrGone) || errors.Is(err, core.ErrNotCached)) {
 		// The remembered torrent is gone or lacks the wanted file: add anew.
 		req.TorrentID = ""
 		id, release, cerr := s.reclaimAdd(ctx, e, hash, torrentID)

@@ -11,7 +11,8 @@ import (
 
 // configSections maps URL section names to JSON field names on Config.
 var configSections = map[string]string{
-	"markers": "markers", "server": "server", "plex": "plex", "usenet": "usenet", "indexers": "indexers",
+	"availability": "availability",
+	"markers":      "markers", "server": "server", "plex": "plex", "usenet": "usenet", "indexers": "indexers",
 	"cache": "cache", "catalog": "catalog", "resolver": "resolver", "quality": "quality",
 	"transcode": "transcode", "trakt": "trakt", "opensubtitles": "openSubtitles",
 	"openSubtitles": "openSubtitles", "llm": "llm", "updates": "updates", "spike": "spike",

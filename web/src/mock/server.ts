@@ -81,6 +81,22 @@ function err(status: number, code: string, message: string): Response {
 
 function defaultConfig(): EtherConfig {
   return {
+    availability: {
+      monitor: false,
+      verify: false,
+      preferVerified: true,
+      newlyAvailable: true,
+      indexerIds: [],
+      debrid: true,
+      pollMinutes: 30,
+      maxPages: 3,
+      feedRequests: 100,
+      checkRequests: 100,
+      grabs: 20,
+      checks: 20,
+      checkBytes: 536870912,
+      reservePercent: 80,
+    },
     server: {
       port: 32400,
       bindAddress: "0.0.0.0",
@@ -1753,6 +1769,36 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
     // Static routes
     switch (route) {
+      case "GET /availability":
+        return json({
+          mode: state.config.availability?.verify
+            ? "checking"
+            : state.config.availability?.monitor
+              ? "monitoring"
+              : "off",
+          message: "Search results remain independent of source evidence.",
+          feeds: (state.config.indexers ?? [])
+            .filter((x) => x.enabled)
+            .map((x) => ({
+              id: x.id,
+              name: x.name,
+              protocol: x.protocol,
+              supported: true,
+              selected: true,
+              lastSync: 0,
+              gap: false,
+              message: "Ready to monitor",
+              matched: 0,
+            })),
+          usage: {},
+          counts: {},
+          recent: [],
+          day: new Date().toISOString().slice(0, 10),
+        });
+      case "POST /availability/sync":
+        return state.config.availability?.monitor
+          ? json(null, 202)
+          : err(409, "disabled", "Enable release monitoring first");
       case "GET /bootstrap":
       case "GET /health":
         return json(state.boot);

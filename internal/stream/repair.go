@@ -40,6 +40,9 @@ type repairPending struct {
 }
 
 func (e *Engine) segment(ctx context.Context, r *release, pf *postedFile, i int, prio core.Priority, fo fetchOpts) (*segData, error) {
+	if core.IsBackgroundCheck(ctx) {
+		prio = core.PriorityPrefetch
+	}
 	seg, err := e.segmentRaw(ctx, r, pf, i, prio, fo)
 	if fo.noRepair || !e.repairOptions().Enabled {
 		return seg, err

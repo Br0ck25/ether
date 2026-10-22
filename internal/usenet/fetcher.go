@@ -374,6 +374,12 @@ func (f *Fetcher) BodyPart(ctx context.Context, messageID string, groups []strin
 	var part *yenc.Part
 	err = f.each(ctx, id, "fetch-body", func(ctx context.Context, p *pool) error {
 		var e error
+		if core.IsBackgroundCheck(ctx) {
+			prio = core.PriorityPrefetch
+			if e = core.SpendBackground(ctx, "bytes", "usenet", 2*p.o.MaxArticleSize+(64<<10)); e != nil {
+				return e
+			}
+		}
 		part, e = p.body(ctx, id, groups, prio)
 		return e
 	})
@@ -732,6 +738,8 @@ func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(context
 				return cerr
 			}
 			switch {
+			case errors.Is(err, core.ErrBudgetExhausted):
+				return err
 			case errors.Is(err, ErrNoSuchArticle):
 				missing++
 				f.misses.add(id, p.key)
@@ -878,6 +886,12 @@ func (f *Fetcher) CheckBodyPart(ctx context.Context, messageID string, groups []
 		return err
 	}
 	return f.each(ctx, id, "body", func(ctx context.Context, p *pool) error {
+		if core.IsBackgroundCheck(ctx) {
+			prio = core.PriorityPrefetch
+			if err := core.SpendBackground(ctx, "bytes", "usenet", 2*p.o.MaxArticleSize+(64<<10)); err != nil {
+				return err
+			}
+		}
 		c, err := p.get(ctx, prio)
 		if err != nil {
 			return err

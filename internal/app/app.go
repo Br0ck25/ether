@@ -12,6 +12,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/admin"
 	"github.com/braedonsaunders/ether/internal/artwork"
 	"github.com/braedonsaunders/ether/internal/auth"
+	"github.com/braedonsaunders/ether/internal/availability"
 	"github.com/braedonsaunders/ether/internal/backup"
 	"github.com/braedonsaunders/ether/internal/cachefill"
 	"github.com/braedonsaunders/ether/internal/cardigann"
@@ -84,11 +85,12 @@ type Options struct {
 
 // App is a running Ether server.
 type App struct {
-	opts Options
-	log  *slog.Logger
-	logs *admin.LogBuffer
-	cfg  *config.Store
-	db   *sql.DB
+	availability *availability.Service
+	opts         Options
+	log          *slog.Logger
+	logs         *admin.LogBuffer
+	cfg          *config.Store
+	db           *sql.DB
 	// databaseURL is the cluster database, placed in join tokens
 	// (cluster_settings.go); empty on a standalone server.
 	databaseURL string
@@ -371,6 +373,7 @@ func (a *App) Run(ctx context.Context) error {
 	// Tracked like every other background loop, so Run returns (and the
 	// caller closes the database) only after they have stopped.
 	background.start(func() { a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "release availability", a.availability.Run) })
 	background.start(func() { a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run) })
 	background.start(func() { a.trakt.Start(ctx) })
 	background.start(func() { a.load.Run(ctx) })

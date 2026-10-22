@@ -99,6 +99,11 @@ export const PAGES: PageDef[] = [
         title: "Debrid",
         keywords: "real-debrid realdebrid torbox alldebrid premiumize torrent cached",
       },
+      {
+        key: "availability",
+        title: "Availability",
+        keywords: "release feeds rss source evidence checks budget",
+      },
       { key: "usage", title: "Usage & costs", keywords: "quota price plan cost" },
     ],
   },

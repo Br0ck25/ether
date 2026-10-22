@@ -320,6 +320,17 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, payload []b
 		return false, err
 	}
 	defer e.releaseFile(f)
+	if core.IsBackgroundCheck(ctx) {
+		// Keep budget and cancellation on this request instead of starting a
+		// shared durable block fetch with the engine lifetime.
+		body, _, err := f.rangeGet(ctx, 0, min(f.size-1, 65535), false)
+		if err != nil {
+			return false, err
+		}
+		defer body.Close()
+		_, err = io.CopyN(io.Discard, body, min(f.size, 65536))
+		return err == nil, err
+	}
 	// With the head already cached, a 1-byte range request still proves the
 	// link serves this file (Content-Range carries its size), so a check
 	// never passes on cached bytes alone.
@@ -910,6 +921,9 @@ func (f *remoteFile) rangeGet(ctx context.Context, start, end int64, urgent bool
 		}
 		resp, tm, err := f.e.get(ctx, u, start, end, urgent, f.conns)
 		if err != nil {
+			if errors.Is(err, core.ErrBudgetExhausted) {
+				return nil, tm, err
+			}
 			if ctx.Err() != nil {
 				return nil, tm, ctx.Err()
 			}
@@ -1254,6 +1268,9 @@ func (p *peekBody) Read(b []byte) (int, error) {
 func (p *peekBody) Close() error { return p.rc.Close() }
 
 func (e *Engine) send(ctx context.Context, hc *http.Client, u string, start, end int64) (*http.Response, timing, error) {
+	if err := core.SpendBackground(ctx, "bytes", "debrid", max(1, end-start+1)); err != nil {
+		return nil, timing{}, err
+	}
 	began := time.Now()
 	var connStart, connect, ttfb, gotConn atomic.Int64
 	reused := false

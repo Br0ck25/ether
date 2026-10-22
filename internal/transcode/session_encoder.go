@@ -298,6 +298,12 @@ func (s *Session) startRunLocked(seg int, bigProbe bool) error {
 	}
 	r.proc = proc
 	s.cur = r
+	if s.isDASH() {
+		// A prior seek may have ended on an empty trailing audio/video
+		// fragment. Its EOF is not a bound on another rendition: the new
+		// run must finish and publish its own rounded-up final alias.
+		s.endSeg = -1
+	}
 	s.deliveredCount = 0
 	runLog.Info("ffmpeg started", "segment", seg, "at", spec.Start, "kind", s.decision.Kind,
 		"videoCopy", s.decision.VideoCopy, "audioCopy", s.decision.AudioCopy, "hw", r.hw)

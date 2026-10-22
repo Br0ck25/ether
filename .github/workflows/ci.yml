@@ -118,7 +118,9 @@ jobs:
         # build except the macOS tray GUI file, which is excluded here on
         # macOS by CGO_ENABLED=0 for the test step below instead.
         if: runner.os != 'macOS'
-        run: go test -race ./...
+        # Guardian subprocesses inherit race instrumentation; the expanded
+        # real-media suite needs more than Go's default ten-minute package cap.
+        run: go test -race -timeout 20m ./...
       - name: Test (macOS, headless tray)
         if: runner.os == 'macOS'
         env:

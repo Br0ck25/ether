@@ -22,6 +22,7 @@ import (
 )
 
 type Config struct {
+	Availability Availability `json:"availability"`
 	// SharedCache is the cluster-wide NAS policy. Mount paths stay in Cache.
 	SharedCache   *Cache        `json:"sharedCache,omitempty"`
 	Server        Server        `json:"server"`

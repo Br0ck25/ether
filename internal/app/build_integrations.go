@@ -48,6 +48,9 @@ func (a *App) buildIntegrations(ctx context.Context, cfg config.Config) error {
 	}
 	a.cfg.Subscribe(a.applyConfig)
 
+	if err := a.buildAvailability(); err != nil {
+		return err
+	}
 	a.buildExtras()
 	plexHandler, err := a.buildPlex(cfg)
 	if err != nil {
