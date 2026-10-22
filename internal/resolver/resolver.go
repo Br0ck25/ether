@@ -148,6 +148,8 @@ type Service struct {
 	flightMu sync.Mutex
 	flights  map[string]*inflight
 
+	delivery deliveryState
+
 	route routingState // source routing: startup measurements and signals
 
 	con consoleState // pins, release memory, health results, history (console.go)
@@ -465,6 +467,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 
 	sreq := searchRequestFor(t)
+	early := newSearchPreparation(ctx, s, req, sreq, profile, pinID)
+	defer early.close()
+	ctx = context.WithValue(ctx, searchPreparationKey{}, early)
 	searchStart := time.Now()
 	results, searchErr := s.search(ctx, sreq)
 	trace.SearchDuration = time.Since(searchStart)
@@ -544,6 +549,7 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		return preferred.resolution, nil
 	}
 	cands = preferred.candidates
+	early.attach(cands)
 	optimisticErr := preferred.transient
 	preferTried := preferred.attempted
 
@@ -701,7 +707,15 @@ func (s *Service) searchCached(ctx context.Context, req core.SearchRequest, fres
 	if ok && !fresh && s.now().Before(e.expires) {
 		return append([]core.Release(nil), e.results...), true, nil
 	}
-	results, err = s.indexer.Search(ctx, req)
+	if early, ok := ctx.Value(searchPreparationKey{}).(*searchPreparation); ok {
+		if streaming, ok := s.indexer.(core.StreamingIndexer); ok {
+			results, err = streaming.SearchWith(ctx, req, early.arrived)
+		} else {
+			results, err = s.indexer.Search(ctx, req)
+		}
+	} else {
+		results, err = s.indexer.Search(ctx, req)
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -815,7 +829,7 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 			trace.Candidates = append(trace.Candidates, ct)
 			tr = len(trace.Candidates) - 1
 		}
-		cands = append(cands, candidate{rel: rel, trace: tr, verified: verified, bandwidth: sourceBandwidthFit(sizedForEpisode(rel), req.Client, t)})
+		cands = append(cands, candidate{rel: rel, trace: tr, verified: verified, bandwidth: s.deliveryFit(sizedForEpisode(rel), req.Client, t)})
 	}
 	sort.SliceStable(cands, func(i, j int) bool {
 		// A previously working LAN remux must not outrank a source that

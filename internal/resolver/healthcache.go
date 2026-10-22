@@ -70,7 +70,7 @@ func (s *Service) checkHealthCached(ctx context.Context, releaseID string, nzb [
 		return true, true, nil
 	}
 	ok, err = core.CheckReleaseHealth(ctx, s.health, releaseID, nzb)
-	if ok && err == nil {
+	if ok && err == nil && ctx.Value(speculativeHealthKey{}) == nil {
 		s.markVerified(ctx, releaseID)
 	}
 	return ok, false, err

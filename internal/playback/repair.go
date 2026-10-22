@@ -37,6 +37,7 @@ func (m *Manager) PlaybackProgress(userID int64, clientID string, key core.Ratin
 		s.viewerAt = time.Now()
 		s.viewerState = state
 		s.mu.Unlock()
+		m.maintainReserve(s, position, state)
 	}
 }
 

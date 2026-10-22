@@ -147,6 +147,7 @@ func (s *Service) validateRanked(ctx context.Context, cands []candidate, tr *Tra
 			tr.Candidates[cands[lead].trace].Attempted = true
 		}
 		if v.healthChecked && !v.healthCached {
+			s.markVerified(ctx, cands[v.index].rel.ID)
 			s.noteStartup(cands[v.index].rel, max(v.fetchDuration+v.healthDuration, time.Microsecond))
 		}
 		s.recordReputation(ctx, cands[v.index].rel.Indexer, true)

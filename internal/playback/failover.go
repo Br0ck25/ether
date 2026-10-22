@@ -596,12 +596,31 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		remuxSwitch bool
 		lastErr     error
 	)
+	if fo.down {
+		g = cur.takeSpeedAlternate(tried)
+		if g != nil && m.preflightSwap(s, g) != nil {
+			m.dropGeneration(g)
+			g = nil
+		}
+	}
 	prepared := cur.takeDamageResolution(tried)
-	if !direct && !fo.down && prepared == nil {
+	if g == nil && !direct && prepared == nil {
 		// Any healthy alternate continues an encoder session, so open
 		// several at once instead of stalling through each broken one.
 		var failed []string
-		g, failed, lastErr = m.raceAlternates(ctx, s, tried, alternates, fallback, failoverRaceWidth)
+		width := failoverRaceWidth
+		var accept func(*generation) error
+		if fo.down {
+			width = 2
+			accept = func(next *generation) error {
+				bps := mediaBps(next.infoSnapshot(), next.src.Size())
+				if curBps > 0 && (bps <= 0 || bps >= curBps) {
+					return fmt.Errorf("down-failover candidate is not lower bitrate: %w", core.ErrNotAvailable)
+				}
+				return nil
+			}
+		}
+		g, failed, lastErr = m.raceAlternates(ctx, s, tried, alternates, fallback, width, accept)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -757,8 +776,15 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		}
 		target := m.alignForFailover(ctx, s, cur, g, at)
 		swap := hls.SwapInput
-		if buffered, ok := hls.(core.BufferedInputSwapper); ok && fo.preserveBuffer && target == at && newInfo.Duration == oldInfo.Duration {
-			swap = buffered.SwapInputBuffered
+		if buffered, ok := hls.(core.BufferedInputSwapper); ok && fo.preserveBuffer && target == at {
+			if source, ok := hls.(core.RecoveryBufferSource); ok {
+				boundary := source.RecoveryBuffer().ReadyUntil
+				// Check the handoff itself, not only a zero playhead where PAL
+				// speed corrections and different edits can happen to agree.
+				if boundary > at && boundary < newInfo.Duration && m.alignForFailover(ctx, s, cur, g, boundary) == boundary {
+					swap = buffered.SwapInputBuffered
+				}
+			}
 		}
 		if err := swap(ctx, m.urlFor(g), newInfo, target); err != nil {
 			log.Error("hls input swap failed", "err", err)

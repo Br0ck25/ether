@@ -23,6 +23,8 @@ type identity struct {
 // generation is one opened source of a session. A failover creates a new
 // generation; the old one is retired and closed once in-flight reads end.
 type generation struct {
+	reads    pendingSourceReads
+	standby  standbyState
 	recovery recoveryState
 	damage   damageState
 	sess     *session
@@ -150,6 +152,7 @@ func (g *generation) releaseID() string {
 
 // session is the internal, mutable form of a core.PlaySession.
 type session struct {
+	reserve        reserveState
 	viewerPosition time.Duration // guarded by mu, from authenticated Plex timeline
 	viewerAt       time.Time
 	viewerState    string

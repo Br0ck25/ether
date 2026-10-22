@@ -48,6 +48,7 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 		if !stale && r.Method == http.MethodGet {
 			if n > s.lastReq+3 || n < s.lastReq-3 {
 				s.recoverySeekAt = time.Now()
+				s.completedDeliveries = nil
 			}
 			s.lastReq = n
 		}
@@ -417,6 +418,20 @@ func (s *Session) serveCounted(w http.ResponseWriter, r *http.Request, name stri
 	defer s.mu.Unlock()
 	// Audio, retries, stale representations and overlapping requests cannot
 	// manufacture sequential video progress or drain another rung's buffer.
+	if n >= s.lastReq-3 && n <= s.lastReq+512 {
+		if s.completedDeliveries == nil {
+			s.completedDeliveries = map[int]map[int]bool{}
+		}
+		if s.completedDeliveries[t] == nil {
+			s.completedDeliveries[t] = map[int]bool{}
+		}
+		s.completedDeliveries[t][n] = true
+		for k := range s.completedDeliveries[t] {
+			if k < s.lastReq-3 || k > s.lastReq+512 {
+				delete(s.completedDeliveries[t], k)
+			}
+		}
+	}
 	if s.cur != nil && s.cur.track == t && (!s.isDASH() || t != s.audioTrackLocked()) {
 		if s.deliveredCount == 0 || s.deliveredTrack != t || n != s.deliveredSeg+1 {
 			if s.deliveredCount > 0 && s.deliveredTrack == t && n <= s.deliveredSeg {

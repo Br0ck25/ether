@@ -32,6 +32,22 @@ func TestRecoveryBufferStopsAtHolesAndRequiresAudio(t *testing.T) {
 	}
 }
 
+func TestBufferDistinguishesPublishedFromDelivered(t *testing.T) {
+	s := &Session{segDur: 4 * time.Second, total: 30, proto: core.ProtocolHLS}
+	s.done = []map[int]bool{{}}
+	for n := 0; n < 12; n++ {
+		s.done[0][n] = true
+	}
+	s.completedDeliveries = map[int]map[int]bool{0: {0: true, 1: true, 3: true}}
+	b := s.RecoveryBuffer()
+	if b.ReadyUntil != 48*time.Second || b.DeliveredUntil != 8*time.Second {
+		t.Fatalf("server buffer confused with delivery: %+v", b)
+	}
+	if defaultOptions().maxAhead < 40*time.Second {
+		t.Fatal("default encoder cannot fill requested reserve")
+	}
+}
+
 func TestBufferedSwapPreservesPublishedMediaAndViewerPosition(t *testing.T) {
 	fr := newFakeRunner()
 	fr.segDelay = 20 * time.Millisecond
@@ -133,5 +149,44 @@ func TestIntegrationBufferedRepairHandoff(t *testing.T) {
 	out, err := exec.CommandContext(t.Context(), e.ffmpeg, "-v", "error", "-xerror", "-i", path, "-fps_mode", "passthrough", "-enc_time_base:v", "1:90000", "-f", "null", "-").CombinedOutput()
 	if err != nil {
 		t.Fatalf("handoff decode: %v: %s", err, out)
+	}
+}
+
+func TestBufferedReplacementStartsWhileOldMediaRemainsPlayable(t *testing.T) {
+	fr := newFakeRunner()
+	fr.segDelay = 10 * time.Millisecond
+	m := newTestManager(t, fr, config.Transcode{}, WithBuffering(8*time.Second, 48*time.Second, 8*time.Second))
+	req := remuxRequest(t, "slow-buffered-replacement", time.Hour)
+	s := startSession(t, m, req)
+	original := get(t, s, 0).Body.Bytes()
+	waitFor(t, "forty seconds encoded", func() bool { return s.RecoveryBuffer().ReadyUntil >= 40*time.Second })
+	// Stop the sole producer before changing its fake rate. The replacement
+	// takes longer than serving retained segments: it must not block them.
+	s.mu.Lock()
+	s.stopRunLocked()
+	s.mu.Unlock()
+	fr.segDelay = 300 * time.Millisecond
+	replacement := req.Info
+	replacement.Duration -= time.Second // harmless trailing duration difference
+	if err := s.SwapInputBuffered(t.Context(), "http://127.0.0.1:1/source/replacement", replacement, 0); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	boundary := s.cur.startSeg
+	s.mu.Unlock()
+	if boundary <= 0 || s.RequestedPosition() != 0 {
+		t.Fatalf("lost reserve at %d", boundary)
+	}
+	started := time.Now()
+	if got := get(t, s, 0).Body.Bytes(); !bytes.Equal(got, original) {
+		t.Fatal("lost old media")
+	}
+	if time.Since(started) >= 200*time.Millisecond {
+		t.Fatal("old segment waited for replacement encoding")
+	}
+	// Production must progress without the player first requesting the suffix.
+	waitFor(t, "replacement produced ahead of viewer", func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.done[0][boundary] })
+	if s.RequestedPosition() != 0 {
+		t.Fatal("preparation advanced viewer")
 	}
 }

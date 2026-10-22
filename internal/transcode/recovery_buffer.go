@@ -34,5 +34,15 @@ func (s *Session) recoveryBufferLocked() core.RecoveryBuffer {
 		}
 		b.ReadyUntil = s.segStart(n + 1)
 	}
+	track := min(max(0, s.wantTrack), len(s.done)-1)
+	for n := start; n < start+512 && (s.total <= 0 || n < s.total); n++ {
+		if !s.completedDeliveries[track][n] {
+			break
+		}
+		if audio := s.audioTrackLocked(); audio >= 0 && audio < len(s.done) && !s.completedDeliveries[audio][n] {
+			break
+		}
+		b.DeliveredUntil = s.segStart(n + 1)
+	}
 	return b
 }

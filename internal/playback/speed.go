@@ -148,9 +148,9 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 		return
 	}
 	s.mu.Lock()
-	decision, downs := s.decision, s.downFailovers
+	decision, downs, viewerState := s.decision, s.downFailovers, s.viewerState
 	s.mu.Unlock()
-	if downs >= m.opts.MaxDownFailovers {
+	if downs >= m.opts.MaxDownFailovers || viewerState == "paused" || viewerState == "stopped" {
 		return
 	}
 	hls, hasHLS := m.deps.HLSLookup(s.id)
@@ -171,53 +171,76 @@ func (m *Manager) checkSpeed(s *session, now time.Time) {
 	if media <= 0 {
 		return
 	}
+
+	blocked := g.reads.longest(now)
 	s.speedMu.Lock()
-	if now.Before(s.graceUntil) || now.Sub(s.genSince) < m.opts.SpeedGrace {
-		s.speedMu.Unlock()
-		return
-	}
 	fetch, ok := s.speed.rate(now)
+	age := now.Sub(s.genSince)
+	settled := !now.Before(s.graceUntil.Add(-max(0, m.opts.SpeedGrace-6*time.Second)))
+	grace := now.Before(s.graceUntil) || age < m.opts.SpeedGrace
+	// A source that stopped delivering bytes cannot produce completed-read
+	// samples. A live blocked read is evidence; a quiet/paused encoder is not.
+	if blocked >= 6*time.Second {
+		fetch, ok = 0, true
+	}
 	if !ok {
 		s.speedMu.Unlock()
 		return
 	}
-	if fetch/media >= m.opts.SpeedThreshold {
+	ratio := fetch / media
+	if ratio < 1 {
+		s.slowChecks++
+	} else {
 		s.slowChecks = 0
-		s.speedMu.Unlock()
-		return
 	}
-	s.slowChecks++
 	slow := s.slowChecks
 	at := g.timeMapSnapshot().TimeAt(s.lastSrcPos)
 	s.speedMu.Unlock()
-	if position, ok := hls.(core.PlaybackPosition); ok {
-		// The segment requested by the player is a better resume point
-		// than the encoder's source reads, which may probe the file tail.
-		at = position.RequestedPosition()
+	if age >= 8*time.Second {
+		if observer, ok := m.deps.Resolver.(core.SourceDeliveryObserver); ok {
+			observer.ObserveSourceDelivery(g.res.Release, fetch)
+		}
 	}
-	if slow < m.opts.SpeedSlowChecks {
-		return // hysteresis: one slow window is not enough
+	// Begin bounded preparation before the buffer is empty. A source slightly
+	// faster than average still needs headroom for bursts, but never switch it
+	// solely for lacking that headroom.
+	if hasHLS && settled && age >= 6*time.Second && ratio < 1.2 {
+		m.prepareSpeedAlternate(g)
+	}
+	_, buffer, bufferKnown := m.repairHorizon(g, core.RepairEvent{Offset: -1})
+	urgent := hasHLS && settled && bufferKnown && age >= 6*time.Second && slow >= 2 && ratio < 1 && bufferRunway(buffer, ratio) <= 25*time.Second
+	if !urgent && (grace || ratio >= m.opts.SpeedThreshold || slow < m.opts.SpeedSlowChecks) {
+		return
+	}
+	if position, ok := hls.(core.PlaybackPosition); ok {
+		at = position.RequestedPosition()
 	}
 	s.speedMu.Lock()
 	s.slowChecks = 0
 	s.speedMu.Unlock()
 	m.log.Warn("source slower than playback; down-failing over",
 		"session", s.id, "key", s.ident.key, "release", g.res.Release.Name,
-		"fetchBps", int64(fetch), "mediaBps", int64(media), "at", at)
+		"fetchBps", int64(fetch), "mediaBps", int64(media), "at", at,
+		"buffer", buffer, "bufferKnown", bufferKnown, "runway", bufferRunway(buffer, ratio), "blockedRead", blocked)
 	m.backgroundDownFailover(s, g, at)
 }
 
 // backgroundDownFailover runs a speed-triggered failover off the monitor.
 func (m *Manager) backgroundDownFailover(s *session, g *generation, at time.Duration) {
+	if !g.backgroundFailover.CompareAndSwap(false, true) {
+		return
+	}
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
+		g.backgroundFailover.Store(false)
 		return
 	}
 	m.wg.Add(1)
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
+		defer g.backgroundFailover.Store(false)
 		ctx, cancel := context.WithTimeout(m.ctx, m.opts.FailoverTimeout)
 		defer cancel()
 		// Stopping the session ends the swap; retiring g does not.
@@ -226,7 +249,8 @@ func (m *Manager) backgroundDownFailover(s *session, g *generation, at time.Dura
 			defer stop()
 		}
 		if _, err := m.failoverWith(ctx, s, g, at, failoverOpts{
-			reason:  "source slower than playback",
+			reason:       "source slower than playback",
+			followPlayer: true, preserveBuffer: true,
 			markBad: false,
 			down:    true,
 		}); err != nil && ctx.Err() == nil && !errors.Is(err, errRequireRemux) {

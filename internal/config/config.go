@@ -198,7 +198,7 @@ type Cache struct {
 	ReplayBoostHours   int    `json:"replayBoostHours,omitempty"`
 	DisableSpeculation bool   `json:"disableSpeculation,omitempty"`
 	DetailWarmup       string `json:"detailWarmup,omitempty"` // empty/on or off
-	DetailBytes        int64  `json:"detailBytes,omitempty"`  // zero preserves the 2 MiB default
+	DetailBytes        int64  `json:"detailBytes,omitempty"`  // zero warms 40s of source media, capped at 256 MiB
 
 	Dir         string `json:"dir"`
 	BudgetBytes int64  `json:"budgetBytes"`

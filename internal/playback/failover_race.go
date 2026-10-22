@@ -25,7 +25,7 @@ type raceResult struct {
 // flight, and returns the first that opens. Releases that failed are
 // returned so the caller does not try them again. Late successes are
 // dropped in the background.
-func (m *Manager) raceAlternates(ctx context.Context, s *session, tried []string, alternates []core.Release, fallback func(int64) core.MediaInfo, width int) (*generation, []string, error) {
+func (m *Manager) raceAlternates(ctx context.Context, s *session, tried []string, alternates []core.Release, fallback func(int64) core.MediaInfo, width int, accept ...func(*generation) error) (*generation, []string, error) {
 	var cands []core.Release
 	for _, alt := range alternates {
 		if alt.ID != "" && !slices.Contains(tried, alt.ID) && releaseMatchesTitle(alt, s.title) {
@@ -54,6 +54,13 @@ func (m *Manager) raceAlternates(ctx context.Context, s *session, tried []string
 				if perr := m.preflightSwap(s, g); perr != nil {
 					m.dropGeneration(g)
 					g, err = nil, perr
+				}
+			}
+			if err == nil && len(accept) > 0 && accept[0] != nil {
+				if e := accept[0](g); e != nil {
+					m.dropGeneration(g)
+					g = nil
+					err = e
 				}
 			}
 			results <- raceResult{alt: alt, g: g, err: err}

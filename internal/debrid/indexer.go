@@ -41,6 +41,12 @@ func (x *Indexer) Name() string { return x.inner.Name() }
 
 // Search implements core.Indexer.
 func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Release, error) {
+	return x.SearchWith(ctx, req, nil)
+}
+
+// SearchWith exposes safe early Usenet results while torrent cache discovery
+// continues. Torrents remain on the normal cache/episode-filtered final result path.
+func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrived func([]core.Release)) ([]core.Release, error) {
 	started := time.Now()
 	early := x.earlyCacheChecks(ctx)
 	if early != nil {
@@ -48,8 +54,24 @@ func (x *Indexer) Search(ctx context.Context, req core.SearchRequest) ([]core.Re
 	}
 	var results []core.Release
 	var err error
-	if streaming, ok := x.inner.(core.StreamingIndexer); ok && early != nil {
-		results, err = streaming.SearchWith(ctx, req, early.add)
+	emit := func(batch []core.Release) {
+		if early != nil {
+			early.add(batch)
+		}
+		if arrived != nil {
+			var usenet []core.Release
+			for _, r := range batch {
+				if r.Protocol != core.ProtocolTorrent {
+					usenet = append(usenet, r)
+				}
+			}
+			if len(usenet) > 0 {
+				arrived(usenet)
+			}
+		}
+	}
+	if streaming, ok := x.inner.(core.StreamingIndexer); ok && (early != nil || arrived != nil) {
+		results, err = streaming.SearchWith(ctx, req, emit)
 	} else {
 		results, err = x.inner.Search(ctx, req)
 	}

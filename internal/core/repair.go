@@ -35,11 +35,15 @@ type RepairReporter interface {
 type RecoveryBuffer struct {
 	Position, ReadyUntil time.Duration
 	SeekAt               time.Time // a discontinuous output request invalidates older telemetry
+	// DeliveredUntil is contiguous complete HTTP delivery, not a promise that
+	// the client retained or decoded it. Zero means unavailable.
+	DeliveredUntil time.Duration
 }
 type RecoveryBufferSource interface{ RecoveryBuffer() RecoveryBuffer }
 
 // BufferedInputSwapper preserves published media before starting replacement
-// input at the contiguous buffer boundary. Only equal timelines qualify.
+// input at the contiguous buffer boundary. The caller must verify identity timeline alignment at the playhead and
+// buffer boundary; differing trailing durations alone do not prevent reuse.
 type BufferedInputSwapper interface {
 	SwapInputBuffered(context.Context, string, MediaInfo, time.Duration) error
 }

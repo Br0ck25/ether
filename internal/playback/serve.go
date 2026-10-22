@@ -203,6 +203,10 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			var n int
 			var err error
 			readAt := time.Now()
+			var readFinished func()
+			if !background && g.sess.current() == g {
+				readFinished = g.reads.begin(m.now())
+			}
 			if background {
 				if cr, ok := g.src.(core.PrefetchReaderAt); ok {
 					n, err = cr.ReadAtPrefetchContext(ctx, (*bp)[:want], pos)
@@ -216,7 +220,10 @@ func (m *Manager) copyFrom(ctx context.Context, w io.Writer, g *generation, off,
 			} else {
 				n, err = g.src.ReadAt((*bp)[:want], pos)
 			}
-			if n > 0 && g.sess.isRegistered() && !background {
+			if readFinished != nil {
+				readFinished()
+			}
+			if n > 0 && g.sess.isRegistered() && g.sess.current() == g && !background {
 				now := m.now()
 				g.sess.noteFetch(n, time.Since(readAt), now)
 				g.sess.noteReadPos(pos, n, now, m.opts.SpeedGrace)

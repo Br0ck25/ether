@@ -211,6 +211,8 @@ type Manager struct {
 	mu             sync.Mutex
 	draining       bool // SetDraining: refuse new sessions
 	closed         bool
+	standbyActive  int
+	reserveActive  int
 	sessions       map[string]*session
 	byIdent        map[identity]*session
 	tokens         map[string]*generation

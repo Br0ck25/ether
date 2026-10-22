@@ -36,7 +36,9 @@ func (s *Session) swapInput(ctx context.Context, inputURL string, info core.Medi
 	if s.closed {
 		return errors.New("transcode: session closed")
 	}
-	preserve = preserve && info.Duration > 0 && info.Duration == s.info.Duration
+	// The caller verifies identity alignment, including the buffered boundary.
+	// Different trailing credits or container rounding need not discard media.
+	preserve = preserve && info.Duration > 0
 	if preserve {
 		b := s.recoveryBufferLocked()
 		// Preserve at least one whole published segment; never seek past EOF.

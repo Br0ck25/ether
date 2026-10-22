@@ -58,7 +58,7 @@ func (m *Manager) PreResolve(ctx context.Context, user *core.User, key core.Rati
 // writes resume/history. False means skipped.
 //
 // Budgets: two warm-ups in flight server-wide, one per user, six
-// requests/minute/user. A detail warm-up runs 8s, prefetches 2 MiB and is
+// requests/minute/user. A detail warm-up runs at most 45s, prefetches up to 40s of source media (256 MiB cap) and is
 // skipped while anything is playing. Trailer/post-play warm-ups may run
 // during playback (DuringPlayback), prefetch 48 MiB by default (hard cap
 // 64 MiB) and get 45s. Prefetch goes through Engine.Prefetch, which runs
@@ -75,6 +75,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 	if cfg.DisableSpeculation || cfg.Mode == "off" || (reason == core.PrewarmDetail && cfg.DetailWarmup == "off") {
 		return false
 	}
+	automaticReserve := reason == core.PrewarmDetail && opts.PrefetchBytes <= 0 && cfg.DetailBytes <= 0
 	prefetchBytes := opts.PrefetchBytes
 	if reason == core.PrewarmDetail && cfg.DetailBytes > 0 {
 		prefetchBytes = cfg.DetailBytes
@@ -89,10 +90,7 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 	if prefetchBytes > maxWarmPrefetchBytes {
 		prefetchBytes = maxWarmPrefetchBytes
 	}
-	timeout := 8 * time.Second
-	if reason != core.PrewarmDetail {
-		timeout = 45 * time.Second
-	}
+	timeout := 45 * time.Second
 	id := identity{userID: user.ID, clientID: caps.ClientID, key: key}
 	now := m.now()
 	m.mu.Lock()
@@ -211,6 +209,12 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		facts := &probeCache{releaseID: res.Release.ID, info: generation.infoSnapshot(), points: generation.timeMapSnapshot().Points}
 		if facts.info.Estimated {
 			facts = nil
+		}
+		if automaticReserve {
+			info := generation.infoSnapshot()
+			if info.Duration > 0 {
+				prefetchBytes = min(int64(256<<20), max(int64(8<<20), int64(float64(src.Size())*playableReserve.Seconds()/info.Duration.Seconds())))
+			}
 		}
 		// Publish before prefetch so a play request need not wait for background IO.
 		m.mu.Lock()
