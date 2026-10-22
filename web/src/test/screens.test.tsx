@@ -4,6 +4,42 @@ import { calls, renderApp } from "./harness";
 
 const WAIT = { timeout: 4000 };
 
+describe.each(["/", "/activity"])("Playback progress on %s", (path) => {
+  it.each([undefined, 0, 55000])(
+    "uses timeline position %s instead of byte delivery",
+    async (position) => {
+      renderApp(path, {}, (fake) => {
+        const original = fake.fetch;
+        fake.fetch = async (input, init) => {
+          const res = await original(input, init);
+          const dashboard = String(input).endsWith("/dashboard");
+          const sessions = String(input).endsWith("/status/sessions");
+          if (!dashboard && !sessions) return res;
+          const body = await res.json();
+          for (const s of dashboard ? body.sections.sessions : body.value) {
+            s.viewOffset = position;
+            s.Info.duration = 60e9;
+            s.Info.size = 100;
+            s.BytesServed = 33;
+          }
+          return new Response(JSON.stringify(body), { status: 200 });
+        };
+      });
+      if (position === undefined) {
+        expect(
+          await screen.findByText("Waiting for playback position", {}, WAIT),
+        ).toBeInTheDocument();
+        expect(screen.queryByText(/% watched/)).not.toBeInTheDocument();
+      } else {
+        expect(
+          await screen.findByText(`${Math.round((position / 60000) * 100)}% watched`, {}, WAIT),
+        ).toBeInTheDocument();
+      }
+      expect(screen.queryByText(/of .* delivered/)).not.toBeInTheDocument();
+    },
+  );
+});
+
 describe("Overview", () => {
   it("shows now playing, health, activity and best rows", async () => {
     renderApp("/");

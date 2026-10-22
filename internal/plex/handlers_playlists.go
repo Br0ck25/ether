@@ -128,6 +128,39 @@ func (s *Server) resolveURI(ctx context.Context, pr *Request, uri string) ([]cor
 	}
 	path, rawQuery, _ := strings.Cut(p, "?")
 	switch {
+	case path == "/hubs/items" || strings.HasPrefix(path, "/hubs/items/"):
+		q, err := url.ParseQuery(rawQuery)
+		if err != nil {
+			return nil, err
+		}
+		id := q.Get("identifier")
+		if path != "/hubs/items" {
+			id, err = url.PathUnescape(strings.TrimPrefix(path, "/hubs/items/"))
+			if err != nil {
+				return nil, err
+			}
+		}
+		h, ok := s.findHub(ctx, pr, id, parseSectionList(q.Get("contentDirectoryID")), q.Get("metadataID"), maxExpand)
+		if !ok {
+			return nil, core.ErrNotFound
+		}
+		// Use the rendered row so availability and viewer restrictions match
+		// the items the client was offered, including episode parent policy.
+		var out []core.RatingKey
+		for _, md := range s.renderHub(ctx, pr, h, hubCtx{}).Metadata {
+			k, err := core.ParseRatingKey(md.RatingKey)
+			if err != nil {
+				continue
+			}
+			sub, err := s.expandKey(ctx, pr, k)
+			if err == nil {
+				out = append(out, sub...)
+			}
+			if len(out) >= maxExpand {
+				break
+			}
+		}
+		return capKeys(out), nil
 	case reMetadataPath.MatchString(path):
 		m := reMetadataPath.FindStringSubmatch(path)
 		keys, err := parseKeys(m[1])

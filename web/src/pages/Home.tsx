@@ -36,14 +36,7 @@ import { ServerPanel } from "../components/ServerPanel";
 import { LevelBadge, StatusDot } from "../components/status";
 import { api } from "../lib/api";
 import type { ActivityDay, RowInsight } from "../lib/contract";
-import {
-  formatBytes,
-  formatNumber,
-  formatPercent,
-  formatRate,
-  plural,
-  relativeTime,
-} from "../lib/format";
+import { formatNumber, formatPercent, formatRate, plural, relativeTime } from "../lib/format";
 import { normalizeSessions, type HealthItem, type NowPlaying } from "../lib/health";
 import { useAsync } from "../lib/hooks";
 import { useTitle } from "../lib/titles";
@@ -205,7 +198,6 @@ function NowPlayingPanel({
 
 function SessionCard({ s }: { s: NowPlaying }) {
   const title = useTitle(s.key);
-  const delivered = s.size > 0 ? Math.min(1, s.bytesServed / s.size) : null;
   return (
     <li className="relative overflow-hidden rounded-lg border border-border">
       <Artwork src={title?.backdrop} alt="" title="" className="absolute inset-0" icon={<span />} />
@@ -249,17 +241,8 @@ function SessionCard({ s }: { s: NowPlaying }) {
                 label={`Started ${relativeTime(s.startedAt)}`}
                 valueLabel={`${Math.round(s.progress * 100)}% watched`}
               />
-            ) : delivered !== null ? (
-              <Meter
-                onScrim
-                value={delivered}
-                label={`Started ${relativeTime(s.startedAt)}`}
-                valueLabel={`${formatBytes(s.bytesServed)} of ${formatBytes(s.size)} delivered`}
-              />
             ) : (
-              <p className="text-xs opacity-80">
-                Started {relativeTime(s.startedAt)} · {formatBytes(s.bytesServed)} delivered
-              </p>
+              <p className="text-xs opacity-80">Waiting for playback position</p>
             )}
           </div>
           {s.decisionReason ? (

@@ -339,6 +339,10 @@ func (s *session) snapshot(now time.Time) *core.PlaySession {
 		DownFailovers:  s.downFailovers,
 		RequiresRemux:  s.requiresRemux,
 	}
+	if !s.viewerAt.IsZero() {
+		offset := s.viewerPosition.Milliseconds()
+		ps.ViewOffset = &offset
+	}
 	if s.user.Username == "" {
 		ps.Username = s.user.Title
 	}

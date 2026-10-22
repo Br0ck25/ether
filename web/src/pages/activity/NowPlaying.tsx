@@ -6,7 +6,7 @@ import { Meter } from "../../components/charts";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Section } from "../../components/layout";
 import { apiFetch, errorMessage } from "../../lib/api";
-import { formatBytes, formatRate, plural, relativeTime } from "../../lib/format";
+import { formatRate, plural, relativeTime } from "../../lib/format";
 import type { NowPlaying as Stream } from "../../lib/health";
 import type { AsyncState } from "../../lib/hooks";
 import { useTitle } from "../../lib/titles";
@@ -19,7 +19,6 @@ function decisionLabel(decision: string): string {
 
 function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onStop: () => void }) {
   const title = useTitle(s.key || undefined);
-  const delivered = s.size > 0 ? Math.min(1, s.bytesServed / s.size) : null;
   return (
     <li className="flex flex-wrap items-center gap-4 py-4 first:pt-0 last:pb-0">
       <Artwork
@@ -51,16 +50,8 @@ function StreamRow({ s, stopping, onStop }: { s: Stream; stopping: boolean; onSt
               label={`Started ${relativeTime(s.startedAt)}`}
               valueLabel={`${Math.round(s.progress * 100)}% watched`}
             />
-          ) : delivered !== null ? (
-            <Meter
-              value={delivered}
-              label={`Started ${relativeTime(s.startedAt)}`}
-              valueLabel={`${formatBytes(s.bytesServed)} of ${formatBytes(s.size)} delivered`}
-            />
           ) : (
-            <p className="text-xs text-fg-muted">
-              Started {relativeTime(s.startedAt)} · {formatBytes(s.bytesServed)} delivered
-            </p>
+            <p className="text-xs text-fg-muted">Waiting for playback position</p>
           )}
         </div>
         {s.release ? (

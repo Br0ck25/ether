@@ -407,6 +407,20 @@ describe("health", () => {
       computeHealth(undefined, now).every((x) => x.level === "unknown" || x.level === "warn"),
     ).toBe(true);
   });
+  it("uses the reported playhead, including zero, independently of transferred bytes", () => {
+    const base = { BytesServed: 33, Info: { size: 100, duration: 60e9 } };
+    const sessions = normalizeSessions([
+      base,
+      { ...base, viewOffset: 55000 },
+      { ...base, viewOffset: 10000 },
+      { ...base, viewOffset: 0 },
+      { ...base, viewOffset: -1000 },
+      { ...base, viewOffset: 90000 },
+      { ...base, viewOffset: null },
+      { ...base, viewOffset: NaN },
+    ]);
+    expect(sessions.map((s) => s.progress)).toEqual([null, 55 / 60, 1 / 6, 0, 0, 1, null, null]);
+  });
   it("normalizes now-playing sessions from Go field names", () => {
     const [s] = normalizeSessions([
       {

@@ -118,7 +118,10 @@ type PlaySession struct {
 	BytesServed    int64        // source bytes delivered (direct play and ffmpeg input)
 	SpeedBps       int64        // recent delivery rate, bytes per second
 	LastActive     time.Time
-	Failovers      int // mid-stream release swaps so far
+	// ViewOffset is the client's last reported playhead in milliseconds.
+	// Nil means no timeline has arrived; source bytes do not imply progress.
+	ViewOffset *int64 `json:"viewOffset,omitempty"`
+	Failovers  int    // mid-stream release swaps so far
 	// DownFailovers counts speed-driven swaps to a lower-bitrate release
 	// (a subset of Failovers) (additive).
 	DownFailovers int `json:"downFailovers,omitempty"`

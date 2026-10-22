@@ -300,12 +300,14 @@ export function normalizeSessions(v: unknown): NowPlaying[] {
     const resolution = (pick(s, "Resolution", "resolution") ?? {}) as Record<string, unknown>;
     const release = isPlainObject(resolution.release) ? resolution.release : {};
     const durationNs = num(pick(info, "duration", "Duration"));
-    const offsetMs = num(pick(s, "viewOffset", "ViewOffset", "positionMs", "PositionMs"));
+    const offsetMs = pick(s, "viewOffset", "ViewOffset", "positionMs", "PositionMs");
     const durationMs = durationNs / 1e6;
     const explicit = pick(s, "progress", "Progress");
     let progress: number | null = null;
-    if (typeof explicit === "number") progress = explicit;
-    else if (offsetMs > 0 && durationMs > 0) progress = Math.min(1, offsetMs / durationMs);
+    if (typeof explicit === "number" && Number.isFinite(explicit))
+      progress = Math.max(0, Math.min(1, explicit));
+    else if (typeof offsetMs === "number" && Number.isFinite(offsetMs) && durationMs > 0)
+      progress = Math.max(0, Math.min(1, offsetMs / durationMs));
     return {
       id: str(pick(s, "ID", "id")),
       key: String(pick(s, "Key", "key") ?? ""),

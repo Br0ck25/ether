@@ -582,6 +582,12 @@ func (s *Server) sectionFromHubID(id string) (Section, bool) {
 
 func (s *Server) findHub(ctx context.Context, pr *Request, id string, sections []int, metadataID string, count int) (hubSpec, bool) {
 	switch {
+	case id == "tv.upnext":
+		k, err := core.ParseRatingKey(metadataID)
+		if err != nil || !s.relatedSourceVisible(ctx, pr, k) {
+			return hubSpec{}, false
+		}
+		return s.upNextHub(ctx, pr, k)
 	case id == "home.continue":
 		return s.continueHub(ctx, pr, cwHome, Section{}, count), true
 	case id == "continueWatching":
@@ -697,6 +703,20 @@ func (s *Server) handleMetadataHubs(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, mc)
 }
 
+// upNextHub is shared by post-play and the advertised shelf-items URL so
+// clients can reload the row or use it as a play-queue source.
+func (s *Server) upNextHub(ctx context.Context, pr *Request, k core.RatingKey) (hubSpec, bool) {
+	if k.Kind() != core.KindEpisode {
+		return hubSpec{}, false
+	}
+	next, err := s.d.Catalog.NextEpisode(ctx, k)
+	if err != nil || next == nil || !s.visibleTitle(ctx, pr.User, next) {
+		return hubSpec{}, false
+	}
+	return hubSpec{Hub: core.Hub{ID: "tv.upnext", Title: "Up Next", Type: core.TypeEpisode,
+		Context: "hub.tv.upnext", Items: []core.Title{*next}}}, true
+}
+
 // handlePostplay is /hubs/metadata/{key}/postplay. An episode with a
 // next episode keeps Up Next first; everything else leads with the
 // viewer's personalized hook queue (#30, the same #1 pick prefetch
@@ -713,14 +733,9 @@ func (s *Server) handlePostplay(w http.ResponseWriter, r *http.Request) {
 	count := countParam(r, 12)
 	mc := hubContainer()
 	seen := map[core.RatingKey]bool{k: true}
-	if k.Kind() == core.KindEpisode {
-		// visibleTitle, not just the item's own policy: the next episode
-		// may not carry its show's restrictions.
-		if next, err := s.d.Catalog.NextEpisode(ctx, k); err == nil && next != nil && s.visibleTitle(ctx, pr.User, next) {
-			h := core.Hub{ID: "tv.upnext", Title: "Up Next", Type: core.TypeEpisode, Context: "hub.tv.upnext", Items: []core.Title{*next}}
-			mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, hubSpec{Hub: h}, hubCtx{related: k}))
-			seen[next.Key] = true
-		}
+	if h, ok := s.upNextHub(ctx, pr, k); ok {
+		mc.Hub = append(mc.Hub, s.renderHub(ctx, pr, h, hubCtx{related: k}))
+		seen[h.Items[0].Key] = true
 	}
 	if picks := s.postPlayPicks(ctx, pr, k, count); len(picks) > 0 {
 		// Skip whatever Up Next already covers so the queue never
