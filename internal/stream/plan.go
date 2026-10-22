@@ -292,9 +292,12 @@ func (p *plan) ensureOne(ctx context.Context, v verifier, k int) error {
 				return ctx.Err()
 			}
 		}
+		// A concurrent verifier can replace info as soon as we unlock.
+		// Snapshot the diagnostic value under the same lock as the comparison.
+		assumed := p.info[k]
 		p.mu.Unlock()
 		v.e.log.Warn("archive volume layout differs from the uniform assumption; rebuilding from every volume",
-			"name", p.name, "volume", k, "assumed", fmt.Sprintf("%+v", p.info[k]), "actual", fmt.Sprintf("%+v", actual))
+			"name", p.name, "volume", k, "assumed", fmt.Sprintf("%+v", assumed), "actual", fmt.Sprintf("%+v", actual))
 		if err := p.rebuildExact(ctx, v); err != nil {
 			return err
 		}

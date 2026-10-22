@@ -54,10 +54,27 @@ func TestBufferedSwapPreservesPublishedMediaAndViewerPosition(t *testing.T) {
 	}
 }
 
+// Pace only encoding/remux runs, not probes or fixture generation. Without
+// this, a fast machine can finish the entire fixture before the first poll and
+// the test only decodes the old buffer, never exercising the handoff.
+type repairHandoffRunner struct{ ExecRunner }
+
+func (r repairHandoffRunner) Start(cmd Command) (Process, error) {
+	for i, arg := range cmd.Args {
+		if arg == "-i" {
+			args := append([]string(nil), cmd.Args[:i]...)
+			args = append(args, "-readrate", "8")
+			cmd.Args = append(args, cmd.Args[i:]...)
+			break
+		}
+	}
+	return r.ExecRunner.Start(cmd)
+}
+
 // Real ffmpeg must decode the preserved prefix and replacement suffix without
 // fetching old input or restarting the viewer at the handoff.
 func TestIntegrationBufferedRepairHandoff(t *testing.T) {
-	e := newRealEnv(t, WithoutHWDetection(), WithBuffering(8*time.Second, 4*time.Second, 4*time.Second))
+	e := newRealEnv(t, WithoutHWDetection(), WithRunner(repairHandoffRunner{}), WithBuffering(8*time.Second, 4*time.Second, 4*time.Second))
 	e.gen(t, "buffer-a.mkv", 32, "-c:v", "libx264", "-preset", "ultrafast", "-threads", "2", "-g", "48", "-c:a", "aac")
 	info, err := e.m.Probe(t.Context(), e.url("buffer-a.mkv"))
 	if err != nil {
@@ -73,6 +90,12 @@ func TestIntegrationBufferedRepairHandoff(t *testing.T) {
 	if err := s.SwapInputBuffered(t.Context(), e.url("buffer-a.mkv")+"?replacement=1", *info, 0); err != nil {
 		t.Fatal(err)
 	}
+	s.mu.Lock()
+	handoffFrame := s.cur.startSeg * 2 * 24
+	s.mu.Unlock()
+	if handoffFrame <= 0 || handoffFrame >= 480 {
+		t.Fatalf("test did not place the handoff inside delivered media: frame %d", handoffFrame)
+	}
 	if s.RequestedPosition() != 0 || !bytes.Equal(fetch(t, hs, 0), first) {
 		t.Fatal("handoff discarded original buffer")
 	}
@@ -82,7 +105,32 @@ func TestIntegrationBufferedRepairHandoff(t *testing.T) {
 		media = append(media, fetch(t, hs, n)...)
 	}
 	path := e.writeTemp(t, "repair-handoff.ts", media)
-	out, err := exec.CommandContext(t.Context(), e.ffmpeg, "-v", "error", "-xerror", "-i", path, "-f", "null", "-").CombinedOutput()
+	// Check the delivered packets before decoding; an output muxer's guessed
+	// frame-rate timebase must not hide a discontinuity at the handoff.
+	packets := e.videoPackets(t, path)
+	if len(packets) != 480 {
+		t.Fatalf("handoff has %d video packets, want 480", len(packets))
+	}
+	for i := 1; i < len(packets); i++ {
+		d := packets[i].pts - packets[i-1].pts
+		// TS may absorb the source's AAC priming offset at a restart (21 ms in
+		// this fixture). Allow a shorter positive boundary step, never duplicate
+		// timestamps, a backwards step, or a missing frame anywhere.
+		minStep := 1.0/24 - 0.0015
+		if i == handoffFrame {
+			minStep = 0
+		}
+		if d <= minStep || d > 1.0/24+0.0015 {
+			t.Fatalf("video packet %d has invalid presentation step %.6f (handoff=%d)", i, d, handoffFrame)
+		}
+		if packets[i].dts <= packets[i-1].dts {
+			t.Fatalf("video DTS regressed at packet %d", i)
+		}
+	}
+	// The Windows null muxer can guess a coarse frame-rate timebase and round
+	// distinct input timestamps to the same output tick. Preserve TS precision
+	// and every decoded frame instead of testing that unrelated conversion.
+	out, err := exec.CommandContext(t.Context(), e.ffmpeg, "-v", "error", "-xerror", "-i", path, "-fps_mode", "passthrough", "-enc_time_base:v", "1:90000", "-f", "null", "-").CombinedOutput()
 	if err != nil {
 		t.Fatalf("handoff decode: %v: %s", err, out)
 	}

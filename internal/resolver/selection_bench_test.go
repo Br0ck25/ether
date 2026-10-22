@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -160,11 +162,18 @@ func BenchmarkObscureTitleResolve(b *testing.B) {
 	}
 }
 
-func TestFullFleet12IndexerObscureFanOutInMilliseconds(t *testing.T) {
+func TestFullFleet12IndexerObscureFanOut(t *testing.T) {
+	// Every indexer must enter its first search before any may answer. This
+	// proves concurrent fan-out without a host-speed threshold under -race.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	allEntered := make(chan struct{})
+	var entered atomic.Int32
 	const fakeNZBPayload = `<?xml version="1.0"?><nzb><file poster="a" date="1" subject="x"><groups><group>alt.binaries.test</group></groups><segments><segment bytes="10" number="1">m1@test</segment></segments></file></nzb>`
 	var cfgs []config.Indexer
 	for i := 0; i < 12; i++ {
 		idxNum := i
+		var firstSearch sync.Once
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			q := r.URL.Query()
 			base := "http://" + r.Host
@@ -174,6 +183,17 @@ func TestFullFleet12IndexerObscureFanOutInMilliseconds(t *testing.T) {
 			case "get":
 				fmt.Fprint(w, fakeNZBPayload)
 			default:
+				firstSearch.Do(func() {
+					if entered.Add(1) == 12 {
+						close(allEntered)
+					}
+				})
+				select {
+				case <-allEntered:
+				case <-ctx.Done():
+					http.Error(w, "fan-out never reached every indexer", http.StatusGatewayTimeout)
+					return
+				}
 				// Indexer 0 returns an expired/broken Usenet post on imdbid;
 				// Indexer 11 (the last of 12 indexers!) holds the healthy
 				// release under the collapsed initialism alias "MASH 1970".
@@ -208,13 +228,13 @@ func TestFullFleet12IndexerObscureFanOutInMilliseconds(t *testing.T) {
 		Title: "M*A*S*H", Year: 1970, Runtime: 116 * time.Minute,
 	}
 	start := time.Now()
-	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: mash, Client: appleTVCaps()})
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: mash, Client: appleTVCaps()})
 	elapsed := time.Since(start)
 	if err != nil || res.Release.Name != "MASH.1970.1080p.BluRay.x264-CLASSIC" {
 		t.Fatalf("12-indexer obscure fan-out failed: res=%+v err=%v", res, err)
 	}
-	if elapsed > 50*time.Millisecond {
-		t.Fatalf("expected 12-indexer fan-out in milliseconds (<50ms), took %s", elapsed)
+	if entered.Load() != 12 {
+		t.Fatalf("only %d indexers searched", entered.Load())
 	}
 	t.Logf("12-indexer obscure fan-out + rescue + health check resolved in %s", elapsed)
 }

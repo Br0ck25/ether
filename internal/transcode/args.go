@@ -117,11 +117,25 @@ func buildArgs(s runSpec) []string {
 	if s.Protocol == core.ProtocolDASH {
 		return append(args, dashMuxArgs(s)...)
 	}
-	if s.RTXTimeline && s.Decision.Container == ContainerMPEGTS {
-		// Both HLS and its child TS muxer must preserve timestamps: the
-		// child otherwise shifts a zero-origin B-frame run to positive DTS.
-		args = append(args, "-muxdelay", "0", "-muxpreload", "0", "-hls_segment_options", "mpegts_copyts=1:avoid_negative_ts=disabled")
+	if s.Decision.Container == ContainerMPEGTS {
+		var segmentOptions []string
+		if s.RTXTimeline {
+			// Both HLS and its child TS muxer must preserve timestamps: the
+			// child otherwise shifts a zero-origin B-frame run to positive DTS.
+			args = append(args, "-muxdelay", "0", "-muxpreload", "0")
+			segmentOptions = append(segmentOptions, "mpegts_copyts=1", "avoid_negative_ts=disabled")
+		}
+		if s.Start > 0 {
+			// A new muxer resets each PID's continuity counter. Mark that reset
+			// in-band so a decoder retaining buffered TS does not flag the first
+			// replacement packet as corrupt. Media timestamps remain unchanged.
+			segmentOptions = append(segmentOptions, "mpegts_flags=+initial_discontinuity")
+		}
+		if len(segmentOptions) > 0 {
+			args = append(args, "-hls_segment_options", strings.Join(segmentOptions, ":"))
+		}
 	}
+
 	if runtime.GOOS == "windows" && s.Decision.Container == ContainerFMP4 && s.InitName != "" && !filepath.IsAbs(s.InitName) {
 		// Windows FFmpeg otherwise resolves this against the process's
 		// working directory, which is the session root even for lower rungs.

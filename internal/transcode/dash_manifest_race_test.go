@@ -92,6 +92,10 @@ func TestDASHInitServedWhileReplaced(t *testing.T) {
 // until it exits.
 func TestDASHRedundantSegmentsAreRemoved(t *testing.T) {
 	fr := newFakeRunner()
+	// Four completed five-second segments plus the next boundary are enough.
+	// Bound the producer while keeping it alive, so a slow instrumented
+	// filesystem cannot create unlimited work and exit cleanup cannot mask a leak.
+	fr.dashEnd, fr.dashHold = 25*time.Second, true
 	m := newTestManager(t, fr, config.Transcode{}, WithBuffering(time.Hour, 0, 0))
 	s := startDASHSession(t, m, dashRequest(t, "redundant", time.Hour))
 	for n := 0; n < 4; n++ {
@@ -111,7 +115,15 @@ func TestDASHRedundantSegmentsAreRemoved(t *testing.T) {
 		defer s.mu.Unlock()
 		return r.produced >= 4
 	})
-	left, _ := filepath.Glob(filepath.Join(r.dash.dir, "seg-*"))
+	select {
+	case <-r.proc.Done():
+		t.Fatal("producer exited before checking redundant segment cleanup")
+	default:
+	}
+	left, err := filepath.Glob(filepath.Join(r.dash.dir, "seg-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(left) != 0 {
 		t.Errorf("redundant assembled segments left in the run directory: %v", left)
 	}

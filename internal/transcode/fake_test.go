@@ -46,7 +46,8 @@ type fakeRunner struct {
 	noPause    bool // processes cannot be suspended (Windows)
 
 	// DASH simulation: the input ends at this media time (0 = never).
-	dashEnd time.Duration
+	dashEnd  time.Duration
+	dashHold bool // keep the bounded producer alive until Stop, to test cleanup before exit
 
 	// Chunked HLS simulation (keyframe-planned sessions): source keyframe
 	// interval (default 2.5s) and end of input (0 = never).
@@ -204,7 +205,7 @@ func (f *fakeRunner) Start(cmd Command) (Process, error) {
 		stderr, fail = f.failStart(cmd.Args)
 	}
 	if argValue(cmd.Args, "-f") == "dash" {
-		go p.simulateDASH(cmd, f.segDelay, f.dashEnd, f.failAfter, fail, stderr)
+		go p.simulateDASH(cmd, f.segDelay, f.dashEnd, f.dashHold, f.failAfter, fail, stderr)
 	} else if fakeChunked(cmd.Args) {
 		go p.simulateChunks(cmd, f.segDelay, f.chunkGOP, f.chunkEnd, f.lastSeg, f.failAfter, fail, stderr)
 	} else {
@@ -576,7 +577,7 @@ func tsChunkMarkers(b []byte) []string {
 // first, then chunk-<rep>-<n>.m4s (from 1, via .tmp and rename), each one
 // -seg_duration long with absolute decode times from -ss. Video uses a
 // 90 kHz timescale at 24 fps, audio 48 kHz in 20 ms frames.
-func (p *fakeProc) simulateDASH(cmd Command, delay, end time.Duration, failAfter int, failStart bool, stderr string) {
+func (p *fakeProc) simulateDASH(cmd Command, delay, end time.Duration, hold bool, failAfter int, failStart bool, stderr string) {
 	defer close(p.done)
 	args := cmd.Args
 	dir := filepath.Dir(args[len(args)-1])
@@ -610,6 +611,9 @@ func (p *fakeProc) simulateDASH(cmd Command, delay, end time.Duration, failAfter
 	for n := 1; ; n++ {
 		t := ss + float64(n-1)*chunk
 		if end > 0 && t >= end.Seconds()-1e-9 {
+			if hold {
+				<-p.kill
+			}
 			return // end of input
 		}
 		if failAfter > 0 && n > failAfter {

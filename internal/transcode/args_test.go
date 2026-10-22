@@ -353,3 +353,24 @@ func TestFMP4CopiedAudioPreloadScope(t *testing.T) {
 		})
 	}
 }
+
+func TestRestartedTSMarksTransportCounterReset(t *testing.T) {
+	for _, container := range []string{ContainerMPEGTS, ContainerFMP4, ContainerMatroska} {
+		for _, protocol := range []string{core.ProtocolHLS, core.ProtocolDASH} {
+			for _, start := range []time.Duration{0, 8 * time.Second} {
+				for _, rtx := range []bool{false, true} {
+					s := runSpec{Decision: core.Decision{Container: container, VideoCopy: true, AudioStream: -1}, Protocol: protocol, Start: start, RTXTimeline: rtx}
+					args := buildArgs(s)
+					got := strings.Contains(argValue(args, "-hls_segment_options"), "mpegts_flags=+initial_discontinuity")
+					want := container == ContainerMPEGTS && protocol == core.ProtocolHLS && start > 0
+					if got != want {
+						t.Fatalf("container=%s protocol=%s start=%s rtx=%v: reset marker=%v want=%v", container, protocol, start, rtx, got, want)
+					}
+					if want && rtx && !strings.Contains(argValue(args, "-hls_segment_options"), "mpegts_copyts=1:avoid_negative_ts=disabled") {
+						t.Fatal("reset marker discarded RTX clock options")
+					}
+				}
+			}
+		}
+	}
+}

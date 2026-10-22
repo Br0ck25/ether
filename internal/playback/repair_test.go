@@ -97,18 +97,30 @@ func TestRepairTelemetryIsScopedToViewerAndClient(t *testing.T) {
 }
 
 func TestRepairSeekInvalidatesOlderTelemetryAndPassedDamage(t *testing.T) {
-	h := newHarness(t, []*fakeRelease{mkv("A", 100_000, time.Minute)}, []string{"A"})
-	ps := h.prepare(owner, movieKey, "seeking")
-	s := h.m.lookup(ps.ID)
-	g := s.current()
-	h.m.PlaybackProgress(owner.ID, "seeking", movieKey, 10*time.Second, "paused")
-	f := &repairHLS{fakeHLS: h.tr.addHLS(ps.ID), buffer: core.RecoveryBuffer{Position: 45 * time.Second, ReadyUntil: 55 * time.Second, SeekAt: time.Now()}}
-	h.m.deps.HLSLookup = func(string) (core.HLSSession, bool) { return f, true }
-	event := core.RepairEvent{Key: 1, Offset: 50_000, Phase: "failed"}
-	g.recovery.events = map[repairEventKey]core.RepairEvent{{article: 1}: event}
-	pos, _, _ := h.m.repairHorizon(g, event)
-	if pos != 45*time.Second || h.m.repairMustSwitch(g) {
-		t.Fatal("abandoned seek range affected recovery", pos)
+	for _, delta := range []time.Duration{-time.Millisecond, 0, time.Millisecond} {
+		t.Run(delta.String(), func(t *testing.T) {
+			h := newHarness(t, []*fakeRelease{mkv("A", 100_000, time.Minute)}, []string{"A"})
+			ps := h.prepare(owner, movieKey, "seeking")
+			s := h.m.lookup(ps.ID)
+			g := s.current()
+			seekAt := time.Now().Add(-time.Second)
+			h.m.PlaybackProgress(owner.ID, "seeking", movieKey, 10*time.Second, "paused")
+			s.mu.Lock()
+			s.viewerAt = seekAt.Add(delta)
+			s.mu.Unlock()
+			f := &repairHLS{fakeHLS: h.tr.addHLS(ps.ID), buffer: core.RecoveryBuffer{Position: 45 * time.Second, ReadyUntil: 55 * time.Second, SeekAt: seekAt}}
+			h.m.deps.HLSLookup = func(string) (core.HLSSession, bool) { return f, true }
+			event := core.RepairEvent{Key: 1, Offset: 50_000, Phase: "failed"}
+			g.recovery.events = map[repairEventKey]core.RepairEvent{{article: 1}: event}
+			pos, _, _ := h.m.repairHorizon(g, event)
+			wantPosition, wantSwitch := 45*time.Second, false
+			if delta > 0 {
+				wantPosition, wantSwitch = 10*time.Second, true
+			}
+			if pos != wantPosition || h.m.repairMustSwitch(g) != wantSwitch {
+				t.Fatalf("telemetry relative to seek %s: position=%s want=%s switch=%v want=%v", delta, pos, wantPosition, h.m.repairMustSwitch(g), wantSwitch)
+			}
+		})
 	}
 }
 

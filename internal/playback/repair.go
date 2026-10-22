@@ -61,7 +61,9 @@ func (m *Manager) repairHorizon(g *generation, event core.RepairEvent) (position
 	s.mu.Lock()
 	at, p, state := s.viewerAt, s.viewerPosition, s.viewerState
 	s.mu.Unlock()
-	if !at.IsZero() && !at.Before(b.SeekAt) && time.Since(at) < 30*time.Second {
+	// Equal timestamps cannot establish that telemetry followed the seek on a
+	// coarse clock. Keep the newer requested segment until a later update.
+	if !at.IsZero() && at.After(b.SeekAt) && time.Since(at) < 30*time.Second {
 		position = p
 		if state == "playing" {
 			position += time.Since(at)
