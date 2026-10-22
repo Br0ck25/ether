@@ -129,3 +129,27 @@ func TestSegmentedSeekDropsOnlyCopiedAudioPreroll(t *testing.T) {
 		})
 	}
 }
+
+// An EOF observed by a tail seek on one rendition must not reject the
+// advertised final segment while a replacement rendition is still producing it.
+func TestDASHNewRenditionClearsPriorRunEOF(t *testing.T) {
+	fr := newFakeRunner()
+	fr.dashEnd = 24*time.Second + 21*time.Millisecond
+	m := newTestManager(t, fr, config.Transcode{ABRLadder: true}, withRungDwell(0))
+	s := startDASHSession(t, m, dashRequest(t, "tail-rung", fr.dashEnd))
+	s.mu.Lock()
+	s.endSeg = 11 // a seek at 24s saw no complete audio/video pair
+	s.wantTrack = 2
+	err := s.startRunLocked(0, false)
+	end := s.endSeg
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end != -1 {
+		t.Fatalf("new rendition inherited EOF at segment %d", end)
+	}
+	if r := media(t, s, 2, 12); r.Code != http.StatusOK {
+		t.Fatalf("advertised final segment: HTTP %d %s", r.Code, r.Body.String())
+	}
+}
