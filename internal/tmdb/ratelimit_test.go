@@ -3,6 +3,7 @@ package tmdb
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -32,27 +33,30 @@ func TestSetRateShare(t *testing.T) {
 }
 
 func TestRateLimiterFollowsRateChanges(t *testing.T) {
-	r := newRateLimiter(50, 1)
-	ctx := context.Background()
-	start := time.Now()
-	for i := 0; i < 6; i++ { // 1 from the burst + 5 at 50/s ≈ 100ms
-		if err := r.wait(ctx); err != nil {
-			t.Fatal(err)
+	// Virtual time checks the reservation rate without measuring host scheduling.
+	synctest.Test(t, func(t *testing.T) {
+		r := newRateLimiter(50, 1)
+		ctx := context.Background()
+		start := time.Now()
+		for i := 0; i < 6; i++ { // 1 from the burst + 5 at 50/s ≈ 100ms
+			if err := r.wait(ctx); err != nil {
+				t.Fatal(err)
+			}
 		}
-	}
-	if el := time.Since(start); el < 80*time.Millisecond {
-		t.Fatalf("50/s limiter too fast: %v", el)
-	}
-	r.setRate(5000, 1)
-	start = time.Now()
-	for i := 0; i < 20; i++ {
-		if err := r.wait(ctx); err != nil {
-			t.Fatal(err)
+		if el := time.Since(start); el < 80*time.Millisecond {
+			t.Fatalf("50/s limiter too fast: %v", el)
 		}
-	}
-	if el := time.Since(start); el > 80*time.Millisecond {
-		t.Fatalf("raised rate not applied: %v", el)
-	}
+		r.setRate(5000, 1)
+		start = time.Now()
+		for i := 0; i < 20; i++ {
+			if err := r.wait(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if el := time.Since(start); el > 80*time.Millisecond {
+			t.Fatalf("raised rate not applied: %v", el)
+		}
+	})
 }
 
 func TestRateLimiterCancelReturnsReservation(t *testing.T) {
