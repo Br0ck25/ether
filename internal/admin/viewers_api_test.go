@@ -325,14 +325,20 @@ func TestRankerInsightUntrained(t *testing.T) {
 func TestImportedViewersRemainVisibleOutsideActiveMembership(t *testing.T) {
 	store := newStore(t, nil)
 	active := &fakeUsers{users: []core.User{{ID: 1, Username: "owner", IsOwner: true}}}
-	directory := func(context.Context) ([]core.User, error) {
-		return []core.User{{ID: 1, Username: "owner", IsOwner: true}, {ID: 32, Username: "imported-viewer"}}, nil
+	directory := func(context.Context) ([]admin.ViewerRecord, error) {
+		return []admin.ViewerRecord{{User: core.User{ID: 1, Username: "owner", IsOwner: true}, Active: true}, {User: core.User{ID: 32, Username: "imported-viewer"}, Origin: "imported"}}, nil
 	}
 	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Users: active, ViewerDirectory: directory, Personalization: &fakeEngine{}})
 	for _, path := range []string{"/ether/api/viewers", "/ether/api/users", "/ether/api/viewers/32"} {
 		rec := serve(h, req(http.MethodGet, path, ""))
 		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "imported-viewer") {
 			t.Fatalf("%s hid imported history: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	for _, path := range []string{"/ether/api/viewers", "/ether/api/viewers/32"} {
+		rec := serve(h, req(http.MethodGet, path, ""))
+		if !strings.Contains(rec.Body.String(), `"accessStatus":"imported"`) {
+			t.Fatalf("missing status: %s", rec.Body)
 		}
 	}
 	for _, path := range []string{"/ether/api/viewers/32/taste", "/ether/api/viewers/32/home"} {
@@ -344,5 +350,24 @@ func TestImportedViewersRemainVisibleOutsideActiveMembership(t *testing.T) {
 	users, _ := active.Users(context.Background())
 	if len(users) != 1 || users[0].ID != 1 {
 		t.Fatal("historical directory changed membership")
+	}
+}
+
+func TestViewerDirectoryMembershipStatuses(t *testing.T) {
+	store := newStore(t, nil)
+	directory := func(context.Context) ([]admin.ViewerRecord, error) {
+		return []admin.ViewerRecord{
+			{User: core.User{ID: 1, IsOwner: true}, Active: true, Origin: "owner"},
+			{User: core.User{ID: 2}, Active: true, Origin: "imported"},
+			{User: core.User{ID: 3}, Origin: "imported"},
+			{User: core.User{ID: 4}, Origin: "friend"},
+		}, nil
+	}
+	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store), Users: &fakeUsers{}, ViewerDirectory: directory, Personalization: &fakeEngine{}})
+	for i, status := range []string{"owner", "active", "imported", "inactive"} {
+		rec := serve(h, req(http.MethodGet, fmt.Sprintf("/ether/api/viewers/%d", i+1), ""))
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"accessStatus":"`+status+`"`) {
+			t.Fatalf("%s: %d %s", status, rec.Code, rec.Body)
+		}
 	}
 }

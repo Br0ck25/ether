@@ -146,7 +146,7 @@ type Deps struct {
 	// ViewerDirectory lists stored identities for owner administration, including
 	// imported or inactive viewers. It must never be used for authentication.
 	// Nil preserves the active-user fallback for smaller integrations.
-	ViewerDirectory func(context.Context) ([]core.User, error)
+	ViewerDirectory func(context.Context) ([]ViewerRecord, error)
 
 	// TestTimeout bounds each wizard test call (default 20s).
 	TestTimeout time.Duration

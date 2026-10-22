@@ -85,6 +85,27 @@ func writeEngineError(w http.ResponseWriter, err error) {
 	}
 }
 
+// ViewerRecord is a stored identity plus read-only Plex membership metadata.
+// Imported history does not grant server access.
+type ViewerRecord struct {
+	core.User
+	Active bool
+	Origin string
+}
+
+func (u ViewerRecord) accessStatus() string {
+	if u.IsOwner {
+		return "owner"
+	}
+	if u.Active {
+		return "active"
+	}
+	if u.Origin == "imported" {
+		return "imported"
+	}
+	return "inactive"
+}
+
 // viewer is the Viewer shape of the contract.
 type viewer struct {
 	ID              int64      `json:"id"`
@@ -93,14 +114,15 @@ type viewer struct {
 	Title           string     `json:"title"`
 	Thumb           string     `json:"thumb,omitempty"`
 	IsOwner         bool       `json:"isOwner"`
+	AccessStatus    string     `json:"accessStatus"`
 	LastActive      *time.Time `json:"lastActive,omitempty"`
 	Plays30d        int        `json:"plays30d"`
 	HoursWatched30d float64    `json:"hoursWatched30d"`
 }
 
-func toViewer(u core.User, st core.ViewerStats) viewer {
+func toViewer(u ViewerRecord, st core.ViewerStats) viewer {
 	v := viewer{ID: u.ID, PlexID: u.PlexID, Username: u.Username, Title: u.Title, Thumb: u.Thumb, IsOwner: u.IsOwner,
-		Plays30d: st.Plays30d, HoursWatched30d: st.HoursWatched30d}
+		AccessStatus: u.accessStatus(), Plays30d: st.Plays30d, HoursWatched30d: st.HoursWatched30d}
 	if v.Title == "" {
 		v.Title = u.Username
 	}
@@ -113,13 +135,13 @@ func toViewer(u core.User, st core.ViewerStats) viewer {
 
 // viewerByID looks a user up for a {id} path parameter, answering 400/404
 // itself when it cannot.
-func (h *Handler) viewerByID(w http.ResponseWriter, r *http.Request) (*core.User, bool) {
+func (h *Handler) viewerByID(w http.ResponseWriter, r *http.Request) (*ViewerRecord, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_id", "viewer id must be a number")
 		return nil, false
 	}
-	users, err := h.viewerDirectory(r.Context())
+	users, err := h.storedViewers(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
 		return nil, false
@@ -135,7 +157,7 @@ func (h *Handler) viewerByID(w http.ResponseWriter, r *http.Request) (*core.User
 }
 
 func (h *Handler) handleViewers(w http.ResponseWriter, r *http.Request) {
-	users, err := h.viewerDirectory(r.Context())
+	users, err := h.storedViewers(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "users_failed", err.Error())
 		return
@@ -193,7 +215,7 @@ func (h *Handler) handleViewerTaste(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p, err := h.deps.Personalization.Taste(r.Context(), u)
+	p, err := h.deps.Personalization.Taste(r.Context(), &u.User)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -218,7 +240,7 @@ func (h *Handler) handleViewerOverrides(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	p, err := h.deps.Personalization.SetTasteOverrides(ctx, u, body.Overrides)
+	p, err := h.deps.Personalization.SetTasteOverrides(ctx, &u.User, body.Overrides)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -283,7 +305,7 @@ func (h *Handler) handleViewerHome(w http.ResponseWriter, r *http.Request) {
 	}
 	hc := core.NewHubContext(at.Local(), "", "", "")
 	hc.Device = device
-	p, err := h.deps.Personalization.PreviewHome(r.Context(), u, hc, q.Get("section"), limit)
+	p, err := h.deps.Personalization.PreviewHome(r.Context(), &u.User, hc, q.Get("section"), limit)
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -328,7 +350,7 @@ func (h *Handler) handleViewerRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	if err := h.deps.Personalization.Refresh(ctx, u); err != nil {
+	if err := h.deps.Personalization.Refresh(ctx, &u.User); err != nil {
 		writeEngineError(w, err)
 		return
 	}
@@ -379,8 +401,28 @@ func homeCard(t core.Title) homeTitleCard {
 
 // viewerDirectory is owner-facing identity/history browsing, not membership.
 func (h *Handler) viewerDirectory(ctx context.Context) ([]core.User, error) {
+	stored, err := h.storedViewers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.User, 0, len(stored))
+	for _, u := range stored {
+		out = append(out, u.User)
+	}
+	return out, nil
+}
+
+func (h *Handler) storedViewers(ctx context.Context) ([]ViewerRecord, error) {
 	if h.deps.ViewerDirectory != nil {
 		return h.deps.ViewerDirectory(ctx)
 	}
-	return h.deps.Users.Users(ctx)
+	users, err := h.deps.Users.Users(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ViewerRecord, 0, len(users))
+	for _, u := range users {
+		out = append(out, ViewerRecord{User: u, Active: true})
+	}
+	return out, nil
 }

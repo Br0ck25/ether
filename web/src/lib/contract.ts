@@ -167,6 +167,8 @@ export interface LookupResult {
 
 // ---- Viewers and personalization ------------------------------------------
 
+export type ViewerAccessStatus = "owner" | "active" | "imported" | "inactive";
+
 export interface Viewer {
   id: number;
   plexId: number;
@@ -174,6 +176,7 @@ export interface Viewer {
   title: string;
   thumb?: string;
   isOwner: boolean;
+  accessStatus?: ViewerAccessStatus;
   lastActive?: string;
   plays30d: number;
   hoursWatched30d: number;

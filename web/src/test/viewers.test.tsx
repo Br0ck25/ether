@@ -154,3 +154,40 @@ describe("Viewers", () => {
     await waitFor(() => expect(screen.queryByText("You have unsaved changes")).toBeNull());
   });
 });
+
+it("filters imported history without changing Plex access", async () => {
+  const { fake } = renderApp("/viewers", {}, (server) => {
+    const base = server.fetch;
+    server.fetch = async (input, init) => {
+      const res = await base(input, init);
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname !== "/ether/api/viewers") return res;
+      const body = await res.json();
+      body.viewers = body.viewers.map((v: { id: number; isOwner: boolean }) => ({
+        ...v,
+        accessStatus: v.isOwner ? "owner" : v.id === 2 ? "imported" : "active",
+      }));
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+  });
+  await screen.findByText("Sam Rivera", {}, WAIT);
+  expect(screen.getByText("Imported history", { selector: "span" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Viewer status" }));
+  fireEvent.click(await screen.findByRole("option", { name: /^With access/ }));
+  expect(screen.queryByText("Sam Rivera")).not.toBeInTheDocument();
+  expect(screen.getByText("The Kids")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Viewer status" }));
+  fireEvent.click(await screen.findByRole("option", { name: /^Imported history/ }));
+  expect(screen.getByText("Sam Rivera")).toBeInTheDocument();
+  expect(screen.queryByText("The Kids")).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Plex.tv" })).toHaveAttribute(
+    "href",
+    "https://app.plex.tv/desktop/#!/settings/manage-library-access",
+  );
+  expect(
+    fake.state.calls.filter((c) => ["POST", "PUT", "PATCH", "DELETE"].includes(c.method)),
+  ).toHaveLength(0);
+});

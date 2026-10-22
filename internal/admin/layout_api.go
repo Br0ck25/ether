@@ -114,7 +114,7 @@ func (h *Handler) handleLayoutPreview(w http.ResponseWriter, r *http.Request) {
 	u := &core.User{IsOwner: true}
 	var viewer any
 	if b.ViewerID != nil {
-		users, err := h.viewerDirectory(r.Context())
+		users, err := h.storedViewers(r.Context())
 		if err != nil {
 			writeEngineError(w, err)
 			return
@@ -122,7 +122,7 @@ func (h *Handler) handleLayoutPreview(w http.ResponseWriter, r *http.Request) {
 		found := false
 		for _, v := range users {
 			if v.ID == *b.ViewerID {
-				copy := v
+				copy := v.User
 				u = &copy
 				found = true
 				viewer = map[string]any{"id": v.ID, "title": toViewer(v, core.ViewerStats{}).Title}
@@ -160,7 +160,7 @@ func (h *Handler) handleLayoutImpact(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	users, err := h.viewerDirectory(r.Context())
+	users, err := h.storedViewers(r.Context())
 	if err != nil {
 		writeEngineError(w, err)
 		return
@@ -173,12 +173,12 @@ func (h *Handler) handleLayoutImpact(w http.ResponseWriter, r *http.Request) {
 	results := []map[string]any{}
 	overrides, changed := 0, 0
 	for _, u := range users {
-		old, err := e.PreviewLayout(r.Context(), &u, hc, b.Section, b.Count, saved)
+		old, err := e.PreviewLayout(r.Context(), &u.User, hc, b.Section, b.Count, saved)
 		if err != nil {
 			writeEngineError(w, err)
 			return
 		}
-		next, err := e.PreviewLayout(r.Context(), &u, hc, b.Section, b.Count, *b.Layout)
+		next, err := e.PreviewLayout(r.Context(), &u.User, hc, b.Section, b.Count, *b.Layout)
 		if err != nil {
 			writeEngineError(w, err)
 			return

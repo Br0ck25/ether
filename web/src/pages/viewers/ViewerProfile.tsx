@@ -27,6 +27,7 @@ import { ViewerWatchlist } from "./sections/ViewerWatchlist";
 import { TasteView } from "./TasteView";
 import { ViewerAccess } from "./ViewerAccess";
 import { ViewerPlayback } from "./ViewerPlayback";
+import { PlexAccessNote, ViewerStatus } from "./ViewerStatus";
 
 const TABS = ["taste", "activity", "home", "access", "playback", "watchlist"] as const;
 type Tab = (typeof TABS)[number];
@@ -83,7 +84,7 @@ export default function ViewerProfile() {
             <Avatar src={v.thumb} name={name} size={56} />
             <div className="min-w-0 flex-1">
               <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold text-fg">
-                {name} {v.isOwner ? <Badge>Owner</Badge> : null}
+                {name} <ViewerStatus viewer={v} />
               </h1>
               <p className="text-sm text-fg-muted">
                 {v.username} · active {relativeTime(v.lastActive)} · {formatNumber(v.plays30d, 0)}{" "}
@@ -104,6 +105,9 @@ export default function ViewerProfile() {
               </Button>
             </div>
           </div>
+          <div className="mt-3">
+            <PlexAccessNote viewer={v} />
+          </div>
         </div>
       }
       subtabs={
@@ -115,7 +119,7 @@ export default function ViewerProfile() {
             { key: "taste", label: "Taste" },
             { key: "activity", label: "Activity", count: v.recent?.length },
             { key: "home", label: "Their Home" },
-            { key: "access", label: "Access" },
+            { key: "access", label: "Limits & preferences" },
             { key: "playback", label: "Audio & subtitles" },
             { key: "watchlist", label: "Watchlist" },
           ]}

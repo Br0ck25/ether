@@ -76,7 +76,9 @@ export function ViewerAccess({ viewer }: { viewer: Viewer }) {
         });
         policy.setData(rules.draft);
       }
-      toast.success("Access saved", { description: `${name}'s access is up to date.` });
+      toast.success("Preferences saved", {
+        description: `${name}'s Ether preferences are up to date.`,
+      });
     } catch (e) {
       setError(e);
     } finally {
