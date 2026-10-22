@@ -31,6 +31,7 @@ type cursor struct {
 
 // source implements core.MediaSource.
 type source struct {
+	recovery  repairObserver
 	bulk      *bulkReader
 	e         *Engine
 	rel       *release
@@ -56,7 +57,7 @@ type source struct {
 func newSource(e *Engine, rel *release, p *plan, releaseID string) *source {
 	ctx, cancel := context.WithCancel(e.ctx)
 	e.active.Add(1)
-	return &source{
+	s := &source{
 		e: e, rel: rel, plan: p, releaseID: releaseID,
 		bulk:   &bulkReader{e: e, r: rel, prio: core.PriorityReadahead, fo: fetchOpts{cacheID: releaseID}},
 		fo:     fetchOpts{cacheID: releaseID},
@@ -64,6 +65,9 @@ func newSource(e *Engine, rel *release, p *plan, releaseID string) *source {
 		cancel: cancel,
 		raSem:  make(chan struct{}, e.opts.ReadAheadParallel),
 	}
+	s.fo.repairProgress = s.reportRepair
+	s.bulk.fo = s.fo
+	return s
 }
 
 func (s *source) Size() int64       { return s.plan.size }

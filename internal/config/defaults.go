@@ -18,7 +18,7 @@ func randomID(n int) string {
 // Defaults returns a fresh config for a new install.
 func Defaults(dataDir string) Config {
 	return Config{
-		Usenet:   Usenet{MinIdle: 2, Repair: Repair{SummaryRows: 4, MaxDownloadBytes: 512 << 20, LiveWait: Duration(2 * time.Second), AheadWait: Duration(90 * time.Second)}},
+		Usenet:   Usenet{MinIdle: 2, Repair: Repair{AdaptiveSummaries: true, SummaryRows: 4, MaxDownloadBytes: 512 << 20, LiveWait: Duration(2 * time.Second), AheadWait: Duration(90 * time.Second)}},
 		Debrid:   Debrid{CachedOnly: true, RemoveUncached: true},
 		Markers:  Markers{TheIntroDB: true},
 		Database: Database{Driver: DatabaseSQLite},

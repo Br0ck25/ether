@@ -23,14 +23,15 @@ type identity struct {
 // generation is one opened source of a session. A failover creates a new
 // generation; the old one is retired and closed once in-flight reads end.
 type generation struct {
-	damage damageState
-	sess   *session
-	n      int
-	token  string // loopback path component; unguessable
-	src    core.MediaSource
-	res    *core.Resolution
-	info   core.MediaInfo
-	tmap   TimeMap
+	recovery recoveryState
+	damage   damageState
+	sess     *session
+	n        int
+	token    string // loopback path component; unguessable
+	src      core.MediaSource
+	res      *core.Resolution
+	info     core.MediaInfo
+	tmap     TimeMap
 
 	// indexReady is closed once the container keyframe index has been
 	// read (or given up on); the prewarm path waits for it, Play does not.
@@ -149,16 +150,19 @@ func (g *generation) releaseID() string {
 
 // session is the internal, mutable form of a core.PlaySession.
 type session struct {
-	warm          warmState // the encoder input range being prefetched
-	playbackGroup string
-	id            string
-	ident         identity
-	user          core.User
-	caps          core.ClientCaps
-	title         *core.Title
-	titleName     string
-	profile       string
-	startedAt     time.Time
+	viewerPosition time.Duration // guarded by mu, from authenticated Plex timeline
+	viewerAt       time.Time
+	viewerState    string
+	warm           warmState // the encoder input range being prefetched
+	playbackGroup  string
+	id             string
+	ident          identity
+	user           core.User
+	caps           core.ClientCaps
+	title          *core.Title
+	titleName      string
+	profile        string
+	startedAt      time.Time
 
 	// virtual is the byte/time layout of the first generation: the file the
 	// client was told about. Direct-play byte offsets are always in these

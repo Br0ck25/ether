@@ -104,12 +104,13 @@ type Usenet struct {
 // Repair bounds opportunistic PAR2 reconstruction. Disabled until the owner
 // opts in; the live benchmark enables it explicitly without editing config.
 type Repair struct {
-	Enabled          bool     `json:"enabled"`
-	WholeSlices      bool     `json:"wholeSlices,omitempty"`
-	SummaryRows      int      `json:"summaryRows"`
-	MaxDownloadBytes int64    `json:"maxDownloadBytes"`
-	LiveWait         Duration `json:"liveWait"`
-	AheadWait        Duration `json:"aheadWait"`
+	AdaptiveSummaries bool     `json:"adaptiveSummaries"`
+	Enabled           bool     `json:"enabled"`
+	WholeSlices       bool     `json:"wholeSlices,omitempty"`
+	SummaryRows       int      `json:"summaryRows"`
+	MaxDownloadBytes  int64    `json:"maxDownloadBytes"`
+	LiveWait          Duration `json:"liveWait"`
+	AheadWait         Duration `json:"aheadWait"`
 }
 
 type UsenetProvider struct {

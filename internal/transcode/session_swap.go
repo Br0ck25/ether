@@ -14,6 +14,14 @@ import (
 // (mid-stream failover). Segments from `at` on are discarded and produced
 // again from the new input; numbering stays continuous.
 func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.MediaInfo, at time.Duration) error {
+	return s.swapInput(ctx, inputURL, info, at, false)
+}
+
+func (s *Session) SwapInputBuffered(ctx context.Context, inputURL string, info core.MediaInfo, at time.Duration) error {
+	return s.swapInput(ctx, inputURL, info, at, true)
+}
+
+func (s *Session) swapInput(ctx context.Context, inputURL string, info core.MediaInfo, at time.Duration, preserve bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -27,6 +35,15 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	defer s.mu.Unlock()
 	if s.closed {
 		return errors.New("transcode: session closed")
+	}
+	preserve = preserve && info.Duration > 0 && info.Duration == s.info.Duration
+	if preserve {
+		b := s.recoveryBufferLocked()
+		// Preserve at least one whole published segment; never seek past EOF.
+		preserve = b.ReadyUntil > b.Position && b.ReadyUntil < info.Duration
+		if preserve {
+			at = b.ReadyUntil
+		}
 	}
 	seg := 0
 	if at > s.base {
@@ -89,7 +106,9 @@ func (s *Session) SwapInput(ctx context.Context, inputURL string, info core.Medi
 	s.failures = 0
 	s.failErr = nil
 	s.inputFailed = false
-	s.lastReq = seg
+	if !preserve {
+		s.lastReq = seg
+	}
 	s.seekRampSeg = seg
 	s.log.Info("input swapped", "at", at, "segment", seg)
 	return s.startRunLocked(seg, false)

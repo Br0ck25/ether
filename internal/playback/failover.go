@@ -512,10 +512,13 @@ func (m *Manager) FailoverInput(ctx context.Context, sessionID, inputURL string,
 // speed-driven down-failover (down: pick a lower-bitrate candidate, never
 // mark the slow release bad).
 type failoverOpts struct {
-	reason        string
-	markBad       bool
-	down          bool
-	stopOnFailure bool
+	stillNeeded    func() bool // speculative recovery rechecks before publishing a swap
+	quietFailure   bool
+	preserveBuffer bool
+	reason         string
+	markBad        bool
+	down           bool
+	stopOnFailure  bool
 	// followPlayer: at was mapped from a failed source read, which may be
 	// a container tail/index read or predate a seek; resume at the
 	// player's latest segment request when the HLS session reports it.
@@ -544,6 +547,9 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 	}
 	if cur != observed {
 		return cur, nil // someone else already swapped
+	}
+	if fo.stillNeeded != nil && !fo.stillNeeded() {
+		return cur, nil
 	}
 	if fo.stopOnFailure {
 		defer func() {
@@ -681,10 +687,16 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 		if lastErr == nil {
 			lastErr = core.ErrNotAvailable
 		}
-		m.emitEvent("error", s, lastErr)
+		if !fo.quietFailure {
+			m.emitEvent("error", s, lastErr)
+		}
 		return nil, fmt.Errorf("playback: failover: %w", lastErr)
 	}
 
+	if fo.stillNeeded != nil && !fo.stillNeeded() {
+		m.dropGeneration(g)
+		return cur, nil
+	}
 	// An HLS session restarts ffmpeg on fresh headers; anything else that
 	// swaps to a different-size file must be remuxed. Mark that in the same
 	// critical section as the swap, so no request sees the new release
@@ -744,7 +756,11 @@ func (m *Manager) failoverWith(ctx context.Context, s *session, observed *genera
 			at = requested
 		}
 		target := m.alignForFailover(ctx, s, cur, g, at)
-		if err := hls.SwapInput(ctx, m.urlFor(g), newInfo, target); err != nil {
+		swap := hls.SwapInput
+		if buffered, ok := hls.(core.BufferedInputSwapper); ok && fo.preserveBuffer && target == at && newInfo.Duration == oldInfo.Duration {
+			swap = buffered.SwapInputBuffered
+		}
+		if err := swap(ctx, m.urlFor(g), newInfo, target); err != nil {
 			log.Error("hls input swap failed", "err", err)
 			return g, fmt.Errorf("playback: swap hls input: %w", err)
 		}

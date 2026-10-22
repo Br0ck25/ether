@@ -229,6 +229,7 @@ export interface EtherConfig {
       enabled: boolean;
       wholeSlices?: boolean;
       summaryRows: number;
+      adaptiveSummaries?: boolean;
       maxDownloadBytes: number;
       liveWait: string;
       aheadWait: string;

@@ -269,6 +269,7 @@ export function UsenetProviders() {
                   cfg?.usenet.repair ?? {
                     enabled: false,
                     summaryRows: 4,
+                    adaptiveSummaries: true,
                     maxDownloadBytes: 512 * 1024 * 1024,
                     liveWait: "2s",
                     aheadWait: "1m30s",
@@ -316,9 +317,13 @@ export function UsenetProviders() {
             <BoolRow
               label="Remember downloaded data"
               value={repairDraft.summaryRows > 0}
-              help="Keep compact repair information after cached bytes are evicted. This uses additional memory and CPU."
+              help="After damage is detected, retain repair information when its expected benefit justifies the memory and CPU cost."
               onChange={(enabled) =>
-                setRepairDraft({ ...repairDraft, summaryRows: enabled ? 4 : 0 })
+                setRepairDraft({
+                  ...repairDraft,
+                  summaryRows: enabled ? 4 : 0,
+                  adaptiveSummaries: true,
+                })
               }
             />
           </SettingsSection>

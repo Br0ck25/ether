@@ -19,16 +19,20 @@ const repairMemoryBudget = 128 << 20
 // Serialized per release; only one reconstruction across the engine competes
 // with playback. Source close cancels readahead repairs and joins their workers.
 type repairSession struct {
-	blocksByFile map[*postedFile][2]int
-	layout       *par2.Layout
-	field        *par2.Field
-	files        map[par2.ID]*postedFile
-	summaries    *par2.Summaries
-	pending      map[int]*repairPending
-	reserved     int64
-	retryAfter   map[int]time.Time
-	fixed        map[int][]byte // verified small slices reconstructed incidentally
-	fixedLimit   int
+	summaryRows    int
+	summaryBytes   int64
+	summaryTime    time.Duration
+	summaryStopped bool
+	blocksByFile   map[*postedFile][2]int
+	layout         *par2.Layout
+	field          *par2.Field
+	files          map[par2.ID]*postedFile
+	summaries      *par2.Summaries
+	pending        map[int]*repairPending
+	reserved       int64
+	retryAfter     map[int]time.Time
+	fixed          map[int][]byte // verified small slices reconstructed incidentally
+	fixedLimit     int
 }
 type repairPending struct {
 	data  []byte
@@ -153,6 +157,12 @@ func (e *Engine) prepareRepair(ctx context.Context, r *release, prio core.Priori
 		files[b.File.ID] = match
 	}
 	rows := min(16, int((64<<20)/layout.SliceSize), max(0, e.repairOptions().SummaryRows))
+	if e.repairOptions().AdaptiveSummaries {
+		rows = min(rows, 2)
+		if len(layout.Blocks) < 4*rows {
+			rows = 0
+		}
+	}
 	// Retained summaries and two partial slices. The single global repair job
 	// separately bounds targets/parity to 64 MiB each and packet scanning to 64 MiB.
 	reserve := int64(rows+2)*layout.SliceSize + 1<<20
@@ -174,6 +184,7 @@ func (e *Engine) prepareRepair(ctx context.Context, r *release, prio core.Priori
 		}
 	}
 	s := &repairSession{layout: layout, field: par2.NewField(), files: files, pending: map[int]*repairPending{}, reserved: reserve, retryAfter: map[int]time.Time{}, fixed: map[int][]byte{}, fixedLimit: fixedLimit}
+	s.summaryRows = rows
 	s.blocksByFile = map[*postedFile][2]int{}
 	for i, b := range layout.Blocks {
 		pf := files[b.File.ID]
@@ -184,7 +195,7 @@ func (e *Engine) prepareRepair(ctx context.Context, r *release, prio core.Priori
 		bounds[1] = i + 1
 		s.blocksByFile[pf] = bounds
 	}
-	if rows > 0 {
+	if rows > 0 && !e.repairOptions().AdaptiveSummaries {
 		exps := make([]uint32, rows)
 		for i := range exps {
 			exps[i] = uint32(i)
@@ -214,7 +225,7 @@ func (e *Engine) observeRepair(r *release, pf *postedFile, seg *segData) {
 	}
 	defer r.repairMu.Unlock()
 	s := r.repair
-	if s == nil || s.summaries == nil {
+	if s == nil || s.summaries == nil || s.summaryStopped {
 		return
 	}
 	bounds, ok := s.blocksByFile[pf]
@@ -257,24 +268,29 @@ func (e *Engine) observeRepair(r *release, pf *postedFile, seg *segData) {
 		}
 		p.spans = merged
 		if len(merged) == 1 && merged[0].begin == 0 && merged[0].end == b.Length {
-			s.summaries.Observe(index, p.data)
+			started := time.Now()
+			if s.summaries.Observe(index, p.data) {
+				s.summaryBytes += int64(len(p.data))
+				s.summaryTime += time.Since(started)
+			}
+			if e.repairOptions().AdaptiveSummaries && s.summaryBytes >= 16<<20 {
+				e.repairRate.mu.Lock()
+				rate := e.repairRate.rate
+				e.repairRate.mu.Unlock()
+				if rate > 0 && s.summaryTime.Seconds() > float64(s.summaryBytes)/rate*.05 {
+					s.summaryStopped = true
+					clear(s.pending)
+				}
+			}
 			delete(s.pending, index)
 		}
 	}
 }
 
-func (e *Engine) repairArticle(parent context.Context, r *release, pf *postedFile, slot int, prio core.Priority, fo fetchOpts) (*segData, bool) {
-	wait := e.repairOptions().AheadWait.D()
-	if wait <= 0 {
-		wait = 90 * time.Second
-	}
-	if prio == core.PriorityLive {
-		wait = e.repairOptions().LiveWait.D()
-		if wait <= 0 {
-			wait = 2 * time.Second
-		}
-	}
-	ctx, cancel := context.WithTimeout(parent, wait)
+func (e *Engine) repairArticle(parent context.Context, r *release, pf *postedFile, slot int, prio core.Priority, fo fetchOpts) (result *segData, repaired bool) {
+	ctx, planned, progress, finish := e.watchRepair(parent, pf, slot, prio, fo)
+	defer func() { finish(repaired) }()
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	stopEngineCancel := context.AfterFunc(e.ctx, cancel)
 	defer stopEngineCancel()
@@ -435,24 +451,48 @@ func (e *Engine) repairArticle(parent context.Context, r *release, pf *postedFil
 			if int64(got) != n {
 				return par2.ErrErasure
 			}
+			progress(n)
 			return nil
 		}
 		wanted := max(len(holes), min(4, int((64<<20)/s.layout.SliceSize)))
 		if s.layout.SliceSize <= pf.learnedPartSize() {
 			wanted = min(64, max(wanted, 4*int((pf.learnedPartSize()+s.layout.SliceSize-1)/s.layout.SliceSize)))
 		}
-		if s.summaries != nil {
+		if s.summaries != nil && !e.repairOptions().AdaptiveSummaries {
 			wanted = max(wanted, len(s.summaries.Exponents))
 		}
+		whole := e.repairOptions().WholeSlices || end-begin >= s.layout.SliceSize || pf.learnedPartSize() >= s.layout.SliceSize
+		planned(e.estimateRepair(r, s, holes, whole, wanted, fo))
 		parity := e.recoveryPackets(ctx, r, s, prio, fo, maxBytes, startBytes, wanted)
 		if len(parity) == 0 {
 			return nil, false
 		}
+		// Adaptive summaries start only after actual damage, using equations
+		// already fetched for this solve. Healthy playback pays no parity I/O.
+		if e.repairOptions().AdaptiveSummaries && s.summaries == nil && s.summaryRows > 0 {
+			var exps []uint32
+			for _, p := range parity[:min(s.summaryRows, len(parity))] {
+				exps = append(exps, p.Exponent)
+			}
+			s.summaries, _ = par2.NewSummaries(s.layout, s.field, exps, int64(s.summaryRows)*s.layout.SliceSize)
+		}
+		summaries := s.summaries
+		if e.repairOptions().AdaptiveSummaries && summaries != nil {
+			covered := 0
+			for _, seen := range summaries.Seen {
+				if seen {
+					covered++
+				}
+			}
+			if int64(covered)*s.layout.SliceSize < max(int64(8<<20), int64(4*len(summaries.Exponents))*s.layout.SliceSize) {
+				summaries = nil
+			}
+		}
 		selected := parity
-		if s.summaries != nil {
+		if summaries != nil {
 			var matching []par2.Recovery
 			for _, p := range parity {
-				for _, exp := range s.summaries.Exponents {
+				for _, exp := range summaries.Exponents {
 					if exp%65535 == p.Exponent%65535 {
 						matching = append(matching, p)
 						break
@@ -463,18 +503,19 @@ func (e *Engine) repairArticle(parent context.Context, r *release, pf *postedFil
 				selected = matching
 			}
 		}
-		whole := e.repairOptions().WholeSlices || end-begin >= s.layout.SliceSize || pf.learnedPartSize() >= s.layout.SliceSize
 		opts := par2.RepairOptions{WholeSlices: whole, ChunkBytes: 1 << 20, MaxTargets: min(64, int((64<<20)/s.layout.SliceSize))}
 		var stats par2.RepairStats
 		var err error
-		fixed, stats, err = s.layout.Recover(ctx, s.field, holes, read, selected, s.summaries, opts)
+		fixed, stats, err = s.layout.Recover(ctx, s.field, holes, read, selected, summaries, opts)
 		if errors.Is(err, par2.ErrErasure) && !opts.WholeSlices && ctx.Err() == nil {
 			opts.WholeSlices = true
+			planned(e.estimateRepair(r, s, holes, true, len(parity), fo))
 			var extra par2.RepairStats
 			fixed, extra, err = s.layout.Recover(ctx, s.field, holes, read, parity, nil, opts)
 			stats.InputBytes += extra.InputBytes
 		}
 		if errors.Is(err, par2.ErrInsufficient) && len(selected) < len(parity) && ctx.Err() == nil {
+			planned(e.estimateRepair(r, s, holes, opts.WholeSlices, len(parity), fo))
 			var extra par2.RepairStats
 			fixed, extra, err = s.layout.Recover(ctx, s.field, holes, read, parity, nil, opts)
 			stats.InputBytes += extra.InputBytes
@@ -489,6 +530,7 @@ func (e *Engine) repairArticle(parent context.Context, r *release, pf *postedFil
 					break
 				}
 				var extra par2.RepairStats
+				planned(e.estimateRepair(r, s, holes, opts.WholeSlices, len(parity), fo))
 				fixed, extra, err = s.layout.Recover(ctx, s.field, holes, read, parity, nil, opts)
 				stats.InputBytes += extra.InputBytes
 			} else {

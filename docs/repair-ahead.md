@@ -25,7 +25,11 @@ The source path has two optimizations:
   to a bounded set of recovery equations. Coverage is explicit. Later repairs
   subtract those summaries instead of rereading covered bytes after cache
   eviction. Missing observations reduce efficiency, not correctness; summaries
-  cannot be used with mismatched recovery equations.
+  cannot be used with mismatched recovery equations. Adaptive mode (the default)
+  starts at most two rows only after actual damage, using parity already fetched
+  for that repair. Healthy playback fetches no extra parity for summaries. It
+  requires meaningful verified coverage before using them and stops collecting
+  if observed processing cost exceeds its five-percent transfer-time allowance.
 
 Whole-slice solves also retain incidental reconstructed small slices, within a
 32 MiB allowance per initialized release. Reaching another hole can reuse the
@@ -57,12 +61,36 @@ can be evicted. Source close and engine close cancel work. Cursor eviction or
 moving past the relevant range cancels obsolete repair dependencies; moving the
 foreground reader into the damaged range preserves its useful background job.
 
+The first missing or corrupt source article reports damage before waiting for
+the shared repair slot. Playback immediately prepares one alternate NZB and
+warms both its opening and an approximate range near the viewer. Original
+playback continues. Repair plans count uncached wire articles and forecast
+remaining time from measured transfer throughput, conservatively shared across
+active sources. Stalled transfers worsen the forecast. A 250 ms monitor compares
+it with contiguous published HLS/DASH media and the mapped damaged offset;
+recent authenticated client telemetry improves the playback position estimate.
+Discontinuous segment requests invalidate older telemetry. Seeking past damage
+does not force an unnecessary source switch.
+
+Playback can expand read-ahead within the configured source/cache limits and
+adjust the useful repair deadline, bounded by the owner's maximum wait. It
+starts a speculative failover when repair cannot beat the buffer with a safety
+margin, or recovery fails. A completed repair cancels the pending switch before
+publication. Failure to prepare an alternate leaves the original source intact.
+For compatible equal timelines, proactive HLS/DASH replacement starts after the
+contiguous published buffer, retaining that media and the viewer position.
+Different timelines retain existing alignment and compatibility checks. Direct
+play retains its representation-safe failure path; there is no proactive
+byte-splicing promise for unrelated releases.
+
 Missing metadata, inadequate parity, transport errors, exhausted limits and
 missed deadlines preserve the ordinary source error/failover behavior. Health
-sampling still rejects confirmed bad candidates. Recovery cannot make a release
+sampling admits a sampled hole only after actually reconstructing and verifying
+its bytes, within a 15-second overall health-check deadline. Recovery cannot make a release
 with insufficient surviving data playable, and a repair needing most of a large
 post can exceed the playback buffer. This is opportunistic repair, not a general
-stall-free streaming guarantee.
+stall-free streaming guarantee. Published server media is not proof of a
+client's received buffer; a slow or disconnected player still can stall.
 
 ## Reproducing live experiments
 

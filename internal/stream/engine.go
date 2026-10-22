@@ -154,6 +154,8 @@ type hasCache interface {
 
 // Engine implements core.Engine and core.HealthChecker.
 type Engine struct {
+	repairRate         repairRate
+	repairNotice       atomic.Uint64
 	repairConfig       atomic.Pointer[config.Repair]
 	repairLast         atomic.Pointer[string]
 	repairGate         chan struct{}

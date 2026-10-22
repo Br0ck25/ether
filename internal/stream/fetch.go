@@ -33,13 +33,14 @@ type flight struct {
 
 // fetchOpts says where a fetched segment may be stored.
 type fetchOpts struct {
-	burstUntil   time.Time
-	parallel     int         // independent bulk-reader window concurrency
-	repairValid  func() bool // readahead cursor still needs this work
-	deferObserve bool        // readFile observes assembled segments in file order
-	noRepair     bool        // dependency reads must never recursively enter repair
-	cacheID      string      // release ID for the disk cache; "" = don't use it
-	noHot        bool        // don't fill the hot buffer (background prefetch)
+	repairProgress func(*postedFile, int, core.RepairEvent) core.RepairWindow
+	burstUntil     time.Time
+	parallel       int         // independent bulk-reader window concurrency
+	repairValid    func() bool // readahead cursor still needs this work
+	deferObserve   bool        // readFile observes assembled segments in file order
+	noRepair       bool        // dependency reads must never recursively enter repair
+	cacheID        string      // release ID for the disk cache; "" = don't use it
+	noHot          bool        // don't fill the hot buffer (background prefetch)
 }
 
 // segment returns slot i of pf: from the hot buffer, the disk cache, or
@@ -325,6 +326,7 @@ func (e *Engine) load(ctx context.Context, pf *postedFile, i int, id string, glo
 			data, part, err = e.fetcher.BodyPart(ctx, id, pf.groups, prio)
 		}
 		if err == nil {
+			e.repairRate.add(int64(len(data)))
 			e.fetches.Add(1)
 			e.fetchedBytes.Add(int64(len(data)))
 			seg, err := e.normalize(pf, i, data, part)

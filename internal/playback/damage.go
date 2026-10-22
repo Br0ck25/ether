@@ -27,6 +27,9 @@ func (m *Manager) installDamageHandler(g *generation) {
 		return
 	}
 	g.damage.once.Do(func() {
+		if src, ok := g.src.(core.RepairReporter); ok {
+			src.SetRepairHandler(func(event core.RepairEvent) core.RepairWindow { return m.noteRepair(g, event) })
+		}
 		if src, ok := g.src.(core.DamageReporter); ok {
 			src.SetDamageHandler(func(offset, length int64) bool { return m.noteDamage(g, offset, length) })
 		}
@@ -108,6 +111,13 @@ func (m *Manager) prepareDamageAlternate(g *generation) {
 		d.prepared = res
 		d.mu.Unlock()
 		_ = m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, 0, 256<<10)
+		// Warm near the viewer too: an opening alone is useless for a hole
+		// halfway through a movie. This is only a hint; failover aligns exactly.
+		position, _, _ := m.repairHorizon(g, core.RepairEvent{Offset: -1})
+		if duration := g.infoSnapshot().Duration; duration > 0 && position > 0 && res.Release.Size > 0 {
+			off := int64(float64(res.Release.Size) * float64(max(0, position-6*time.Second)) / float64(duration))
+			_ = m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, off, 4<<20)
+		}
 	}()
 }
 

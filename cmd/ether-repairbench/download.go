@@ -93,7 +93,7 @@ func downloadSample(ctx context.Context, dir string, fetch core.ArticleFetcher, 
 		return err
 	}
 	defer cache.Close()
-	eng := stream.New(ff, cache, stream.Options{HotBufferBytes: 32 << 20, ReadParallel: 16, Repair: config.Repair{Enabled: true, SummaryRows: 2, AheadWait: config.Duration(3 * time.Minute), MaxDownloadBytes: min(budget, 4<<30)}}, log)
+	eng := stream.New(ff, cache, stream.Options{HotBufferBytes: 32 << 20, ReadParallel: 16, Repair: config.Repair{Enabled: true, AdaptiveSummaries: true, SummaryRows: 2, AheadWait: config.Duration(3 * time.Minute), MaxDownloadBytes: min(budget, 4<<30)}}, log)
 	defer eng.Close()
 	start := time.Now()
 	_ = eng.InitRepair(ctx, "full-download", body)

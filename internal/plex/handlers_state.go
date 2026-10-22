@@ -137,6 +137,9 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 			s.cl.poke() // share starts and state changes now; positions ride the heartbeat
 		}
 	}
+	if progress, ok := s.d.Playback.(core.PlaybackTimeline); ok {
+		progress.PlaybackProgress(user.ID, pr.ClientID, key, offset, state)
+	}
 	if hook := s.d.Hooks.OnTimeline; hook != nil {
 		u := *user
 		s.goHook("OnTimeline", func() { hook(&u, key, offset, duration, state) })

@@ -77,9 +77,10 @@ type sessionEncoding struct {
 
 // sessionDelivery owns one aspect of the session. Fields are guarded by Session.mu.
 type sessionDelivery struct {
-	done        []map[int]bool // finished segments per track
-	lastReq     int
-	mkvDelivery map[int]mkvDelivery // last response per track, including retries of a seek
+	done           []map[int]bool // finished segments per track
+	lastReq        int
+	recoverySeekAt time.Time
+	mkvDelivery    map[int]mkvDelivery // last response per track, including retries of a seek
 	// Published Matroska data segment path -> the video stream that
 	// produced it: a copy of an input, or an encode run (chunks.go).
 	mkvSources map[string]string

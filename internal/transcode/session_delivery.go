@@ -46,6 +46,9 @@ func (s *Session) serveSegment(w http.ResponseWriter, r *http.Request, t, n int)
 		}
 		stale := seq < s.movedBy
 		if !stale && r.Method == http.MethodGet {
+			if n > s.lastReq+3 || n < s.lastReq-3 {
+				s.recoverySeekAt = time.Now()
+			}
 			s.lastReq = n
 		}
 		s.throttleLocked()

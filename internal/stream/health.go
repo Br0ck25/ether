@@ -38,6 +38,11 @@ func (e *Engine) Check(ctx context.Context, nzbData []byte) (healthy bool, err e
 // the Open that follows a passed check finds them there as well as in the
 // hot buffer. Implements core.ReleaseHealthChecker.
 func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []byte) (healthy bool, err error) {
+	if e.repairOptions().Enabled {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+	}
 	fo := fetchOpts{cacheID: releaseID}
 	defer func() {
 		if err != nil && IsRejection(err) {
@@ -83,7 +88,7 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 		sampleOnce.Do(func() {
 			go func() {
 				started := time.Now()
-				out := e.statSample(sctx, files)
+				out := e.statSample(sctx, files, func(ref slotRef) bool { return e.repairHealthSample(sctx, rel, ref, fo) })
 				statCh <- statResult{files: files, out: out, duration: time.Since(started)}
 			}()
 		})
@@ -184,7 +189,7 @@ func (e *Engine) CheckRelease(ctx context.Context, releaseID string, nzbData []b
 	p := ready.p
 	if !sameFiles(res.files, p.vols) {
 		started := time.Now()
-		out := e.statSample(ctx, p.vols)
+		out := e.statSample(ctx, p.vols, func(ref slotRef) bool { return e.repairHealthSample(ctx, rel, ref, fo) })
 		res = statResult{files: p.vols, out: out, duration: time.Since(started)}
 	}
 	record(res)
@@ -347,7 +352,7 @@ func bodyProbeSlots(n int) map[int]bool {
 // the first article confirmed missing on every provider tier ends the
 // check immediately — outstanding STAT and BODY work is cancelled rather
 // than awaited.
-func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sampleOutcome) {
+func (e *Engine) statSample(parent context.Context, files []*postedFile, repairs ...func(slotRef) bool) (out sampleOutcome) {
 	refs := healthSample(files, e.opts.HealthSamples)
 	// BODY probes stay on the spread sample; the head is STAT-only.
 	probes := bodyProbeSlots(len(refs))
@@ -362,6 +367,7 @@ func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sa
 	defer cancel()
 
 	type event struct {
+		ref      slotRef
 		body     bool
 		statDone bool // the STAT stream ended; err explains undecided ids
 		missing  bool
@@ -377,7 +383,7 @@ func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sa
 		body := probes[i]
 		switch {
 		case id == "":
-			events <- event{body: body, missing: true}
+			events <- event{body: body, missing: true, ref: ref}
 		case body:
 			out.bodyProbes++
 			wg.Add(1)
@@ -451,6 +457,24 @@ func (e *Engine) statSample(parent context.Context, files []*postedFile) (out sa
 				}
 			} else {
 				statReceived++
+			}
+			if (ev.missing || repairErasure(ev.err)) && len(repairs) > 0 && e.repairOptions().Enabled {
+				ref := ev.ref
+				if ref.pf == nil {
+					for _, r := range refs {
+						if r.pf.msgID(r.slot) == ev.id {
+							ref = r
+							break
+						}
+					}
+				}
+				if ref.pf != nil && repairs[0](ref) {
+					continue
+				}
+				if parent.Err() != nil {
+					out.err = parent.Err()
+					return out
+				}
 			}
 			if ev.missing {
 				out.err = nil // a confirmed miss takes precedence over another sample's timeout
