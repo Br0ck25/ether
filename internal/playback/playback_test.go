@@ -983,3 +983,21 @@ func TestReadFailuresRecoverWithoutPoisoningReleases(t *testing.T) {
 		})
 	}
 }
+
+func TestPausedPlaybackSurvivesPhoneCall(t *testing.T) {
+	h := newHarness(t, []*fakeRelease{mkv("A", 10000, time.Hour)}, []string{"A"},
+		func(h *harness, o *Options) { o.IdleTimeout = 2 * time.Minute })
+	ps := h.prepare(owner, movieKey, "c1")
+	h.m.PlaybackProgress(owner.ID, "c1", movieKey, time.Minute, "paused")
+	h.clock.Advance(5 * time.Minute)
+	h.m.expire()
+	if _, ok := h.m.Session(ps.ID); !ok {
+		t.Fatal("paused source expired")
+	}
+	h.m.PlaybackProgress(owner.ID, "c1", movieKey, time.Minute, "playing")
+	h.clock.Advance(3 * time.Minute)
+	h.m.expire()
+	if _, ok := h.m.Session(ps.ID); ok {
+		t.Fatal("resumed abandoned source retained")
+	}
+}

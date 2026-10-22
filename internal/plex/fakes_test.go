@@ -459,12 +459,15 @@ func (p *fakePlayback) Touch(id string) {
 // Transcoder
 
 type fakeHLS struct {
-	id           string
-	req          core.HLSRequest
-	rungs        []core.HLSRung
-	rungReqs     []string
-	rungPlaylist string
+	playbackState string
+	id            string
+	req           core.HLSRequest
+	rungs         []core.HLSRung
+	rungReqs      []string
+	rungPlaylist  string
 }
+
+func (h *fakeHLS) PlaybackState(state string) { h.playbackState = state }
 
 func (h *fakeHLS) ID() string { return h.id }
 func (h *fakeHLS) ServePlaylist(w http.ResponseWriter, r *http.Request) {

@@ -418,7 +418,7 @@ func (s *Server) decisionContainer(ctx context.Context, pr *Request, t *core.Tit
 	}
 	md.Media = []model.Media{s.decisionMedia(t, ps, shown, p, pr.User)}
 	s.addProbedStreamFeatures(ctx, t.Key, ps.Info, &md)
-	if md.Duration == 0 {
+	if md.Media[0].Duration > 0 {
 		md.Duration = md.Media[0].Duration
 	}
 	mc.Metadata = []model.Metadata{md}

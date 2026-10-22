@@ -978,18 +978,22 @@ func (m *Manager) expire() {
 	m.mu.Unlock()
 	for _, s := range list {
 		s.mu.Lock()
-		last, stopAt := s.lastActive, s.stopAt
+		last, stopAt, viewerState := s.lastActive, s.stopAt, s.viewerState
 		s.mu.Unlock()
 		if hls, ok := m.deps.HLSLookup(s.id); ok && hls != nil {
 			if la := hls.LastAccess(); la.After(last) {
 				last = la
 			}
 		}
+		idleTimeout := m.opts.IdleTimeout
+		if viewerState == "paused" {
+			idleTimeout = max(idleTimeout, core.PausedSessionRetention)
+		}
 		switch {
 		case !stopAt.IsZero() && !now.Before(stopAt) && !last.After(stopAt.Add(-m.opts.StoppedGrace)):
 			m.log.Debug("session stopped by client", "session", s.id)
 			m.Stop(s.id)
-		case now.Sub(last) > m.opts.IdleTimeout:
+		case now.Sub(last) > idleTimeout:
 			m.log.Debug("session idle", "session", s.id, "idle", now.Sub(last))
 			m.Stop(s.id)
 		}

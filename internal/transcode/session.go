@@ -37,6 +37,7 @@ type Session struct {
 	log        *slog.Logger
 	created    time.Time
 	lastAccess atomic.Int64 // unix nanos
+	pauseUntil atomic.Int64 // bounded authenticated player pause
 	mu         sync.Mutex
 	closed     bool
 	// Coordinated state transitions use mu; blocking process reaping releases it.
@@ -176,6 +177,25 @@ func (s *Session) LastAccess() time.Time { return time.Unix(0, s.lastAccess.Load
 // Touch marks the session as in use (e.g. on a Plex timeline ping while the
 // client is paused) so the idle reaper keeps it.
 func (s *Session) Touch() { s.lastAccess.Store(time.Now().UnixNano()) }
+
+var _ core.SessionActivity = (*Session)(nil)
+
+func (s *Session) PlaybackState(state string) {
+	switch state {
+	case "paused":
+		if s.pauseUntil.Swap(time.Now().Add(core.PausedSessionRetention).UnixNano()) == 0 {
+			s.log.Info("player paused; retaining output", "retention", core.PausedSessionRetention)
+		}
+		s.Touch()
+	case "playing":
+		s.Touch()
+		if s.pauseUntil.Swap(0) != 0 {
+			s.log.Info("player resumed")
+		}
+	case "stopped":
+		s.pauseUntil.Store(0)
+	}
+}
 
 // Decision is the session's current decision (it can change on SwapInput).
 func (s *Session) Decision() core.Decision {

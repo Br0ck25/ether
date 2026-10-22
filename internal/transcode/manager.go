@@ -673,7 +673,7 @@ func (m *Manager) reapIdle(now time.Time) {
 		return
 	}
 	for _, s := range m.Sessions() {
-		if idle := now.Sub(s.LastAccess()); idle > m.opts.idleTimeout {
+		if idle := now.Sub(s.LastAccess()); idle > m.opts.idleTimeout && now.UnixNano() >= s.pauseUntil.Load() {
 			s.log.Info("closing idle session", "idle", idle.Round(time.Second))
 			_ = s.Close()
 		}

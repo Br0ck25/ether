@@ -97,6 +97,9 @@ func (s *Server) addProbedStreamFeatures(ctx context.Context, key core.RatingKey
 	if info.Estimated {
 		return
 	}
+	if info.Duration > 0 {
+		m.Duration = info.Duration.Milliseconds()
+	}
 	for i, c := range info.Chapters {
 		if c.Start < 0 || c.End <= c.Start || c.End > info.Duration {
 			continue

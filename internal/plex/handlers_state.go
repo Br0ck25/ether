@@ -75,6 +75,13 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	tids := s.transcodes.forClient(user.ID, pr.ClientID, key)
 	for _, id := range tids {
 		s.transcodes.touch(id, s.now())
+		if s.d.Transcoder != nil {
+			if output, ok := s.d.Transcoder.Session(id); ok {
+				if activity, ok := output.(core.SessionActivity); ok {
+					activity.PlaybackState(state)
+				}
+			}
+		}
 	}
 	pqItem, _ := strconv.ParseInt(q.Get("playQueueItemID"), 10, 64)
 	if pqItem > 0 {

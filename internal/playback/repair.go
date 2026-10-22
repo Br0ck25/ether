@@ -36,6 +36,9 @@ func (m *Manager) PlaybackProgress(userID int64, clientID string, key core.Ratin
 		s.viewerPosition = max(0, position)
 		s.viewerAt = time.Now()
 		s.viewerState = state
+		if state == "playing" || state == "paused" {
+			s.lastActive = m.now()
+		}
 		s.mu.Unlock()
 		m.maintainReserve(s, position, state)
 	}

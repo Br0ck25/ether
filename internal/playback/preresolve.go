@@ -227,7 +227,23 @@ func (m *Manager) Prewarm(_ context.Context, user *core.User, key core.RatingKey
 		m.mu.Unlock()
 		e.ready.Do(func() { close(e.done) })
 		m.log.Debug("prewarm ready", "key", key, "reason", reason, "release", res.Release.Name, "prefetch", prefetchBytes)
-		_ = m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, 0, prefetchBytes)
+		if err := m.deps.Engine.Prefetch(ctx, res.Release.ID, res.NZB, 0, prefetchBytes); err != nil {
+			if permanentSourceFailure(err) {
+				// Probe success is not proof that the opening window is intact.
+				// Invalidate the published warm result before a later Play uses it.
+				m.mu.Lock()
+				if m.warm[id] == e {
+					delete(m.warm, id)
+				}
+				m.mu.Unlock()
+				m.markBad(res.Release.ID, "opening prefetch: "+err.Error())
+				m.log.Warn("prepared opening rejected", "key", key, "release", res.Release.ID, "err", err)
+			} else if ctx.Err() == nil {
+				m.log.Debug("opening prefetch incomplete", "key", key, "err", err)
+			}
+			return
+		}
+		m.log.Info("opening prefetch completed", "key", key, "release", res.Release.ID, "bytes", prefetchBytes)
 		// Seek indexes are optional for starting playback. Keep filling one
 		// under the warm-up budget, but never hold the ready signal for it.
 		select {

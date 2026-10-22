@@ -2,6 +2,7 @@ package plex
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -109,5 +110,47 @@ func TestMultipleCreditsMarkersRendering(t *testing.T) {
 	}
 	if last.Type != "credits" || last.StartTimeOffset != 5_800_000 || last.EndTimeOffset != 6_000_000 || !*last.Final {
 		t.Fatalf("last credits must be final: %+v", last)
+	}
+}
+
+func TestDecisionDurationIncludesLateCredits(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.playback.info.Duration = 1497504 * time.Millisecond
+	f.playback.info.Chapters = []core.Chapter{{ID: 1, Title: "Credits", Start: 1460550 * time.Millisecond, End: f.playback.info.Duration}}
+	rec := f.get(t, "/video/:/transcode/universal/decision?path=/library/metadata/"+bbE1.Key.String()+"&session=late-credits")
+	var mc struct {
+		Video []struct {
+			Duration int64 `xml:"duration,attr"`
+		} `xml:"Video"`
+	}
+	if err := xml.Unmarshal(rec.Body.Bytes(), &mc); err != nil {
+		t.Fatal(err)
+	}
+	if len(mc.Video) != 1 || mc.Video[0].Duration != 1497504 {
+		t.Fatalf("actual runtime lost: %s", rec.Body.String())
+	}
+}
+
+func TestOwnedPauseTimelineReachesEncoder(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	rec := f.get(t, "/video/:/transcode/universal/start.m3u8?path=/library/metadata/"+fightClub.Key.String()+"&session=pause-output&directPlay=0")
+	if rec.Code != 200 {
+		t.Fatalf("start: %s", rec.Body.String())
+	}
+	h := f.trans.sessions["pause-output"]
+	url := "/:/timeline?ratingKey=" + fightClub.Key.String() + "&state=paused&time=60000"
+	f.get(t, url, "X-Plex-Client-Identifier", "other-client")
+	if h.playbackState != "" {
+		t.Fatal("another client extended output lifetime")
+	}
+	f.get(t, url)
+	if h.playbackState != "paused" {
+		t.Fatal("owned pause did not reach encoder")
+	}
+	f.get(t, "/:/timeline?ratingKey="+fightClub.Key.String()+"&state=playing&time=61000")
+	if h.playbackState != "playing" {
+		t.Fatal("resume did not reach encoder")
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/core"
 )
 
 func TestPreResolveReusedWithoutLiveSessionOrHistory(t *testing.T) {
@@ -78,6 +80,56 @@ func TestCachePolicyCanDisableSpeculation(t *testing.T) {
 			defer h.resolver.mu.Unlock()
 			if h.resolver.calls != 0 {
 				t.Fatal("disabled warming reached resolver")
+			}
+		})
+	}
+}
+
+type openingPrefetchFailure struct {
+	core.Engine
+	err      error
+	finished chan context.Context
+}
+
+func (e *openingPrefetchFailure) Prefetch(ctx context.Context, _ string, _ []byte, _, _ int64) error {
+	e.finished <- ctx
+	return e.err
+}
+
+func TestPrewarmRejectsMissingOpeningButNotTransientFailure(t *testing.T) {
+	for _, permanent := range []bool{true, false} {
+		name := "transient"
+		failure := context.DeadlineExceeded
+		if permanent {
+			name = "missing"
+			failure = core.ErrArticleMissing
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, []*fakeRelease{mkv("r1", 2<<30, 90*time.Minute)}, []string{"r1"})
+			engine := &openingPrefetchFailure{Engine: h.engine, err: failure, finished: make(chan context.Context, 1)}
+			h.m.deps.Engine = engine
+			if !h.m.PreResolve(context.Background(), owner, movieKey, defaultCaps("client")) {
+				t.Fatal("warm skipped")
+			}
+			select {
+			case ctx := <-engine.finished:
+				select {
+				case <-ctx.Done():
+				case <-time.After(2 * time.Second):
+					t.Fatal("warm did not finish")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("prefetch not reached")
+			}
+			// Warm cancellation happens after rejection processing.
+			h.resolver.mu.Lock()
+			_, bad := h.resolver.bad["r1"]
+			h.resolver.mu.Unlock()
+			h.m.mu.Lock()
+			_, warm := h.m.warm[identity{owner.ID, "client", movieKey}]
+			h.m.mu.Unlock()
+			if bad != permanent || warm == permanent {
+				t.Fatalf("bad=%v warm=%v permanent=%v", bad, warm, permanent)
 			}
 		})
 	}

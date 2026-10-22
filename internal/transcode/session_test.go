@@ -754,3 +754,28 @@ func TestMaxTranscodesCountsEncodingCopySessions(t *testing.T) {
 		t.Fatalf("a copy session encoding a lower rung did not count: err = %v", err)
 	}
 }
+
+func TestPausedSessionSurvivesPhoneCallAndStillExpires(t *testing.T) {
+	for _, resume := range []bool{false, true} {
+		t.Run(fmt.Sprint(resume), func(t *testing.T) {
+			fr := newFakeRunner()
+			m := newTestManager(t, fr, config.Transcode{})
+			s := startSession(t, m, remuxRequest(t, "phone-call", time.Hour))
+			s.PlaybackState("paused")
+			m.reapIdle(time.Now().Add(5 * time.Minute))
+			if _, ok := m.Session(s.ID()); !ok {
+				t.Fatal("paused session reaped during phone call")
+			}
+			if resume {
+				s.PlaybackState("playing")
+				s.lastAccess.Store(time.Now().Add(-3 * time.Minute).UnixNano())
+				m.reapIdle(time.Now())
+			} else {
+				m.reapIdle(time.Now().Add(core.PausedSessionRetention + time.Minute))
+			}
+			if _, ok := m.Session(s.ID()); ok {
+				t.Fatal("abandoned session retained indefinitely")
+			}
+		})
+	}
+}
