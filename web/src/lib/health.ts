@@ -148,8 +148,8 @@ export function cacheHealth(v: unknown): HealthItem {
 export function catalogHealth(v: unknown, now = new Date()): HealthItem {
   const base = {
     id: "catalog" as const,
-    label: "Catalogue",
-    href: "/metadata/catalogue",
+    label: "Catalog",
+    href: "/catalog",
   };
   const err = errorOf(v);
   if (err) return { ...base, level: "error", summary: err, details: [] };

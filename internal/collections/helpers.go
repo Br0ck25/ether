@@ -15,6 +15,11 @@ import (
 
 // Catalogue helpers for the Collection Studio's pickers.
 
+// BrowseTitles lists the released local catalogue with filters and pagination.
+func (s *Service) BrowseTitles(ctx context.Context, q core.BrowseQuery) (core.Page, error) {
+	return s.cat.Browse(ctx, q)
+}
+
 // SearchTitles searches the catalogue (reaching all of TMDB).
 func (s *Service) SearchTitles(ctx context.Context, q string, t core.MediaType, limit int) ([]core.Title, error) {
 	if limit <= 0 || limit > 100 {

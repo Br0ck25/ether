@@ -25,6 +25,64 @@ type CatalogHelper interface {
 	TitleDetail(ctx context.Context, key core.RatingKey) (*core.Title, error)
 }
 
+// CatalogBrowser exposes paginated local browsing without a remote TMDB search.
+type CatalogBrowser interface {
+	BrowseTitles(context.Context, core.BrowseQuery) (core.Page, error)
+}
+
+func (h *Handler) handleCatalogBrowse(w http.ResponseWriter, r *http.Request) {
+	browser, ok := h.deps.CatalogHelper.(CatalogBrowser)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "Catalog browsing is unavailable")
+		return
+	}
+	p := r.URL.Query()
+	q := core.BrowseQuery{Limit: 48, Sort: core.SortPopularity, Desc: true}
+	q.Filter.Type = mediaTypeParam(p.Get("type"))
+	q.Filter.Query = strings.TrimSpace(p.Get("q"))
+	if genre := p.Get("genre"); genre != "" {
+		q.Filter.Genres = []string{genre}
+	}
+	if decade := p.Get("decade"); decade != "" {
+		year, err := strconv.Atoi(decade)
+		if err != nil || year < 1800 || year > 2200 || year%10 != 0 {
+			writeValidationError(w, []FieldError{{Field: "decade", Message: "Choose a valid decade"}})
+			return
+		}
+		q.Filter.YearFrom, q.Filter.YearTo = year, year+9
+	}
+	if sort := p.Get("sort"); sort != "" {
+		switch core.SortOrder(sort) {
+		case core.SortPopularity, core.SortRating, core.SortReleased, core.SortAdded, core.SortTitle:
+			q.Sort = core.SortOrder(sort)
+			q.Desc = q.Sort != core.SortTitle
+		default:
+			writeValidationError(w, []FieldError{{Field: "sort", Message: "Unknown catalog sort"}})
+			return
+		}
+	}
+	for _, field := range []string{"offset", "limit"} {
+		if raw := p.Get(field); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 0 || (field == "limit" && (n == 0 || n > 100)) {
+				writeValidationError(w, []FieldError{{Field: field, Message: "Invalid page bounds"}})
+				return
+			}
+			if field == "offset" {
+				q.Offset = n
+			} else {
+				q.Limit = n
+			}
+		}
+	}
+	page, err := browser.BrowseTitles(r.Context(), q)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": cardsFor(page.Items), "total": page.Total})
+}
+
 // ImageProxy serves TMDB artwork by path at the TMDB size covering w.
 // Implemented by internal/artwork. It must reject anything that is not a
 // TMDB image path.

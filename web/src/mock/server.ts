@@ -2063,6 +2063,36 @@ export function createFakeServer(opts: FakeOptions = {}) {
             : "I couldn't find specific conditions, so this starts from the whole catalogue sorted by popularity.",
         });
       }
+      case "GET /catalog/browse": {
+        const needle = (q.get("q") ?? "").toLowerCase();
+        const type = q.get("type");
+        const genre = q.get("genre");
+        const decade = q.get("decade");
+        const sort = q.get("sort");
+        const items = catalog.filter(
+          (t) =>
+            t.title.toLowerCase().includes(needle) &&
+            (!type || t.type === type) &&
+            (!genre || t.genres?.includes(genre)) &&
+            (!decade || decadeOf(t.year) === decade),
+        );
+        items.sort((a, b) =>
+          sort === "title"
+            ? a.title.localeCompare(b.title)
+            : sort === "rating"
+              ? (b.rating ?? 0) - (a.rating ?? 0)
+              : sort === "released"
+                ? b.released.localeCompare(a.released)
+                : sort === "added"
+                  ? b.addedAt.localeCompare(a.addedAt)
+                  : b.popularity - a.popularity,
+        );
+        const offset = Number(q.get("offset") ?? 0);
+        return json({
+          items: items.slice(offset, offset + Number(q.get("limit") ?? 48)).map(card),
+          total: items.length,
+        });
+      }
       case "GET /catalog/search": {
         const needle = (q.get("q") ?? "").toLowerCase();
         const type = q.get("type");

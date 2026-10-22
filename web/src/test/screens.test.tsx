@@ -15,7 +15,7 @@ describe("Overview", () => {
       "Usenet",
       "Indexers",
       "Cache",
-      "Catalogue",
+      "Catalog",
       "Remote access",
       "plex.direct",
     ]) {
@@ -49,7 +49,9 @@ describe("Overview", () => {
     expect(within(net).getAllByText(/Mbit\/s/).length).toBeGreaterThanOrEqual(2);
     const gpu = within(server).getByRole("group", { name: "GPU · RTX 4080" });
     expect(within(gpu).getByText("Encode")).toBeInTheDocument();
-    expect(within(gpu).getByText("18%")).toBeInTheDocument();
+    expect(
+      within(within(gpu).getByText("Encode").parentElement!).getByText("18%"),
+    ).toBeInTheDocument();
     expect(within(server).getByText(/\d+% CPU · 412\.0 MiB/)).toBeInTheDocument();
     expect(within(server).getByText("videotoolbox")).toBeInTheDocument();
     expect(calls(fake, "GET", "/system/load").length).toBeGreaterThan(0);

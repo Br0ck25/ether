@@ -54,6 +54,7 @@ func (h *Handler) collectionRoutes(mux *http.ServeMux, api func(string, http.Han
 	api("POST /api/collections/{id}/rebuild", h.handleRebuildCollection)
 	mux.HandleFunc("GET /api/collections/{id}/artwork", h.handleCollectionArtwork)
 
+	api("GET /api/catalog/browse", h.handleCatalogBrowse)
 	api("GET /api/catalog/search", h.handleCatalogSearch)
 	api("GET /api/catalog/facets", h.handleCatalogFacets)
 	api("GET /api/catalog/lookup", h.handleCatalogLookup)

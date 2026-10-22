@@ -196,18 +196,18 @@ func TestPostPlayEpisodeVsFinale(t *testing.T) {
 	f.wait(t)
 	f.p.OnTimeline(user, ep1, dur-2*time.Minute, dur, "playing")
 	f.wait(t)
-	if n := len(f.warmer.got()); n != 0 {
-		t.Fatalf("mid-season episode prewarmed the hook queue (%d)", n)
+	if calls := f.warmer.got(); len(calls) != 1 || calls[0].key != ep2 {
+		t.Fatalf("mid-season prewarm = %+v, want only the next episode", calls)
 	}
 	// Season finale (next opens season 2).
 	f.p.OnTimeline(user, epFinale, dur-11*time.Minute, dur, "playing")
 	f.wait(t)
 	f.p.OnTimeline(user, epFinale, dur-2*time.Minute, dur, "playing")
 	f.wait(t)
-	if n := len(f.warmer.got()); n != 1 {
-		t.Fatalf("finale prewarm calls = %d, want 1", n)
+	if calls := f.warmer.got(); len(calls) != 2 || calls[1].key != pickKey {
+		t.Fatalf("finale prewarm = %+v, want the hook pick after the next episode", calls)
 	}
-	// Next-episode prefetch resolved ep2 for ep1, but must not resolve
+	// Next-episode prefetch prepared ep2 for ep1, but must not resolve
 	// the season opener for the finale (no double prefetch).
 	resolved := map[core.RatingKey]bool{}
 	f.resolver.mu.Lock()

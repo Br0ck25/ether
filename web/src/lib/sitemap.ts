@@ -74,13 +74,20 @@ export const PAGES: PageDef[] = [
     ],
   },
   {
+    href: "/catalog",
+    title: "Catalog",
+    sections: [
+      { key: "settings", title: "Catalog settings", keywords: "tmdb language region popularity" },
+    ],
+    keywords: "catalogue movies shows browse search library",
+  },
+  {
     href: "/metadata",
     title: "Metadata",
     sections: [
       { key: "ratings", title: "Ratings", keywords: "omdb mdblist imdb rotten badges" },
       { key: "artwork", title: "Artwork", keywords: "posters overlays backdrop" },
       { key: "episodes", title: "Episode order", keywords: "dvd absolute aired ordering" },
-      { key: "catalogue", title: "Catalogue", keywords: "tmdb language region popularity" },
     ],
   },
   {

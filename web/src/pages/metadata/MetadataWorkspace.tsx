@@ -1,7 +1,7 @@
 import { Button } from "@braedonsaunders/appkit-ui";
 import type { ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { Database, Images, ListVideo, Star } from "lucide-react";
+import { Images, ListVideo, Star } from "lucide-react";
 import { Workspace } from "../../components/workspace";
 import "./metadata.css";
 
@@ -9,7 +9,6 @@ const sections = [
   { key: "artwork", label: "Artwork", icon: Images },
   { key: "ratings", label: "Ratings", icon: Star },
   { key: "episodes", label: "Episode order", icon: ListVideo },
-  { key: "catalogue", label: "Catalogue", icon: Database },
 ];
 
 export function MetadataWorkspace({
@@ -27,7 +26,7 @@ export function MetadataWorkspace({
   return (
     <Workspace
       title="Metadata"
-      subtitle="Artwork, rating sources, episode presentation and catalogue settings."
+      subtitle="Artwork, rating sources and episode presentation."
       actions={
         <>
           {actions}

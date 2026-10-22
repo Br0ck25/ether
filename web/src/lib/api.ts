@@ -311,6 +311,18 @@ export const api = {
     `${API_BASE}/collections/${encodeURIComponent(id)}/artwork${qs({ w, v: version })}`,
 
   // ---- Catalogue helpers ---------------------------------------------------------
+  browseCatalog: (
+    params: {
+      q?: string;
+      type?: string;
+      genre?: string;
+      decade?: string;
+      sort?: string;
+      offset?: number;
+      limit?: number;
+    },
+    signal?: AbortSignal,
+  ) => apiFetch<{ items: TitleCard[]; total: number }>(`/catalog/browse${qs(params)}`, { signal }),
   searchCatalog: async (q: string, type?: string, limit = 24, signal?: AbortSignal) =>
     (
       await apiFetch<{ items: TitleCard[] | null }>(`/catalog/search${qs({ q, type, limit })}`, {

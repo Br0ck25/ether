@@ -328,6 +328,20 @@ only updates the draft until you review and save.
   Ether's SQLite database and transcode temp directory on local storage, never
   on the NAS share.
 
+## Catalog
+
+Open **In Plex → Catalog** to browse the released movies and shows in your
+library. Switch between posters and a list, search by title, filter by genre
+or decade, and sort by popularity, release date, rating, date added, or title.
+Results are paginated across the full local catalog. Select a title to inspect
+its artwork, overview, ratings, cast, directors, and catalog identity.
+
+**Find on TMDB** retains the broader title lookup for released titles outside
+the browsable library. **Catalog settings** contains the TMDB key and connection
+test, language, region, refresh interval, popularity and vote thresholds, adult
+content option, and catalog health. Settings apply without a restart. Existing
+links to **Metadata → Catalogue** redirect to Catalog.
+
 ## Metadata artwork
 
 **Metadata → Artwork** previews real catalogue posters with your unsaved design.

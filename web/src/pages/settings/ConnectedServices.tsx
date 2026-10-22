@@ -307,8 +307,8 @@ function ServiceOverview({ cfg }: { cfg: EtherConfig }) {
       icon: <Clapperboard size={icon} />,
       description: "Titles, artwork and details for the whole catalogue.",
       status: catalog ? <LevelBadge level={catalog.level} label={catalog.summary} /> : null,
-      href: "/metadata/catalogue",
-      action: "Metadata › Catalogue",
+      href: "/catalog/settings",
+      action: "Catalog settings",
     },
     {
       name: "Debrid",

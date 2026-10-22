@@ -43,7 +43,7 @@ describe("Settings", () => {
     ).toBeTruthy();
     for (const [name, href] of [
       [/Connectivity/, "/remote-access"],
-      [/Metadata › Catalogue/, "/metadata/catalogue"],
+      [/Catalog settings/, "/catalog/settings"],
       [/Sources › Debrid/, "/sources/debrid"],
     ] as const)
       expect(within(essentials).getByRole("link", { name })).toHaveAttribute("href", href);

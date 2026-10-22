@@ -15,6 +15,7 @@ import {
 import {
   Activity as ActivityIcon,
   HardDrive,
+  Library,
   Boxes,
   Globe,
   LifeBuoy,
@@ -84,6 +85,7 @@ const Setup = lazy(() => import("./pages/Setup"));
 const Activity = lazy(() => import("./pages/activity/Activity"));
 const Notifications = lazy(() => import("./pages/notifications/Notifications"));
 const LiveTV = lazy(() => import("./pages/livetv/LiveTV"));
+const Catalog = lazy(() => import("./pages/catalog/Catalog"));
 const Metadata = lazy(() => import("./pages/metadata/Metadata"));
 const Sources = lazy(() => import("./pages/sources/Sources"));
 const Releases = lazy(() => import("./pages/releases/Releases"));
@@ -136,6 +138,7 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
         { href: "/home", label: "Home", icon: <LayoutTemplate size={icon} /> },
         { href: "/collections", label: "Collections", icon: <Layers size={icon} />, mobile: true },
         { href: "/livetv", label: "Live TV", icon: <Tv size={icon} /> },
+        { href: "/catalog", label: "Catalog", icon: <Library size={icon} /> },
         { href: "/metadata", label: "Metadata", icon: <Tags size={icon} /> },
       ],
     },
@@ -353,6 +356,8 @@ function Shell() {
               <Route path=":id" element={<CollectionDrawer />} />
             </Route>
             <Route path="/livetv/:tab?" element={<LiveTV />} />
+            <Route path="/catalog/:tab?" element={<Catalog />} />
+            <Route path="/metadata/catalogue" element={<Navigate to="/catalog" replace />} />
             <Route path="/metadata/:tab?" element={<Metadata />} />
             <Route path="/sources/:tab?" element={<Sources />} />
             <Route path="/releases/:tab?" element={<Releases />} />
