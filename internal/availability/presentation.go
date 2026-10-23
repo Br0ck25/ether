@@ -170,6 +170,7 @@ func (s *Service) verifiedKeys(ctx context.Context) []core.RatingKey {
 	return out
 }
 func (s *Service) Prioritize(ctx context.Context, items []core.Title) []core.Title {
+	items = s.FilterDiscovery(ctx, items)
 	if !s.cfg().Availability.PreferVerified {
 		return items
 	}
@@ -193,6 +194,7 @@ func (s *Service) Hubs(ctx context.Context, limit int) []core.Hub {
 	if err != nil {
 		return nil
 	}
+	items = s.FilterDiscovery(ctx, items)
 	limit = min(200, max(1, limit))
 	movie := core.Hub{ID: "availability.movies", Title: "Newly available movies", Type: core.TypeMovie}
 	tv := core.Hub{ID: "availability.episodes", Title: "Newly available episodes", Type: core.TypeEpisode}

@@ -413,3 +413,20 @@ share one render, with at most two cold renders running at once. Unneeded queued
 work is cancelled when its last requester leaves. Disk failures fall back to
 memory/rendering rather than making posters unavailable. These caches are local
 to each server process; they are not a shared media-cache directory.
+
+### Release monitoring and recent movies
+
+Release monitoring and background verification must be enabled under Availability;
+“Prefer verified” alone does not poll feeds. Checks respect the configured daily
+request, grab and byte allowances and pause during playback. Verified means a
+source passed the configured policy and readability check, not that its picture
+quality or spoken language has been independently inspected.
+
+Theatrical release dates do not establish a digital release. Discovery rows
+suppress movies released within the last four months when every current observed
+source is explicitly disallowed (for example CAM/HQ Pre, or a named dub that
+matches neither the original language nor a preferred language). A later suitable
+source restores the movie. Missing evidence and temporary provider failures do
+not hide titles; search, watchlists and Continue Watching remain available.
+Original-language foreign films remain eligible. An explicit Play Version choice
+can select a different dub; the global CAM restriction still applies.

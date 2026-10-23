@@ -57,10 +57,21 @@ func hubItemsKey(h core.Hub, hc hubCtx) string {
 	return k
 }
 
+// Apply source suitability to discovery, including mixed Home shelves. Personal
+// saved lists and playback state must never disappear because sources change.
+func discoveryAvailabilityHub(id string) bool {
+	for _, keep := range []string{"continue", "inprogress", "ondeck", "upnext", "watchlist", "playlist", "collection"} {
+		if strings.Contains(strings.ToLower(id), keep) {
+			return false
+		}
+	}
+	return strings.HasPrefix(id, "home.") || strings.HasPrefix(id, "movie.") || strings.HasPrefix(id, "availability.") || strings.Contains(id, "recommend") || strings.Contains(id, "trending") || strings.Contains(id, "popular")
+}
+
 func (s *Server) renderHub(ctx context.Context, pr *Request, hs hubSpec, hc hubCtx) model.Hub {
 	h := hs.Hub
 	items := s.filterAllowed(pr.User, h.Items)
-	if s.d.PrioritizeAvailable != nil && h.Type == core.TypeMovie && (strings.Contains(h.ID, "recommend") || strings.Contains(h.ID, "trending") || strings.Contains(h.ID, "popular")) {
+	if s.d.PrioritizeAvailable != nil && discoveryAvailabilityHub(h.ID) {
 		items = s.d.PrioritizeAvailable(ctx, items)
 	}
 	if strings.HasSuffix(h.ID, ".ondeck") || h.ID == "tv.upnext" {

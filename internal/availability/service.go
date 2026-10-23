@@ -92,7 +92,7 @@ func (s *Service) decode(raw string) (core.Release, error) {
 }
 func (s *Service) policy() string {
 	c := s.cfg()
-	b, _ := json.Marshal([]any{c.Quality, c.Resolver, c.Usenet, c.Debrid, c.Indexers})
+	b, _ := json.Marshal([]any{"source-suitability-v2", c.Quality, c.Resolver, c.Usenet, c.Debrid, c.Indexers})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }

@@ -958,8 +958,8 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 			return "blocked group: " + g
 		}
 	}
-	if rel.Info.Source == core.SourceCam && !(rcfg.AllowCam && profile.AllowCam) {
-		return "cam not allowed"
+	if reason := sourceSuitability(rel, t, profile, rcfg, preferred); reason != "" {
+		return reason
 	}
 	// Samples ("...Sample.mkv", "-sample" parts).
 	for _, tok := range strings.FieldsFunc(lowerName, func(r rune) bool {

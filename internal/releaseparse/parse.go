@@ -35,7 +35,7 @@ var containers = map[string]bool{
 var languages = []struct{ token, name string }{
 	{"MULTI", "multi"}, {"FRENCH", "french"}, {"VOSTFR", "french"}, {"TRUEFRENCH", "french"},
 	{"GERMAN", "german"}, {"SPANISH", "spanish"}, {"LATINO", "spanish"}, {"ITALIAN", "italian"},
-	{"DUTCH", "dutch"}, {"PORTUGUESE", "portuguese"}, {"RUSSIAN", "russian"}, {"POLISH", "polish"},
+	{"DUTCH", "dutch"}, {"PORTUGUESE", "portuguese"}, {"RUSSIAN", "russian"}, {"RUS", "russian"}, {"UKRAINIAN", "ukrainian"}, {"UKR", "ukrainian"}, {"POLISH", "polish"},
 	{"KOREAN", "korean"}, {"JAPANESE", "japanese"}, {"CHINESE", "chinese"}, {"MANDARIN", "chinese"},
 	{"HINDI", "hindi"}, {"TELUGU", "telugu"}, {"TAMIL", "tamil"}, {"TURKISH", "turkish"},
 	{"ARABIC", "arabic"}, {"SWEDISH", "swedish"}, {"NORWEGIAN", "norwegian"}, {"DANISH", "danish"},
@@ -123,6 +123,12 @@ func Parse(name string) core.ReleaseInfo {
 	}
 	info.Height = parseHeight(upper)
 	info.Source = parseSource(upper)
+	// An explicit low-quality tag outranks a contradictory WEB/BD claim.
+	// Only inspect release metadata, never words in the film's title.
+	metadata := " " + strings.ToUpper(spaced[max(floor, 0):]) + " "
+	if containsAny(metadata, " HDCAM", " HD CAM", " CAM ", " CAM-", "CAMRIP", " HQCAM", " HDTS", " HD-TS", " TSRIP", " HDTC", " HD-TC", " TELESYNC", " TELECINE", " HQ PRE ", " HQ-PRE ") {
+		info.Source = core.SourceCam
+	}
 	info.VideoCodec = parseVideoCodec(upper)
 	info.AudioCodec, info.Atmos = parseAudio(upper)
 	if m := reChannels.FindStringSubmatch(strings.ToUpper(spaced)); m != nil {

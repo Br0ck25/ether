@@ -111,7 +111,7 @@ func assumedLanguage(t *core.Title) string {
 	}
 	code := strings.ToLower(t.Language)
 	if name, ok := map[string]string{"en": "english", "fr": "french", "es": "spanish", "de": "german", "it": "italian",
-		"da": "danish", "nl": "dutch", "ja": "japanese", "is": "icelandic", "zh": "chinese", "ru": "russian", "pl": "polish",
+		"da": "danish", "nl": "dutch", "ja": "japanese", "is": "icelandic", "zh": "chinese", "ru": "russian", "uk": "ukrainian", "pl": "polish",
 		"vi": "vietnamese", "sv": "swedish", "no": "norwegian", "nb": "norwegian", "nn": "norwegian", "fi": "finnish",
 		"tr": "turkish", "pt": "portuguese", "ko": "korean", "hi": "hindi", "te": "telugu", "ta": "tamil", "ar": "arabic",
 		"cs": "czech", "hu": "hungarian", "el": "greek", "th": "thai", "id": "indonesian"}[code]; ok {
