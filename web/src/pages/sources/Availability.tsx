@@ -128,7 +128,8 @@ export function Availability() {
           </div>
           <p className="text-sm text-fg-muted">{s.message}</p>
           <p className="mt-2 text-xs text-fg-muted">
-            Recent movies need release evidence for 60 days; episodes for 24 hours. Suitable releases unlock immediately. Older titles need no background scan.
+            Recent movies need release evidence for 60 days; episodes for 24 hours. Suitable
+            releases unlock immediately. Older titles need no background scan.
           </p>
         </div>
         <div className="flex gap-2">
@@ -155,6 +156,19 @@ export function Availability() {
         </div>
       </div>
       {error ? <MutationError error={error} /> : null}
+      <p className="text-xs text-fg-muted">
+        At this interval, {s.feeds.filter((f) => f.supported && f.selected).length} feeds need
+        approximately{" "}
+        {Math.ceil(1440 / Math.max(5, cfg.pollMinutes)) *
+          s.feeds.filter((f) => f.supported && f.selected).length}{" "}
+        requests per day for fresh arrivals. Catch-up uses only the remaining allowance and saves
+        its progress across restarts.
+        {cfg.feedRequests <
+        Math.ceil(1440 / Math.max(5, cfg.pollMinutes)) *
+          s.feeds.filter((f) => f.supported && f.selected).length
+          ? " The current allowance cannot sustain this polling interval for every feed."
+          : " Allow additional requests for busy feeds and downtime."}
+      </p>
       <div className="grid gap-3 sm:grid-cols-3">
         {[
           [Radio, "Feed requests", s.usage.feedRequests ?? 0, cfg.feedRequests],
@@ -406,7 +420,7 @@ export function Availability() {
                 onChange={(v) => change("maxPages", v)}
                 min={1}
                 max={20}
-                help="A page contains up to 100 releases. Gaps are reported instead of silently spending more."
+                help="A page contains up to 100 releases. Unfinished catch-up resumes on later polls, within the daily allowance; fresh arrivals are checked first."
               />
             </SettingsSection>
           </>

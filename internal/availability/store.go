@@ -10,6 +10,11 @@ import (
 )
 
 func init() {
+	store.Register("availability", 3, `
+ ALTER TABLE availability_feeds ADD COLUMN catchup_target TEXT NOT NULL DEFAULT '';
+ ALTER TABLE availability_feeds ADD COLUMN catchup_tail TEXT NOT NULL DEFAULT '';
+ ALTER TABLE availability_feeds ADD COLUMN catchup_offset INTEGER NOT NULL DEFAULT 0;
+ `)
 	store.Register("availability", 2, `
  CREATE TABLE availability_feed_items (
  id TEXT NOT NULL, source_id TEXT NOT NULL, generation TEXT NOT NULL,

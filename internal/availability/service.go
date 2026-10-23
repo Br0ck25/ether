@@ -18,7 +18,6 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
-	"github.com/braedonsaunders/ether/internal/releaseparse"
 )
 
 type Feeds interface {
@@ -187,7 +186,7 @@ func (s *Service) Cycle(ctx context.Context) error {
 			}
 			if err := s.syncFeed(ctx, w.f); err != nil {
 				if benign(err) {
-					break
+					continue // A paused indexer must not starve other feeds.
 				}
 				s.log.Warn("release feed sync failed", "source", w.f.Name, "error", err)
 			}
@@ -199,77 +198,6 @@ func (s *Service) Cycle(ctx context.Context) error {
 		}
 	}
 	return s.prune(ctx)
-}
-func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
-	anchor, _, gap, err := s.feedState(parent, f)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(s.budgetContext(parent, true), 90*time.Second)
-	defer cancel()
-	maxPages := min(20, max(1, s.cfg().Availability.MaxPages))
-	if anchor == "" {
-		maxPages = 1
-	}
-	policy := s.policy()
-	head := ""
-	count := 0
-	overlap := false
-	for page := 0; page < maxPages; page++ {
-		releases, e := s.d.Feeds.Recent(ctx, f.ID, page*100, 100)
-		if e != nil {
-			if parent.Err() == nil {
-				_ = s.noteFeed(parent, f, anchor, gap, safeReason(e), count, false)
-			}
-			return e
-		}
-		if len(releases) == 0 {
-			overlap = true
-			break
-		}
-		if head == "" {
-			head = releases[0].ID
-		}
-		for i := range releases {
-			releases[i].Info = releaseparse.Parse(releases[i].Name)
-			if releases[i].ID == anchor {
-				overlap = true
-			}
-		}
-		if e := s.retainFeed(ctx, f, releases); e != nil {
-			return e
-		}
-		matched, e := s.d.Catalog.ReleaseMatches(ctx, releases)
-		if e != nil {
-			return e
-		}
-		for _, r := range releases {
-			for _, t := range matched[r.ID] {
-				if e = s.remember(ctx, f, t, r, policy); e != nil {
-					return e
-				}
-				count++
-			}
-		}
-		if overlap || len(releases) < 100 || anchor == "" {
-			overlap = true
-			break
-		}
-	}
-	if head == "" {
-		head = anchor
-	}
-	if !overlap {
-		gap = true
-	}
-	message := "Feed is current"
-	if anchor == "" {
-		message = "Monitoring started from the latest releases; older titles remain searchable"
-	}
-	if gap {
-		message = "A feed coverage gap was recorded; older releases may require on-demand search"
-	}
-	return s.noteFeed(parent, f, head, gap, message, count, true)
 }
 
 type queued struct {

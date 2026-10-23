@@ -20,5 +20,5 @@ type Availability struct {
 }
 
 func DefaultAvailability() Availability {
-	return Availability{Monitor: true, PollMinutes: 30, MaxPages: 3, FeedRequests: 100, CheckRequests: 100, Grabs: 20, Checks: 20, CheckBytes: 512 << 20, ReservePercent: 80, Debrid: true, PreferVerified: true, NewlyAvailable: true}
+	return Availability{Monitor: true, PollMinutes: 15, MaxPages: 5, FeedRequests: 400, CheckRequests: 100, Grabs: 20, Checks: 20, CheckBytes: 512 << 20, ReservePercent: 80, Debrid: true, PreferVerified: true, NewlyAvailable: true}
 }

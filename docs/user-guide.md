@@ -440,9 +440,22 @@ source invalidations and recent failed searches are respected; a genuinely new
 eligible release can supersede an older failed search. Merely browsing does not
 launch per-title availability searches.
 
-The default feed allowance is 100 API requests per UTC day across all indexers,
-with a 30-minute polling interval and bounded catch-up pages. Two indexers need
-96 requests/day for their regular first pages; catch-up uses the same allowance.
+The default feed allowance is 400 API requests per UTC day across all indexers,
+with a 15-minute polling interval and at most five pages per sync. Two indexers
+need 192 requests/day for their regular first pages, leaving up to 208 for
+catch-up. Deeper pages reserve the remaining day's scheduled first-page polls,
+so a busy feed cannot consume that allowance on history. An allowance too small
+for the configured feeds and interval is shown in Sources > Availability.
+
+Unfinished feed gaps retain their boundaries and page progress across restarts.
+Each poll reads fresh arrivals first, then resumes the older gap, checking that
+the saved page boundary still matches. A mismatched boundary triggers a rescan.
+First setup and recovery of old gaps page through recent feed history only,
+ending at the feed's available history or a page entirely older than 61 days.
+This uses feed pages, never a search per catalogue title. Provider retention,
+rate limits and exhausted daily allowances can still leave gaps; these stay
+visible instead of being reported as a successful sync. Sites without a feed
+remain search-only. Feed discovery is not equivalent to an Arr-completed download.
 These are normal API hits, not free RSS traffic. Playback retains the configured
 foreground reserve. Optional background health verification has separate request,
 grab and byte budgets and pauses during playback; it is disabled by default.
