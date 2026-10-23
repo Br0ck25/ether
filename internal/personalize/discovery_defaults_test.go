@@ -121,3 +121,23 @@ func TestFinalizeRenderedRowsUsesCounts(t *testing.T) {
 		t.Fatal(hubIDsOf(got))
 	}
 }
+
+func TestDiscoveryIsNotRemovedByHomeDeduplication(t *testing.T) {
+	cat := newFakeCatalog(testNow)
+	var keys []core.RatingKey
+	for i := 0; i < 24; i++ {
+		keys = append(keys, movieKey(0, i))
+	}
+	its := items(cat, keys...)
+	for _, kind := range []string{KindNewReleases, KindTrending} {
+		c := testRow(kind, "discovery", its)
+		a := &assembly{section: core.TypeMovie, limit: 24, minRow: 12, lead: &homeLead{keys: map[core.RatingKey]bool{}}}
+		for _, it := range its {
+			a.lead.keys[it.t.Key] = true
+		}
+		got, _, demoted := a.holdBackHomeLead(c, its)
+		if len(got) != 24 || demoted {
+			t.Fatalf("%s lost to Home: %d, demoted=%v", kind, len(got), demoted)
+		}
+	}
+}

@@ -123,10 +123,10 @@ func (a *assembly) holdBackHomeLead(c *candRow, items []candItem) (kept, held []
 	if a.lead == nil || len(a.lead.keys) == 0 && len(a.lead.same[c.id]) == 0 || c.source == core.RowSourcePlex {
 		return items, nil, false
 	}
-	// The page's top picks are the viewer's best titles of this type even
-	// when the Home shows them too; holding them back would open the page
-	// with second-tier picks (toppicks.go).
-	if c.kind == KindTop10 || c.kind == KindTop10Today {
+	// Each page must offer its best picks and timely discovery even when
+	// Home already shows them. Cross-page dedupe must not erase New or
+	// Trending from a library. Within-page dedupe and row floors still apply.
+	if c.kind == KindTop10 || c.kind == KindTop10Today || c.kind == KindNewReleases || c.kind == KindTrending {
 		return items, nil, false
 	}
 	if a.demoted == nil {

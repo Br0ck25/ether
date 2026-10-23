@@ -110,7 +110,7 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 	if n := lenses(shows.Rows); n < 4 {
 		t.Errorf("TV Shows has %d lens kinds: %v", n, kindsOf(shows.Rows))
 	}
-	// Row kinds: most of a Recommended page's rows are kinds the Home
+	// Outside the shared discovery head, most Recommended rows are kinds Home
 	// does not have.
 	// Every page opens with the viewer's top picks, which may repeat the
 	// Home's (toppicks.go); the rest of the page is what must differ.
@@ -122,7 +122,7 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 	notLead := func(rows []core.HomeRow) []core.HomeRow {
 		var out []core.HomeRow
 		for _, r := range rows {
-			if r.Kind != KindTop10 && r.Kind != KindTop10Today {
+			if r.Kind != KindTop10 && r.Kind != KindTop10Today && r.Kind != KindNewReleases && r.Kind != KindTrending {
 				out = append(out, r)
 			}
 		}
@@ -148,7 +148,7 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 				t.Errorf("%s row %s leads with a Home lead title", name, r.HubID)
 			}
 		}
-		if s := jaccard(pageKeys(home.Rows, 12), pageKeys(p.Rows, 12)); s > 0.2 {
+		if s := jaccard(pageKeys(home.Rows, 12), pageKeys(p.Rows, 12)); s > 0.25 {
 			hk := pageKeys(home.Rows, 12)
 			for _, r := range visibleEngineRows(p.Rows) {
 				for i, it := range r.Items {
@@ -182,7 +182,7 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 // of its own: held titles may only trail a row too thin without them.
 // Anchored rows (franchise order, finish what you started) are exempt.
 func leadsWithHome(r core.HomeRow, lead map[core.RatingKey]bool) bool {
-	if r.Kind == KindTop10 || r.Kind == KindTop10Today || r.Kind == KindFranchise || r.Kind == KindFinishShow || r.Kind == KindNewSeasons {
+	if r.Kind == KindTop10 || r.Kind == KindTop10Today || r.Kind == KindNewReleases || r.Kind == KindTrending || r.Kind == KindFranchise || r.Kind == KindFinishShow || r.Kind == KindNewSeasons {
 		return false
 	}
 	seenLead := false
@@ -218,7 +218,7 @@ func TestDedupeHomeSwitch(t *testing.T) {
 		n := 0
 		var rows []core.HomeRow // the top picks may repeat the Home by design
 		for _, r := range p.Rows {
-			if r.Kind != KindTop10 && r.Kind != KindTop10Today {
+			if r.Kind != KindTop10 && r.Kind != KindTop10Today && r.Kind != KindNewReleases && r.Kind != KindTrending {
 				rows = append(rows, r)
 			}
 		}
