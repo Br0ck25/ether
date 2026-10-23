@@ -173,14 +173,18 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 				oldPage = false
 			}
 		}
-		if e = s.retainFeed(ctx, f, releases); e != nil {
+		eligible := feedCategories(f, releases)
+		if e = s.retainFeed(ctx, f, eligible); e != nil {
 			return e
 		}
-		matched, e := s.d.Catalog.ReleaseMatches(ctx, releases)
-		if e != nil {
-			return e
+		var matched map[string][]core.Title
+		if len(eligible) > 0 {
+			matched, e = s.d.Catalog.ReleaseMatches(ctx, eligible)
+			if e != nil {
+				return e
+			}
 		}
-		for _, r := range releases {
+		for _, r := range eligible {
 			for _, t := range matched[r.ID] {
 				if e = s.remember(ctx, f, t, r, policy); e != nil {
 					return e
@@ -225,4 +229,25 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 		c.target = bootstrapTarget
 	}
 	return s.saveCheckpoint(parent, f, c, "Catching up on recent releases; progress is saved and fresh arrivals are polled first", count, false)
+}
+
+// Pagination always counts the raw page, including excluded categories. A page
+// full of books or games must not look like the end of the movie/TV feed.
+func feedCategories(f core.ReleaseFeed, rs []core.Release) []core.Release {
+	if len(f.Categories) == 0 {
+		return rs
+	}
+	out := make([]core.Release, 0, len(rs))
+	for _, r := range rs {
+		allowed := r.Category == 0 // some otherwise-valid APIs omit category attributes
+		for _, cat := range f.Categories {
+			if r.Category == cat || (cat%1000 == 0 && r.Category/1000 == cat/1000) {
+				allowed = true
+			}
+		}
+		if allowed {
+			out = append(out, r)
+		}
+	}
+	return out
 }

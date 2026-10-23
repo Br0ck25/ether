@@ -419,7 +419,12 @@ to each server process; they are not a shared media-cache directory.
 Ether automatically follows recent-release feeds on the Newznab/Torznab indexers
 already configured under Sources. No separate RSS URL is needed. Built-in scraper
 sites without a recent-feed API remain searchable; debrid provides streaming,
-not a global new-release feed. Monitoring defaults on for new installs. Existing
+not a global new-release feed. If an indexer returns empty results for a combined
+category query but has a working unrestricted feed, Ether learns that format
+with one additional budgeted request and applies your categories locally. The
+learned format survives restarts and is reset when the indexer configuration
+changes. Empty feeds are not repeatedly probed on every poll.
+Monitoring defaults on for new installs. Existing
 owners can enable it under Sources > Availability. Turning monitoring off stops
 polling, but local evidence and the recent-release visibility rules still apply.
 

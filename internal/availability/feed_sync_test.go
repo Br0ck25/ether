@@ -235,3 +235,28 @@ func TestLargeFreshBurstDoesNotDiscardOlderGap(t *testing.T) {
 		t.Fatalf("gap still pending %+v", after)
 	}
 }
+
+func TestUnfilteredFeedUsesRawOffsetsButOnlyRetainsAllowedCategories(t *testing.T) {
+	x := setup(t)
+	x.c.Availability.Verify = false
+	x.c.Availability.MaxPages = 3
+	f := &movingFeed{sources: x.f.sources, items: feedItems(0, 120)}
+	f.sources[0].Categories = []int{2000, 5040}
+	for i := range f.items {
+		f.items[i].Category = 6000
+	}
+	f.items[110].Category = 2040
+	f.items[111].Category = 5040
+	f.items[112].Category = 5030
+	x.s.d.Feeds = f
+	if err := x.s.Cycle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := x.s.db.QueryRow(`SELECT COUNT(*) FROM availability_feed_items`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || len(f.offsets) != 2 || f.offsets[1] != 100 {
+		t.Fatalf("retained=%d offsets=%v", n, f.offsets)
+	}
+}

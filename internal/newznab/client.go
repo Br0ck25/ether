@@ -85,6 +85,8 @@ type Client struct {
 	now      func() time.Time
 	backends func(config.Indexer) (Backend, error)
 
+	feedMu   sync.Mutex
+	feedMode recentFeedMode
 	budgetMu sync.Mutex
 	mem      memBudget
 	rate     rateLimitState

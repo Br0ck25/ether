@@ -84,3 +84,76 @@ func TestBackgroundCannotConsumeTinyForegroundReserve(t *testing.T) {
 		t.Fatal("spent foreground reserve")
 	}
 }
+
+func TestRecentLearnsCategoryFallbackAndPersists(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query().Get("cat"))
+		if r.URL.Query().Get("cat") != "" {
+			fmt.Fprint(w, `<rss><channel/></rss>`)
+			return
+		}
+		fmt.Fprint(w, `<rss><channel><item><title>Film.2026.1080p.WEB-DL</title><guid>new</guid></item></channel></rss>`)
+	}))
+	defer srv.Close()
+	cfg := testConfig(srv.URL)
+	db := store.OpenTest(t)
+	m := NewManager(db, []config.Indexer{cfg}, Options{})
+	var costs atomic.Int32
+	ctx := core.WithBackgroundBudget(t.Context(), func(context.Context, string, string, int64) error { costs.Add(1); return nil })
+	rs, err := m.Recent(ctx, cfg.ID, 0, 100)
+	if err != nil || len(rs) != 1 {
+		t.Fatal(rs, err)
+	}
+	restarted := NewManager(db, []config.Indexer{cfg}, Options{})
+	if _, err = restarted.Recent(ctx, cfg.ID, 100, 100); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 3 || queries[0] != "2000,5000" || queries[1] != "" || queries[2] != "" || costs.Load() != 3 {
+		t.Fatalf("requests=%v costs=%d", queries, costs.Load())
+	}
+	cfg.APIKey = "changed-account"
+	changed := NewManager(db, []config.Indexer{cfg}, Options{})
+	if _, err = changed.Recent(ctx, cfg.ID, 0, 100); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 5 || queries[3] != "2000,5000" {
+		t.Fatalf("reused other account's mode: %v", queries)
+	}
+}
+
+func TestRecentEmptyFeedProbeIsBounded(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `<rss><channel/></rss>`) }))
+	defer srv.Close()
+	cfg := testConfig(srv.URL)
+	m := NewManager(store.OpenTest(t), []config.Indexer{cfg}, Options{})
+	for i := 0; i < 3; i++ {
+		if _, err := m.Recent(t.Context(), cfg.ID, 0, 100); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls.Load() != 4 {
+		t.Fatalf("repeated discovery probes on an empty feed: %d", calls.Load())
+	}
+}
+func TestRecentFallbackDeniedDoesNotClaimEmptySuccess(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `<rss><channel/></rss>`) }))
+	defer srv.Close()
+	cfg := testConfig(srv.URL)
+	m := NewManager(nil, []config.Indexer{cfg}, Options{})
+	var reservations atomic.Int32
+	ctx := core.WithBackgroundBudget(t.Context(), func(context.Context, string, string, int64) error {
+		if reservations.Add(1) > 1 {
+			return core.ErrBudgetExhausted
+		}
+		return nil
+	})
+	if _, err := m.Recent(ctx, cfg.ID, 0, 100); !errors.Is(err, core.ErrBudgetExhausted) {
+		t.Fatalf("expected budget denial: %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatal("denied fallback reached provider")
+	}
+}

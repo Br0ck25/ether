@@ -22,6 +22,7 @@ func SpendBackground(ctx context.Context, resource, source string, amount int64)
 
 // ReleaseFeed describes an indexer's recent-release discovery capability.
 type ReleaseFeed struct {
+	Categories []int  `json:"categories,omitempty"` // local filter when a feed ignores category queries
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Generation string `json:"-"`
