@@ -318,7 +318,7 @@ func arrangeLayout(rows []core.HomeRow, d core.HomeLayout, user int64, hc core.H
 		rank float64
 	}
 	// Rows no owner policy covers get the engine's defaults: the top picks
-	// open the page, Continue Watching follows, catalogue feeds sit lower.
+	// open the page, followed by new releases and trending discovery.
 	lead, defaults := leadDefaults(rows, g, v, maxRows)
 	var pool []candidate
 	hidden := []core.HomeRow{}

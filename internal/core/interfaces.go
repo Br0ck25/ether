@@ -97,6 +97,9 @@ type Hub struct {
 	Items    []Title   `json:"items"`
 	More     bool      `json:"more"`
 	Key      RatingKey `json:"key,omitempty"` // backing collection, if any
+	// ItemCount carries rendered availability when a front end retains the
+	// actual metadata and asks only for row placement.
+	ItemCount int `json:"itemCount,omitempty"`
 }
 
 type Collection struct {

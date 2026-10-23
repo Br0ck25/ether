@@ -122,14 +122,15 @@ func TestAssemblyRankingLearnsFromEngagement(t *testing.T) {
 		}
 		return testRow(kind, id, items(cat, keys...))
 	}
-	m := emptyModel(mk(KindTop10, "top10", 0), mk(KindNewThisWeek, "newthisweek", 1))
+	m := emptyModel(mk(KindCrowdTrending, "trending.fans", 0), mk(KindNewThisWeek, "newthisweek", 1))
 	before := run(m, nil)
-	if before[0].Kind != KindTop10 {
+	if before[0].Kind != KindCrowdTrending {
 		t.Fatalf("prior order = %v", kindsOf(before))
 	}
-	// This viewer ignores Top 10 and plays hidden gems constantly.
+	// Below the fixed discovery head, engagement still changes row ranking.
+	// This viewer ignores crowd trends and plays New This Week constantly.
 	after := run(m, func(a *assembly) {
-		a.arms = map[string]arm{KindTop10: {shows: 60, reward: 0}, KindNewThisWeek: {shows: 60, reward: 30}}
+		a.arms = map[string]arm{KindCrowdTrending: {shows: 60, reward: 0}, KindNewThisWeek: {shows: 60, reward: 30}}
 	})
 	if after[0].Kind != KindNewThisWeek {
 		t.Fatalf("learned order = %v (scores %v / %v)", kindsOf(after), after[0].Score, after[1].Score)

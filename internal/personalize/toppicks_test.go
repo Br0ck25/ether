@@ -51,7 +51,7 @@ func TestTopPicksOpenEveryPage(t *testing.T) {
 				t.Fatalf("recently added at row %d: %v", i+1, got)
 			}
 		case "movie.newreleases":
-			if i+1 < newReleasesMinSlot {
+			if i+1 != 3 {
 				t.Fatalf("new releases at row %d: %v", i+1, got)
 			}
 		}

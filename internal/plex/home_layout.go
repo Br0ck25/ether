@@ -16,7 +16,7 @@ func (s *Server) finalizeHomeRows(ctx context.Context, pr *Request, hc core.HubC
 	raw := make([]core.Hub, 0, len(rows))
 	byID := map[string]model.Hub{}
 	for _, row := range rows {
-		raw = append(raw, core.Hub{ID: row.HubIdentifier, Title: row.Title, Type: core.MediaType(row.Type), Context: row.Context})
+		raw = append(raw, core.Hub{ID: row.HubIdentifier, Title: row.Title, Type: core.MediaType(row.Type), Context: row.Context, ItemCount: max(row.Size, len(row.Metadata)+len(row.Directory))})
 		byID[row.HubIdentifier] = row
 	}
 	ordered, err := engine.FinalizeHome(ctx, pr.User, hc, section, raw)

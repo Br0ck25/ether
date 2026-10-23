@@ -137,6 +137,22 @@ func (a *assembly) run() []core.HomeRow {
 	})
 	a.spreadRows(visible) // Variety dial: page-level genre spread
 	a.retainRowOrder(visible)
+	// Keep discovery defaults in the candidate window before row limits and
+	// deduplication. Explicit layout policies still control final placement.
+	var headlines []core.HomeRow
+	for _, r := range visible {
+		if !a.ownerPlaced(r.c, r.hubID) {
+			headlines = append(headlines, core.HomeRow{HubID: r.hubID, Kind: r.c.kind, Hub: core.Hub{ItemCount: len(r.items)}})
+		}
+	}
+	_, defaults := leadDefaults(headlines, nil, nil, a.maxRows)
+	priority := func(r *rankedRow) int {
+		if p := defaults[r.hubID]; p != nil && p.Slot > 0 {
+			return p.Slot
+		}
+		return a.maxRows + 1
+	}
+	sort.SliceStable(visible, func(i, j int) bool { return priority(visible[i]) < priority(visible[j]) })
 	// Per-kind caps (pinned rows count but are never dropped).
 	perKind := map[string]int{}
 	groups := map[string]bool{}
@@ -265,6 +281,8 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				}
 			}
 		}
+		draftOrder := append([]*rankedRow(nil), sel...)
+		sort.SliceStable(draftOrder, func(i, j int) bool { return anchored(draftOrder[i].c) && !anchored(draftOrder[j].c) })
 		for _, phase := range []bool{true, false} {
 			inPhase := func(r *rankedRow) bool { return head == nil || head[r] == phase }
 			// Ordered utility/collection rows retain their live order and priority.
@@ -285,7 +303,7 @@ func (a *assembly) fill(ordered []*rankedRow, maxRows int) []core.HomeRow {
 				}
 				a.retainItems(sel, picked, claimed, inPhase)
 			}
-			for _, r := range sel {
+			for _, r := range draftOrder {
 				if r.c.source == core.RowSourcePlex || !draftsFirst(r.c) || !inPhase(r) {
 					continue
 				}
@@ -383,7 +401,7 @@ func (a *assembly) survivors(sel []*rankedRow) map[*rankedRow]bool {
 	}
 	byID := make(map[string]*rankedRow, len(sel))
 	for _, r := range sel {
-		rows = append(rows, core.HomeRow{HubID: r.hubID, Kind: r.c.kind, Source: r.c.source})
+		rows = append(rows, core.HomeRow{HubID: r.hubID, Kind: r.c.kind, Source: r.c.source, Hub: core.Hub{ItemCount: len(r.items)}})
 		byID[r.hubID] = r
 	}
 	var d core.HomeLayout
@@ -460,6 +478,11 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 	if l, ok := c.typed[a.section]; ok && a.section != "" {
 		src = l // type-native list for a Movies / TV Shows page
 	}
+	if a.section == "" && discoveryPriority(c.kind) < 5 && c.kind != KindContinue && len(c.typed) > 0 {
+		// Full type-native pools prevent one type from exhausting the mixed
+		// pool before context filtering and the page's deduplication draft.
+		src = append(append([]candItem(nil), c.typed[core.TypeMovie]...), c.typed[core.TypeShow]...)
+	}
 	out := make([]candItem, 0, len(src))
 	for _, it := range src {
 		if !a.typeOK(&it.t) {
@@ -498,9 +521,16 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 	if demoted {
 		eligible = append(eligible, held...)
 	}
-	out = mmr(out, min(len(out), 3*n+6), a.dials().lambda())
+	window := min(len(out), 3*n+6)
+	if a.section == "" && discoveryPriority(c.kind) < 5 {
+		window = len(out)
+	}
+	out = mmr(out, window, a.dials().lambda())
 	if demoted {
 		out = append(out, mmr(held, len(held), a.dials().lambda())...)
+	}
+	if a.section == "" && discoveryPriority(c.kind) < 5 {
+		out = mixDiscoveryTypes(out)
 	}
 	return a.keepPreviouslyShown(c, eligible, out)
 }

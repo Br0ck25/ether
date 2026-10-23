@@ -25,7 +25,7 @@ func TestWatchRefreshKeepsUnchangedCardsInTheirShelves(t *testing.T) {
 			slices.Reverse(ks)
 		}
 		ks = slices.DeleteFunc(ks, func(k core.RatingKey) bool { return k == removed })
-		first := testRow(KindTrending, "trending", items(cat, ks...))
+		first := testRow(KindPopular, "popular", items(cat, ks...))
 		second := testRow(KindHiddenGems, "gems", items(cat, ks...))
 		first.scale, second.scale = 20, 1
 		if reverse {

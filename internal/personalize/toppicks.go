@@ -6,69 +6,130 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// Every page opens with the strongest picks for the viewer. Without an owner
-// policy saying otherwise, the lead row takes slot 1, Continue Watching
-// follows, and fast-moving catalogue feeds (Recently Added, New &
-// Noteworthy) sit lower down where they can't bury the picks.
-
-// leadKinds are the rows that can open a page, best first: the viewer's
-// personal Top 10, then the server's Top 10 Today for viewers the taste
-// model doesn't know well enough yet.
+// Discovery leads with personal picks, new releases, trending, and a viewing-
+// history row. Continue Watching stays beside the lead when populated. These
+// are defaults only: explicit owner/viewer policies reserve their own slots.
 var leadKinds = []string{KindTop10, KindTop10Today}
 
-const (
-	// continueMinSlot keeps Continue Watching right under the lead row.
-	continueMinSlot = 2
-	// feedMinSlot keeps catalogue feeds below the personal rows.
-	recentlyAddedMinSlot = 8
-	newReleasesMinSlot   = 5
-)
+const recentlyAddedMinSlot = 8
 
-// leadDefaults returns the engine's default placement for rows that no owner
-// policy covers on this page: lead is the hub id of the row that opens the
-// page ("" when none of the lead kinds is present or slot 1 is the owner's).
+func discoveryPriority(kind string) int {
+	switch kind {
+	case KindTop10:
+		return 0
+	case KindTop10Today:
+		return 1
+	case KindContinue:
+		return 2
+	case KindNewReleases:
+		return 3
+	case KindTrending:
+		return 4
+	case KindBecause, KindCrowd:
+		return 5
+	default:
+		return 6
+	}
+}
+
+func rowHasItems(r core.HomeRow) bool {
+	return len(r.Items) > 0 || r.Hub.ItemCount > 0
+}
+
 func leadDefaults(rows []core.HomeRow, g, v *core.LayoutPage, maxRows int) (lead string, defaults map[string]*core.RowPolicy) {
 	defaults = map[string]*core.RowPolicy{}
-	ownerSlot1 := false
-	for _, p := range []*core.LayoutPage{g, v} {
-		if p == nil {
-			continue
-		}
-		for _, r := range p.Rows {
-			if r.Slot == 1 && r.Status != "off" {
-				ownerSlot1 = true
-			}
-		}
-	}
 	covered := func(r core.HomeRow) bool { return matchingPolicy(g, r) != nil || matchingPolicy(v, r) != nil }
-	if !ownerSlot1 {
-	pick:
-		for _, k := range leadKinds {
-			for _, r := range rows {
-				if r.Kind == k && len(r.Items) > 0 && !covered(r) {
-					lead = r.HubID
-					break pick
+	reserved := map[int]bool{}
+	for _, r := range rows {
+		p := matchingPolicy(g, r)
+		if q := matchingPolicy(v, r); q != nil {
+			p = q
+		}
+		if p != nil && p.Status != "off" {
+			if p.Slot > 0 {
+				reserved[p.Slot] = true
+			} else if p.MaxSlot > 0 {
+				// Leave bounded owner placements room before default anchors.
+				for n := max(1, p.MinSlot); n <= min(maxRows, p.MaxSlot); n++ {
+					reserved[n] = true
 				}
 			}
 		}
 	}
-	floor := func(n int) int { return max(1, min(n, maxRows)) }
-	for _, r := range rows {
-		if covered(r) {
-			continue
+	slot := 1
+	place := func(r core.HomeRow) {
+		for reserved[slot] {
+			slot++
 		}
-		switch {
-		case r.HubID == lead:
-			defaults[r.HubID] = &core.RowPolicy{Row: r.HubID, Status: "always", Slot: 1}
-		case r.Kind == KindContinue && lead != "":
-			defaults[r.HubID] = &core.RowPolicy{Row: r.HubID, Status: "eligible", MinSlot: continueMinSlot}
-		case r.Kind == KindRecentlyAdded:
-			defaults[r.HubID] = &core.RowPolicy{Row: r.HubID, Status: "eligible", MinSlot: floor(recentlyAddedMinSlot)}
-		case r.Kind == KindNewReleases:
-			defaults[r.HubID] = &core.RowPolicy{Row: r.HubID, Status: "eligible", MinSlot: floor(newReleasesMinSlot)}
+		if slot > maxRows {
+			return
+		}
+		defaults[r.HubID] = &core.RowPolicy{Row: r.HubID, Status: "always", Slot: slot}
+		reserved[slot] = true
+		slot++
+	}
+	groups := [][]string{leadKinds, {KindContinue}, {KindNewReleases}, {KindTrending}, {KindBecause, KindCrowd}}
+	for gi, kinds := range groups {
+		// Only one headline per purpose; the remaining history/theme rows
+		// keep their stable personalized order further down the page.
+		found := false
+		for _, kind := range kinds {
+			for _, r := range rows {
+				if r.Kind != kind || !rowHasItems(r) || covered(r) {
+					continue
+				}
+				place(r)
+				if gi == 0 {
+					lead = r.HubID
+				}
+				found = true
+				break
+			}
+			if found {
+				break
+			}
+		}
+	}
+	for _, r := range rows {
+		if r.Kind == KindRecentlyAdded && !covered(r) {
+			defaults[r.HubID] = &core.RowPolicy{Row: r.HubID, Status: "eligible", MinSlot: max(1, min(recentlyAddedMinSlot, maxRows))}
 		}
 	}
 	return lead, defaults
+}
+
+// mixDiscoveryTypes preserves ranking within each type while interleaving
+// movies and shows on Home. A sparse type never forces a short row. Existing
+// presentations reserve their cards separately, so feedback does not shuffle
+// the shelves a viewer is already browsing.
+func mixDiscoveryTypes(items []candItem) []candItem {
+	var movies, shows []candItem
+	for _, it := range items {
+		switch it.t.Type {
+		case core.TypeMovie:
+			movies = append(movies, it)
+		case core.TypeShow:
+			shows = append(shows, it)
+		default:
+			return items
+		}
+	}
+	if len(movies) == 0 || len(shows) == 0 {
+		return items
+	}
+	out := make([]candItem, 0, len(items))
+	movieFirst := items[0].t.Type == core.TypeMovie
+	for len(movies) > 0 || len(shows) > 0 {
+		if len(movies) > 0 && (movieFirst || len(shows) == 0) {
+			out = append(out, movies[0])
+			movies = movies[1:]
+		} else {
+			out = append(out, shows[0])
+			shows = shows[1:]
+		}
+		movieFirst = !movieFirst
+	}
+	return out
 }
 
 // headlineOK is the bar a title must clear to be one of the viewer's top

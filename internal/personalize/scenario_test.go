@@ -143,9 +143,9 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 	}
 	// The fake catalogue has 48 science fiction films and her Home leads
 	// with most of the ones Vera directed, so her director lens shows on a
-	// Movies page that does not hold the Home's titles back.
+	// Movies page that explicitly includes person rows and does not hold Home titles back.
 	off := false
-	draft := core.HomeLayout{Global: []core.LayoutPage{{Section: "movies", DedupeHome: &off, Rows: []core.RowPolicy{}}}}
+	draft := core.HomeLayout{Global: []core.LayoutPage{{Section: "movies", DedupeHome: &off, Rows: []core.RowPolicy{{Row: KindPerson, Status: "always"}}}}}
 	mp2, err := h.e.PreviewLayout(ctx, &alice, wednesdayTV, "movies", 12, draft)
 	if err != nil {
 		t.Fatal(err)
@@ -185,8 +185,8 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 			pos[r.Kind] = i
 		}
 	}
-	if p, ok := pos[KindShortOnTime]; !ok || p > 4 {
-		t.Fatalf("Short on Time should be near the top for carol (pos %v): %v", p, kindsOf(c))
+	if p, ok := pos[KindShortOnTime]; !ok || p > 8 {
+		t.Fatalf("Short on Time should follow the discovery head for carol (pos %v): %v", p, kindsOf(c))
 	}
 	if r := rowByKind(c, KindShortOnTime); r != nil {
 		for i, it := range r.Items {
@@ -221,13 +221,14 @@ func TestScenarioDifferentViewersGetDifferentHomes(t *testing.T) {
 	}
 
 	// Context changes Alice's Home too: Saturday night on the TV versus a
-	// weeknight on her phone.
+	// weeknight on her phone. The fixed discovery head is intentionally stable;
+	// context still changes the personal rows below it.
 	sat, _ := h.e.PreviewHome(ctx, &alice, hubContext(time.Date(2026, 10, 17, 20, 30, 0, 0, time.UTC), core.DeviceTV), "", 12)
 	phone, _ := h.e.PreviewHome(ctx, &alice, hubContext(time.Date(2026, 10, 14, 23, 0, 0, 0, time.UTC), core.DeviceMobile), "", 12)
 	t.Logf("alice, Saturday TV:\n%s\nalice, weeknight phone:\n%s", describe(sat.Rows), describe(phone.Rows))
 	same := true
 	sk, pk := kindsOf(sat.Rows), kindsOf(phone.Rows)
-	for i := 0; i < len(sk) && i < len(pk) && i < 6; i++ {
+	for i := 0; i < len(sk) && i < len(pk); i++ {
 		if sk[i] != pk[i] {
 			same = false
 		}

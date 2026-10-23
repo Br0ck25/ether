@@ -117,6 +117,14 @@ own history and recommendations.
 
 ## Organise your Home
 
+Movies, TV and Home lead with **Top 10 for You**, **New & Noteworthy**,
+**Trending This Week**, and a **Because You Watched** or **Fans Also Loved**
+row when enough eligible titles are available. Populated **Continue Watching**
+stays just after the top picks. Home mixes movies and shows in its leading
+rows; themed and type-specific rows follow. Movies and TV pages keep their own
+types. New viewers get today's Top 10 until there is enough viewing history.
+
+These are the defaults for every install. Explicit saved layouts take precedence.
 Use **Home Designer** to choose the server's default rows and ordering. Select a
 viewer to preview their Home and make personal exceptions. **Collections** lets
 you build and edit themed lists. Recommendations improve as viewers watch and
