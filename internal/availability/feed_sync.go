@@ -13,7 +13,7 @@ import (
 // A checkpoint has two boundaries: the newest observed release, and a pending
 // historical gap. Updating the head must never discard that unfinished gap.
 // Offsets are only hints: a resumed page must contain the saved tail at its
-// expected position, otherwise we walk again from the head (deletions/reordering).
+// overlapping page, otherwise we walk again from the head (deletions/reordering).
 type feedCheckpoint struct {
 	head, target, tail string
 	offset             int
@@ -150,12 +150,21 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 		if head == "" {
 			head = releases[0].ID
 		}
-		if expectedTail != "" && releases[0].ID != expectedTail {
-			offset = 100
-			expectedTail = ""
-			resumed = true
-			// Don't jump over unexamined items when the indexer's ordering changes.
-			continue
+		if expectedTail != "" {
+			found := false
+			for _, r := range releases {
+				if r.ID == expectedTail {
+					found = true
+					break
+				}
+			}
+			if !found {
+				offset = 100
+				expectedTail = ""
+				resumed = true
+				// Lost boundary: rescan instead of silently skipping history.
+				continue
+			}
 		}
 		expectedTail = ""
 		headIndex := -1
@@ -206,7 +215,10 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 				// The entire current page is already observed. Resume only beyond it.
 				if shifted >= offset+len(releases) {
 					c = feedCheckpoint{head: head, target: target, offset: shifted, tail: old.tail}
-					offset = shifted
+					// New posts can shift offsets between the head and this
+					// request. Re-read a bounded overlap and find the exact
+					// saved ID anywhere in it, rather than requiring index 0.
+					offset = max(offset+len(releases)-1, shifted-50)
 					expectedTail = old.tail
 					resumed = true
 					continue

@@ -62,7 +62,7 @@ func TestFeedCatchupSurvivesRestartAndNewArrivals(t *testing.T) {
 		t.Fatal(err)
 	}
 	x.s = restarted
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 16; i++ {
 		x.now = x.now.Add(15 * time.Minute)
 		if err = x.s.Cycle(t.Context()); err != nil {
 			t.Fatal(err)
@@ -84,7 +84,7 @@ func TestFeedCatchupSurvivesRestartAndNewArrivals(t *testing.T) {
 	}
 	found := false
 	for _, o := range f.offsets {
-		if o == 209 {
+		if o == 159 {
 			found = true
 		}
 	}
@@ -105,7 +105,7 @@ func TestFeedCatchupDoesNotSkipDeletedBoundary(t *testing.T) {
 	// pages. A failed boundary check must rescan, not declare coverage.
 	f.items = append(f.items[:299], f.items[300:]...)
 	f.items = append(f.items[:150], append(feedItems(2000, 1), f.items[150:]...)...)
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 16; i++ {
 		x.now = x.now.Add(15 * time.Minute)
 		if err := x.s.Cycle(t.Context()); err != nil {
 			t.Fatal(err)
@@ -258,5 +258,52 @@ func TestUnfilteredFeedUsesRawOffsetsButOnlyRetainsAllowedCategories(t *testing.
 	}
 	if n != 2 || len(f.offsets) != 2 || f.offsets[1] != 100 {
 		t.Fatalf("retained=%d offsets=%v", n, f.offsets)
+	}
+}
+
+// Real feeds grow between requests, not just between scheduler cycles.
+type shiftingFeed struct {
+	*movingFeed
+	insert bool
+}
+
+func (f *shiftingFeed) Recent(ctx context.Context, id string, offset, limit int) ([]core.Release, error) {
+	if offset > 0 && f.insert {
+		f.items = append(feedItems(9000, 7), f.items...)
+		f.insert = false
+	}
+	return f.movingFeed.Recent(ctx, id, offset, limit)
+}
+func TestFeedCatchupToleratesNewPostsBetweenHeadAndContinuation(t *testing.T) {
+	x := setup(t)
+	x.c.Availability.Verify = false
+	x.c.Availability.MaxPages = 2
+	f := &shiftingFeed{movingFeed: &movingFeed{sources: x.f.sources, items: feedItems(0, 600)}}
+	x.s.d.Feeds = f
+	if err := x.s.Cycle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := x.s.checkpoint(t.Context(), f.sources[0])
+	f.insert = true
+	x.now = x.now.Add(15 * time.Minute)
+	if err := x.s.Cycle(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := x.s.checkpoint(t.Context(), f.sources[0])
+	if after.offset <= before.offset {
+		t.Fatalf("new posts forced catch-up backwards: %+v -> %+v", before, after)
+	}
+	for i := 0; i < 16; i++ {
+		x.now = x.now.Add(15 * time.Minute)
+		if err := x.s.Cycle(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var n int
+	if err := x.s.db.QueryRow(`SELECT COUNT(*) FROM availability_feed_items`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 607 {
+		t.Fatalf("missed releases: %d", n)
 	}
 }
