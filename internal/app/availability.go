@@ -36,3 +36,9 @@ func (a *App) invalidateRelease(ctx context.Context, id string) {
 		a.availability.Invalidate(ctx, id)
 	}
 }
+
+func (a *App) observeSearch(ctx context.Context, t *core.Title, rs []core.Release) {
+	if a.availability != nil {
+		a.availability.RecordSearch(ctx, t, rs)
+	}
+}

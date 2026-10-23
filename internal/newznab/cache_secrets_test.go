@@ -83,6 +83,18 @@ func TestCachedResultsHoldNoAPIKeyAndStillDownload(t *testing.T) {
 	if b, err := m.FetchNZB(ctx, cached[0]); err != nil || string(b) != fakeNZB || grabs.Load() != 1 {
 		t.Fatalf("download after hydration: %v grabs=%d", err, grabs.Load())
 	}
+	// Feed bootstrap reads paid-for results locally without spending a hit/grab.
+	beforeHits, beforeGrabs := searches.Load(), grabs.Load()
+	observed, err := m.CachedReleases(ctx)
+	if err != nil || len(observed) != 1 || observed[0].NZBURL != first[0].NZBURL || searches.Load() != beforeHits || grabs.Load() != beforeGrabs {
+		t.Fatal("cached discovery issued a request or lost authenticated descriptor", err)
+	}
+	rotated := cfg
+	rotated.URL = "https://changed.invalid"
+	other := NewManager(db, []config.Indexer{rotated}, Options{})
+	if rs, err := other.CachedReleases(ctx); err != nil || len(rs) != 0 {
+		t.Fatal("bulk cache reused another destination", err)
+	}
 	// A changed key misses the cache instead of hydrating another key.
 	cfg.APIKey = "rotated-key"
 	c := New(cfg, db, Options{})

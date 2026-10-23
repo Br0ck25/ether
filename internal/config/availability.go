@@ -1,7 +1,7 @@
 package config
 
-// Availability controls discovery independently of playback and catalogue
-// eligibility. Zero budgets disable the corresponding background work.
+// Availability bounds automatic recent-release monitoring and optional checks.
+// Zero budgets disable the corresponding background work.
 type Availability struct {
 	Monitor        bool     `json:"monitor"`
 	Verify         bool     `json:"verify"`
@@ -20,5 +20,5 @@ type Availability struct {
 }
 
 func DefaultAvailability() Availability {
-	return Availability{PollMinutes: 30, MaxPages: 3, FeedRequests: 100, CheckRequests: 100, Grabs: 20, Checks: 20, CheckBytes: 512 << 20, ReservePercent: 80, Debrid: true, PreferVerified: true, NewlyAvailable: true}
+	return Availability{Monitor: true, PollMinutes: 30, MaxPages: 3, FeedRequests: 100, CheckRequests: 100, Grabs: 20, Checks: 20, CheckBytes: 512 << 20, ReservePercent: 80, Debrid: true, PreferVerified: true, NewlyAvailable: true}
 }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
 )
@@ -54,4 +55,55 @@ func (m *Manager) Recent(ctx context.Context, id string, offset, limit int) ([]c
 		return c.doSearch(ctx, url.Values{"t": {"search"}, "extended": {"1"}, "cat": {joinCats(cats)}, "offset": {strconv.Itoa(max(0, offset))}, "limit": {strconv.Itoa(min(100, max(1, limit)))}})
 	}
 	return nil, fmt.Errorf("release-feed source no longer configured")
+}
+
+// CachedReleases reuses a bounded set of already-paid-for search/feed results.
+// It performs no requests, capability discovery, cache refresh, or downloads.
+func (m *Manager) CachedReleases(ctx context.Context) ([]core.Release, error) {
+	if m.db == nil {
+		return nil, nil
+	}
+	clients := map[string]*Client{}
+	for _, c := range m.Clients() {
+		if c.Config().Enabled {
+			clients[c.indexerID()] = c
+		}
+	}
+	rows, err := m.db.QueryContext(ctx, `SELECT indexer_id,results FROM newznab_cache WHERE expires_at>? ORDER BY expires_at DESC LIMIT 100`, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []core.Release
+	seen := map[string]bool{}
+	for rows.Next() {
+		var id, raw string
+		if err = rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		c := clients[id]
+		if c == nil {
+			continue
+		}
+		// Bulk reuse must establish the same configuration binding as cacheKey.
+		// Older cache rows remain usable by exact Search, but cannot be bulk adopted.
+		var doc cachedResults
+		if json.Unmarshal([]byte(raw), &doc) != nil || doc.Identity != searchIdentity(c.Config()) {
+			continue
+		}
+		rs, ok := c.decodeCached(raw)
+		if !ok {
+			continue
+		}
+		for _, r := range rs {
+			if !seen[r.ID] {
+				seen[r.ID] = true
+				out = append(out, r)
+				if len(out) >= 5000 {
+					return out, nil
+				}
+			}
+		}
+	}
+	return out, rows.Err()
 }

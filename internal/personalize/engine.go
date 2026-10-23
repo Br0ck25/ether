@@ -61,6 +61,7 @@ type UserSource interface {
 // Options build an Engine. DB and Catalog are required; every other
 // dependency is optional and its rows simply drop out when absent.
 type Options struct {
+	FilterAvailable func(context.Context, []core.Title) []core.Title
 	// Owner previews use the same effective viewer and title policy as Plex.
 	UserPolicy func(*core.User) *core.User
 	Allowed    func(*core.User, *core.Title) bool
@@ -575,12 +576,38 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 		key.lead = lead.sig
 	}
 	_, draft := ctx.Value(draftLayoutKey{}).(core.HomeLayout)
+	hidden := map[core.RatingKey]bool{}
+	if e.opts.FilterAvailable != nil {
+		var pool []core.Title
+		for _, row := range append(append([]*candRow{}, m.rows...), owner...) {
+			for _, it := range row.items {
+				pool = append(pool, it.t)
+				hidden[it.t.Key] = true
+			}
+			for _, items := range row.typed {
+				for _, it := range items {
+					pool = append(pool, it.t)
+					hidden[it.t.Key] = true
+				}
+			}
+		}
+		for _, t := range e.opts.FilterAvailable(ctx, pool) {
+			delete(hidden, t.Key)
+		}
+		keys := make([]int64, 0, len(hidden))
+		for k := range hidden {
+			keys = append(keys, int64(k))
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		key.limits += fmt.Sprint(keys)
+	}
 	if ent, ok := e.memoGet(key); ok && !draft {
 		p.Rows, p.HomeDeduped = ent.rows, ent.deduped
 		return p
 	}
 	a := &assembly{
 		minRow: max(e.opts.MinRowItems, 0),
+		hidden: hidden,
 		layout: &layoutDoc,
 		model:  m, user: u, hc: hc, section: section, limit: limit, owner: owner,
 		global: stats.global, arms: stats.users[u.ID], allowed: e.allowedFor(&u), explore: e.opts.Exploration, day: day,

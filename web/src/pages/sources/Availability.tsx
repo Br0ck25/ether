@@ -128,7 +128,7 @@ export function Availability() {
           </div>
           <p className="text-sm text-fg-muted">{s.message}</p>
           <p className="mt-2 text-xs text-fg-muted">
-            Discover in batches. Check selectively. Keep search complete.
+            Recent movies need release evidence for 60 days; episodes for 24 hours. Suitable releases unlock immediately. Older titles need no background scan.
           </p>
         </div>
         <div className="flex gap-2">
@@ -286,7 +286,7 @@ export function Availability() {
                 label="Monitor release feeds"
                 value={draft.monitor}
                 onChange={(v) => change("monitor", v)}
-                help="Follow recent releases from your selected indexers, with bounded catch-up after downtime."
+                help="Use your configured indexers automatically. No separate RSS URL. Requests count toward API budgets; catch-up is bounded."
               />
               <BoolRow
                 label="Check discovered sources"
@@ -304,7 +304,7 @@ export function Availability() {
                 label="Prefer checked recommendations"
                 value={draft.preferVerified}
                 onChange={(v) => change("preferVerified", v)}
-                help="Move fresh checked movies forward in popular, trending and recommendation shelves. No titles are removed."
+                help="Move fresh checked movies forward in discovery shelves. Recent-title visibility always uses eligible release evidence."
               />
               <BoolRow
                 label="Show newly available shelves"

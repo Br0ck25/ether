@@ -45,17 +45,17 @@ type Status struct {
 
 func (s *Service) Status(ctx context.Context) (Status, error) {
 	c := s.cfg().Availability
-	out := Status{Mode: "off", Message: "Background monitoring and checks are off. Search and playback work normally.", Feeds: []FeedStatus{}, Usage: map[string]int64{}, Counts: map[string]int{}, Recent: []Observation{}, Day: s.now().UTC().Format("2006-01-02")}
+	out := Status{Mode: "off", Message: "Background monitoring and checks are off. Recent titles still require local release evidence.", Feeds: []FeedStatus{}, Usage: map[string]int64{}, Counts: map[string]int{}, Recent: []Observation{}, Day: s.now().UTC().Format("2006-01-02")}
 	if c.Monitor {
 		out.Mode = "monitoring"
-		out.Message = "Watching new releases. Search results remain independent of source evidence."
+		out.Message = "Watching configured indexers for eligible releases. Movies need evidence for 60 days; episodes for 24 hours."
 	}
 	if c.Verify {
 		out.Mode = "checking"
 		out.Message = "Checking discovered releases within the background allowance."
 	}
 	if !s.usable("") && !s.usable(core.ProtocolTorrent) {
-		out.Message = "No playback provider is enabled for availability checks. Catalogue and search remain available."
+		out.Message = "No playback provider is enabled. Older catalogue entries remain visible; recent titles need usable source evidence."
 	}
 	if s.d.Active != nil && s.d.Active() && c.Verify {
 		out.Message = "Source checks are paused while playback is active; feed monitoring can continue."

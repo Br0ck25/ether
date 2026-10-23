@@ -75,6 +75,10 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 			DB:          a.db, // plex_ultrablur
 		}
 	}
+	if !cfg.Spike.Enabled && a.availability != nil {
+		deps.Catalog = &availabilityCatalog{Catalog: a.catalog, availability: a.availability}
+		deps.FilterAvailable = a.availability.FilterDiscovery
+	}
 	deps.PrioritizeAvailable = func(ctx context.Context, items []core.Title) []core.Title {
 		if a.availability == nil {
 			return items

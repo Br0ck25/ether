@@ -34,13 +34,14 @@ const (
 
 // Options tunes a Service. Zero values get sensible defaults.
 type Options struct {
-	Discovered    func(context.Context, *core.Title) []core.Release
-	Observed      func(context.Context, *core.Title, core.Release)
-	Invalidated   func(context.Context, string)
-	Logger        *slog.Logger
-	Now           func() time.Time
-	MaxTraces     int
-	RetentionDays int // posts older than this are penalised; 0 = no extra penalty
+	SearchObserved func(context.Context, *core.Title, []core.Release)
+	Discovered     func(context.Context, *core.Title) []core.Release
+	Observed       func(context.Context, *core.Title, core.Release)
+	Invalidated    func(context.Context, string)
+	Logger         *slog.Logger
+	Now            func() time.Time
+	MaxTraces      int
+	RetentionDays  int // posts older than this are penalised; 0 = no extra penalty
 	// HealthTTL is how long a passed health check is trusted before the
 	// release is sampled again (default 6h; negative disables the cache).
 	HealthTTL time.Duration
@@ -110,14 +111,15 @@ type inflight struct {
 
 // Service implements core.Resolver.
 type Service struct {
-	discovered  func(context.Context, *core.Title) []core.Release
-	observed    func(context.Context, *core.Title, core.Release)
-	invalidated func(context.Context, string)
-	indexer     core.Indexer
-	health      core.HealthChecker
-	db          *sql.DB
-	log         *slog.Logger
-	now         func() time.Time
+	searchObserved func(context.Context, *core.Title, []core.Release)
+	discovered     func(context.Context, *core.Title) []core.Release
+	observed       func(context.Context, *core.Title, core.Release)
+	invalidated    func(context.Context, string)
+	indexer        core.Indexer
+	health         core.HealthChecker
+	db             *sql.DB
+	log            *slog.Logger
+	now            func() time.Time
 
 	cfgMu     sync.RWMutex
 	rcfg      config.Resolver
@@ -164,7 +166,7 @@ var _ core.Resolver = (*Service)(nil)
 // (typically *newznab.Manager); health may be nil (health checks are
 // then skipped); db may be nil (state then lives in memory).
 func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config.Config, opts Options) *Service {
-	s := &Service{discovered: opts.Discovered, observed: opts.Observed, invalidated: opts.Invalidated,
+	s := &Service{searchObserved: opts.SearchObserved, discovered: opts.Discovered, observed: opts.Observed, invalidated: opts.Invalidated,
 		indexer: indexer, health: health, db: db,
 		bad: map[string]badMark{}, reps: map[string]reputation{},
 		avail: map[int64]availEntry{}, searchCache: map[string]searchCacheEntry{},
@@ -503,6 +505,9 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		results = nil
 	}
 	s.rememberReleases(t, results)
+	if s.searchObserved != nil {
+		s.searchObserved(ctx, t, results)
+	}
 	for _, r := range discovered {
 		results = withRelease(results, r)
 	}

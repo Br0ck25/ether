@@ -333,3 +333,26 @@ func TestIsShort(t *testing.T) {
 		}
 	}
 }
+
+func TestAvailabilityFiltersBeforeRowSizing(t *testing.T) {
+	var pool []candItem
+	hidden := map[core.RatingKey]bool{}
+	for i := int64(1); i <= 24; i++ {
+		title := core.Title{Key: core.MovieKey(i), Type: core.TypeMovie, Title: fmt.Sprint(i), Released: testNow.AddDate(-1, 0, 0)}
+		pool = append(pool, candItem{t: title, base: 1, fit: .5})
+		if i <= 8 {
+			hidden[title.Key] = true
+		}
+	}
+	row := testRow(KindTrending, "trending", pool)
+	row.keepOrder = true
+	rows := run(emptyModel(row), func(a *assembly) { a.limit = 12; a.hidden = hidden })
+	if len(rows) != 1 || len(rows[0].Items) != 12 {
+		t.Fatalf("row not filled from eligible pool: %+v", rows)
+	}
+	for _, it := range rows[0].Items {
+		if hidden[it.Key] {
+			t.Fatal("ineligible title", it.Key)
+		}
+	}
+}

@@ -2,50 +2,62 @@ package availability
 
 import (
 	"context"
+	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/releaseparse"
 	"strings"
 	"time"
-
-	"github.com/braedonsaunders/ether/internal/core"
 )
 
-type discoveryValidator interface {
-	DiscoveryCandidate(*core.Title, core.Release) string
+// EvidenceWindow is a proof window, not a delay: an eligible observed release
+// unlocks a title immediately. Older catalogue entries do not need a scan.
+func EvidenceWindow(t core.Title, now time.Time) bool {
+	if t.Released.IsZero() || t.Key.Kind() == core.KindLocal {
+		return false
+	}
+	age := now.Sub(t.Released)
+	switch t.Type {
+	case core.TypeMovie:
+		return age < 60*24*time.Hour
+	case core.TypeEpisode:
+		return age < 24*time.Hour
+	}
+	return false
 }
 
-// FilterDiscovery hides recent movies only when all current observations are
-// explicitly unsuitable, or a recent resolve is still cooling off. Missing
-// evidence and old films do
-// not become title-wide negatives. It never runs searches or health checks.
-func (s *Service) FilterDiscovery(ctx context.Context, items []core.Title) []core.Title {
-	v, ok := s.d.Validator.(discoveryValidator)
-	if !ok {
-		return items
-	}
+// FilterDiscovery reads local observations only. A feed listing establishes
+// release existence, not guaranteed playback; playback still checks the source.
+func (s *Service) filterDiscovery(ctx context.Context, items []core.Title) []core.Title {
 	titles := map[core.RatingKey]*core.Title{}
 	keys := []core.RatingKey{}
 	for i := range items {
 		t := &items[i]
-		if t.Type == core.TypeMovie && !t.Released.IsZero() && t.Released.After(s.now().AddDate(0, -4, 0)) {
-			if titles[t.Key] == nil {
-				keys = append(keys, t.Key)
-				titles[t.Key] = t
-			}
+		if EvidenceWindow(*t, s.now()) && titles[t.Key] == nil {
+			keys = append(keys, t.Key)
+			titles[t.Key] = t
 		}
 	}
 	if len(keys) == 0 {
 		return items
 	}
-	feeds := map[string]string{}
+	feeds := map[string]core.ReleaseFeed{}
 	for _, f := range s.d.Feeds.FeedSources() {
-		feeds[f.ID] = f.Generation
+		feeds[f.ID] = f
 	}
-	unavailable := map[core.RatingKey]bool{}
+	s.attachRetained(ctx, titles, feeds)
+	unavailable := map[core.RatingKey]time.Time{}
 	if source, ok := s.d.Validator.(interface {
-		KnownUnavailable(context.Context, []core.RatingKey) map[core.RatingKey]bool
+		KnownUnavailableSince(context.Context, []core.RatingKey) map[core.RatingKey]time.Time
 	}); ok {
-		unavailable = source.KnownUnavailable(ctx, keys)
+		unavailable = source.KnownUnavailableSince(ctx, keys)
 	}
-	seen, acceptable := map[core.RatingKey]bool{}, map[core.RatingKey]bool{}
+	acceptable := map[core.RatingKey]bool{}
+	type observation struct {
+		key                                core.RatingKey
+		source, generation, payload, state string
+		firstSeen                          int64
+		revision                           int64
+	}
+	var observations []observation
 	for start := 0; start < len(keys); start += 500 {
 		batch := keys[start:min(start+500, len(keys))]
 		marks := make([]string, len(batch))
@@ -54,37 +66,72 @@ func (s *Service) FilterDiscovery(ctx context.Context, items []core.Title) []cor
 			marks[i] = "?"
 			args = append(args, k)
 		}
-		args = append(args, s.now().Add(-30*24*time.Hour).Unix())
-		rows, err := s.db.QueryContext(ctx, `SELECT rating_key,name,source_id,generation FROM availability_releases WHERE rating_key IN (`+strings.Join(marks, ",")+`) AND last_seen>=?`, args...)
+		args = append(args, s.now().Add(-61*24*time.Hour).Unix())
+		rows, err := s.db.QueryContext(ctx, `SELECT rating_key,source_id,generation,payload,state,first_seen,revision FROM availability_releases WHERE rating_key IN (`+strings.Join(marks, ",")+`) AND last_seen>=?`, args...)
 		if err != nil {
-			return items
+			continue
 		}
 		for rows.Next() {
-			var k core.RatingKey
-			var name, source, generation string
-			if rows.Scan(&k, &name, &source, &generation) != nil {
-				rows.Close()
-				return items
-			}
-			if current, exists := feeds[source]; !exists || current != generation {
-				continue
-			}
-			seen[k] = true
-			if v.DiscoveryCandidate(titles[k], core.Release{Name: name}) == "" {
-				acceptable[k] = true
+			var o observation
+			if rows.Scan(&o.key, &o.source, &o.generation, &o.payload, &o.state, &o.firstSeen, &o.revision) == nil {
+				observations = append(observations, o)
 			}
 		}
-		err = rows.Err()
 		rows.Close()
+	}
+	// Close the cursor before policy checks, which may read the same database.
+	for _, o := range observations {
+		if acceptable[o.key] || (o.state == "unknown" && o.revision > 0) || o.state == "unavailable" {
+			continue
+		}
+		f, ok := feeds[o.source]
+		if !ok || f.Generation != o.generation || !s.usable(f.Protocol) {
+			continue
+		}
+		if since, ok := unavailable[o.key]; ok && o.firstSeen <= since.Unix() {
+			continue
+		}
+		r, err := s.decode(o.payload)
 		if err != nil {
-			return items
+			continue
+		}
+		r.Info = releaseparse.Parse(r.Name)
+		_, reason, err := s.d.Validator.FeedCandidate(ctx, titles[o.key], r)
+		if err == nil && reason == "" {
+			acceptable[o.key] = true
 		}
 	}
 	out := make([]core.Title, 0, len(items))
 	for _, t := range items {
-		if !unavailable[t.Key] && (!seen[t.Key] || acceptable[t.Key]) {
+		if titles[t.Key] == nil || (!t.Released.After(s.now()) && acceptable[t.Key]) {
 			out = append(out, t)
 		}
 	}
 	return out
+}
+
+// HiddenMovies supplies SQL pagination with exclusions from the recent local
+// mirror only. No per-title provider lookup or historical catalogue walk occurs.
+func (s *Service) HiddenMovies(ctx context.Context) []core.RatingKey {
+	c, ok := s.d.Catalog.(interface {
+		RecentMovies(context.Context, time.Time) ([]core.Title, error)
+	})
+	if !ok {
+		return nil
+	}
+	items, err := c.RecentMovies(ctx, s.now().Add(-60*24*time.Hour))
+	if err != nil {
+		return nil
+	}
+	visible := map[core.RatingKey]bool{}
+	for _, t := range s.FilterDiscovery(ctx, items) {
+		visible[t.Key] = true
+	}
+	var hidden []core.RatingKey
+	for _, t := range items {
+		if !visible[t.Key] {
+			hidden = append(hidden, t.Key)
+		}
+	}
+	return hidden
 }

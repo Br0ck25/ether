@@ -205,30 +205,21 @@ func (s *Server) detail(ctx context.Context, pr *Request, t *core.Title, childre
 	return md
 }
 
-// sameDayUnavailable reports whether t is a same-day episode (<36h since its
-// nominal date) that the resolver has confirmed is not yet uploaded on
-// Usenet/debrid. When unknown, it triggers a non-blocking PreResolve probe so
-// the 3-minute availability window is populated for the next refresh.
+// sameDayUnavailable is a local visibility lookup. Merely browsing must never
+// spend search quota trying to discover an upload.
 func (s *Server) sameDayUnavailable(ctx context.Context, pr *Request, t *core.Title) bool {
 	if t == nil || t.Type != core.TypeEpisode || t.Released.IsZero() {
 		return false
 	}
-	age := s.now().Sub(t.Released)
-	if age < 0 || age > 36*time.Hour {
+	if s.d.FilterAvailable != nil {
+		return len(s.d.FilterAvailable(ctx, []core.Title{*t})) == 0
+	}
+	if age := s.now().Sub(t.Released); age < 0 || age >= 24*time.Hour {
 		return false
 	}
-	av, ok := s.d.Variants.(core.AvailabilitySource)
-	if !ok {
-		return false
-	}
-	known, available := av.Available(ctx, t.Key)
-	if known {
-		return !available
-	}
-	if pr != nil && s.d.Playback != nil {
-		if warm, ok := s.d.Playback.(core.PlaybackPreparer); ok {
-			warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
-		}
+	if av, ok := s.d.Variants.(core.AvailabilitySource); ok {
+		known, available := av.Available(ctx, t.Key)
+		return known && !available
 	}
 	return false
 }

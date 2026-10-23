@@ -26,6 +26,7 @@ import (
 const cacheFormat = 2
 
 type cachedResults struct {
+	Identity string         `json:"identity,omitempty"`
 	Format   int            `json:"format"`
 	Releases []core.Release `json:"releases"`
 }
@@ -135,7 +136,7 @@ func (c *Client) encodeCached(results []core.Release) (string, bool) {
 		}
 		out[i] = r
 	}
-	raw, err := json.Marshal(cachedResults{Format: cacheFormat, Releases: out})
+	raw, err := json.Marshal(cachedResults{Format: cacheFormat, Releases: out, Identity: searchIdentity(c.Config())})
 	if err != nil {
 		return "", false
 	}

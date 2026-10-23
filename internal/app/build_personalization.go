@@ -41,6 +41,12 @@ func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error
 	// Per-viewer Homes, built in the background and served to Plex.
 	if a.personalize, err = personalize.New(personalize.Options{
 		DB: a.db, Catalog: a.catalog, State: a.state, Events: a.state, Users: a.users,
+		FilterAvailable: func(ctx context.Context, ts []core.Title) []core.Title {
+			if a.availability == nil {
+				return ts
+			}
+			return a.availability.FilterDiscovery(ctx, ts)
+		},
 		UserPolicy: a.safety.UserPolicy, Allowed: a.safety.Allowed,
 		LLM: a.llm, Trakt: a.trakt, Playlists: a.state.Playlists(),
 		ExtraHomeRows: a.extraHomeRows,

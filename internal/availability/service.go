@@ -1,6 +1,6 @@
 // Package availability discovers releases incrementally and spends a bounded
-// background allowance validating useful candidates. Missing evidence never
-// removes a title from search, browsing, or watch history.
+// background allowance validating useful candidates. Recent releases require
+// evidence for discovery; older catalogue entries need no background search.
 package availability
 
 import (
@@ -48,12 +48,16 @@ type Deps struct {
 	Logger     *slog.Logger
 }
 type Service struct {
-	db    *sql.DB
-	cfg   func() config.Config
-	d     Deps
-	now   func() time.Time
-	log   *slog.Logger
-	runMu sync.Mutex
+	visibilityMu       sync.Mutex
+	visibilityRevision uint64
+	visibilityCache    map[string]visibilityEntry
+	db                 *sql.DB
+	cfg                func() config.Config
+	d                  Deps
+	now                func() time.Time
+	log                *slog.Logger
+	runMu              sync.Mutex
+	cacheSeeded        bool
 }
 
 func New(d Deps) (*Service, error) {
@@ -148,6 +152,12 @@ func (s *Service) Cycle(ctx context.Context) error {
 	}
 	defer s.runMu.Unlock()
 	cfg := s.cfg().Availability
+	if !s.cacheSeeded {
+		if err := s.seedCached(ctx); err != nil {
+			return err
+		}
+		s.cacheSeeded = true
+	}
 	if cfg.Monitor {
 		feeds := s.d.Feeds.FeedSources()
 		type due struct {
@@ -226,6 +236,9 @@ func (s *Service) syncFeed(parent context.Context, f core.ReleaseFeed) error {
 				overlap = true
 			}
 		}
+		if e := s.retainFeed(ctx, f, releases); e != nil {
+			return e
+		}
 		matched, e := s.d.Catalog.ReleaseMatches(ctx, releases)
 		if e != nil {
 			return e
@@ -268,6 +281,7 @@ type queued struct {
 }
 
 func (s *Service) verify(parent context.Context) error {
+	defer s.clearVisibility()
 	policy := s.policy()
 	now := s.now().Unix()
 	sources := map[string]core.ReleaseFeed{}
@@ -462,6 +476,7 @@ func (s *Service) verify(parent context.Context) error {
 // Observe reuses an actual successful resolver health check. Optimistic starts
 // and prepared sessions without health evidence do not call this method.
 func (s *Service) Observe(ctx context.Context, t *core.Title, r core.Release) {
+	defer s.clearVisibility()
 	if t == nil || !t.IsReleased(s.now()) {
 		return
 	}
@@ -520,6 +535,7 @@ func (s *Service) Candidates(ctx context.Context, t *core.Title) []core.Release 
 // Invalidate retracts positive evidence immediately when playback or the owner
 // invalidates a release. The title and its other sources remain discoverable.
 func (s *Service) Invalidate(ctx context.Context, id string) {
+	defer s.clearVisibility()
 	_, err := s.db.ExecContext(ctx, `UPDATE availability_releases SET revision=revision+1,verified_at=0,state='unknown',reason='Source health invalidated; awaiting a fresh check',next_check=0 WHERE id=? OR checked_id=?`, id, id)
 	if err != nil {
 		s.log.Debug("availability invalidation failed", "error", err)

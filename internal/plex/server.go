@@ -72,6 +72,7 @@ type SessionToucher interface {
 // Deps are the server's dependencies. Catalog, State, Auth and Playback are
 // required; the rest degrade gracefully when nil.
 type Deps struct {
+	FilterAvailable     func(context.Context, []core.Title) []core.Title
 	PrioritizeAvailable func(context.Context, []core.Title) []core.Title
 	EpisodeOrder        *episodeorder.Service
 	PlexGUID            *plexguid.Service

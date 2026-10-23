@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -48,6 +49,13 @@ func sourceSuitability(r core.Release, t *core.Title, p core.QualityProfile, c c
 // batch. It never searches, probes, or turns missing evidence into a negative.
 func (s *Service) KnownUnavailable(ctx context.Context, keys []core.RatingKey) map[core.RatingKey]bool {
 	out := map[core.RatingKey]bool{}
+	for k := range s.KnownUnavailableSince(ctx, keys) {
+		out[k] = true
+	}
+	return out
+}
+func (s *Service) KnownUnavailableSince(ctx context.Context, keys []core.RatingKey) map[core.RatingKey]time.Time {
+	out := map[core.RatingKey]time.Time{}
 	now := s.now()
 	if s.db != nil {
 		for start := 0; start < len(keys); start += 500 {
@@ -59,14 +67,15 @@ func (s *Service) KnownUnavailable(ctx context.Context, keys []core.RatingKey) m
 				args = append(args, k)
 			}
 			args = append(args, now.Unix())
-			rows, err := s.db.QueryContext(ctx, `SELECT rating_key FROM resolver_availability WHERE rating_key IN (`+strings.Join(marks, ",")+`) AND available=0 AND expires_at>?`, args...)
+			rows, err := s.db.QueryContext(ctx, `SELECT rating_key,checked_at FROM resolver_availability WHERE rating_key IN (`+strings.Join(marks, ",")+`) AND available=0 AND expires_at>?`, args...)
 			if err != nil {
 				continue
 			}
 			for rows.Next() {
 				var k core.RatingKey
-				if rows.Scan(&k) == nil {
-					out[k] = true
+				var checked int64
+				if rows.Scan(&k, &checked) == nil {
+					out[k] = time.Unix(checked, 0)
 				}
 			}
 			rows.Close()
@@ -77,7 +86,7 @@ func (s *Service) KnownUnavailable(ctx context.Context, keys []core.RatingKey) m
 	for _, k := range keys {
 		if e, ok := s.avail[int64(k)]; ok {
 			if !e.available && now.Before(e.expires) {
-				out[k] = true
+				out[k] = e.checked
 			} else {
 				delete(out, k)
 			}

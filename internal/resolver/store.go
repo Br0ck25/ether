@@ -137,6 +137,7 @@ func (s *Service) recordReputation(ctx context.Context, indexer string, success 
 }
 
 type availEntry struct {
+	checked   time.Time
 	available bool
 	expires   time.Time
 }
@@ -146,7 +147,7 @@ func (s *Service) setAvailability(ctx context.Context, key int64, available bool
 	exp := now.Add(ttl)
 	s.mu.Lock()
 	boundMap(s.avail, maxAvailEntries, func(e availEntry) bool { return now.After(e.expires) })
-	s.avail[key] = availEntry{available: available, expires: exp}
+	s.avail[key] = availEntry{available: available, expires: exp, checked: now}
 	s.mu.Unlock()
 	if s.db != nil {
 		v := 0
@@ -174,11 +175,11 @@ func (s *Service) getAvailability(ctx context.Context, key int64) (availEntry, b
 	}
 	if s.db != nil {
 		var v int
-		var exp int64
+		var exp, checked int64
 		err := s.db.QueryRowContext(ctx,
-			`SELECT available, expires_at FROM resolver_availability WHERE rating_key=?`, key).Scan(&v, &exp)
+			`SELECT available, expires_at,checked_at FROM resolver_availability WHERE rating_key=?`, key).Scan(&v, &exp, &checked)
 		if err == nil {
-			e := availEntry{available: v == 1, expires: time.Unix(exp, 0)}
+			e := availEntry{available: v == 1, expires: time.Unix(exp, 0), checked: time.Unix(checked, 0)}
 			if s.now().After(e.expires) {
 				return availEntry{}, false
 			}

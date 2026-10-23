@@ -13,6 +13,7 @@ import (
 // receives. It is pure: same inputs, same rows. Everything time-dependent
 // (rotation, exploration) is seeded by the local date.
 type assembly struct {
+	hidden   map[core.RatingKey]bool
 	previous []presentedRow // currently browsed positions; never bypass eligibility
 	model    *userModel
 	owner    []*candRow // owner collection rows for this context
@@ -485,7 +486,7 @@ func (a *assembly) contextItems(c *candRow) []candItem {
 	}
 	out := make([]candItem, 0, len(src))
 	for _, it := range src {
-		if !a.typeOK(&it.t) {
+		if a.hidden[it.t.Key] || !a.typeOK(&it.t) {
 			continue
 		}
 		if c.kind == KindShortOnTime && !isShort(&it.t) {

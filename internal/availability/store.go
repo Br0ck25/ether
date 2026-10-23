@@ -10,6 +10,14 @@ import (
 )
 
 func init() {
+	store.Register("availability", 2, `
+ CREATE TABLE availability_feed_items (
+ id TEXT NOT NULL, source_id TEXT NOT NULL, generation TEXT NOT NULL,
+ match_title TEXT NOT NULL, payload TEXT NOT NULL, seen_at INTEGER NOT NULL,
+ PRIMARY KEY(id,source_id));
+ CREATE INDEX availability_feed_match ON availability_feed_items(match_title,seen_at);
+ `)
+
 	store.Register("availability", 1, `
 CREATE TABLE availability_feeds (
  source_id TEXT PRIMARY KEY, generation TEXT NOT NULL, anchor TEXT NOT NULL DEFAULT '',
@@ -82,6 +90,7 @@ func (s *Service) budgetContext(ctx context.Context, feed bool) context.Context 
 	})
 }
 func (s *Service) remember(ctx context.Context, f core.ReleaseFeed, t core.Title, r core.Release, policy string) error {
+	defer s.clearVisibility()
 	raw, err := s.encode(r)
 	if err != nil {
 		return err
@@ -97,7 +106,14 @@ func (s *Service) remember(ctx context.Context, f core.ReleaseFeed, t core.Title
 	return err
 }
 func (s *Service) prune(ctx context.Context) error {
-	cutoff := s.now().Add(-30 * 24 * time.Hour).Unix()
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM availability_feed_items WHERE seen_at<?`, s.now().Add(-61*24*time.Hour).Unix()); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM availability_feed_items WHERE (id,source_id) IN (SELECT id,source_id FROM availability_feed_items ORDER BY seen_at DESC LIMIT 2147483647 OFFSET 30000)`); err != nil {
+		return err
+	}
+
+	cutoff := s.now().Add(-61 * 24 * time.Hour).Unix()
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM availability_releases WHERE last_seen<?`, cutoff); err != nil {
 		return err
 	}

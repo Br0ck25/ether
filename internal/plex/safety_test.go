@@ -316,3 +316,45 @@ func TestHistoryAndPosterHideBlockedShowEpisodes(t *testing.T) {
 		t.Fatalf("blocked show's episode poster used as fallback (%d fetches)", n)
 	}
 }
+
+func TestRecentAvailabilityAppliesToListsAndDirectMetadata(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.FilterAvailable = func(_ context.Context, ts []core.Title) []core.Title {
+		var out []core.Title
+		for _, v := range ts {
+			if v.Key != fightClub.Key {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	for _, path := range []string{"/library/metadata/" + fightClub.Key.String(), "/library/metadata/" + fightClub.Key.String() + "/thumb/1"} {
+		r := f.request(t, http.MethodGet, path, nil)
+		if r.Code != 404 {
+			t.Fatalf("%s: %d", path, r.Code)
+		}
+	}
+	for _, path := range []string{"/hubs", "/hubs/search?query=Fight", "/library/sections/1/all", "/hubs/sections/1"} {
+		r := f.request(t, http.MethodGet, path, nil)
+		if r.Code != 200 || strings.Contains(r.Body.String(), `title="Fjord Harbor"`) {
+			t.Fatalf("%s leaked hidden title: %d", path, r.Code)
+		}
+	}
+}
+
+func TestAvailabilityDoesNotInterruptAnOpenViewerSession(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	f.srv.d.FilterAvailable = func(context.Context, []core.Title) []core.Title { return nil }
+	user := &core.User{ID: 1, IsOwner: true}
+	if _, err := f.playback.Prepare(t.Context(), user, fightClub.Key, core.ClientCaps{ClientID: "watching"}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.srv.visibleTitle(t.Context(), user, &fightClub) {
+		t.Fatal("visibility change revoked active playback")
+	}
+	if f.srv.visibleTitle(t.Context(), &core.User{ID: 2}, &fightClub) {
+		t.Fatal("active viewer granted access to another viewer")
+	}
+}

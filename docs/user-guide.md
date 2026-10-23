@@ -414,20 +414,40 @@ work is cancelled when its last requester leaves. Disk failures fall back to
 memory/rendering rather than making posters unavailable. These caches are local
 to each server process; they are not a shared media-cache directory.
 
-### Release monitoring and recent movies
+### Release monitoring and recent availability
 
-Release monitoring and background verification must be enabled under Availability;
-“Prefer verified” alone does not poll feeds. Checks respect the configured daily
-request, grab and byte allowances and pause during playback. Verified means a
-source passed the configured policy and readability check, not that its picture
-quality or spoken language has been independently inspected.
+Ether automatically follows recent-release feeds on the Newznab/Torznab indexers
+already configured under Sources. No separate RSS URL is needed. Built-in scraper
+sites without a recent-feed API remain searchable; debrid provides streaming,
+not a global new-release feed. Monitoring defaults on for new installs. Existing
+owners can enable it under Sources > Availability. Turning monitoring off stops
+polling, but local evidence and the recent-release visibility rules still apply.
 
-Theatrical release dates do not establish a digital release. Discovery rows
-suppress movies released within the last four months when every current observed
-source is explicitly disallowed (for example CAM/HQ Pre, or a named dub that
-matches neither the original language nor a preferred language). A later suitable
-source restores the movie. Recent movies also leave discovery temporarily while
-a failed search is in its resolver cooldown. Missing evidence alone does not hide
-titles; search, watchlists and Continue Watching remain available.
-Original-language foreign films remain eligible. An explicit Play Version choice
-can select a different dub; the global CAM restriction still applies.
+Before the release or air date, titles remain hidden. From release until 60 days
+for movies, and until 24 hours for individual episodes, an eligible observed
+release is required for Plex discovery, library lists, search and detail pages.
+A suitable upload unlocks the item immediately: these are evidence windows, not
+waiting periods. Older titles keep normal catalogue visibility without scanning
+the back catalogue. The age cutoffs are assumptions, not availability guarantees.
+A missing new episode does not remove the show's older seasons or episodes.
+Watch history and saved lists are retained even when an item is temporarily hidden.
+
+Feeds, existing search-cache entries, requested searches and successful playback
+checks share local evidence. Entries arriving before an episode's metadata are
+retained for later local matching. CAM/HQ Pre and explicitly incompatible dubs
+are not suitable evidence. Current quality policy, disabled/reconfigured sources,
+source invalidations and recent failed searches are respected; a genuinely new
+eligible release can supersede an older failed search. Merely browsing does not
+launch per-title availability searches.
+
+The default feed allowance is 100 API requests per UTC day across all indexers,
+with a 30-minute polling interval and bounded catch-up pages. Two indexers need
+96 requests/day for their regular first pages; catch-up uses the same allowance.
+These are normal API hits, not free RSS traffic. Playback retains the configured
+foreground reserve. Optional background health verification has separate request,
+grab and byte budgets and pauses during playback; it is disabled by default.
+
+A listing establishes that an eligible release was observed, not guaranteed
+picture quality, spoken language or current playability. Playback still validates
+its source. Original-language foreign films remain eligible. An explicit Play
+Version choice can select a different dub; the global CAM restriction still applies.

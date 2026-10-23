@@ -37,6 +37,9 @@ func (s *Server) visibleTitle(ctx context.Context, u *core.User, t *core.Title) 
 	if !s.titleVisible(u, t) {
 		return false
 	}
+	if len(s.availableForViewer(ctx, u, []core.Title{*t})) == 0 {
+		return false
+	}
 	if t.ShowKey != 0 {
 		show, err := s.d.Catalog.Get(ctx, t.ShowKey)
 		if err != nil || !s.titleVisible(u, show) {
@@ -44,4 +47,33 @@ func (s *Server) visibleTitle(ctx context.Context, u *core.User, t *core.Title) 
 		}
 	}
 	return true
+}
+
+// Discovery evidence must not revoke a source that this viewer already has
+// open. Membership/content guards still run independently; source failure uses
+// playback's normal failover path.
+func (s *Server) availableForViewer(ctx context.Context, u *core.User, ts []core.Title) []core.Title {
+	if s.d.FilterAvailable == nil {
+		return ts
+	}
+	filtered := s.d.FilterAvailable(ctx, ts)
+	if len(filtered) == len(ts) || u == nil || s.d.Playback == nil {
+		return filtered
+	}
+	keep := map[core.RatingKey]bool{}
+	for _, t := range filtered {
+		keep[t.Key] = true
+	}
+	for _, ps := range s.d.Playback.Sessions() {
+		if ps != nil && ps.UserID == u.ID {
+			keep[ps.Key] = true
+		}
+	}
+	out := make([]core.Title, 0, len(ts))
+	for _, t := range ts {
+		if keep[t.Key] {
+			out = append(out, t)
+		}
+	}
+	return out
 }

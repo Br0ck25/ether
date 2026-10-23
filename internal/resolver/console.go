@@ -362,6 +362,9 @@ func (s *Service) SearchReleases(ctx context.Context, t *core.Title, opts Search
 	out := &ConsoleSearch{TitleKey: t.Key, TitleName: consoleTitleName(t), Profile: profile.Name,
 		Cached: cached, SearchedAt: s.now(), Duration: time.Since(start), Releases: []ConsoleRelease{}}
 	s.rememberReleases(t, results)
+	if s.searchObserved != nil {
+		s.searchObserved(ctx, t, results)
+	}
 
 	req := core.ResolveRequest{Title: t, Client: caps}
 	pinID := ""

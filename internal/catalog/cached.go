@@ -191,3 +191,8 @@ func (c *Catalog) StandaloneEpisodes(ctx context.Context, minRating float64, lim
 		LIMIT ?`
 	return c.queryTitles(ctx, q, nowTS, minRating, limit)
 }
+
+// RecentMovies reads the release-date index, without refreshing any title.
+func (c *Catalog) RecentMovies(ctx context.Context, since time.Time) ([]core.Title, error) {
+	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='movie' AND browsable=1 AND released_ts>? AND released_ts<=? ORDER BY key`, since.Unix(), c.now().Unix())
+}

@@ -304,8 +304,8 @@ func TestFailureIsSourceScopedAndSyncIsBounded(t *testing.T) {
 	if st.Counts["unavailable"] != 1 {
 		t.Fatal(st)
 	}
-	if got := x.s.Prioritize(t.Context(), []core.Title{x.cat.titles[core.MovieKey(1)]}); len(got) != 1 {
-		t.Fatal("negative removed title")
+	if got := x.s.Prioritize(t.Context(), []core.Title{x.cat.titles[core.MovieKey(1)]}); len(got) != 0 {
+		t.Fatal("failed recent release still published")
 	}
 	req := httptest.NewRequest(http.MethodPost, "/sync", nil)
 	w := httptest.NewRecorder()

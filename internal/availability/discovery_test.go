@@ -2,11 +2,10 @@ package availability
 
 import (
 	"context"
-	"testing"
-	"time"
-
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/resolver"
+	"testing"
+	"time"
 )
 
 type suitabilityValidator struct {
@@ -14,11 +13,20 @@ type suitabilityValidator struct {
 	r *resolver.Service
 }
 
-func (v suitabilityValidator) DiscoveryCandidate(t *core.Title, r core.Release) string {
-	return v.r.DiscoveryCandidate(t, r)
+func (v suitabilityValidator) FeedCandidate(ctx context.Context, t *core.Title, r core.Release) (core.Release, string, error) {
+	return v.r.FeedCandidate(ctx, t, r)
 }
 
-func TestDiscoverySuppressesOnlyKnownUnsuitableRecentMovies(t *testing.T) {
+type cooldownValidator struct {
+	suitabilityValidator
+	missing map[core.RatingKey]time.Time
+}
+
+func (v cooldownValidator) KnownUnavailableSince(context.Context, []core.RatingKey) map[core.RatingKey]time.Time {
+	return v.missing
+}
+
+func TestRecentEvidenceWindow(t *testing.T) {
 	x := setup(t)
 	r := resolver.New(nil, nil, nil, x.c, resolver.Options{})
 	defer r.Close()
@@ -27,69 +35,134 @@ func TestDiscoverySuppressesOnlyKnownUnsuitableRecentMovies(t *testing.T) {
 	title.Language = "en"
 	put := func(id, name string) {
 		t.Helper()
-		if err := x.s.remember(t.Context(), x.f.sources[0], title, core.Release{ID: id, Name: name}, x.s.policy()); err != nil {
+		if err := x.s.remember(t.Context(), x.f.sources[0], title, core.Release{ID: id, Name: name, Indexer: "Fake"}, x.s.policy()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	unknown := title
-	unknown.Key = core.MovieKey(2)
-	show := title
-	show.Type = core.TypeShow
-	show.Key = core.ShowKey(3)
-	items := []core.Title{title, unknown, show}
-	if got := x.s.FilterDiscovery(t.Context(), items); len(got) != 3 {
-		t.Fatal("missing evidence hid titles")
+	visible := func(want int) {
+		t.Helper()
+		if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != want {
+			t.Fatalf("visible=%d want=%d", len(got), want)
+		}
 	}
-	put("dub", "Film.2026.1080p.WEB-DL.[Ukr.Dub]")
-	put("cam", "Film.2026.1080p.CAM")
-	put("pre", "Film.2026.1080p.HQ.Pre.Multi")
-	got := x.s.FilterDiscovery(t.Context(), items)
-	if len(got) != 2 || got[0].Key != unknown.Key || len(items) != 3 {
-		t.Fatal("known unsuitable sources were promoted or input mutated", got)
-	}
-	// A catalogue title from years ago must not be hidden by a narrow feed sample.
-	old := title
-	old.Released = x.now.AddDate(-5, 0, 0)
-	if got := x.s.FilterDiscovery(t.Context(), []core.Title{old}); len(got) != 1 {
-		t.Fatal("old title hidden")
-	}
-	// A changed/disabled source cannot supply current negative evidence.
+	visible(0)
+	put("cam", "Film.2020.1080p.CAM")
+	put("dub", "Film.2020.1080p.WEB-DL.[Ukr.Dub]")
+	put("pre", "Film.2020.1080p.HQ.Pre.Multi")
+	visible(0)
+	put("good", "Film.2020.1080p.WEB-DL.ENG")
+	visible(1)
+	// Policy/credential changes cannot reuse old evidence.
 	x.f.sources[0].Generation = "two"
-	if got := x.s.FilterDiscovery(t.Context(), items); len(got) != 3 {
-		t.Fatal("stale source generation hid title")
-	}
+	visible(0)
 	x.f.sources[0].Generation = "one"
-	// A later suitable release restores discovery immediately, without a search.
-	put("good", "Film.2026.1080p.WEB-DL.ENG")
-	if got := x.s.FilterDiscovery(t.Context(), items); len(got) != 3 {
-		t.Fatal("new good release did not restore title")
-	}
-	x.now = x.now.Add(31 * 24 * time.Hour)
-	if got := x.s.FilterDiscovery(t.Context(), items); len(got) != 3 {
-		t.Fatal("stale evidence hid title")
+	visible(1)
+	x.s.Invalidate(t.Context(), "good")
+	visible(0)
+	title.Released = x.now.Add(-60 * 24 * time.Hour)
+	visible(1)
+	title.Released = x.now.Add(-60*24*time.Hour + time.Second)
+	visible(0)
+	// Future content remains hidden even when a named upload exists.
+	title.Released = x.now.Add(time.Hour)
+	put("future", "Film.2020.1080p.WEB-DL.ENG")
+	visible(0)
+	if x.f.calls != 0 || x.v.calls != 0 {
+		t.Fatal("browsing spent provider quota")
 	}
 }
 
-type cooldownValidator struct {
-	suitabilityValidator
-	missing map[core.RatingKey]bool
+func TestEpisodeEvidenceExpiresAtOneDayNotSeries(t *testing.T) {
+	x := setup(t)
+	ep := core.Title{Key: core.EpisodeKey(7, 1, 2), Type: core.TypeEpisode, Released: x.now.Add(-23 * time.Hour)}
+	show := core.Title{Key: core.ShowKey(7), Type: core.TypeShow, Released: x.now.AddDate(-20, 0, 0)}
+	got := x.s.FilterDiscovery(t.Context(), []core.Title{show, ep})
+	if len(got) != 1 || got[0].Key != show.Key {
+		t.Fatal(got)
+	}
+	if err := x.s.remember(t.Context(), x.f.sources[0], ep, x.release("ep"), x.s.policy()); err != nil {
+		t.Fatal(err)
+	}
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{ep}); len(got) != 1 {
+		t.Fatal("upload must unlock immediately")
+	}
+	x.s.Invalidate(t.Context(), "ep")
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{ep}); len(got) != 0 {
+		t.Fatal("invalidated upload visible")
+	}
+	x.now = x.now.Add(time.Hour)
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{ep}); len(got) != 1 {
+		t.Fatal("24h assumption did not take effect")
+	}
 }
 
-func (v cooldownValidator) KnownUnavailable(context.Context, []core.RatingKey) map[core.RatingKey]bool {
-	return v.missing
-}
-func TestDiscoveryHonorsResolverCooldownWithoutFeedEvidence(t *testing.T) {
+func TestNewReleaseOverridesEarlierUnavailableWithoutSearching(t *testing.T) {
 	x := setup(t)
 	r := resolver.New(nil, nil, nil, x.c, resolver.Options{})
 	defer r.Close()
 	title := x.cat.titles[core.MovieKey(1)]
-	missing := map[core.RatingKey]bool{title.Key: true}
+	missing := map[core.RatingKey]time.Time{title.Key: x.now}
 	x.s.d.Validator = cooldownValidator{suitabilityValidator{x.v, r}, missing}
-	if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != 0 {
-		t.Fatal("known unavailable film still recommended")
+	put := func(id string) {
+		t.Helper()
+		if err := x.s.remember(t.Context(), x.f.sources[0], title, core.Release{ID: id, Name: "Film.2020.1080p.WEB-DL", Indexer: "Fake"}, x.s.policy()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	delete(missing, title.Key)
+	put("old")
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != 0 {
+		t.Fatal("old evidence defeated negative")
+	}
+	x.now = x.now.Add(time.Minute)
+	put("new")
 	if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != 1 {
-		t.Fatal("expired cooldown still hides film")
+		t.Fatal("new release stuck behind old cooldown")
+	}
+	if x.f.calls != 0 || x.v.calls != 0 {
+		t.Fatal("provider calls")
+	}
+}
+
+func TestRetainedFeedUnlocksLaterCatalogEpisode(t *testing.T) {
+	x := setup(t)
+	r := resolver.New(nil, nil, nil, x.c, resolver.Options{})
+	defer r.Close()
+	x.s.d.Validator = suitabilityValidator{x.v, r}
+	rel := core.Release{ID: "upload", Name: "Series.S01E02.1080p.WEB-DL", Indexer: "Fake"}
+	if err := x.s.retainFeed(t.Context(), x.f.sources[0], []core.Release{rel}); err != nil {
+		t.Fatal(err)
+	}
+	ep := core.Title{Key: core.EpisodeKey(7, 1, 2), Type: core.TypeEpisode, Title: "Second", ShowTitle: "Series", Season: 1, Episode: 2, Released: x.now.Add(-time.Hour)}
+	next := ep
+	next.Key = core.EpisodeKey(7, 1, 3)
+	next.Episode = 3
+	got := x.s.FilterDiscovery(t.Context(), []core.Title{ep, next})
+	if len(got) != 1 || got[0].Key != ep.Key {
+		t.Fatalf("exact episode match: %+v", got)
+	}
+	x.s.Invalidate(t.Context(), rel.ID)
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{ep}); len(got) != 0 {
+		t.Fatal("retained feed resurrected invalidated source")
+	}
+	if x.f.calls != 0 {
+		t.Fatal("refetched feed")
+	}
+}
+
+func TestTransientCheckDoesNotEraseReleaseExistence(t *testing.T) {
+	x := setup(t)
+	title := x.cat.titles[core.MovieKey(1)]
+	if err := x.s.remember(t.Context(), x.f.sources[0], title, x.release("known"), x.s.policy()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.s.db.Exec(`UPDATE availability_releases SET state='unknown',reason='timeout'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != 1 {
+		t.Fatal("timeout erased observed existence")
+	}
+	x.s.Invalidate(t.Context(), "known")
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != 0 {
+		t.Fatal("explicit invalidation ignored")
 	}
 }
