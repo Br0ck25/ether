@@ -14,6 +14,10 @@ func init() {
  ALTER TABLE availability_feeds ADD COLUMN catchup_target TEXT NOT NULL DEFAULT '';
  ALTER TABLE availability_feeds ADD COLUMN catchup_tail TEXT NOT NULL DEFAULT '';
  ALTER TABLE availability_feeds ADD COLUMN catchup_offset INTEGER NOT NULL DEFAULT 0;
+ -- Earlier monitors only seeded the newest page and discarded gap boundaries.
+ -- Recover their recent history once, within the normal catch-up allowance.
+ UPDATE availability_feeds SET catchup_target='__ether_recent_history__',gap=1,
+ message='Recent feed history is queued for bounded catch-up';
  `)
 	store.Register("availability", 2, `
  CREATE TABLE availability_feed_items (
