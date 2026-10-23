@@ -270,7 +270,7 @@ export function Availability() {
       <RecordDrawer
         open={draft !== null}
         title="Availability settings"
-        description="Background work is optional. Search never requires availability evidence."
+        description="Polling and health checks are independently optional. Recent titles need eligible local release evidence; older titles do not."
         onClose={() => {
           if (!saving) setDraft(null);
         }}
