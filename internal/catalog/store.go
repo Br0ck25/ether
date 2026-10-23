@@ -545,7 +545,10 @@ func (c *Catalog) queryTitles(ctx context.Context, q string, args ...any) ([]cor
 		if err != nil {
 			return nil, err
 		}
-		if !st.t.Adult && st.t.IsReleased(c.now()) {
+		// Let hydration establish an undated Specials container's premiere
+		// from its aired children; all other unknown dates remain excluded.
+		undatedSpecials := st.t.Type == core.TypeSeason && st.t.Key.Season() == 0 && st.t.Released.IsZero()
+		if !st.t.Adult && (st.t.IsReleased(c.now()) || undatedSpecials) {
 			out = append(out, st.t)
 		}
 	}
@@ -555,7 +558,13 @@ func (c *Catalog) queryTitles(ctx context.Context, q string, args ...any) ([]cor
 	if err := c.hydrateSlice(ctx, out); err != nil {
 		return nil, err
 	}
-	return out, nil
+	visible := out[:0]
+	for _, t := range out {
+		if t.IsReleased(c.now()) {
+			visible = append(visible, t)
+		}
+	}
+	return visible, nil
 }
 
 func (c *Catalog) getMeta(ctx context.Context, k string) string {

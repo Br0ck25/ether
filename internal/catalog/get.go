@@ -404,7 +404,7 @@ const seasonLoads = 6
 func (c *Catalog) loadSeasons(ctx context.Context, showID int64, seasons []core.Title) error {
 	type mirrored struct{ episodes, pending int }
 	have := map[int]mirrored{}
-	rows, err := c.db.QueryContext(ctx, `SELECT season,COUNT(*),COUNT(CASE WHEN released_ts<=0 OR released_ts>? THEN 1 END)
+	rows, err := c.db.QueryContext(ctx, `SELECT season,COUNT(*),COUNT(CASE WHEN released_ts=0 OR released_ts>? THEN 1 END)
 		FROM catalog_titles WHERE type='episode' AND show_key=? GROUP BY season`, c.now().Unix(), int64(core.ShowKey(showID)))
 	if err != nil {
 		return err

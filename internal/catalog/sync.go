@@ -396,7 +396,7 @@ func (c *Catalog) WarmDetails(ctx context.Context, limit int) (int, error) {
 	rows, err := c.db.QueryContext(ctx, `
 		SELECT key FROM catalog_titles
 		WHERE browsable=1 AND adult=0 AND type IN ('movie','show')
-		  AND released_ts>0 AND released_ts<=?
+		  AND released_ts<>0 AND released_ts<=?
 		  AND (detail=0 OR (type='show' AND status='Returning Series' AND detail_at>0 AND detail_at<?))
 		ORDER BY CASE WHEN detail=0 AND released_ts>=? THEN 0 WHEN detail=0 THEN 1 ELSE 2 END ASC,
 		         popularity DESC, vote_count DESC, key ASC

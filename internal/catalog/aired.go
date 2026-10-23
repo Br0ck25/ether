@@ -10,10 +10,11 @@ import (
 
 // seasonAired is what the mirror knows about one season's aired episodes.
 type seasonAired struct {
-	released   bool // the season's own air date is known and not in the future
-	stored     int  // TMDB episode_count from the season summary
-	mirrored   bool // the season's episodes are in the mirror
-	airedCount int  // mirrored episodes with a known, past air date
+	date       int64 // zero means unknown; negative values are historical dates
+	released   bool  // the season's own air date is known and not in the future
+	stored     int   // TMDB episode_count from the season summary
+	mirrored   bool  // the season's episodes are in the mirror
+	airedCount int   // mirrored episodes with a known, past air date
 }
 
 // count is the season's aired episodes: exact once its episodes are
@@ -80,7 +81,8 @@ func applyAiredCounts(ctx context.Context, db *sql.DB, now time.Time, items []*c
 			continue
 		}
 		id := seasonID{core.RatingKey(show), season}
-		seasons[id] = &seasonAired{released: released > 0 && released <= nowTS, stored: child}
+		// Negative Unix timestamps are valid pre-1970 air dates; only zero is unknown.
+		seasons[id] = &seasonAired{date: released, released: released != 0 && released <= nowTS, stored: child}
 		order = append(order, id)
 	}
 	rows.Close()
@@ -89,20 +91,27 @@ func applyAiredCounts(ctx context.Context, db *sql.DB, now time.Time, items []*c
 	}
 	// COUNT(CASE ...) rather than SUM so both SQLite and PostgreSQL return
 	// an integer.
-	rows, err = db.QueryContext(ctx, `SELECT show_key,season,COUNT(*),COUNT(CASE WHEN released_ts>0 AND released_ts<=? AND adult=0 THEN 1 END)
-		FROM catalog_titles WHERE type='episode' AND show_key IN (`+ph+`) GROUP BY show_key,season`, append([]any{nowTS}, showArgs...)...)
+	rows, err = db.QueryContext(ctx, `SELECT show_key,season,COUNT(*),COUNT(CASE WHEN released_ts<>0 AND released_ts<=? AND adult=0 THEN 1 END),
+		COALESCE(MIN(CASE WHEN released_ts<>0 AND released_ts<=? AND adult=0 THEN released_ts END),0)
+		FROM catalog_titles WHERE type='episode' AND show_key IN (`+ph+`) GROUP BY show_key,season`, append([]any{nowTS, nowTS}, showArgs...)...)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
 		var show int64
+		var earliest int64
 		var season, total, aired int
-		if err := rows.Scan(&show, &season, &total, &aired); err != nil {
+		if err := rows.Scan(&show, &season, &total, &aired, &earliest); err != nil {
 			rows.Close()
 			return err
 		}
 		if s := seasons[seasonID{core.RatingKey(show), season}]; s != nil && total > 0 {
 			s.mirrored, s.airedCount = true, aired
+			// Specials often have no season premiere. A dated aired child is
+			// sufficient to open this container, but never overrides a future date.
+			if season == 0 && s.date == 0 && earliest != 0 {
+				s.date, s.released = earliest, true
+			}
 		}
 	}
 	rows.Close()
@@ -134,6 +143,9 @@ func applyAiredCounts(ctx context.Context, db *sql.DB, now time.Time, items []*c
 		case core.TypeSeason:
 			if s := seasons[seasonID{core.ShowKey(t.Key.TMDB()), t.Key.Season()}]; s != nil {
 				t.ChildCount = s.count()
+				if t.Released.IsZero() && t.Key.Season() == 0 && s.date != 0 {
+					t.Released = time.Unix(s.date, 0).UTC()
+				}
 			}
 		}
 	}

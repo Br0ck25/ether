@@ -221,7 +221,7 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 		like := "%" + escapeLike(f.Query) + "%"
 		args = append(args, like, like)
 	}
-	conds = append(conds, "t.released_ts>0 AND t.released_ts<=?")
+	conds = append(conds, "t.released_ts<>0 AND t.released_ts<=?")
 	args = append(args, c.now().Unix())
 	return strings.Join(conds, " AND "), args, nil
 }
@@ -250,7 +250,7 @@ func (c *Catalog) Facet(ctx context.Context, t core.MediaType, facet string) ([]
 		typeCond = "t.type=?"
 		args = append(args, string(t))
 	}
-	base := "t.browsable=1 AND t.adult=0 AND t.released_ts>0 AND t.released_ts<=? AND " + typeCond
+	base := "t.browsable=1 AND t.adult=0 AND t.released_ts<>0 AND t.released_ts<=? AND " + typeCond
 	args = append([]any{c.now().Unix()}, args...)
 	var q string
 	switch facet {
