@@ -108,7 +108,7 @@ func (s *Service) attachRetained(ctx context.Context, titles map[core.RatingKey]
 	for _, t := range titles {
 		names := []string{t.Title, t.OriginalTitle}
 		if t.Type == core.TypeEpisode {
-			names = []string{t.ShowTitle}
+			names = []string{t.ShowTitle, t.ShowOriginalTitle}
 		}
 		for _, name := range names {
 			n := releaseparse.NormalizeTitle(name)

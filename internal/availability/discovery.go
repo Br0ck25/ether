@@ -18,7 +18,7 @@ func EvidenceWindow(t core.Title, now time.Time) bool {
 	switch t.Type {
 	case core.TypeMovie:
 		return age < 60*24*time.Hour
-	case core.TypeEpisode:
+	case core.TypeEpisode, core.TypeShow:
 		return age < 24*time.Hour
 	}
 	return false
@@ -26,7 +26,7 @@ func EvidenceWindow(t core.Title, now time.Time) bool {
 
 // FilterDiscovery reads local observations only. A feed listing establishes
 // release existence, not guaranteed playback; playback still checks the source.
-func (s *Service) filterDiscovery(ctx context.Context, items []core.Title) []core.Title {
+func (s *Service) filterReleaseDiscovery(ctx context.Context, items []core.Title) []core.Title {
 	titles := map[core.RatingKey]*core.Title{}
 	keys := []core.RatingKey{}
 	for i := range items {
@@ -120,6 +120,31 @@ func (s *Service) HiddenMovies(ctx context.Context) []core.RatingKey {
 		return nil
 	}
 	items, err := c.RecentMovies(ctx, s.now().Add(-60*24*time.Hour))
+	if err != nil {
+		return nil
+	}
+	visible := map[core.RatingKey]bool{}
+	for _, t := range s.FilterDiscovery(ctx, items) {
+		visible[t.Key] = true
+	}
+	var hidden []core.RatingKey
+	for _, t := range items {
+		if !visible[t.Key] {
+			hidden = append(hidden, t.Key)
+		}
+	}
+	return hidden
+}
+
+// HiddenShows excludes first-day series before SQL pagination, just as movies.
+func (s *Service) HiddenShows(ctx context.Context) []core.RatingKey {
+	c, ok := s.d.Catalog.(interface {
+		RecentShows(context.Context, time.Time) ([]core.Title, error)
+	})
+	if !ok {
+		return nil
+	}
+	items, err := c.RecentShows(ctx, s.now().Add(-24*time.Hour))
 	if err != nil {
 		return nil
 	}

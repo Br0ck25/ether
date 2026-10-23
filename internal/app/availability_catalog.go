@@ -16,6 +16,7 @@ type availabilityCatalog struct {
 
 func (c *availabilityCatalog) Browse(ctx context.Context, q core.BrowseQuery) (core.Page, error) {
 	q.Filter.ExcludeKeys = append(append([]core.RatingKey{}, q.Filter.ExcludeKeys...), c.availability.HiddenMovies(ctx)...)
+	q.Filter.ExcludeKeys = append(q.Filter.ExcludeKeys, c.availability.HiddenShows(ctx)...)
 	return c.Catalog.Browse(ctx, q)
 }
 func (c *availabilityCatalog) Children(ctx context.Context, k core.RatingKey) ([]core.Title, error) {

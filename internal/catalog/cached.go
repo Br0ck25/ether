@@ -196,3 +196,40 @@ func (c *Catalog) StandaloneEpisodes(ctx context.Context, minRating float64, lim
 func (c *Catalog) RecentMovies(ctx context.Context, since time.Time) ([]core.Title, error) {
 	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='movie' AND browsable=1 AND released_ts>? AND released_ts<=? ORDER BY key`, since.Unix(), c.now().Unix())
 }
+
+// RecentShows only reads the local premiere-date index.
+func (c *Catalog) RecentShows(ctx context.Context, since time.Time) ([]core.Title, error) {
+	return c.queryTitles(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='show' AND browsable=1 AND released_ts>? AND released_ts<=? ORDER BY key`, since.Unix(), c.now().Unix())
+}
+
+// CachedDiscoveryEpisodes returns regular episode metadata without hydration or
+// remote lookups. Unknown/future dates are retained so callers can distinguish
+// an unmirrored premiere from a known but unreleased episode.
+func (c *Catalog) CachedDiscoveryEpisodes(ctx context.Context, shows []core.RatingKey) (map[core.RatingKey][]core.Title, error) {
+	out := map[core.RatingKey][]core.Title{}
+	for start := 0; start < len(shows); start += 500 {
+		batch := shows[start:min(start+500, len(shows))]
+		args := make([]any, len(batch))
+		for i, k := range batch {
+			args[i] = k
+		}
+		rows, err := c.db.QueryContext(ctx, `SELECT `+titleCols+` FROM catalog_titles WHERE type='episode' AND season>0 AND show_key IN (`+placeholders(len(batch))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			st, err := scanTitle(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[st.t.ShowKey] = append(out[st.t.ShowKey], st.t)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
