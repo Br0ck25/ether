@@ -25,7 +25,7 @@ func order(rows []core.HomeRow) []string {
 	return out
 }
 
-func TestTopPicksOpenEveryPage(t *testing.T) {
+func TestContinueWatchingOpensEveryPage(t *testing.T) {
 	hc := hubContext(testNow, core.DeviceTV)
 	// The order a section page is assembled in: the front end's rows first.
 	rows := []core.HomeRow{
@@ -41,7 +41,7 @@ func TestTopPicksOpenEveryPage(t *testing.T) {
 		row("movie.toprated", KindTopRated, 10),
 	}
 	got := order(arrangeLayout(rows, core.HomeLayout{}, 1, hc, "movies", 16))
-	if got[0] != "movie.top10" || got[1] != "movie.inprogress.1" {
+	if got[0] != "movie.inprogress.1" || got[1] != "movie.top10" {
 		t.Fatalf("page head = %v", got)
 	}
 	for i, id := range got {
@@ -60,7 +60,7 @@ func TestTopPicksOpenEveryPage(t *testing.T) {
 	// A viewer the taste model doesn't know yet gets the server's Top 10.
 	cold := append([]core.HomeRow{}, rows[:5]...)
 	cold = append(cold, row("movie.top10.today", KindTop10Today, 10))
-	if got := order(arrangeLayout(cold, core.HomeLayout{}, 1, hc, "movies", 16)); got[0] != "movie.top10.today" {
+	if got := order(arrangeLayout(cold, core.HomeLayout{}, 1, hc, "movies", 16)); got[0] != "movie.inprogress.1" || got[1] != "movie.top10.today" {
 		t.Fatalf("cold page head = %v", got)
 	}
 	// An empty Top 10 can't lead.
@@ -76,11 +76,11 @@ func TestTopPicksOpenEveryPage(t *testing.T) {
 		t.Fatalf("owner anchor lost slot 1: %v", got)
 	}
 	ra := core.HomeLayout{Global: []core.LayoutPage{{Section: "movies", Rows: []core.RowPolicy{{Row: KindRecentlyAdded, Status: "always", Slot: 2}}}}}
-	if got := order(arrangeLayout(rows, ra, 1, hc, "movies", 16)); got[0] != "movie.top10" || got[1] != "movie.recentlyadded.1" {
+	if got := order(arrangeLayout(rows, ra, 1, hc, "movies", 16)); got[0] != "movie.inprogress.1" || got[1] != "movie.recentlyadded.1" {
 		t.Fatalf("owner policy on Recently Added ignored: %v", got)
 	}
 	// A short page still keeps the feed at the bottom rather than dropping the picks.
-	if got := order(arrangeLayout(rows, core.HomeLayout{}, 1, hc, "movies", 4)); got[0] != "movie.top10" || len(got) != 4 {
+	if got := order(arrangeLayout(rows, core.HomeLayout{}, 1, hc, "movies", 4)); got[0] != "movie.inprogress.1" || len(got) != 4 {
 		t.Fatalf("short page = %v", got)
 	}
 }
@@ -148,6 +148,22 @@ func TestRowsNeverShowAHandfulOfTitles(t *testing.T) {
 			}
 			if r.Kind == KindFranchise {
 				t.Errorf("%s: franchise row shown by default", section)
+			}
+		}
+	}
+}
+
+func TestContinueWatchingFirstAcrossSurfaces(t *testing.T) {
+	for _, section := range []string{"home", "movies", "shows"} {
+		for _, n := range []int{0, 1, 8} {
+			rows := []core.HomeRow{row("top", KindTop10, 10), row("continue", KindContinue, n), row("new", KindNewReleases, 24)}
+			got := order(arrangeLayout(rows, core.HomeLayout{}, 1, hubContext(testNow, core.DeviceTV), section, 16))
+			want := "continue"
+			if n == 0 {
+				want = "top"
+			}
+			if got[0] != want {
+				t.Fatalf("%s count=%d got=%v", section, n, got)
 			}
 		}
 	}

@@ -117,10 +117,10 @@ own history and recommendations.
 
 ## Organise your Home
 
-Movies, TV and Home lead with **Top 10 for You**, **New & Noteworthy**,
+Movies, TV and Home put populated **Continue Watching** first, followed by
+**Top 10 for You**, **New & Noteworthy**,
 **Trending This Week**, and a **Because You Watched** or **Fans Also Loved**
-row when enough eligible titles are available. Populated **Continue Watching**
-stays just after the top picks. Home mixes movies and shows in its leading
+row when enough eligible titles are available. Home mixes movies and shows in its leading
 rows; themed and type-specific rows follow. Movies and TV pages keep their own
 types. New viewers get today's Top 10 until there is enough viewing history.
 
@@ -426,7 +426,8 @@ Theatrical release dates do not establish a digital release. Discovery rows
 suppress movies released within the last four months when every current observed
 source is explicitly disallowed (for example CAM/HQ Pre, or a named dub that
 matches neither the original language nor a preferred language). A later suitable
-source restores the movie. Missing evidence and temporary provider failures do
-not hide titles; search, watchlists and Continue Watching remain available.
+source restores the movie. Recent movies also leave discovery temporarily while
+a failed search is in its resolver cooldown. Missing evidence alone does not hide
+titles; search, watchlists and Continue Watching remain available.
 Original-language foreign films remain eligible. An explicit Play Version choice
 can select a different dub; the global CAM restriction still applies.

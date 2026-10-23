@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"context"
 	"strings"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -41,4 +42,46 @@ func sourceSuitability(r core.Release, t *core.Title, p core.QualityProfile, c c
 		}
 	}
 	return "dub audio does not match the original or preferred languages"
+}
+
+// KnownUnavailable returns only unexpired resolver negatives, in one local
+// batch. It never searches, probes, or turns missing evidence into a negative.
+func (s *Service) KnownUnavailable(ctx context.Context, keys []core.RatingKey) map[core.RatingKey]bool {
+	out := map[core.RatingKey]bool{}
+	now := s.now()
+	if s.db != nil {
+		for start := 0; start < len(keys); start += 500 {
+			batch := keys[start:min(start+500, len(keys))]
+			marks := make([]string, len(batch))
+			args := make([]any, 0, len(batch)+1)
+			for i, k := range batch {
+				marks[i] = "?"
+				args = append(args, k)
+			}
+			args = append(args, now.Unix())
+			rows, err := s.db.QueryContext(ctx, `SELECT rating_key FROM resolver_availability WHERE rating_key IN (`+strings.Join(marks, ",")+`) AND available=0 AND expires_at>?`, args...)
+			if err != nil {
+				continue
+			}
+			for rows.Next() {
+				var k core.RatingKey
+				if rows.Scan(&k) == nil {
+					out[k] = true
+				}
+			}
+			rows.Close()
+		}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, k := range keys {
+		if e, ok := s.avail[int64(k)]; ok {
+			if !e.available && now.Before(e.expires) {
+				out[k] = true
+			} else {
+				delete(out, k)
+			}
+		}
+	}
+	return out
 }

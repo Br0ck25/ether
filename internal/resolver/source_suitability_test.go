@@ -2,7 +2,9 @@ package resolver
 
 import (
 	"fmt"
+	"github.com/braedonsaunders/ether/internal/store"
 	"testing"
+	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
@@ -50,5 +52,32 @@ func TestFeedAndPlaybackRejectForeignDub(t *testing.T) {
 	_, reason, err := s.FeedCandidate(t.Context(), title, r)
 	if err != nil || reason == "" {
 		t.Fatalf("feed reason=%q err=%v", reason, err)
+	}
+}
+
+func TestKnownUnavailableExpiresAndClearsOnSuccess(t *testing.T) {
+	now := time.Now()
+	db := store.OpenTest(t)
+	s := New(&fakeIndexer{}, nil, db, testCfg(), Options{Now: func() time.Time { return now }})
+	defer s.Close()
+	s.setAvailability(t.Context(), 42, false, time.Minute)
+	keys := []core.RatingKey{42, 43}
+	if got := s.KnownUnavailable(t.Context(), keys); !got[42] || got[43] {
+		t.Fatal(got)
+	}
+	// A new service sees the persisted cooldown; no provider call is needed.
+	other := New(&fakeIndexer{}, nil, db, testCfg(), Options{Now: func() time.Time { return now }})
+	defer other.Close()
+	if !other.KnownUnavailable(t.Context(), keys)[42] {
+		t.Fatal("restart lost cooldown")
+	}
+	now = now.Add(2 * time.Minute)
+	if len(s.KnownUnavailable(t.Context(), keys)) != 0 {
+		t.Fatal("expired cooldown retained")
+	}
+	s.setAvailability(t.Context(), 42, false, time.Minute)
+	s.setAvailability(t.Context(), 42, true, time.Minute)
+	if len(s.KnownUnavailable(t.Context(), keys)) != 0 {
+		t.Fatal("success did not clear cooldown")
 	}
 }

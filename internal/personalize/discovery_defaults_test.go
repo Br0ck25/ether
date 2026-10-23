@@ -29,7 +29,7 @@ func TestDiscoveryHeadAcrossPagesAndRenderedMetadata(t *testing.T) {
 					got := order(arrangeLayout(input, core.HomeLayout{}, 1, hubContext(testNow, core.DeviceWeb), section, 8))
 					want := []string{"top", "new", "trend", "crowd"}
 					if populated {
-						want = []string{"top", "cw", "new", "trend", "crowd"}
+						want = []string{"cw", "top", "new", "trend", "crowd"}
 					}
 					if !reflect.DeepEqual(got[:len(want)], want) {
 						t.Fatalf("rendered=%v populated=%v: %v", rendered, populated, got)

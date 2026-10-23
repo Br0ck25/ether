@@ -13,7 +13,8 @@ type discoveryValidator interface {
 }
 
 // FilterDiscovery hides recent movies only when all current observations are
-// explicitly unsuitable. Missing evidence, provider failures and old films do
+// explicitly unsuitable, or a recent resolve is still cooling off. Missing
+// evidence and old films do
 // not become title-wide negatives. It never runs searches or health checks.
 func (s *Service) FilterDiscovery(ctx context.Context, items []core.Title) []core.Title {
 	v, ok := s.d.Validator.(discoveryValidator)
@@ -37,6 +38,12 @@ func (s *Service) FilterDiscovery(ctx context.Context, items []core.Title) []cor
 	feeds := map[string]string{}
 	for _, f := range s.d.Feeds.FeedSources() {
 		feeds[f.ID] = f.Generation
+	}
+	unavailable := map[core.RatingKey]bool{}
+	if source, ok := s.d.Validator.(interface {
+		KnownUnavailable(context.Context, []core.RatingKey) map[core.RatingKey]bool
+	}); ok {
+		unavailable = source.KnownUnavailable(ctx, keys)
 	}
 	seen, acceptable := map[core.RatingKey]bool{}, map[core.RatingKey]bool{}
 	for start := 0; start < len(keys); start += 500 {
@@ -75,7 +82,7 @@ func (s *Service) FilterDiscovery(ctx context.Context, items []core.Title) []cor
 	}
 	out := make([]core.Title, 0, len(items))
 	for _, t := range items {
-		if !seen[t.Key] || acceptable[t.Key] {
+		if !unavailable[t.Key] && (!seen[t.Key] || acceptable[t.Key]) {
 			out = append(out, t)
 		}
 	}

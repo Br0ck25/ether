@@ -1,6 +1,7 @@
 package availability
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -66,5 +67,29 @@ func TestDiscoverySuppressesOnlyKnownUnsuitableRecentMovies(t *testing.T) {
 	x.now = x.now.Add(31 * 24 * time.Hour)
 	if got := x.s.FilterDiscovery(t.Context(), items); len(got) != 3 {
 		t.Fatal("stale evidence hid title")
+	}
+}
+
+type cooldownValidator struct {
+	suitabilityValidator
+	missing map[core.RatingKey]bool
+}
+
+func (v cooldownValidator) KnownUnavailable(context.Context, []core.RatingKey) map[core.RatingKey]bool {
+	return v.missing
+}
+func TestDiscoveryHonorsResolverCooldownWithoutFeedEvidence(t *testing.T) {
+	x := setup(t)
+	r := resolver.New(nil, nil, nil, x.c, resolver.Options{})
+	defer r.Close()
+	title := x.cat.titles[core.MovieKey(1)]
+	missing := map[core.RatingKey]bool{title.Key: true}
+	x.s.d.Validator = cooldownValidator{suitabilityValidator{x.v, r}, missing}
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != 0 {
+		t.Fatal("known unavailable film still recommended")
+	}
+	delete(missing, title.Key)
+	if got := x.s.FilterDiscovery(t.Context(), []core.Title{title}); len(got) != 1 {
+		t.Fatal("expired cooldown still hides film")
 	}
 }
