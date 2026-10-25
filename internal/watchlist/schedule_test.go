@@ -73,3 +73,16 @@ func TestRunPassesAtStartByDefault(t *testing.T) {
 	defer stop()
 	waitPasses(t, &n, 1, 2*time.Second)
 }
+
+func TestFutureRecordedPassCannotDeferMoreThanOneInterval(t *testing.T) {
+	db := store.OpenTest(t)
+	now := time.Now().Round(0)
+	s := New(db, Options{SyncInterval: time.Hour, ResumeSchedule: true, Now: func() time.Time { return now }})
+	future := now.Add(72 * time.Hour)
+	s.o.Now = func() time.Time { return future }
+	s.recordPass(t.Context())
+	s.o.Now = func() time.Time { return now }
+	if got := s.untilDue(t.Context()); got != time.Hour {
+		t.Fatalf("clock correction postpones work for %v", got)
+	}
+}

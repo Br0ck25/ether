@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
 // DefaultFeedBase is where release manifests live when config has no
@@ -293,24 +294,13 @@ func (c *Client) Poll(ctx context.Context, interval, firstDelay time.Duration, o
 			}
 		}
 	}
-	if firstDelay > 0 {
-		t := time.NewTimer(firstDelay)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return
-		case <-t.C:
-		}
+	if !schedule.Wait(ctx, time.Now, firstDelay) {
+		return
 	}
-	check()
-	tk := time.NewTicker(interval)
-	defer tk.Stop()
-	for {
-		select {
-		case <-ctx.Done():
+	for ctx.Err() == nil {
+		check()
+		if !schedule.Wait(ctx, time.Now, interval) {
 			return
-		case <-tk.C:
-			check()
 		}
 	}
 }

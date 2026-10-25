@@ -651,3 +651,42 @@ func TestManagerRebuildsClientOnChannelChange(t *testing.T) {
 		t.Fatalf("channel change: checks=%d built=%v", h.checker.checks, built)
 	}
 }
+
+// Use a real clock value with monotonic metadata: a fake time.Date alone cannot
+// catch deadlines that accidentally retain elapsed-time semantics across sleep.
+func TestManagerWallClockResumeAndRetry(t *testing.T) {
+	now := time.Now()
+	h := newHarness(t, func(o *ManagerOptions) { o.Now = func() time.Time { return now }; o.SelfApply = false })
+	if h.m.nextCheck != h.m.nextCheck.Round(0) {
+		t.Fatal("startup deadline retains monotonic clock")
+	}
+	now = now.Add(72 * time.Hour).Round(0)
+	h.checker.checkErr = errors.New("offline")
+	h.m.step(t.Context())
+	if h.checker.checks != 1 || h.m.lastErr == "" {
+		t.Fatal("overdue check not attempted")
+	}
+	if h.m.nextCheck != h.m.nextCheck.Round(0) {
+		t.Fatal("retry deadline retains monotonic clock")
+	}
+	for range 5 {
+		h.m.step(t.Context())
+	}
+	if h.checker.checks != 1 {
+		t.Fatal("missed intervals replayed or retry ignored")
+	}
+	now = now.Add(h.m.opts.RetryInterval)
+	h.checker.checkErr = nil
+	h.m.step(t.Context())
+	if h.checker.checks != 2 || h.m.lastErr != "" {
+		t.Fatal("failed check did not recover")
+	}
+	if len(h.restarts) != 0 {
+		t.Fatal("notify-only check restarted the server")
+	}
+	now = now.Add(-7 * 24 * time.Hour)
+	h.m.step(t.Context())
+	if h.m.nextCheck.Sub(now) > h.m.opts.PollInterval {
+		t.Fatal("backwards clock correction postponed checks beyond a period")
+	}
+}

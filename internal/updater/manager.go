@@ -278,7 +278,7 @@ func (m *Manager) Run(ctx context.Context) {
 }
 
 func (m *Manager) begin() {
-	now := m.opts.Now()
+	now := m.opts.Now().Round(0)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.startedAt = now
@@ -319,7 +319,7 @@ func (m *Manager) wake() {
 
 // step is one evaluation of the state machine at the injected clock.
 func (m *Manager) step(ctx context.Context) {
-	now := m.opts.Now()
+	now := m.opts.Now().Round(0)
 	m.confirmIfHealthy(now)
 	m.coordinate(ctx)
 	feedKey := clientKey(m.opts.Config())
@@ -335,6 +335,11 @@ func (m *Manager) step(ctx context.Context) {
 		m.idleSince = now
 	}
 	enabled := m.opts.NewClient != nil && !m.noKey
+	// Correcting a badly advanced system clock must not defer checks for
+	// days. Keep at most one normal polling interval after the correction.
+	if now.Before(m.lastCheck) && m.nextCheck.Sub(now) > m.opts.PollInterval {
+		m.nextCheck = now.Add(m.opts.PollInterval)
+	}
 	// A channel/feed change in settings re-checks right away.
 	due := !now.Before(m.nextCheck) || (m.client != nil && feedKey != m.clientKey)
 	stop := m.restarting
@@ -866,7 +871,7 @@ type ClusterUpdateStatus struct {
 // Status snapshots the manager.
 func (m *Manager) Status() ManagerStatus {
 	cfg := m.opts.Config()
-	now := m.opts.Now()
+	now := m.opts.Now().Round(0)
 	start, end := windowBounds(cfg)
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -15,6 +15,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/schedule"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -420,15 +421,10 @@ func (s *Service) Hubs(ctx context.Context, u *core.User, limit int) ([]core.Hub
 // once and then every SyncInterval; with ResumeSchedule the first pass
 // waits out the interval since the last recorded pass.
 func (s *Service) Run(ctx context.Context) {
-	if wait := s.untilDue(ctx); wait > 0 {
-		t := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return
-		case <-t.C:
-		}
+	if !schedule.Wait(ctx, s.o.Now, s.untilDue(ctx)) {
+		return
 	}
+
 	run := func() {
 		defer s.recordPass(ctx)
 		if s.o.Users == nil {
@@ -448,15 +444,10 @@ func (s *Service) Run(ctx context.Context) {
 			cancel()
 		}
 	}
-	run()
-	ticker := time.NewTicker(s.o.SyncInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
+	for ctx.Err() == nil {
+		run()
+		if !schedule.Wait(ctx, s.o.Now, s.o.SyncInterval) {
 			return
-		case <-ticker.C:
-			run()
 		}
 	}
 }
@@ -474,7 +465,7 @@ func (s *Service) untilDue(ctx context.Context) time.Duration {
 	if err != nil || ms <= 0 {
 		return 0
 	}
-	return max(time.UnixMilli(ms).Add(s.o.SyncInterval).Sub(s.o.Now()), 0)
+	return min(s.o.SyncInterval, max(time.UnixMilli(ms).Add(s.o.SyncInterval).Sub(s.o.Now().Round(0)), 0))
 }
 
 // recordPass notes a finished (or attempted) pass for ResumeSchedule.

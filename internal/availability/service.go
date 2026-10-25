@@ -18,6 +18,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
 type Feeds interface {
@@ -172,7 +173,7 @@ func (s *Service) Cycle(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			if at == 0 || s.now().Sub(time.Unix(at, 0)) >= time.Duration(max(5, cfg.PollMinutes))*time.Minute {
+			if at == 0 || schedule.Due(s.now(), time.Unix(at, 0), time.Duration(max(5, cfg.PollMinutes))*time.Minute) {
 				work = append(work, due{f, at})
 			}
 		}

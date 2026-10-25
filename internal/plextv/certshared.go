@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
 // Cluster nodes share one plex.direct certificate. With
@@ -110,14 +112,7 @@ func (m *CertManager) RunSharedSync(ctx context.Context, every time.Duration) {
 	if every <= 0 {
 		every = DefaultCertSyncInterval
 	}
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
+	for schedule.Wait(ctx, time.Now, every) {
 		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		if _, err := m.SyncShared(sctx); err != nil && ctx.Err() == nil {
 			m.o.Logger.Warn("sync shared certificate", "err", err)

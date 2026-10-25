@@ -23,6 +23,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/playback"
+	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
 // Hints is what prefetch needs from playback; *playback.Manager implements it.
@@ -488,21 +489,33 @@ func clampLen(off, length, size int64) int64 {
 
 func (p *Prefetcher) warmLoop() {
 	defer p.wg.Done()
-	t := time.NewTicker(p.opts.WarmInterval)
+	deadline := schedule.New(p.opts.Now(), p.opts.WarmInterval)
+	t := time.NewTimer(min(p.opts.WarmInterval, schedule.MaxWait))
 	defer t.Stop()
 	for {
 		select {
 		case <-p.ctx.Done():
 			return
 		case <-t.C:
+			if left := deadline.Remaining(p.opts.Now()); left > 0 {
+				t.Reset(min(left, schedule.MaxWait))
+				continue
+			}
 		case <-p.warmC:
+			t.Stop()
 		}
+		if p.ctx.Err() != nil {
+			return
+		}
+
 		ctx, cancel := context.WithTimeout(p.ctx, time.Minute)
 		if err := p.warmPass(ctx); err != nil && p.ctx.Err() == nil {
 			p.log.Warn("keep-warm pass failed", "err", err)
 		}
 		cancel()
 		p.prune()
+		deadline = schedule.New(p.opts.Now(), p.opts.WarmInterval)
+		t.Reset(min(p.opts.WarmInterval, schedule.MaxWait))
 	}
 }
 

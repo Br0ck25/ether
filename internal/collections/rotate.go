@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
 // rotate picks the subset of keys shown in the current period. Over one
@@ -120,5 +121,5 @@ func (s *Service) due(row *specRow) bool {
 	if row.spec.Refresh == RefreshLive {
 		return false
 	}
-	return s.now().Sub(row.lastBuilt) >= refreshInterval(row.spec.Refresh)
+	return schedule.Due(s.now(), row.lastBuilt, refreshInterval(row.spec.Refresh))
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
 // The learned ranker: a feedback-driven correction on top of the
@@ -281,14 +282,12 @@ func (e *Engine) rankerLoop(ctx context.Context) {
 	defer e.wg.Done()
 	rs := e.rk
 	every := min(rs.opts.TrainEvery, time.Hour)
-	t := time.NewTicker(every)
-	defer t.Stop()
 	var lastPurge, lastTrain time.Time
 	if m := rs.model.Load(); m != nil {
 		lastTrain = m.TrainedAt
 	}
 	for {
-		now := e.now()
+		now := e.now().Round(0)
 		if now.Sub(lastPurge) > 24*time.Hour {
 			lastPurge = now
 			if n, err := purgeServes(ctx, rs.db, now, rs.opts.Retention, rs.opts.MaxItems); err != nil {
@@ -314,10 +313,8 @@ func (e *Engine) rankerLoop(ctx context.Context) {
 				}
 			}
 		}
-		select {
-		case <-ctx.Done():
+		if !schedule.Wait(ctx, e.now, every) {
 			return
-		case <-t.C:
 		}
 	}
 }

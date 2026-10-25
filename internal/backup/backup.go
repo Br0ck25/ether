@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/schedule"
 	"github.com/braedonsaunders/ether/internal/store"
 	"io"
 	"net/url"
@@ -603,7 +604,7 @@ func (s *Service) Run(ctx context.Context, onError func(error)) {
 			return
 		case <-tick.C:
 			v, e := s.Settings(ctx)
-			if e == nil && v.IntervalHours > 0 && time.Now().Unix()-v.LastRun >= int64(v.IntervalHours)*3600 {
+			if e == nil && v.IntervalHours > 0 && schedule.Due(time.Now(), time.Unix(v.LastRun, 0), time.Duration(v.IntervalHours)*time.Hour) {
 				_, e = s.Create(ctx)
 			}
 			if e != nil && onError != nil {

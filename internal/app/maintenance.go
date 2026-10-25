@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/schedule"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -58,14 +59,9 @@ func (a *App) runPruners(ctx context.Context) {
 // maintainDB prunes derived data and runs store.Maintain daily until ctx
 // ends.
 func (a *App) maintainDB(ctx context.Context) {
-	timer := time.NewTimer(dbMaintenanceDelay)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
+	delay := dbMaintenanceDelay
+	for schedule.Wait(ctx, time.Now, delay) {
+		delay = dbMaintenanceInterval
 		start := time.Now()
 		a.runPruners(ctx)
 		if err := store.Maintain(ctx, a.db); err != nil {
@@ -73,9 +69,9 @@ func (a *App) maintainDB(ctx context.Context) {
 				return
 			}
 			a.log.Warn("database maintenance", "err", err)
+			delay = dbMaintenanceDelay
 		} else {
-			a.log.Debug("database maintenance done", "took", time.Since(start))
+			a.log.Info("database maintenance done", "took", time.Since(start))
 		}
-		timer.Reset(dbMaintenanceInterval)
 	}
 }

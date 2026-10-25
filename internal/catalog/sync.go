@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/schedule"
 	"github.com/braedonsaunders/ether/internal/tmdb"
 )
 
@@ -98,46 +99,44 @@ func (c *Catalog) SyncProgress() SyncProgress {
 func (c *Catalog) Run(ctx context.Context) {
 	if wait := c.untilDue(ctx); wait > 0 {
 		c.log.Info("catalog: resuming the sync schedule", "next_sync_in", wait.Round(time.Second))
-		t := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			t.Stop()
+		if !schedule.Wait(ctx, c.now, wait) {
 			return
-		case <-t.C:
 		}
 	}
-	if err := c.Sync(ctx); err != nil && ctx.Err() == nil {
-		c.log.Error("catalog: initial sync", "err", err)
-	}
-	for {
-		refreshTimer := time.NewTimer(c.refreshInterval())
-		warmTicker := time.NewTicker(90 * time.Second)
-		newReleaseTicker := time.NewTicker(4 * time.Hour)
-	waitLoop:
-		for {
-			select {
-			case <-ctx.Done():
-				refreshTimer.Stop()
-				warmTicker.Stop()
-				newReleaseTicker.Stop()
-				return
-			case <-warmTicker.C:
-				if !c.syncing.Load() {
-					_, _ = c.WarmDetails(ctx, 25)
-				}
-			case <-newReleaseTicker.C:
-				if !c.syncing.Load() {
-					c.syncNewReleases(ctx)
-					_, _ = c.WarmDetails(ctx, 25)
-				}
-			case <-refreshTimer.C:
-				warmTicker.Stop()
-				newReleaseTicker.Stop()
-				break waitLoop
+	full := schedule.New(c.now(), 0)
+	warm := schedule.New(c.now(), 90*time.Second)
+	recent := schedule.New(c.now(), 4*time.Hour)
+	for ctx.Err() == nil {
+		if full.Remaining(c.now()) == 0 {
+			err := c.Sync(ctx)
+			delay := c.refreshInterval()
+			if err != nil && ctx.Err() == nil {
+				c.log.Error("catalog: refresh sync", "err", err)
+				delay = min(delay, 5*time.Minute)
 			}
+			full = schedule.New(c.now(), delay)
 		}
-		if err := c.Sync(ctx); err != nil && ctx.Err() == nil {
-			c.log.Error("catalog: refresh sync", "err", err)
+		if ctx.Err() != nil {
+			return
+		}
+		if recent.Remaining(c.now()) == 0 {
+			if !c.syncing.Load() {
+				c.syncNewReleases(ctx)
+			}
+			recent = schedule.New(c.now(), 4*time.Hour)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if warm.Remaining(c.now()) == 0 {
+			if !c.syncing.Load() {
+				_, _ = c.WarmDetails(ctx, 25)
+			}
+			warm = schedule.New(c.now(), 90*time.Second)
+		}
+		delay := min(schedule.MaxWait, full.Remaining(c.now()), warm.Remaining(c.now()), recent.Remaining(c.now()))
+		if !schedule.Wait(ctx, c.now, delay) {
+			return
 		}
 	}
 }
@@ -159,7 +158,7 @@ func (c *Catalog) untilDue(ctx context.Context) time.Duration {
 	if err != nil || n <= 0 {
 		return 0 // never synced: sync now
 	}
-	return max(time.Unix(n, 0).Add(c.refreshInterval()).Sub(c.now()), 0)
+	return min(c.refreshInterval(), max(time.Unix(n, 0).Add(c.refreshInterval()).Sub(c.now().Round(0)), 0))
 }
 
 // Sync (re)builds the browsable set from TMDB discover. A second call while

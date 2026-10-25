@@ -399,7 +399,9 @@ func (r *Registrar) due(task string, every time.Duration) bool {
 	now := r.o.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if now.Before(r.next[task]) {
+	// Compare wall time: publishing and friend refresh must account for
+	// time spent asleep, just like stored expiry dates.
+	if now.Round(0).Before(r.next[task].Round(0)) {
 		return false
 	}
 	r.next[task] = now.Add(every)

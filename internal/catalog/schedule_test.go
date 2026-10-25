@@ -91,3 +91,30 @@ func TestRunSyncsAtStartByDefault(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+func TestRunBoundsFutureRecordedSyncAfterClockCorrection(t *testing.T) {
+	db := store.OpenTest(t)
+	_, err := db.Exec(`INSERT INTO catalog_meta(k,v) VALUES('last_sync',?)`, time.Now().Add(72*time.Hour).Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := fakeTMDB(t)
+	client := tmdb.New("testkey", slog.Default(), tmdb.WithBaseURL(srv.URL))
+	t.Cleanup(client.Close)
+	cfg := config.Catalog{RefreshInterval: config.Duration(40 * time.Millisecond)}
+	c, err := catalog.New(db, client, cfg, slog.Default(), catalog.WithResumeSchedule())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	deadline := time.Now().Add(2 * time.Second)
+	for c.SyncProgress().StartedAt.IsZero() {
+		if time.Now().After(deadline) {
+			t.Fatal("future timestamp postponed sync after clock correction")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

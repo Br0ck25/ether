@@ -12,6 +12,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/recommend"
+	"github.com/braedonsaunders/ether/internal/schedule"
 )
 
 // ---- model cache and background builds ------------------------------------------
@@ -213,7 +214,7 @@ func (e *Engine) scheduler(ctx context.Context) {
 	lastPurge := time.Time{}
 	tick := func() {
 		e.refreshActive(ctx)
-		if e.now().Sub(lastPurge) > 24*time.Hour {
+		if e.now().Round(0).Sub(lastPurge.Round(0)) > 24*time.Hour {
 			lastPurge = e.now()
 			if n, err := e.store.purge(ctx, e.now(), e.opts.Retention); err != nil {
 				e.log.Warn("personalize: retention failed", "err", err)
@@ -222,15 +223,10 @@ func (e *Engine) scheduler(ctx context.Context) {
 			}
 		}
 	}
-	tick()
-	t := time.NewTicker(e.opts.RefreshEvery)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
+	for ctx.Err() == nil {
+		tick()
+		if !schedule.Wait(ctx, e.now, e.opts.RefreshEvery) {
 			return
-		case <-t.C:
-			tick()
 		}
 	}
 }
