@@ -160,8 +160,14 @@ func TestAlignTimeAndMapOffset(t *testing.T) {
 	if got := MapOffset(1<<28, a, b); got != 1<<30 {
 		t.Fatalf("MapOffset = %d", got)
 	}
-	if alignPacket(188*10+5) != 1880 {
+	if alignPacket(188*10+5, tsPacket) != 1880 {
 		t.Fatal("alignPacket")
+	}
+	if alignPacket(192*10+5, tsPacketSize("mpegts", "Movie.m2ts")) != 1920 {
+		t.Fatal("alignPacket m2ts")
+	}
+	if tsPacketSize("mpegts", "Movie.ts") != tsPacket || tsPacketSize("mpegts", "clip.MTS") != bdavPacket {
+		t.Fatal("tsPacketSize")
 	}
 }
 
@@ -624,10 +630,45 @@ func TestFailoverMidResponseSplicesTS(t *testing.T) {
 	if !bytes.Equal(body[:a.FailFrom], expected("A", 0, a.FailFrom)) {
 		t.Fatal("prefix not from A")
 	}
-	newOff := alignPacket(a.FailFrom * sizeB / sizeA)
+	newOff := alignPacket(a.FailFrom*sizeB/sizeA, tsPacket)
 	rest := int64(sizeA) - a.FailFrom
 	if !bytes.Equal(body[a.FailFrom:], expected("B", newOff, rest)) {
 		t.Fatal("suffix not spliced from B at the aligned mapped offset")
+	}
+}
+
+func TestFailoverMidResponseSplicesBDAVOnPacketBoundary(t *testing.T) {
+	const sizeA, sizeB = 192 * 1000, 192 * 3000
+	a := &fakeRelease{ID: "A", Name: "A.m2ts", Size: sizeA, Duration: 50 * time.Second, FailFrom: 192*500 + 17, FailTo: 192 * 600}
+	b := &fakeRelease{ID: "B", Name: "B.m2ts", Size: sizeB, Duration: 50 * time.Second}
+	h := newHarness(t, []*fakeRelease{a, b}, []string{"A", "B"})
+	ps := h.prepare(owner, movieKey, "c1")
+	srv := directPlayServer(t, h.m, ps.ID)
+
+	resp, body, err := get(t, srv.URL, nil)
+	if err != nil || resp.StatusCode != 200 || len(body) != sizeA {
+		t.Fatalf("splice: %d %v len=%d", resp.StatusCode, err, len(body))
+	}
+	newOff := alignPacket(a.FailFrom*sizeB/sizeA, bdavPacket)
+	if newOff%192 != 0 || newOff%188 == 0 {
+		t.Fatalf("test offset %d does not distinguish packet sizes", newOff)
+	}
+	if !bytes.Equal(body[a.FailFrom:], expected("B", newOff, int64(sizeA)-a.FailFrom)) {
+		t.Fatal("suffix not spliced from B at a 192-byte packet boundary")
+	}
+}
+
+func TestFailoverMidResponseDoesNotSpliceAcrossPacketSizes(t *testing.T) {
+	const sizeA, sizeB = 188 * 1000, 192 * 3000
+	a := &fakeRelease{ID: "A", Name: "A.ts", Size: sizeA, Duration: 50 * time.Second, FailFrom: 188*500 + 17, FailTo: 188 * 600}
+	b := &fakeRelease{ID: "B", Name: "B.m2ts", Size: sizeB, Duration: 50 * time.Second}
+	h := newHarness(t, []*fakeRelease{a, b}, []string{"A", "B"})
+	ps := h.prepare(owner, movieKey, "c1")
+	srv := directPlayServer(t, h.m, ps.ID)
+
+	_, body, _ := get(t, srv.URL, nil)
+	if int64(len(body)) != a.FailFrom || !bytes.Equal(body, expected("A", 0, a.FailFrom)) {
+		t.Fatalf("response continued past the failure into another packet size: len=%d", len(body))
 	}
 }
 
