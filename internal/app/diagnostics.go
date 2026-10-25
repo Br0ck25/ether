@@ -43,7 +43,7 @@ func (a *App) diagnosticsHandler() http.Handler {
 		key, err := os.Stat(filepath.Join(a.opts.DataDir, config.CredentialKeyFile))
 		private := err == nil && key.Mode().Perm()&0077 == 0
 		add("Credential storage", private, "Configuration secrets use authenticated encryption with a private local key.", "Keep the data directory and complete backup bundles private.")
-		steps = append(steps, diagnostic{"Compatibility version", "ok", plextv.PMSVersion(cfg), "Override or disable automatic tracking in Plex settings if a client regression occurs."})
+		steps = append(steps, diagnostic{"Compatibility version", "ok", plextv.PMSVersion(cfg), "Ether reports the PMS version its responses were verified against unless you override it or opt into tracking the latest public release in Plex settings."})
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"checkedAt": time.Now(), "steps": steps, "remote": st, "compatibilityVersion": plextv.PMSVersion(cfg), "latestPublicVersion": cfg.Plex.LatestCompatibilityVersion, "limits": "Account settings and paid app features follow Plex's account authorization and entitlements."})
 	})
