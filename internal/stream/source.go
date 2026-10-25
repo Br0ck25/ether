@@ -187,19 +187,19 @@ func readPlan(ctx context.Context, e *Engine, rel *release, p *plan, buf []byte,
 				return 0, fmt.Errorf("stream: %s layout keeps changing: %w", p.name, ErrCorrupt)
 			}
 			// Fetch the wanted segments speculatively while the volume
-			// headers are checked; they are usually right.
-			for _, pc := range pcs {
-				pf := p.vols[pc.vol]
-				for _, i := range pf.slotsFor(pc.off, pc.n) {
-					go func(i int) { _, _ = e.segment(ctx, rel, pf, i, prio, fo) }(i)
+			// headers are checked; they are usually right. The read below
+			// joins the same flights, so these waiters are canceled and
+			// joined before returning, and never enter repair themselves.
+			stop := speculate(ctx, e, rel, p, pcs, prio, fo)
+			err := p.ensure(ctx, v, unverified)
+			if err != nil || p.layout().version != lay.version {
+				stop()
+				if err != nil {
+					return 0, err
 				}
-			}
-			if err := p.ensure(ctx, v, unverified); err != nil {
-				return 0, err
-			}
-			if p.layout().version != lay.version {
 				continue
 			}
+			defer stop()
 		}
 		var n int
 		for _, pc := range pcs {
@@ -214,6 +214,21 @@ func readPlan(ctx context.Context, e *Engine, rel *release, p *plan, buf []byte,
 		}
 		return n, nil
 	}
+}
+
+// speculate starts one fetch per slot of pcs and returns a function that
+// cancels and joins them.
+func speculate(ctx context.Context, e *Engine, rel *release, p *plan, pcs []piece, prio core.Priority, fo fetchOpts) func() {
+	ctx, cancel := context.WithCancel(ctx)
+	fo.noRepair = true
+	var wg sync.WaitGroup
+	for _, pc := range pcs {
+		pf := p.vols[pc.vol]
+		for _, i := range pf.slotsFor(pc.off, pc.n) {
+			wg.Go(func() { _, _ = e.segment(ctx, rel, pf, i, prio, fo) })
+		}
+	}
+	return func() { cancel(); wg.Wait() }
 }
 
 // readAhead updates the reader cursors and schedules background fetches
