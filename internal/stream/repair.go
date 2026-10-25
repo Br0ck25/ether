@@ -572,7 +572,6 @@ func (e *Engine) repairArticle(parent context.Context, r *release, pf *postedFil
 	}
 	for j := first; j <= last; j++ {
 		e.hot.put(segKey{r.digest, pf.segBase + j}, seg)
-
 	}
 
 	e.persistRepair(fo.cacheID, pf.segBase+first, pf.segBase+last, seg)
@@ -610,9 +609,13 @@ func (e *Engine) persistRepair(cacheID string, first, last int, seg *segData) {
 	go func() {
 		defer e.wg.Done()
 		defer func() { <-e.repairPersist }()
-		data := encodeSegment(seg)
-		for j := first; j <= last; j++ {
-			if err := e.cache.Put(cacheID, j, data); err != nil {
+		// Store the span once; the other slots it covers reference it.
+		if err := e.cache.Put(cacheID, first, encodeSegment(seg)); err != nil {
+			e.log.Debug("repair cache write failed", "err", err)
+			return
+		}
+		for j := first + 1; j <= last; j++ {
+			if err := e.cache.Put(cacheID, j, encodeSpanRef(first, seg)); err != nil {
 				e.log.Debug("repair cache write failed", "err", err)
 			}
 		}

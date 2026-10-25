@@ -26,13 +26,15 @@ type segData struct {
 func (s *segData) end() int64 { return s.begin + int64(len(s.data)) }
 
 // hotBuffer is a byte-bounded LRU of decoded segments shared by every
-// source of an Engine.
+// source of an Engine. A repaired span is stored under each slot it covers;
+// its bytes are charged once, while any of those keys holds it.
 type hotBuffer struct {
 	mu    sync.Mutex
 	limit int64
 	used  int64
 	ll    *list.List
 	items map[segKey]*list.Element
+	refs  map[*segData]int
 }
 
 type hotEntry struct {
@@ -41,7 +43,7 @@ type hotEntry struct {
 }
 
 func newHotBuffer(limit int64) *hotBuffer {
-	return &hotBuffer{limit: limit, ll: list.New(), items: map[segKey]*list.Element{}}
+	return &hotBuffer{limit: limit, ll: list.New(), items: map[segKey]*list.Element{}, refs: map[*segData]int{}}
 }
 
 func (h *hotBuffer) get(k segKey) (*segData, bool) {
@@ -70,23 +72,44 @@ func (h *hotBuffer) put(k segKey, s *segData) {
 	defer h.mu.Unlock()
 	if el, ok := h.items[k]; ok {
 		old := el.Value.(*hotEntry)
-		h.used += int64(len(s.data)) - int64(len(old.seg.data))
-		old.seg = s
+		if old.seg != s {
+			h.release(old.seg)
+			h.retain(s)
+			old.seg = s
+		}
 		h.ll.MoveToFront(el)
 	} else {
 		h.items[k] = h.ll.PushFront(&hotEntry{key: k, seg: s})
-		h.used += int64(len(s.data))
+		h.retain(s)
 	}
 	for h.used > h.limit {
 		el := h.ll.Back()
 		if el == nil {
 			break
 		}
-		e := el.Value.(*hotEntry)
-		h.ll.Remove(el)
-		delete(h.items, e.key)
-		h.used -= int64(len(e.seg.data))
+		h.remove(el)
 	}
+}
+
+func (h *hotBuffer) retain(s *segData) {
+	if h.refs[s] == 0 {
+		h.used += int64(len(s.data))
+	}
+	h.refs[s]++
+}
+
+func (h *hotBuffer) release(s *segData) {
+	if h.refs[s]--; h.refs[s] <= 0 {
+		delete(h.refs, s)
+		h.used -= int64(len(s.data))
+	}
+}
+
+func (h *hotBuffer) remove(el *list.Element) {
+	e := el.Value.(*hotEntry)
+	h.ll.Remove(el)
+	delete(h.items, e.key)
+	h.release(e.seg)
 }
 
 // dropRelease removes every segment of a release state.
@@ -95,11 +118,8 @@ func (h *hotBuffer) dropRelease(rel string) {
 	defer h.mu.Unlock()
 	for el := h.ll.Front(); el != nil; {
 		next := el.Next()
-		e := el.Value.(*hotEntry)
-		if e.key.rel == rel {
-			h.ll.Remove(el)
-			delete(h.items, e.key)
-			h.used -= int64(len(e.seg.data))
+		if el.Value.(*hotEntry).key.rel == rel {
+			h.remove(el)
 		}
 		el = next
 	}

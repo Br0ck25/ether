@@ -384,3 +384,85 @@ func TestRepairSummariesAvoidEvictedSourceRedownload(t *testing.T) {
 		t.Fatal(n, err, e.Stats())
 	}
 }
+
+// A repaired span covering several article slots is charged once in the hot
+// buffer and stored once on disk, with the other slots referencing it.
+func TestRepairedSpanStoredOnce(t *testing.T) {
+	f, doc, want := repairPost(t)
+	f.setMissing(postID("repair.mkv", 4))
+	f.setMissing(postID("repair.mkv", 5))
+	cache, err := segcache.Open(t.TempDir(), 1<<20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	e := newTestEngine(t, f, cache, repairOpts())
+	src := openSource(t, e, "span", doc)
+	buf := make([]byte, 20000)
+	if n, err := src.ReadAt(buf, 15360); err != nil || n != len(buf) || !bytes.Equal(buf, want[15360:35360]) {
+		t.Fatal(n, err, e.Stats())
+	}
+
+	e.hot.mu.Lock()
+	unique := map[*segData]bool{}
+	var charged int64
+	spanKeys := 0
+	for _, el := range e.hot.items {
+		seg := el.Value.(*hotEntry).seg
+		if seg.repairedSpan {
+			spanKeys++
+		}
+		if !unique[seg] {
+			unique[seg] = true
+			charged += int64(len(seg.data))
+		}
+	}
+	used := e.hot.used
+	e.hot.mu.Unlock()
+	if spanKeys < 2 {
+		t.Fatalf("expected a repaired span held under several slots, got %d", spanKeys)
+	}
+	if used != charged {
+		t.Fatalf("hot buffer charges %d bytes for %d bytes of distinct segments", used, charged)
+	}
+
+	src.Close()
+	e.Close()
+	refs := 0
+	for g := range 64 {
+		if b, ok := cache.Get("span", g); ok && string(b[:4]) == spanRefMagic {
+			refs++
+		}
+	}
+	if refs == 0 {
+		t.Fatal("repaired span was not stored by reference")
+	}
+	e2 := newTestEngine(t, f, cache, Options{})
+	src2 := openSource(t, e2, "span", doc)
+	if n, err := src2.ReadAt(buf, 15360); err != nil || n != len(buf) || !bytes.Equal(buf, want[15360:35360]) {
+		t.Fatal("repaired span not durable", n, err)
+	}
+}
+
+func TestHotBufferEvictsSharedSegmentOnLastKey(t *testing.T) {
+	h := newHotBuffer(100)
+	span := &segData{data: make([]byte, 60), repairedSpan: true}
+	h.put(segKey{"r", 1}, span)
+	h.put(segKey{"r", 2}, span)
+	if h.usage() != 60 {
+		t.Fatalf("shared span charged %d", h.usage())
+	}
+	h.put(segKey{"r", 3}, &segData{data: make([]byte, 30)})
+	if h.usage() != 90 || !h.has(segKey{"r", 1}) {
+		t.Fatalf("usage=%d", h.usage())
+	}
+	h.put(segKey{"r", 4}, &segData{data: make([]byte, 30)})
+	// Evicting key 1 alone frees nothing; key 2 must go too.
+	if h.has(segKey{"r", 1}) || h.has(segKey{"r", 2}) || h.usage() != 60 {
+		t.Fatalf("usage=%d", h.usage())
+	}
+	h.dropRelease("r")
+	if h.usage() != 0 || len(h.refs) != 0 {
+		t.Fatalf("usage=%d refs=%d", h.usage(), len(h.refs))
+	}
+}
