@@ -469,3 +469,16 @@ A listing establishes that an eligible release was observed, not guaranteed
 picture quality, spoken language or current playability. Playback still validates
 its source. Original-language foreign films remain eligible. An explicit Play
 Version choice can select a different dub; the global CAM restriction still applies.
+
+### Embedding the dashboard
+
+Ether blocks framing by default. To embed its web interface in Organizr or
+another trusted dashboard, set `server.webFrameOrigins` to that dashboard's
+exact origins, for example `["http://dashboard.example:8090"]`, through the
+owner-authenticated server settings API or in `config.json` while Ether is
+stopped. Include the scheme and port, but no path or wildcard. API changes take
+effect immediately. Point the dashboard tab at Ether's `/ether/` URL.
+
+Only those origins may frame Ether; Plex sign-in and owner authentication remain
+required. Use HTTPS for both pages when the dashboard is served over HTTPS.
+An empty list restores the default framing prohibition.

@@ -66,6 +66,9 @@ type Server struct {
 	// a node with weight 2 gets twice the share of a node with weight 1.
 	// 0 means 1. Node-local; ignored on a standalone server.
 	ClusterWeight int `json:"clusterWeight,omitempty"`
+	// WebFrameOrigins permits embedding the owner UI in these exact HTTP(S)
+	// origins (for example a dashboard). Empty denies framing everywhere.
+	WebFrameOrigins []string `json:"webFrameOrigins,omitempty"`
 }
 
 type Plex struct {

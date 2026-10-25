@@ -106,6 +106,9 @@ func ValidateConfig(cfg config.Config) []FieldError {
 	}
 
 	v.port("server.port", cfg.Server.Port, false)
+	if _, err := frameOrigins(cfg.Server.WebFrameOrigins); err != nil {
+		v.add("server.webFrameOrigins", "%s", err)
+	}
 	if strings.TrimSpace(cfg.Server.FriendlyName) == "" {
 		v.add("server.friendlyName", "is required")
 	}

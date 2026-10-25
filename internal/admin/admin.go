@@ -228,7 +228,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
-	w.Header().Set("X-Frame-Options", "DENY")
+	h.frameHeaders(w.Header())
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Cache-Control", "no-store")
