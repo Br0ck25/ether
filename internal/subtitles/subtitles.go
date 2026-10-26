@@ -36,6 +36,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/retryafter"
 )
 
 // URLPrefix prefixes the ExternalURL of sidecar streams from this package.
@@ -157,11 +158,10 @@ func (s *Service) send(ctx context.Context, mk func() (*http.Request, error)) (*
 		if resp.StatusCode != http.StatusTooManyRequests || attempt > 0 {
 			return resp, nil
 		}
-		wait := time.Second
-		if secs, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && secs >= 0 {
-			wait = time.Duration(secs) * time.Second
+		wait, ok := retryafter.Parse(resp.Header.Get("Retry-After"), time.Now(), s.maxWait)
+		if !ok {
+			wait = min(time.Second, s.maxWait)
 		}
-		wait = min(wait, s.maxWait)
 		resp.Body.Close()
 		t := time.NewTimer(wait)
 		select {

@@ -20,13 +20,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/retryafter"
 	"github.com/braedonsaunders/ether/internal/state"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -284,9 +284,9 @@ func (c *Client) do(ctx context.Context, method, path string, payload any, token
 			return resp.StatusCode, nil, err
 		}
 		if resp.StatusCode == http.StatusTooManyRequests && attempt == 0 && ctx.Err() == nil {
-			wait := c.maxWait
-			if secs, err := strconv.Atoi(retryAfter); err == nil && secs >= 0 {
-				wait = min(time.Duration(secs)*time.Second, c.maxWait)
+			wait, ok := retryafter.Parse(retryAfter, c.now(), c.maxWait)
+			if !ok {
+				wait = c.maxWait
 			}
 			c.log.Debug("trakt rate limited, retrying", "path", path, "wait", wait)
 			t := time.NewTimer(wait)

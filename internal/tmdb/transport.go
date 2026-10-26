@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/retryafter"
 )
 
 // rateLimiter is a token bucket whose rate can change at run time (a
@@ -257,7 +258,7 @@ func (c *Client) doWithRetry(ctx context.Context, full, etag string, cfg clientS
 				if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 					lastErr = he
 					wait := backoff
-					if ra := parseRetryAfter(resp.Header.Get("Retry-After")); ra > 0 {
+					if ra, _ := retryafter.Parse(resp.Header.Get("Retry-After"), time.Now(), 0); ra > 0 {
 						wait = ra
 					}
 					if attempt < c.opts.maxRetries {
@@ -314,22 +315,6 @@ func parseHTTPError(code int, b []byte) *HTTPError {
 		body = body[:512]
 	}
 	return &HTTPError{StatusCode: code, StatusMsg: payload.StatusMessage, Body: body}
-}
-
-func parseRetryAfter(v string) time.Duration {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return 0
-	}
-	if n, err := strconv.Atoi(v); err == nil {
-		return time.Duration(n) * time.Second
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d
-		}
-	}
-	return 0
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

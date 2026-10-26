@@ -22,6 +22,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/retryafter"
 )
 
 const (
@@ -387,11 +388,7 @@ func (c *Client) setHeaders(h http.Header, token string) {
 
 func parseAPIError(method, path string, resp *http.Response, body []byte) *APIError {
 	e := &APIError{Method: method, Path: path, Status: resp.StatusCode}
-	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if s, err := strconv.Atoi(ra); err == nil {
-			e.RetryAfter = time.Duration(s) * time.Second
-		}
-	}
+	e.RetryAfter, _ = retryafter.Parse(resp.Header.Get("Retry-After"), time.Now(), 0)
 	trim := bytes.TrimSpace(body)
 	switch {
 	case bytes.HasPrefix(trim, []byte("{")):

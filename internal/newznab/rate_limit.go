@@ -3,12 +3,10 @@ package newznab
 import (
 	"context"
 	"database/sql"
-	"net/http"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/retryafter"
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
@@ -38,16 +36,10 @@ const defaultRateLimitPause = 15 * time.Minute
 const maxRateLimitPause = 24 * time.Hour
 
 func retryTime(header string, now time.Time) time.Time {
-	at := now.Add(defaultRateLimitPause)
-	if seconds, err := strconv.ParseInt(strings.TrimSpace(header), 10, 64); err == nil && seconds >= 0 && seconds <= int64((1<<63-1)/int64(time.Second)) {
-		at = now.Add(max(time.Second, time.Duration(seconds)*time.Second))
-	} else if t, err := http.ParseTime(header); err == nil && t.After(now) {
-		at = t
+	if d, ok := retryafter.Parse(header, now, maxRateLimitPause); ok {
+		return now.Add(max(time.Second, d))
 	}
-	if limit := now.Add(maxRateLimitPause); at.After(limit) {
-		at = limit
-	}
-	return at
+	return now.Add(defaultRateLimitPause)
 }
 
 func (c *Client) rateLimitUntil(ctx context.Context) (time.Time, error) {
