@@ -36,6 +36,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 	"github.com/braedonsaunders/ether/internal/retryafter"
 )
 
@@ -82,19 +83,13 @@ type Service struct {
 
 	mu        sync.Mutex
 	token     string // login token, cached
-	flights   map[string]*flight
+	flights   flight.Group[string, string]
 	negative  map[string]time.Time // title+lang -> when nothing was found
 	quotaTill time.Time            // downloads refused until then
 
 	alignLanguages []string
 	aligner        *Aligner
 	alignOnce      sync.Once
-}
-
-type flight struct {
-	done chan struct{}
-	id   string
-	err  error
 }
 
 // New builds a Service. A disabled service returns no sidecars.
@@ -136,7 +131,7 @@ func New(opts Options) *Service {
 	}
 	return &Service{
 		cfg: opts.Config, dir: opts.CacheDir, base: strings.TrimSuffix(opts.BaseURL, "/"),
-		http: opts.HTTPClient, log: opts.Logger, agent: opts.UserAgent, flights: map[string]*flight{},
+		http: opts.HTTPClient, log: opts.Logger, agent: opts.UserAgent,
 		negative: map[string]time.Time{}, negTTL: opts.NegativeTTL, maxWait: opts.MaxRetryAfter, now: opts.Now,
 		alignLanguages: alignLangs,
 	}
@@ -603,57 +598,36 @@ func (s *Service) cached(id, format string) bool {
 }
 
 // fetchAndCache downloads + normalises a candidate, single-flighted per id.
+// Downloads count against the account's quota, so the work stays with the
+// caller that started it.
 func (s *Service) fetchAndCache(ctx context.Context, id string, c Candidate) (string, error) {
 	if s.dir != "" && s.cached(id, "srt") && s.cached(id, "vtt") {
 		return id, nil
 	}
-	s.mu.Lock()
-	if f, ok := s.flights[id]; ok {
-		s.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.id, f.err
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-	}
-	f := &flight{done: make(chan struct{})}
-	s.flights[id] = f
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.flights, id)
-		s.mu.Unlock()
-		close(f.done)
-	}()
-
-	raw, err := s.download(ctx, c)
-	if err != nil {
-		f.err = err
-		return "", err
-	}
-	srt, vtt, err := NormalizeLang(raw, c.Language)
-	if err != nil {
-		f.err = err
-		return "", err
-	}
-	if s.dir != "" {
-		if err := os.MkdirAll(s.dir, 0o755); err != nil {
-			f.err = err
+	return s.flights.Do(ctx, id, func(ctx context.Context) (string, error) {
+		raw, err := s.download(ctx, c)
+		if err != nil {
 			return "", err
 		}
-		meta, _ := json.Marshal(map[string]any{"fileId": c.FileID, "language": c.Language, "release": c.Release, "fetchedAt": s.now().UTC()})
-		// .json first and .srt last: cached() checks srt+vtt, so a crash
-		// mid-write never leaves a half-visible entry.
-		for _, w := range []struct{ name, data string }{{id + ".json", string(meta)}, {id + ".vtt", vtt}, {id + ".srt", srt}} {
-			if err := writeFileAtomic(filepath.Join(s.dir, w.name), []byte(w.data)); err != nil {
-				f.err = err
+		srt, vtt, err := NormalizeLang(raw, c.Language)
+		if err != nil {
+			return "", err
+		}
+		if s.dir != "" {
+			if err := os.MkdirAll(s.dir, 0o755); err != nil {
 				return "", err
 			}
+			meta, _ := json.Marshal(map[string]any{"fileId": c.FileID, "language": c.Language, "release": c.Release, "fetchedAt": s.now().UTC()})
+			// .json first and .srt last: cached() checks srt+vtt, so a crash
+			// mid-write never leaves a half-visible entry.
+			for _, w := range []struct{ name, data string }{{id + ".json", string(meta)}, {id + ".vtt", vtt}, {id + ".srt", srt}} {
+				if err := writeFileAtomic(filepath.Join(s.dir, w.name), []byte(w.data)); err != nil {
+					return "", err
+				}
+			}
 		}
-	}
-	f.id = id
-	return id, nil
+		return id, nil
+	})
 }
 
 // normLang folds "en"/"eng"/"EN"/"en-US" to a comparable 2-letter code

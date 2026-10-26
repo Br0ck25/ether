@@ -119,7 +119,7 @@ func TestUnknownTokenValidationCapacity(t *testing.T) {
 		t.Fatalf("known owner token unavailable at capacity: %v", err)
 	}
 	s.mu.RLock()
-	n := len(s.inflight)
+	n := s.inflight.Len()
 	s.mu.RUnlock()
 	if n != 1 {
 		t.Errorf("unbounded in-flight validations: %d", n)

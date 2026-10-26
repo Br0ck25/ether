@@ -84,9 +84,7 @@ func TestTorrentFlightWaiterCancellationDoesNotCancelLeader(t *testing.T) {
 	if inner.calls.Load() != 1 || h.provs["torbox-0"].callCount("acquire") != 1 {
 		t.Fatal("concurrent request duplicated acquisition")
 	}
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if len(x.flights) != 0 {
+	if x.flights.Len() != 0 {
 		t.Fatal("completed flight leaked")
 	}
 }

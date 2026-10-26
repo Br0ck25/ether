@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/flight"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -46,12 +47,6 @@ type cachedImage struct {
 	fetchedAt   time.Time
 }
 
-type inflight struct {
-	done chan struct{}
-	img  *cachedImage
-	err  error
-}
-
 type imageCache struct {
 	client *http.Client
 	budget int64
@@ -60,16 +55,15 @@ type imageCache struct {
 	used     int64
 	ll       *list.List
 	items    map[string]*list.Element
-	inflight map[string]*inflight
+	inflight flight.Group[string, *cachedImage]
 }
 
 func newImageCache(budget int64, client *http.Client) *imageCache {
 	return &imageCache{
-		client:   client,
-		budget:   budget,
-		ll:       list.New(),
-		items:    map[string]*list.Element{},
-		inflight: map[string]*inflight{},
+		client: client,
+		budget: budget,
+		ll:     list.New(),
+		items:  map[string]*list.Element{},
 	}
 }
 
@@ -87,33 +81,19 @@ func (c *imageCache) get(ctx context.Context, u string, now time.Time) (*cachedI
 		}
 		c.removeLocked(el)
 	}
-	if f, ok := c.inflight[u]; ok {
-		c.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.img, f.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	f := &inflight{done: make(chan struct{})}
-	c.inflight[u] = f
 	c.mu.Unlock()
-
 	// The fetch is shared, so it must not die with the first requester.
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	img, err := c.fetch(fctx, u, now)
-	cancel()
-
-	c.mu.Lock()
-	f.img, f.err = img, err
-	delete(c.inflight, u)
-	if err == nil {
-		c.addLocked(img)
-	}
-	c.mu.Unlock()
-	close(f.done)
-	return img, err
+	return c.inflight.DoDetached(ctx, u, func(ctx context.Context) (*cachedImage, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		img, err := c.fetch(ctx, u, now)
+		if err == nil {
+			c.mu.Lock()
+			c.addLocked(img)
+			c.mu.Unlock()
+		}
+		return img, err
+	})
 }
 
 func (c *imageCache) fetch(ctx context.Context, u string, now time.Time) (*cachedImage, error) {

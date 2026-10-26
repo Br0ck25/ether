@@ -158,53 +158,45 @@ func (c *Client) get(ctx context.Context, path string, q url.Values) ([]byte, er
 		c.mu.Unlock()
 		return body, nil
 	}
-	if f, ok := c.flights[cacheKey]; ok {
+	c.mu.Unlock()
+	// The request runs on the leading caller's context; if that caller gives
+	// up, a waiter retries with its own.
+	body, err := c.flights.Do(ctx, cacheKey, func(ctx context.Context) ([]byte, error) {
+		c.mu.Lock()
+		e, cached := c.cache.get(cacheKey)
+		if cached && time.Now().Before(e.expires) {
+			// Filled by a request that finished as this one started.
+			c.mu.Unlock()
+			return e.body, nil
+		}
+		// Keep the stale body with its ETag: the entry may be evicted while
+		// the revalidation is in flight, and a 304 must still have a body to
+		// serve. Cached bodies are never mutated, so sharing the slice is safe.
+		var etag string
+		var staleBody []byte
+		if cached {
+			etag, staleBody = e.etag, e.body
+		}
 		c.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-f.done:
-			if f.err != nil {
-				// The leader's own context ended its request; that says
-				// nothing about this caller, which retries with its own.
-				if f.abandoned && ctx.Err() == nil {
-					return c.get(ctx, path, q)
-				}
-				return nil, f.err
-			}
-			return append([]byte(nil), f.body...), nil
+
+		body, newETag, notModified, err := c.doWithRetry(ctx, full, etag, cfg)
+		if err != nil {
+			return nil, err
 		}
-	}
-	f := &flight{done: make(chan struct{})}
-	c.flights[cacheKey] = f
-	// Keep the stale body with its ETag: the entry may be evicted while the
-	// revalidation is in flight, and a 304 must still have a body to serve.
-	// Cached bodies are never mutated, so sharing the slice is safe.
-	var etag string
-	var staleBody []byte
-	if e, ok := c.cache.get(cacheKey); ok {
-		etag, staleBody = e.etag, e.body
-	}
-	c.mu.Unlock()
-
-	body, newETag, notModified, err := c.doWithRetry(ctx, full, etag, cfg)
-
-	c.mu.Lock()
-	delete(c.flights, cacheKey)
-	if err == nil && notModified {
-		body = staleBody
-	}
-	if err == nil && c.generation == cfg.generation {
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		if notModified {
-			c.cache.put(cacheKey, cacheEntry{body: staleBody, etag: etag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
-		} else {
-			c.cache.put(cacheKey, cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
+			body = staleBody
 		}
-	}
-	f.body, f.err = body, err
-	f.abandoned = err != nil && ctx.Err() != nil
-	close(f.done)
-	c.mu.Unlock()
+		if c.generation == cfg.generation {
+			if notModified {
+				c.cache.put(cacheKey, cacheEntry{body: staleBody, etag: etag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
+			} else {
+				c.cache.put(cacheKey, cacheEntry{body: append([]byte(nil), body...), etag: newETag, expires: time.Now().Add(c.opts.cacheTTL)}, time.Now())
+			}
+		}
+		return body, nil
+	})
 	if err != nil {
 		return nil, err
 	}

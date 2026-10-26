@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 )
 
 var (
@@ -83,7 +84,7 @@ type Images struct {
 	used     int64
 	ll       *list.List
 	items    map[string]*list.Element
-	inflight map[string]*fetch
+	inflight flight.Group[string, *memImage]
 
 	diskMu    sync.Mutex
 	diskUsed  int64
@@ -94,12 +95,6 @@ type memImage struct {
 	key  string
 	data []byte
 	ct   string
-}
-
-type fetch struct {
-	done chan struct{}
-	img  *memImage
-	err  error
 }
 
 // NewImages creates an image store.
@@ -122,7 +117,7 @@ func NewImages(o ImagesOptions) *Images {
 	if o.Dir != "" {
 		_ = os.MkdirAll(o.Dir, 0o755)
 	}
-	return &Images{o: o, log: o.Logger, ll: list.New(), items: map[string]*list.Element{}, inflight: map[string]*fetch{}}
+	return &Images{o: o, log: o.Logger, ll: list.New(), items: map[string]*list.Element{}}
 }
 
 // Get returns a TMDB image at the smallest size covering width w.
@@ -156,32 +151,17 @@ func (im *Images) get(ctx context.Context, key string, load func(context.Context
 		im.mu.Unlock()
 		return img.data, img.ct, nil
 	}
-	if f, ok := im.inflight[key]; ok {
-		im.mu.Unlock()
-		select {
-		case <-f.done:
-			if f.err != nil {
-				return nil, "", f.err
-			}
-			return f.img.data, f.img.ct, nil
-		case <-ctx.Done():
-			return nil, "", ctx.Err()
+	im.mu.Unlock()
+	// The fetch is shared, so it must not die with the first requester.
+	img, err := im.inflight.DoDetached(ctx, key, func(ctx context.Context) (*memImage, error) {
+		img, err := im.loadShared(ctx, key, load)
+		if err == nil {
+			im.mu.Lock()
+			im.addLocked(img)
+			im.mu.Unlock()
 		}
-	}
-	f := &fetch{done: make(chan struct{})}
-	im.inflight[key] = f
-	im.mu.Unlock()
-
-	img, err := im.loadShared(ctx, key, load)
-
-	im.mu.Lock()
-	delete(im.inflight, key)
-	if err == nil {
-		im.addLocked(img)
-	}
-	f.img, f.err = img, err
-	im.mu.Unlock()
-	close(f.done)
+		return img, err
+	})
 	if err != nil {
 		return nil, "", err
 	}
@@ -192,8 +172,7 @@ func (im *Images) loadShared(ctx context.Context, key string, load func(context.
 	if data, ct, ok := im.readDisk(key); ok {
 		return &memImage{key: key, data: data, ct: ct}, nil
 	}
-	// The fetch is shared, so it must not die with the first requester.
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	fctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	data, ct, err := load(fctx)
 	if err != nil {

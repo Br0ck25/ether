@@ -21,6 +21,7 @@ import (
 	"sync"
 	"unicode"
 
+	"github.com/braedonsaunders/ether/internal/flight"
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/gobold"
@@ -54,14 +55,7 @@ type Renderer struct {
 	dir string
 	log *slog.Logger
 
-	mu      sync.Mutex
-	flights map[string]*renderFlight
-}
-
-type renderFlight struct {
-	done chan struct{}
-	data []byte
-	err  error
+	flights flight.Group[string, []byte]
 }
 
 // NewRenderer creates a renderer. dir "" disables the disk cache.
@@ -72,7 +66,7 @@ func NewRenderer(src ImageSource, dir string, log *slog.Logger) *Renderer {
 	if dir != "" {
 		_ = os.MkdirAll(dir, 0o755)
 	}
-	return &Renderer{src: src, dir: dir, log: log, flights: map[string]*renderFlight{}}
+	return &Renderer{src: src, dir: dir, log: log}
 }
 
 const (
@@ -110,37 +104,22 @@ func (r *Renderer) Poster(ctx context.Context, req PosterRequest) ([]byte, strin
 			return data, "image/jpeg", nil
 		}
 	}
-	r.mu.Lock()
-	if f := r.flights[key]; f != nil {
-		r.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.data, "image/jpeg", f.err
-		case <-ctx.Done():
-			return nil, "", ctx.Err()
-		}
-	}
-	f := &renderFlight{done: make(chan struct{})}
-	r.flights[key] = f
-	r.mu.Unlock()
-
-	data, transient, err := r.render(context.WithoutCancel(ctx), req)
-	// A poster drawn while member art was temporarily unreachable is served
-	// but not persisted, so the next request retries the real artwork.
-	if err == nil && path != "" && !transient {
-		tmp := path + ".tmp"
-		if werr := os.WriteFile(tmp, data, 0o644); werr == nil {
-			if os.Rename(tmp, path) != nil {
-				_ = os.Remove(tmp)
+	data, err := r.flights.DoDetached(ctx, key, func(ctx context.Context) ([]byte, error) {
+		data, transient, err := r.render(ctx, req)
+		// A poster drawn while member art was temporarily unreachable is
+		// served but not persisted, so the next request retries the real
+		// artwork.
+		if err == nil && path != "" && !transient {
+			tmp := path + ".tmp"
+			if werr := os.WriteFile(tmp, data, 0o644); werr == nil {
+				if os.Rename(tmp, path) != nil {
+					_ = os.Remove(tmp)
+				}
 			}
+			r.trim()
 		}
-		r.trim()
-	}
-	r.mu.Lock()
-	delete(r.flights, key)
-	f.data, f.err = data, err
-	r.mu.Unlock()
-	close(f.done)
+		return data, err
+	})
 	return data, "image/jpeg", err
 }
 
