@@ -33,6 +33,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 )
 
 var (
@@ -81,7 +82,7 @@ type Service struct {
 
 	mu       sync.Mutex
 	members  map[int64]*memberSet
-	flights  map[int64]*buildFlight
+	flights  flight.Group[int64, *memberSet]
 	personal map[string]personalEntry
 
 	invalMu sync.Mutex
@@ -174,7 +175,7 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 	}
 	s := &Service{db: db, cat: cat, log: log, now: time.Now,
 		liveTTL: 2 * time.Minute, tick: time.Minute, buildBudget: 20 * time.Second,
-		members: map[int64]*memberSet{}, flights: map[int64]*buildFlight{}, personal: map[string]personalEntry{},
+		members: map[int64]*memberSet{}, personal: map[string]personalEntry{},
 		opts: options{indexTTL: 2 * time.Minute}}
 	for _, fn := range opts {
 		fn(s)
@@ -276,12 +277,6 @@ func (ms *memberSet) personalRules() personalRules {
 	return personalRules{include: ms.personal, exclude: ms.personalX, any: ms.spec.Match == MatchAny, unshared: ms.unshared}
 }
 
-type buildFlight struct {
-	done chan struct{}
-	ms   *memberSet
-	err  error
-}
-
 // ErrBuiltIn is returned when deleting a built-in collection.
 var ErrBuiltIn = errors.New("built-in collections can be disabled but not deleted")
 
@@ -364,34 +359,18 @@ func (s *Service) newMemberSet(sp core.CollectionSpec, keys []core.RatingKey, un
 // build evaluates a row and persists the result. Concurrent builds of the
 // same row share one evaluation.
 func (s *Service) build(ctx context.Context, row *specRow) (*memberSet, error) {
-	s.mu.Lock()
-	if f := s.flights[row.id]; f != nil {
-		s.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.ms, f.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	f := &buildFlight{done: make(chan struct{})}
-	s.flights[row.id] = f
-	s.mu.Unlock()
-
 	// The evaluation is shared, so it must not die with the first caller.
-	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	ms, err := s.buildNow(bctx, row)
-	cancel()
-
-	s.mu.Lock()
-	delete(s.flights, row.id)
-	if err == nil {
-		s.members[row.id] = ms
-	}
-	f.ms, f.err = ms, err
-	s.mu.Unlock()
-	close(f.done)
-	return ms, err
+	return s.flights.DoDetached(ctx, row.id, func(ctx context.Context) (*memberSet, error) {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		ms, err := s.buildNow(ctx, row)
+		if err == nil {
+			s.mu.Lock()
+			s.members[row.id] = ms
+			s.mu.Unlock()
+		}
+		return ms, err
+	})
 }
 
 func (s *Service) buildNow(ctx context.Context, row *specRow) (*memberSet, error) {

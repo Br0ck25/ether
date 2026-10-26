@@ -61,6 +61,21 @@ func (m *Manager) ServeRange(w http.ResponseWriter, r *http.Request, sessionID s
 	}
 }
 
+// spliceOffset maps media time at in g to the packet-aligned offset in ng
+// where an open response continues. A client parsing one packet size cannot
+// continue into another, so a TS/BDAV mismatch ends the response instead.
+func spliceOffset(s *session, g, ng *generation, at time.Duration) (int64, bool) {
+	if !spliceable(s.container, s.name) {
+		return 0, false
+	}
+	packet := tsPacketSize(s.container, s.name)
+	info := ng.infoSnapshot()
+	if tsPacketSize(info.Container, ng.src.Name()) != packet {
+		return 0, false
+	}
+	return alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, info.Duration)), packet), true
+}
+
 // streamClient writes [vstart, vstart+length) of the session's virtual file.
 func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vstart, length int64) error {
 	g, compatible := s.directRangeGeneration()
@@ -100,11 +115,11 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 				g, srcpos = ng, s.toSource(ng, vpos)
 				continue
 			}
-			if !spliceable(s.container, s.name) {
+			pos, ok := spliceOffset(s, g, ng, at)
+			if !ok {
 				return errEndResponse
 			}
-			srcpos = alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, ng.infoSnapshot().Duration)))
-			g = ng
+			g, srcpos = ng, pos
 			continue
 		case errors.Is(rerr, io.EOF) && srcpos >= g.src.Size():
 			// The source reached its real end before the virtual range did
@@ -134,11 +149,11 @@ func (m *Manager) streamClient(ctx context.Context, w io.Writer, s *session, vst
 				g, srcpos = ng, s.toSource(ng, vpos)
 				continue
 			}
-			if !spliceable(s.container, s.name) {
+			pos, ok := spliceOffset(s, g, ng, at)
+			if !ok {
 				return errEndResponse
 			}
-			srcpos = alignPacket(ng.timeMapSnapshot().OffsetAt(AlignTime(at, g.infoSnapshot().Duration, ng.infoSnapshot().Duration)))
-			g = ng
+			g, srcpos = ng, pos
 			continue
 		case errors.Is(rerr, io.EOF):
 			return errShortSource

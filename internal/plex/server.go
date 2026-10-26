@@ -274,7 +274,7 @@ func (s *Server) identity() Identity {
 	}
 	if c.Plex.CompatibilityVersion != "" {
 		id.Version = c.Plex.CompatibilityVersion
-	} else if !c.Plex.DisableVersionTracking && c.Plex.LatestCompatibilityVersion != "" {
+	} else if c.Plex.TrackLatestVersion && c.Plex.LatestCompatibilityVersion != "" {
 		id.Version = c.Plex.LatestCompatibilityVersion
 	}
 	if id.Version == "" {

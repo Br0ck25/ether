@@ -8,7 +8,7 @@ import (
 )
 
 func (a *App) refreshCompatibility(ctx context.Context) {
-	if a.cfg.Get().Plex.DisableVersionTracking {
+	if !a.cfg.Get().Plex.TrackLatestVersion {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)

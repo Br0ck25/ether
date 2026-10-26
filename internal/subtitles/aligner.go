@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 )
 
 // Aligner implements core.TimelineAligner: it maps a moment in one release
@@ -35,12 +36,7 @@ type Aligner struct {
 	mu       sync.Mutex
 	cache    map[string]*Piecewise
 	negative map[string]time.Time
-	flights  map[string]*alignFlight
-}
-
-type alignFlight struct {
-	done chan struct{}
-	pw   *Piecewise
+	flights  flight.Group[string, *Piecewise]
 }
 
 var _ core.TimelineAligner = (*Aligner)(nil)
@@ -62,7 +58,6 @@ func (s *Service) TimelineAligner() *Aligner {
 			s:        s,
 			cache:    map[string]*Piecewise{},
 			negative: map[string]time.Time{},
-			flights:  map[string]*alignFlight{},
 		}
 	})
 	return s.aligner
@@ -184,39 +179,22 @@ func (a *Aligner) store(key string, pw *Piecewise) {
 
 // build single-flights the expensive part: timeline fetch + alignment.
 func (a *Aligner) build(ctx context.Context, key string, req core.AlignRequest) *Piecewise {
-	a.mu.Lock()
-	if f, ok := a.flights[key]; ok {
-		a.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.pw
-		case <-ctx.Done():
-			return nil
-		}
-	}
-	f := &alignFlight{done: make(chan struct{})}
-	a.flights[key] = f
-	a.mu.Unlock()
-	defer func() {
-		a.mu.Lock()
-		delete(a.flights, key)
-		a.mu.Unlock()
-		close(f.done)
-	}()
-
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-	pw := a.compute(ctx, req)
-	if pw == nil {
-		if ctx.Err() == nil { // a cancelled build is not a negative result
+	pw, _ := a.flights.Do(ctx, key, func(ctx context.Context) (*Piecewise, error) {
+		ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		defer cancel()
+		pw := a.compute(ctx, req)
+		if pw == nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err // a cancelled build is not a negative result
+			}
 			a.mu.Lock()
 			a.negative[key] = a.s.now()
 			a.mu.Unlock()
+			return nil, nil
 		}
-		return nil
-	}
-	f.pw = pw
-	a.store(key, pw)
+		a.store(key, pw)
+		return pw, nil
+	})
 	return pw
 }
 

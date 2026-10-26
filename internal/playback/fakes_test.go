@@ -374,8 +374,8 @@ func (t *fakeTranscoder) Probe(ctx context.Context, inputURL string) (*core.Medi
 		return nil, fmt.Errorf("probe: unknown header %q", h)
 	}
 	container := "mkv"
-	if strings.HasSuffix(rel.Name, ".ts") {
-		container = "mpegts"
+	if strings.HasSuffix(rel.Name, ".ts") || strings.HasSuffix(rel.Name, ".m2ts") {
+		container = "mpegts" // ffprobe reports BDAV as mpegts too
 	}
 	if strings.HasSuffix(rel.Name, ".mp4") {
 		container = "mp4"

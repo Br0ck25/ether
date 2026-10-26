@@ -20,6 +20,10 @@ func TestPublicVersionValidation(t *testing.T) {
 	}
 	c := config.Config{}
 	c.Plex.LatestCompatibilityVersion = v
+	if PMSVersion(c) != DefaultServerVersion {
+		t.Fatal("latest public version reported without opting into tracking")
+	}
+	c.Plex.TrackLatestVersion = true
 	if PMSVersion(c) != v {
 		t.Fatal("tracking ignored")
 	}

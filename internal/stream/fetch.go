@@ -43,7 +43,7 @@ type fetchOpts struct {
 	noHot          bool        // don't fill the hot buffer (background prefetch)
 }
 
-// segment returns slot i of pf: from the hot buffer, the disk cache, or
+// segmentRaw returns slot i of pf: from the hot buffer, the disk cache, or
 // Usenet, coalescing concurrent requests. The slot's index entry is
 // updated from the article's yEnc header.
 func (e *Engine) segmentRaw(ctx context.Context, rel *release, pf *postedFile, i int, prio core.Priority, fo fetchOpts) (*segData, error) {
@@ -56,13 +56,18 @@ func (e *Engine) segmentRaw(ctx context.Context, rel *release, pf *postedFile, i
 			return seg, err
 		}
 	}
-	for attempt := 0; ; attempt++ {
+	for {
 		seg, abandoned, err := e.segmentOnce(ctx, rel, pf, i, prio, fo)
-		if !abandoned || attempt >= 3 {
+		if !abandoned {
 			return seg, err
 		}
 		// The flight was abandoned by its other waiters just as this request
-		// joined it; fetch again on our own behalf.
+		// joined it; fetch again on our own behalf. segmentOnce reports
+		// abandonment only after that flight ended, so each retry makes
+		// progress; the abandoned flight's cancellation is not ours to report.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 }
 
@@ -78,11 +83,9 @@ func (e *Engine) segmentOnce(ctx context.Context, rel *release, pf *postedFile, 
 
 	if id == "" {
 		if fo.cacheID != "" && e.cache != nil {
-			if data, ok := e.cache.Get(fo.cacheID, key.seg); ok {
-				if seg, ok := decodeSegment(data); ok {
-					e.learnHot(rel, pf, i, seg)
-					return seg, false, nil
-				}
+			if seg, ok := e.cachedSegment(fo.cacheID, key.seg); ok {
+				e.learnHot(rel, pf, i, seg)
+				return seg, false, nil
 			}
 		}
 
@@ -310,11 +313,9 @@ func (e *Engine) run(ctx context.Context, fl *flight, key flightKey, rel *releas
 // transient errors.
 func (e *Engine) load(ctx context.Context, pf *postedFile, i int, id string, global int, prio core.Priority, fo fetchOpts) (*segData, bool, error) {
 	if fo.cacheID != "" && e.cache != nil {
-		if b, ok := e.cache.Get(fo.cacheID, global); ok {
-			if seg, ok := decodeSegment(b); ok {
-				e.cacheHits.Add(1)
-				return seg, true, nil
-			}
+		if seg, ok := e.cachedSegment(fo.cacheID, global); ok {
+			e.cacheHits.Add(1)
+			return seg, true, nil
 		}
 	}
 	var lastErr error
@@ -417,6 +418,47 @@ func encodeSegment(s *segData) []byte {
 	copy(b[27:], name)
 	copy(b[27+len(name):], s.data)
 	return b
+}
+
+// spanRefMagic marks a disk-cache record that points at the slot holding a
+// repaired span, so a span covering k slots is stored once rather than k
+// times. The reference carries the span's offset and length, so a later
+// ordinary segment written over the target slot cannot be mistaken for it.
+const spanRefMagic = "ETR1"
+
+func encodeSpanRef(target int, s *segData) []byte {
+	b := make([]byte, 4+8+8+8)
+	copy(b, spanRefMagic)
+	binary.LittleEndian.PutUint64(b[4:], uint64(target))
+	binary.LittleEndian.PutUint64(b[12:], uint64(s.begin))
+	binary.LittleEndian.PutUint64(b[20:], uint64(len(s.data)))
+	return b
+}
+
+// cachedSegment reads global from the disk cache, following a repaired-span
+// reference to the slot that stores the span.
+func (e *Engine) cachedSegment(cacheID string, global int) (*segData, bool) {
+	b, ok := e.cache.Get(cacheID, global)
+	if !ok {
+		return nil, false
+	}
+	if len(b) != 28 || string(b[:4]) != spanRefMagic {
+		return decodeSegment(b)
+	}
+	target := int(binary.LittleEndian.Uint64(b[4:]))
+	begin := int64(binary.LittleEndian.Uint64(b[12:]))
+	n := int(binary.LittleEndian.Uint64(b[20:]))
+	if target == global {
+		return nil, false
+	}
+	if b, ok = e.cache.Get(cacheID, target); !ok {
+		return nil, false
+	}
+	seg, ok := decodeSegment(b)
+	if !ok || !seg.repairedSpan || seg.begin != begin || len(seg.data) != n {
+		return nil, false
+	}
+	return seg, true
 }
 
 func decodeSegment(b []byte) (*segData, bool) {

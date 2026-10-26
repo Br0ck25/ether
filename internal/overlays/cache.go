@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/lru"
 )
 
 const cacheEnvelope = "ETHEROV3"
@@ -39,10 +41,6 @@ type CacheStats struct {
 	InFlight        int    `json:"inFlight"`
 }
 
-type memoryPoster struct {
-	key  string
-	data []byte
-}
 type diskPoster struct {
 	key     string
 	size    int64
@@ -58,9 +56,8 @@ type posterFlight struct {
 
 type posterCache struct {
 	mu                                         sync.Mutex
-	memory                                     map[string]*list.Element
-	lru                                        list.List
-	memoryBytes, memoryLimit                   int64
+	memory                                     *lru.Cache[string, []byte]
+	memoryLimit                                int64
 	flights                                    map[string]*posterFlight
 	slots                                      chan struct{}
 	diskMu                                     sync.Mutex
@@ -82,7 +79,12 @@ func newPosterCache(o Options) *posterCache {
 	if o.RenderConcurrency <= 0 {
 		o.RenderConcurrency = 2
 	}
-	c := &posterCache{memory: make(map[string]*list.Element), flights: make(map[string]*posterFlight), memoryLimit: o.MemoryCacheBytes, diskLimit: o.DiskCacheBytes, slots: make(chan struct{}, min(o.RenderConcurrency, 16)), disk: make(map[string]*list.Element)}
+	c := &posterCache{flights: make(map[string]*posterFlight), memoryLimit: o.MemoryCacheBytes, diskLimit: o.DiskCacheBytes, slots: make(chan struct{}, min(o.RenderConcurrency, 16)), disk: make(map[string]*list.Element)}
+	c.memory = lru.New(lru.Options[string, []byte]{
+		MaxCost: c.memoryLimit, // putMemory admits nothing when the limit is not positive
+		Cost:    func(_ string, data []byte) int64 { return int64(len(data)) },
+		OnEvict: func(string, []byte) { c.memoryEvictions.Add(1) },
+	})
 	if o.CacheDir != "" && c.diskLimit > 0 {
 		c.dir = o.CacheDir
 		if err := os.MkdirAll(c.dir, 0700); err != nil {
@@ -184,7 +186,7 @@ func (s *Service) CacheStats() CacheStats { return s.generated.stats() }
 func (c *posterCache) stats() CacheStats {
 	v := CacheStats{MemoryHits: c.memoryHits.Load(), DiskHits: c.diskHits.Load(), Renders: c.renders.Load(), Coalesced: c.coalesced.Load(), MemoryEvictions: c.memoryEvictions.Load(), DiskEvictions: c.diskEvictions.Load(), DiskErrors: c.diskErrors.Load()}
 	c.mu.Lock()
-	v.MemoryBytes, v.MemoryEntries, v.InFlight = c.memoryBytes, len(c.memory), len(c.flights)
+	v.MemoryBytes, v.MemoryEntries, v.InFlight = c.memory.Cost(), c.memory.Len(), len(c.flights)
 	c.mu.Unlock()
 	c.diskMu.Lock()
 	v.DiskBytes, v.DiskEntries = c.diskBytes, len(c.disk)
@@ -200,9 +202,7 @@ func (c *posterCache) get(ctx context.Context, key string, render func(context.C
 		return nil, err
 	}
 	c.mu.Lock()
-	if e := c.memory[key]; e != nil {
-		c.lru.MoveToFront(e)
-		data := e.Value.(memoryPoster).data
+	if data, ok := c.memory.Get(key); ok {
 		c.mu.Unlock()
 		c.memoryHits.Add(1)
 		return data, nil
@@ -281,25 +281,10 @@ func (c *posterCache) run(ctx context.Context, key string, f *posterFlight, rend
 // putMemory holds mu and evicts only the least recently used entries needed to
 // admit this item. Oversize results are served without disturbing hot entries.
 func (c *posterCache) putMemory(key string, data []byte) {
-	size := int64(len(data))
-	if size > c.memoryLimit || size == 0 {
+	if size := int64(len(data)); size > c.memoryLimit || size == 0 {
 		return
 	}
-	if e := c.memory[key]; e != nil {
-		c.memoryBytes -= int64(len(e.Value.(memoryPoster).data))
-		c.lru.Remove(e)
-		delete(c.memory, key)
-	}
-	for c.memoryBytes+size > c.memoryLimit {
-		e := c.lru.Back()
-		old := e.Value.(memoryPoster)
-		c.memoryBytes -= int64(len(old.data))
-		delete(c.memory, old.key)
-		c.lru.Remove(e)
-		c.memoryEvictions.Add(1)
-	}
-	c.memory[key] = c.lru.PushFront(memoryPoster{key: key, data: data})
-	c.memoryBytes += size
+	c.memory.Add(key, data)
 }
 
 func (c *posterCache) forgetDisk(key string) {

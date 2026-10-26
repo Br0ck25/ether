@@ -1,7 +1,6 @@
 package plex
 
 import (
-	"container/list"
 	"context"
 	"log/slog"
 	"strconv"
@@ -9,6 +8,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/lru"
 )
 
 // ---------------------------------------------------------------------------
@@ -47,12 +47,11 @@ type titleCache struct {
 	log   *slog.Logger
 
 	mu    sync.Mutex
-	ll    *list.List
-	items map[core.RatingKey]*list.Element
+	items *lru.Cache[core.RatingKey, *titleEntry]
 }
 
 func newTitleCache(q *bgQueue, now func() time.Time, log *slog.Logger, fetch func(context.Context, core.RatingKey) (*core.Title, error)) *titleCache {
-	return &titleCache{fetch: fetch, q: q, now: now, log: log, ll: list.New(), items: map[core.RatingKey]*list.Element{}}
+	return &titleCache{fetch: fetch, q: q, now: now, log: log, items: lru.New(lru.Options[core.RatingKey, *titleEntry]{MaxEntries: titleCacheEntries})}
 }
 
 // get returns the cached detail for key without blocking. A missing or
@@ -62,9 +61,7 @@ func (c *titleCache) get(key core.RatingKey) *core.Title {
 	c.mu.Lock()
 	var t *core.Title
 	refresh := true
-	if el, ok := c.items[key]; ok {
-		e := el.Value.(*titleEntry)
-		c.ll.MoveToFront(el)
+	if e, ok := c.items.Get(key); ok {
 		t = e.t
 		age := c.now().Sub(e.fetchedAt)
 		refresh = (e.t != nil && age >= titleCacheTTL) || (e.t == nil && age >= titleCacheRetry)
@@ -104,23 +101,12 @@ func (c *titleCache) put(t *core.Title) {
 func (c *titleCache) store(key core.RatingKey, t *core.Title) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e := &titleEntry{key: key, t: t, fetchedAt: c.now()}
-	if el, ok := c.items[key]; ok {
-		if t == nil && el.Value.(*titleEntry).t != nil {
-			// Keep serving the stale detail; retry later.
-			el.Value.(*titleEntry).fetchedAt = c.now().Add(-titleCacheTTL + titleCacheRetry)
-			return
-		}
-		el.Value = e
-		c.ll.MoveToFront(el)
+	if old, ok := c.items.Peek(key); ok && t == nil && old.t != nil {
+		// Keep serving the stale detail; retry later.
+		old.fetchedAt = c.now().Add(-titleCacheTTL + titleCacheRetry)
 		return
 	}
-	c.items[key] = c.ll.PushFront(e)
-	for c.ll.Len() > titleCacheEntries {
-		back := c.ll.Back()
-		c.ll.Remove(back)
-		delete(c.items, back.Value.(*titleEntry).key)
-	}
+	c.items.Add(key, &titleEntry{key: key, t: t, fetchedAt: c.now()})
 }
 
 // trimForCache copies the fields list renders need, bounding credit lists.

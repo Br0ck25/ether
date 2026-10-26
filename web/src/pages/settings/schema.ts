@@ -186,16 +186,16 @@ export const PLEX: FieldGroup[] = [
     title: "Compatibility",
     fields: [
       {
-        key: "disableVersionTracking",
-        label: "Keep the current compatibility version",
+        key: "trackLatestVersion",
+        label: "Report the latest public PMS version",
         kind: "bool",
-        help: "Disable automatic public Plex release tracking.",
+        help: "Off reports the version Ether is verified against. Plex apps turn on features by server version, so tracking can expose features Ether doesn't support.",
       },
       {
         key: "compatibilityVersion",
         label: "Compatibility version override",
         kind: "text",
-        help: "Leave empty to use the tracked public PMS version.",
+        help: "Leave empty to use the verified version, or the latest public version when tracking is on.",
       },
       { key: "latestCompatibilityVersion", label: "Latest public PMS version", kind: "readonly" },
     ],

@@ -1,7 +1,6 @@
 package plex
 
 import (
-	"container/list"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/braedonsaunders/ether/internal/flight"
+	"github.com/braedonsaunders/ether/internal/lru"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -46,30 +47,22 @@ type cachedImage struct {
 	fetchedAt   time.Time
 }
 
-type inflight struct {
-	done chan struct{}
-	img  *cachedImage
-	err  error
-}
-
 type imageCache struct {
 	client *http.Client
 	budget int64
 
 	mu       sync.Mutex
-	used     int64
-	ll       *list.List
-	items    map[string]*list.Element
-	inflight map[string]*inflight
+	items    *lru.Cache[string, *cachedImage]
+	inflight flight.Group[string, *cachedImage]
 }
 
 func newImageCache(budget int64, client *http.Client) *imageCache {
 	return &imageCache{
-		client:   client,
-		budget:   budget,
-		ll:       list.New(),
-		items:    map[string]*list.Element{},
-		inflight: map[string]*inflight{},
+		client: client,
+		budget: budget,
+		items: lru.New(lru.Options[string, *cachedImage]{MaxCost: budget, Cost: func(_ string, img *cachedImage) int64 {
+			return int64(len(img.data))
+		}}),
 	}
 }
 
@@ -78,42 +71,26 @@ var errImageNotFound = errors.New("image not found")
 // get returns the image at u, fetching it once for concurrent callers.
 func (c *imageCache) get(ctx context.Context, u string, now time.Time) (*cachedImage, error) {
 	c.mu.Lock()
-	if el, ok := c.items[u]; ok {
-		img := el.Value.(*cachedImage)
+	if img, ok := c.items.Get(u); ok {
 		if now.Sub(img.fetchedAt) < imageTTL {
-			c.ll.MoveToFront(el)
 			c.mu.Unlock()
 			return img, nil
 		}
-		c.removeLocked(el)
+		c.items.Remove(u)
 	}
-	if f, ok := c.inflight[u]; ok {
-		c.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.img, f.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	f := &inflight{done: make(chan struct{})}
-	c.inflight[u] = f
 	c.mu.Unlock()
-
 	// The fetch is shared, so it must not die with the first requester.
-	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	img, err := c.fetch(fctx, u, now)
-	cancel()
-
-	c.mu.Lock()
-	f.img, f.err = img, err
-	delete(c.inflight, u)
-	if err == nil {
-		c.addLocked(img)
-	}
-	c.mu.Unlock()
-	close(f.done)
-	return img, err
+	return c.inflight.DoDetached(ctx, u, func(ctx context.Context) (*cachedImage, error) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		img, err := c.fetch(ctx, u, now)
+		if err == nil {
+			c.mu.Lock()
+			c.addLocked(img)
+			c.mu.Unlock()
+		}
+		return img, err
+	})
 }
 
 func (c *imageCache) fetch(ctx context.Context, u string, now time.Time) (*cachedImage, error) {
@@ -150,25 +127,7 @@ func (c *imageCache) addLocked(img *cachedImage) {
 	if int64(len(img.data)) > c.budget {
 		return
 	}
-	if el, ok := c.items[img.url]; ok {
-		c.removeLocked(el)
-	}
-	c.items[img.url] = c.ll.PushFront(img)
-	c.used += int64(len(img.data))
-	for c.used > c.budget {
-		back := c.ll.Back()
-		if back == nil {
-			break
-		}
-		c.removeLocked(back)
-	}
-}
-
-func (c *imageCache) removeLocked(el *list.Element) {
-	img := el.Value.(*cachedImage)
-	c.ll.Remove(el)
-	delete(c.items, img.url)
-	c.used -= int64(len(img.data))
+	c.items.Add(img.url, img)
 }
 
 // ---------------------------------------------------------------------------

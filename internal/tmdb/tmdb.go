@@ -13,6 +13,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 )
 
 // BundledKey is set at build time via
@@ -96,7 +97,7 @@ type Client struct {
 
 	mu         sync.Mutex
 	cache      *respCache
-	flights    map[string]*flight
+	flights    flight.Group[string, []byte]
 	generation uint64
 
 	cfgMu sync.RWMutex
@@ -107,13 +108,6 @@ type cacheEntry struct {
 	body    []byte
 	etag    string
 	expires time.Time
-}
-type flight struct {
-	done chan struct{}
-	body []byte
-	err  error
-	// abandoned reports that the leader's own context ended the request.
-	abandoned bool
 }
 
 // New creates a client with an explicit key (v3 api_key or v4 bearer).
@@ -145,7 +139,7 @@ func newClient(key, lang, region string, log *slog.Logger, opts ...Option) *Clie
 	key = strings.TrimSpace(key)
 	return &Client{key: key, bearer: IsBearerKey(key), language: lang, region: region, log: log,
 		opts: o, lim: newRateLimiter(o.ratePerSec, o.burst),
-		cache: newRespCache(o.cacheMaxEntries, o.cacheMaxBytes), flights: map[string]*flight{}}
+		cache: newRespCache(o.cacheMaxEntries, o.cacheMaxBytes)}
 }
 
 // MinClusterRate is the floor, in requests per second, of a node's TMDB

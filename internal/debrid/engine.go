@@ -2,7 +2,6 @@ package debrid
 
 import (
 	"bytes"
-	"container/list"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/lru"
 )
 
 // Streaming parameters. The segment cache stores fixed blocks; HTTP range
@@ -469,8 +469,7 @@ type remoteFile struct {
 
 	bmu     sync.Mutex
 	flights map[int64]*blockFlight
-	mem     map[int64]*list.Element
-	lru     *list.List
+	mem     *lru.Cache[int64, []byte]
 	stored  map[int64]bool
 	tput    float64 // bytes/s EWMA
 
@@ -478,15 +477,10 @@ type remoteFile struct {
 	raSlots chan struct{} // read-ahead and prefetch (leaves one connection for urgent reads)
 }
 
-type memBlock struct {
-	idx  int64
-	data []byte
-}
-
 func (e *Engine) newFile(id string, p Payload) *remoteFile {
 	_, conns, _ := e.tuning()
 	f := &remoteFile{e: e, id: id, tag: p.fileTag(), size: p.Size, pl: p,
-		flights: map[int64]*blockFlight{}, mem: map[int64]*list.Element{}, lru: list.New(), stored: map[int64]bool{}, failedGen: -1,
+		flights: map[int64]*blockFlight{}, mem: lru.New(lru.Options[int64, []byte]{MaxEntries: memBlocksPerFile}), stored: map[int64]bool{}, failedGen: -1,
 		conns: make(chan struct{}, conns), raSlots: make(chan struct{}, max(1, conns-1))}
 	f.nblocks = (p.Size + e.block - 1) / e.block
 	f.ctx, f.cancel = context.WithCancel(e.ctx)
@@ -561,37 +555,21 @@ func (f *remoteFile) blockLen(idx int64) int64 {
 }
 
 func (f *remoteFile) memGetLocked(idx int64) []byte {
-	if el, ok := f.mem[idx]; ok {
-		f.lru.MoveToFront(el)
-		return el.Value.(*memBlock).data
-	}
-	return nil
+	data, _ := f.mem.Get(idx)
+	return data
 }
 
-func (f *remoteFile) memPutLocked(idx int64, data []byte) {
-	if el, ok := f.mem[idx]; ok {
-		el.Value.(*memBlock).data = data
-		f.lru.MoveToFront(el)
-		return
-	}
-	f.mem[idx] = f.lru.PushFront(&memBlock{idx: idx, data: data})
-	for f.lru.Len() > memBlocksPerFile {
-		old := f.lru.Back()
-		f.lru.Remove(old)
-		delete(f.mem, old.Value.(*memBlock).idx)
-	}
-}
+func (f *remoteFile) memPutLocked(idx int64, data []byte) { f.mem.Add(idx, data) }
 
 func (f *remoteFile) dropMemory() {
 	f.bmu.Lock()
-	f.mem = map[int64]*list.Element{}
-	f.lru.Init()
+	f.mem.Clear()
 	f.bmu.Unlock()
 }
 
 // present reports whether a block needs no fetch.
 func (f *remoteFile) presentLocked(idx int64) bool {
-	if _, ok := f.mem[idx]; ok {
+	if f.mem.Contains(idx) {
 		return true
 	}
 	if _, ok := f.flights[idx]; ok {

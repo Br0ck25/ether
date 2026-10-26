@@ -15,11 +15,15 @@ import (
 var pmsVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[a-zA-Z0-9]+$`)
 
 func ValidPMSVersion(v string) bool { return pmsVersionPattern.MatchString(v) }
+
+// PMSVersion is the version Ether reports: the owner override, else the
+// latest public release when the owner opted into tracking, else the version
+// the PMS conformance fixtures were recorded against.
 func PMSVersion(c config.Config) string {
 	if ValidPMSVersion(c.Plex.CompatibilityVersion) {
 		return c.Plex.CompatibilityVersion
 	}
-	if !c.Plex.DisableVersionTracking && ValidPMSVersion(c.Plex.LatestCompatibilityVersion) {
+	if c.Plex.TrackLatestVersion && ValidPMSVersion(c.Plex.LatestCompatibilityVersion) {
 		return c.Plex.LatestCompatibilityVersion
 	}
 	return DefaultServerVersion

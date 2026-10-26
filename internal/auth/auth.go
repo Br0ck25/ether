@@ -33,6 +33,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/clusterbus"
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 	"github.com/braedonsaunders/ether/internal/plextv"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -150,12 +151,6 @@ type cacheEntry struct {
 	expires time.Time
 }
 
-type call struct {
-	done chan struct{}
-	user *core.User
-	err  error
-}
-
 // Service implements core.Auth and plextv.UserSync.
 type Service struct {
 	db  *sql.DB
@@ -168,7 +163,7 @@ type Service struct {
 	tokens      map[string]int64
 	pos         map[string]cacheEntry
 	neg         map[string]time.Time
-	inflight    map[string]*call
+	inflight    flight.Group[string, *core.User]
 	ownerPlexID int64
 
 	membershipMu sync.Mutex // serializes validation writes with authoritative revocation
@@ -222,7 +217,7 @@ func New(ctx context.Context, db *sql.DB, o Options) (*Service, error) {
 		o.Now = time.Now
 	}
 	s := &Service{db: db, o: o, log: o.Logger.With("component", "auth"),
-		pos: map[string]cacheEntry{}, neg: map[string]time.Time{}, inflight: map[string]*call{},
+		pos: map[string]cacheEntry{}, neg: map[string]time.Time{},
 		seen: map[int64]time.Time{}}
 	if err := s.reload(ctx); err != nil {
 		return nil, err
@@ -440,35 +435,16 @@ func (s *Service) validate(ctx context.Context, token, h string) (*core.User, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	if c, ok := s.inflight[h]; ok {
-		s.mu.Unlock()
-		select {
-		case <-c.done:
-			return c.user, c.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	if len(s.inflight) >= s.o.MaxConcurrentValidations {
-		s.mu.Unlock()
+	if !s.inflight.Has(h) && s.inflight.Len() >= s.o.MaxConcurrentValidations {
 		return s.stale(h, errors.New("auth: token validation capacity reached"))
 	}
-	c := &call{done: make(chan struct{})}
-	s.inflight[h] = c
-	s.mu.Unlock()
-
-	// Detach from the caller's cancellation so one impatient client does
-	// not fail the others waiting on the same token.
-	vctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-	c.user, c.err = s.validateOnce(vctx, token, h)
-	cancel()
-
-	s.mu.Lock()
-	delete(s.inflight, h)
-	s.mu.Unlock()
-	close(c.done)
-	return c.user, c.err
+	// Detached, so one impatient client does not fail the others waiting
+	// on the same token.
+	return s.inflight.DoDetached(ctx, h, func(ctx context.Context) (*core.User, error) {
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		return s.validateOnce(ctx, token, h)
+	})
 }
 
 func (s *Service) validateOnce(ctx context.Context, token, h string) (*core.User, error) {

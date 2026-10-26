@@ -26,13 +26,6 @@ func (s *Service) reusablePayload(ctx context.Context, rel core.Release) (Payloa
 	return p, true
 }
 
-type payloadFlight struct {
-	done      chan struct{}
-	data      []byte
-	err       error
-	abandoned bool
-}
-
 // fetchTorrent shares descriptor lookup and provider work across concurrent
 // detail/Play requests. Work stays on the leading caller's goroutine/context;
 // a cancelled leader releases waiters to retry rather than stranding a stream
@@ -46,38 +39,8 @@ func (x *Indexer) fetchTorrent(ctx context.Context, rel core.Release) ([]byte, e
 		target, _ := json.Marshal(rel.Target)
 		key += "\x00" + string(target)
 	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		x.mu.Lock()
-		if f := x.flights[key]; f != nil {
-			x.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-f.done:
-			}
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			if f.err != nil && f.abandoned {
-				continue
-			}
-			return append([]byte(nil), f.data...), f.err
-		}
-		f := &payloadFlight{done: make(chan struct{})}
-		if x.flights == nil {
-			x.flights = make(map[string]*payloadFlight)
-		}
-		x.flights[key] = f
-		x.mu.Unlock()
-		data, err := x.fetchTorrentOnce(ctx, rel)
-		x.mu.Lock()
-		f.data, f.err, f.abandoned = data, err, ctx.Err() != nil
-		delete(x.flights, key)
-		close(f.done)
-		x.mu.Unlock()
-		return append([]byte(nil), data...), err
-	}
+	data, err := x.flights.Do(ctx, key, func(ctx context.Context) ([]byte, error) {
+		return x.fetchTorrentOnce(ctx, rel)
+	})
+	return append([]byte(nil), data...), err
 }

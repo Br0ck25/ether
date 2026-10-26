@@ -89,7 +89,7 @@ func NewFormatScorer(defs []core.CustomFormat, scores map[string]int) (*FormatSc
 					if json.Unmarshal(spec.Fields["value"], &value) != nil {
 						return nil, fmt.Errorf("custom format %q: numeric native specification value required", d.Name)
 					}
-					if (spec.Implementation == "LanguageSpecification" && (value <= 0 || value > 18)) || (spec.Implementation == "SourceSpecification" && (value < 0 || value > 9)) || (spec.Implementation == "QualityModifierSpecification" && (value < 0 || value > 5)) {
+					if (spec.Implementation == "LanguageSpecification" && !knownLanguageValue(value)) || (spec.Implementation == "SourceSpecification" && (value < 0 || value > 9)) || (spec.Implementation == "QualityModifierSpecification" && (value < 0 || value > 5)) {
 						return nil, fmt.Errorf("custom format %q: unsupported native enum value %d", d.Name, value)
 					}
 				}
@@ -106,15 +106,29 @@ func NewFormatScorer(defs []core.CustomFormat, scores map[string]int) (*FormatSc
 // assumedLanguage names a title's original language (ISO 639-1) the way
 // release language tags are named; English when unknown.
 func assumedLanguage(t *core.Title) string {
+	if name := originalLanguage(t); name != "" {
+		return name
+	}
+	return "english"
+}
+
+// originalLanguage names a title's known original language the way release
+// language tags are named, or "" when unknown.
+func originalLanguage(t *core.Title) string {
 	if t == nil || t.Language == "" {
-		return "english"
+		return ""
 	}
 	code := strings.ToLower(t.Language)
 	if name, ok := map[string]string{"en": "english", "fr": "french", "es": "spanish", "de": "german", "it": "italian",
 		"da": "danish", "nl": "dutch", "ja": "japanese", "is": "icelandic", "zh": "chinese", "ru": "russian", "uk": "ukrainian", "pl": "polish",
 		"vi": "vietnamese", "sv": "swedish", "no": "norwegian", "nb": "norwegian", "nn": "norwegian", "fi": "finnish",
 		"tr": "turkish", "pt": "portuguese", "ko": "korean", "hi": "hindi", "te": "telugu", "ta": "tamil", "ar": "arabic",
-		"cs": "czech", "hu": "hungarian", "el": "greek", "th": "thai", "id": "indonesian"}[code]; ok {
+		"cs": "czech", "hu": "hungarian", "el": "greek", "th": "thai", "id": "indonesian", "cn": "chinese",
+		"he": "hebrew", "lt": "lithuanian", "ro": "romanian", "bg": "bulgarian", "fa": "persian", "bn": "bengali",
+		"sk": "slovak", "lv": "latvian", "ca": "catalan", "hr": "croatian", "sr": "serbian", "bs": "bosnian",
+		"et": "estonian", "mk": "macedonian", "sl": "slovenian", "ml": "malayalam", "kn": "kannada", "sq": "albanian",
+		"af": "afrikaans", "mr": "marathi", "tl": "tagalog", "ur": "urdu", "rm": "romansh", "mn": "mongolian",
+		"ka": "georgian", "ga": "irish"}[code]; ok {
 		return name
 	}
 	return code
@@ -125,7 +139,7 @@ func fieldNumber(s core.FormatSpecification, k string) float64 {
 	_ = json.Unmarshal(s.Fields[k], &v)
 	return v
 }
-func specMatch(s compiledSpec, r core.Release) (bool, error) {
+func specMatch(s compiledSpec, r core.Release, original string) (bool, error) {
 	value := fieldNumber(s.def, "value")
 	switch s.def.Implementation {
 	case "ReleaseTitleSpecification":
@@ -162,18 +176,51 @@ func specMatch(s compiledSpec, r core.Release) (bool, error) {
 	case "LanguageSpecification":
 		var name string
 		_ = json.Unmarshal(s.def.Fields["value"], &name)
-		// Native language enum values (only known values; missing metadata never matches).
 		if name == "" {
-			name = map[int]string{1: "english", 2: "french", 3: "spanish", 4: "german", 5: "italian", 6: "danish", 7: "dutch", 8: "japanese", 9: "icelandic", 10: "chinese", 11: "russian", 12: "polish", 13: "vietnamese", 14: "swedish", 15: "norwegian", 16: "finnish", 17: "turkish", 18: "portuguese"}[int(value)]
+			name = starrLanguages[int(value)]
+			if int(value) == languageOriginal {
+				// Like Radarr, Original compares against the title's original
+				// language when known; otherwise it matches no language.
+				name = original
+			}
 		}
+		var except bool
+		_ = json.Unmarshal(s.def.Fields["exceptLanguage"], &except)
 		for _, l := range r.Info.Languages {
-			if name != "" && strings.EqualFold(l, name) {
+			same := name != "" && strings.EqualFold(l, name)
+			if same != except {
 				return true, nil
 			}
 		}
 		return false, nil
 	}
 	return false, nil
+}
+
+// Radarr's language enum (NzbDrone.Core.Languages.Language), named as the
+// release parser names languages. The parser does not distinguish regional
+// variants, so Portuguese (Brazil) and Spanish (Latino) compare as their base
+// language. Unknown (0) and Any (-1) are valid values that name no language.
+const (
+	languageAny      = -1
+	languageOriginal = -2
+)
+
+var starrLanguages = map[int]string{
+	1: "english", 2: "french", 3: "spanish", 4: "german", 5: "italian", 6: "danish", 7: "dutch", 8: "japanese",
+	9: "icelandic", 10: "chinese", 11: "russian", 12: "polish", 13: "vietnamese", 14: "swedish", 15: "norwegian",
+	16: "finnish", 17: "turkish", 18: "portuguese", 19: "flemish", 20: "greek", 21: "korean", 22: "hungarian",
+	23: "hebrew", 24: "lithuanian", 25: "czech", 26: "hindi", 27: "romanian", 28: "thai", 29: "bulgarian",
+	30: "portuguese", 31: "arabic", 32: "ukrainian", 33: "persian", 34: "bengali", 35: "slovak", 36: "latvian",
+	37: "spanish", 38: "catalan", 39: "croatian", 40: "serbian", 41: "bosnian", 42: "estonian", 43: "tamil",
+	44: "indonesian", 45: "telugu", 46: "macedonian", 47: "slovenian", 48: "malayalam", 49: "kannada",
+	50: "albanian", 51: "afrikaans", 52: "marathi", 53: "tagalog", 54: "urdu", 55: "romansh", 56: "mongolian",
+	57: "georgian", 58: "irish",
+}
+
+func knownLanguageValue(v int) bool {
+	_, ok := starrLanguages[v]
+	return ok || v == 0 || v == languageAny || v == languageOriginal
 }
 
 // Score mirrors Starr grouping: every specification type must match; within
@@ -183,6 +230,13 @@ func (s *FormatScorer) Score(r core.Release) (int, []FormatMatch, error) {
 }
 
 func (s *FormatScorer) ScoreWithScores(r core.Release, overrides map[string]int) (int, []FormatMatch, error) {
+	return s.ScoreForTitle(r, overrides, "")
+}
+
+// ScoreForTitle scores r for a title whose original language is original
+// (a release-parser language name, "" when unknown), which "Original"
+// language specifications compare against.
+func (s *FormatScorer) ScoreForTitle(r core.Release, overrides map[string]int, original string) (int, []FormatMatch, error) {
 	if s == nil {
 		return 0, nil, nil
 	}
@@ -200,7 +254,7 @@ func (s *FormatScorer) ScoreWithScores(r core.Release, overrides map[string]int)
 				g = &group{requiredOK: true}
 				groups[spec.def.Implementation] = g
 			}
-			match, err := specMatch(spec, r)
+			match, err := specMatch(spec, r, original)
 			if err != nil {
 				return 0, nil, fmt.Errorf("custom format %q: %w", f.def.Name, errFormatTimeout)
 			}

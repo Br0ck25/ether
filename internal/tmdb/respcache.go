@@ -1,8 +1,9 @@
 package tmdb
 
 import (
-	"container/list"
 	"time"
+
+	"github.com/braedonsaunders/ether/internal/lru"
 )
 
 // Bounds for the in-memory response cache. Every distinct GET URL is
@@ -23,17 +24,8 @@ const (
 // respCache is a size-bounded LRU of TMDB responses. It is not safe for
 // concurrent use; Client.mu guards it.
 type respCache struct {
-	maxEntries int
-	maxBytes   int64
-	bytes      int64
-	ll         *list.List // front = most recently used
-	items      map[string]*list.Element
-	lastSweep  time.Time
-}
-
-type respItem struct {
-	key   string
-	entry cacheEntry
+	lru       *lru.Cache[string, cacheEntry]
+	lastSweep time.Time
 }
 
 func newRespCache(maxEntries int, maxBytes int64) *respCache {
@@ -43,7 +35,7 @@ func newRespCache(maxEntries int, maxBytes int64) *respCache {
 	if maxBytes <= 0 {
 		maxBytes = defaultCacheMaxBytes
 	}
-	return &respCache{maxEntries: maxEntries, maxBytes: maxBytes, ll: list.New(), items: map[string]*list.Element{}}
+	return &respCache{lru: lru.New(lru.Options[string, cacheEntry]{MaxEntries: maxEntries, MaxCost: maxBytes, Cost: itemSize})}
 }
 
 func itemSize(key string, e cacheEntry) int64 {
@@ -51,14 +43,7 @@ func itemSize(key string, e cacheEntry) int64 {
 }
 
 // get returns the entry (fresh or stale) and marks it recently used.
-func (c *respCache) get(key string) (cacheEntry, bool) {
-	el, ok := c.items[key]
-	if !ok {
-		return cacheEntry{}, false
-	}
-	c.ll.MoveToFront(el)
-	return el.Value.(*respItem).entry, true
-}
+func (c *respCache) get(key string) (cacheEntry, bool) { return c.lru.Get(key) }
 
 // put inserts or replaces an entry, then evicts least-recently-used entries
 // until both bounds hold. An entry larger than the whole byte budget is not
@@ -67,37 +52,14 @@ func (c *respCache) put(key string, e cacheEntry, now time.Time) {
 	if now.Sub(c.lastSweep) >= sweepInterval {
 		c.sweep(now)
 	}
-	size := itemSize(key, e)
-	if el, ok := c.items[key]; ok {
-		c.remove(el)
-	}
-	if size > c.maxBytes {
-		return
-	}
-	c.items[key] = c.ll.PushFront(&respItem{key: key, entry: e})
-	c.bytes += size
-	for c.ll.Len() > c.maxEntries || c.bytes > c.maxBytes {
-		c.remove(c.ll.Back())
-	}
+	c.lru.Add(key, e)
 }
 
 // sweep drops entries that expired more than staleRetention ago.
 func (c *respCache) sweep(now time.Time) {
 	c.lastSweep = now
 	cutoff := now.Add(-staleRetention)
-	for el := c.ll.Back(); el != nil; {
-		prev := el.Prev()
-		if el.Value.(*respItem).entry.expires.Before(cutoff) {
-			c.remove(el)
-		}
-		el = prev
-	}
+	c.lru.RemoveFunc(func(_ string, e cacheEntry) bool { return e.expires.Before(cutoff) })
 }
 
-func (c *respCache) remove(el *list.Element) {
-	it := c.ll.Remove(el).(*respItem)
-	delete(c.items, it.key)
-	c.bytes -= itemSize(it.key, it.entry)
-}
-
-func (c *respCache) len() int { return c.ll.Len() }
+func (c *respCache) len() int { return c.lru.Len() }

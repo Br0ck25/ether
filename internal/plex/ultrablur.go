@@ -2,7 +2,6 @@ package plex
 
 import (
 	"bytes"
-	"container/list"
 	"context"
 	"database/sql"
 	"errors"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/lru"
 	"github.com/braedonsaunders/ether/internal/plex/model"
 	"github.com/braedonsaunders/ether/internal/store"
 )
@@ -74,12 +74,11 @@ type ultraBlurCache struct {
 	compute func(ctx context.Context, path string) (model.UltraBlurColors, error)
 
 	mu    sync.Mutex
-	ll    *list.List
-	items map[core.RatingKey]*list.Element
+	items *lru.Cache[core.RatingKey, *ultraBlurEntry]
 }
 
 func newUltraBlurCache(db *sql.DB, q *bgQueue, now func() time.Time, log *slog.Logger, compute func(context.Context, string) (model.UltraBlurColors, error)) *ultraBlurCache {
-	return &ultraBlurCache{db: db, q: q, now: now, log: log, compute: compute, ll: list.New(), items: map[core.RatingKey]*list.Element{}}
+	return &ultraBlurCache{db: db, q: q, now: now, log: log, compute: compute, items: lru.New(lru.Options[core.RatingKey, *ultraBlurEntry]{MaxEntries: ultraBlurEntries})}
 }
 
 // lookup returns the colours of key's backdrop path, or nil when they are
@@ -89,10 +88,9 @@ func (c *ultraBlurCache) lookup(key core.RatingKey, path string) *model.UltraBlu
 		return nil
 	}
 	c.mu.Lock()
-	if el, ok := c.items[key]; ok {
-		e := el.Value.(*ultraBlurEntry)
+	if e, ok := c.items.Peek(key); ok {
 		if e.path == path {
-			c.ll.MoveToFront(el)
+			c.items.Get(key)
 			if e.colors != nil {
 				cp := *e.colors
 				c.mu.Unlock()
@@ -138,17 +136,7 @@ func (c *ultraBlurCache) set(key core.RatingKey, path string, colors *model.Ultr
 	if colors == nil {
 		e.failedAt = c.now()
 	}
-	if el, ok := c.items[key]; ok {
-		el.Value = e
-		c.ll.MoveToFront(el)
-		return
-	}
-	c.items[key] = c.ll.PushFront(e)
-	for c.ll.Len() > ultraBlurEntries {
-		back := c.ll.Back()
-		c.ll.Remove(back)
-		delete(c.items, back.Value.(*ultraBlurEntry).key)
-	}
+	c.items.Add(key, e)
 }
 
 // ultraBlurWant is one item a listing is about to render.
@@ -170,7 +158,7 @@ func (c *ultraBlurCache) preload(ctx context.Context, wants []ultraBlurWant) {
 		if w.path == "" || w.key == 0 {
 			continue
 		}
-		if el, ok := c.items[w.key]; ok && el.Value.(*ultraBlurEntry).path == w.path {
+		if e, ok := c.items.Peek(w.key); ok && e.path == w.path {
 			continue
 		}
 		missing[w.key] = w.path

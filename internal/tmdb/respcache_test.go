@@ -35,13 +35,13 @@ func TestRespCacheEnforcesByteBudget(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		c.put(fmt.Sprintf("k%02d", i), cacheEntry{body: body}, now)
 	}
-	if c.len() != 5 || c.bytes != 5*per {
-		t.Fatalf("len=%d bytes=%d, want 5 and %d", c.len(), c.bytes, 5*per)
+	if c.len() != 5 || c.lru.Cost() != 5*per {
+		t.Fatalf("len=%d bytes=%d, want 5 and %d", c.len(), c.lru.Cost(), 5*per)
 	}
 	// Replacing an entry must not double count it.
 	c.put("k19", cacheEntry{body: body}, now)
-	if c.bytes != 5*per {
-		t.Fatalf("bytes after replace = %d", c.bytes)
+	if c.lru.Cost() != 5*per {
+		t.Fatalf("bytes after replace = %d", c.lru.Cost())
 	}
 	// An entry larger than the budget is not cached.
 	c.put("huge", cacheEntry{body: make([]byte, 6*per)}, now)

@@ -74,7 +74,12 @@ type Server struct {
 type Plex struct {
 	CompatibilityVersion       string `json:"compatibilityVersion,omitempty"`
 	LatestCompatibilityVersion string `json:"latestCompatibilityVersion,omitempty"`
-	DisableVersionTracking     bool   `json:"disableVersionTracking"`
+	// TrackLatestVersion advertises the newest public PMS release instead of
+	// the version Ether's responses were verified against. Plex apps enable
+	// features by server version, so tracking can reach endpoints Ether lacks.
+	TrackLatestVersion bool `json:"trackLatestVersion,omitempty"`
+	// Deprecated: retained for config compatibility; latest tracking is now opt-in.
+	DisableVersionTracking bool `json:"disableVersionTracking,omitempty"`
 	// Token is the owner's plex.tv token from sign-in; the server token.
 	Token            string `json:"token"`
 	ClientIdentifier string `json:"clientIdentifier"` // X-Plex-Client-Identifier Ether uses towards plex.tv

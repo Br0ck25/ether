@@ -2,7 +2,9 @@ package playback
 
 import (
 	"math"
+	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
@@ -168,9 +170,26 @@ func MapOffset(off int64, from, to TimeMap) int64 {
 	return to.OffsetAt(AlignTime(from.TimeAt(off), from.Duration, to.Duration))
 }
 
-// tsPacket is the MPEG transport stream packet size.
-const tsPacket = 188
+// MPEG transport stream packet sizes: plain TS, and BDAV (.m2ts/.mts),
+// which prefixes each packet with a 4-byte timestamp.
+const (
+	tsPacket   = 188
+	bdavPacket = 192
+)
+
+// tsPacketSize is the packet size of a spliceable source. Probes report
+// BDAV streams as "mpegts" too, so the file name decides.
+func tsPacketSize(container, name string) int64 {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".m2ts", ".mts":
+		return bdavPacket
+	}
+	if strings.EqualFold(container, "m2ts") {
+		return bdavPacket
+	}
+	return tsPacket
+}
 
 // alignPacket rounds an offset down to a transport stream packet boundary so
 // a demuxer splicing onto a new source resynchronises immediately.
-func alignPacket(off int64) int64 { return off - off%tsPacket }
+func alignPacket(off, packet int64) int64 { return off - off%packet }

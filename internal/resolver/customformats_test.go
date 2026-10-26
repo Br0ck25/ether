@@ -2,6 +2,8 @@ package resolver
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,5 +180,45 @@ func TestClientRejectionDoesNotHideTitleForOtherClients(t *testing.T) {
 	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
 	if err != nil || res.Release.ID != "uhd" {
 		t.Fatalf("client rejection poisoned availability: %+v %v", res, err)
+	}
+}
+
+func TestNativeLanguageSpecifications(t *testing.T) {
+	defs, err := ImportCustomFormats([]byte(`[
+		{"trash_id":"not-original","name":"Language: Not Original","trash_scores":{"default":-10000},"specifications":[{"name":"Not Original","implementation":"LanguageSpecification","negate":true,"required":false,"fields":{"value":-2}}]},
+		{"trash_id":"korean","name":"Korean","trash_scores":{"default":10},"specifications":[{"name":"Korean","implementation":"LanguageSpecification","fields":{"value":21}}]},
+		{"trash_id":"not-only-english","name":"Not Only English","trash_scores":{"default":1},"specifications":[{"name":"Except English","implementation":"LanguageSpecification","fields":{"value":1,"exceptLanguage":true}}]}
+	]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewFormatScorer(defs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		langs    []string
+		original string
+		score    int
+	}{
+		{[]string{"korean"}, "korean", 10 + 1},
+		{[]string{"english"}, "korean", -10000},
+		{[]string{"english"}, "english", 0},
+		{[]string{"english", "korean"}, "korean", 10 + 1},
+		// Unknown original language: Original names no language, as in Radarr.
+		{[]string{"english"}, "", -10000},
+	} {
+		score, matches, err := s.ScoreForTitle(core.Release{Info: core.ReleaseInfo{Languages: tt.langs}}, nil, tt.original)
+		if err != nil || score != tt.score {
+			t.Fatalf("%v original=%q: score %d matches %v err %v", tt.langs, tt.original, score, matches, err)
+		}
+	}
+	for _, v := range []int{-3, 59} {
+		if _, err := NewFormatScorer([]core.CustomFormat{{Name: "bad", Specifications: []core.FormatSpecification{{Implementation: "LanguageSpecification", Fields: map[string]json.RawMessage{"value": json.RawMessage(strconv.Itoa(v))}}}}}, nil); err == nil {
+			t.Fatalf("language value %d imported", v)
+		}
+	}
+	if got := originalLanguage(&core.Title{Language: "ko"}); got != "korean" {
+		t.Fatalf("originalLanguage(ko) = %q", got)
 	}
 }

@@ -70,6 +70,7 @@ var mixedSections = map[string]map[string]Scope{
 	"plex": {
 		"compatibilityVersion":       Shared,
 		"latestCompatibilityVersion": Shared,
+		"trackLatestVersion":         Shared,
 		"disableVersionTracking":     Shared,
 		"token":                      Shared,
 		"clientIdentifier":           Shared,

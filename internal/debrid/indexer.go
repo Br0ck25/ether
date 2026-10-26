@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
 )
 
 // TorrentResolver fills a torrent release's info hash and magnet (by
@@ -24,8 +25,7 @@ type TorrentResolver interface {
 type Indexer struct {
 	inner   core.Indexer
 	svc     *Service
-	mu      sync.Mutex
-	flights map[string]*payloadFlight
+	flights flight.Group[string, []byte]
 }
 
 var _ core.Indexer = (*Indexer)(nil)

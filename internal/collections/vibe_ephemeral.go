@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"container/list"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/lru"
 )
 
 // Ephemeral collections are the browseable grids synthesized from vibe
@@ -65,9 +65,8 @@ type ephemeralEntry struct {
 
 type vibeRegistry struct {
 	mu      sync.Mutex
-	byKey   map[core.RatingKey]*list.Element
+	byKey   *lru.Cache[core.RatingKey, *ephemeralEntry]
 	byQuery map[string]core.RatingKey
-	order   *list.List // front = most recently used; values are *ephemeralEntry
 	seq     atomic.Int64
 	ttl     time.Duration
 	max     int
@@ -80,10 +79,11 @@ func newVibeRegistry(ttl time.Duration, max int) *vibeRegistry {
 	if max <= 0 {
 		max = defaultVibeMax
 	}
-	return &vibeRegistry{
-		byKey: map[core.RatingKey]*list.Element{}, byQuery: map[string]core.RatingKey{},
-		order: list.New(), ttl: ttl, max: max,
-	}
+	r := &vibeRegistry{byQuery: map[string]core.RatingKey{}, ttl: ttl, max: max}
+	r.byKey = lru.New(lru.Options[core.RatingKey, *ephemeralEntry]{MaxEntries: max, OnEvict: func(k core.RatingKey, _ *ephemeralEntry) {
+		r.forgetQueriesLocked(k)
+	}})
+	return r
 }
 
 func (s *Service) vibeReg() *vibeRegistry {
@@ -105,31 +105,31 @@ func (r *vibeRegistry) expired(e *ephemeralEntry, now time.Time) bool {
 	return e.promoted == 0 && now.Sub(e.created) > r.ttl
 }
 
-func (r *vibeRegistry) removeLocked(el *list.Element) {
-	e := el.Value.(*ephemeralEntry)
-	delete(r.byKey, e.key)
+func (r *vibeRegistry) removeLocked(key core.RatingKey) {
+	r.byKey.Remove(key)
+	r.forgetQueriesLocked(key)
+}
+
+func (r *vibeRegistry) forgetQueriesLocked(key core.RatingKey) {
 	for sig, k := range r.byQuery {
-		if k == e.key {
+		if k == key {
 			delete(r.byQuery, sig)
 		}
 	}
-	r.order.Remove(el)
 }
 
 // get returns a copy of the live entry for key, marking it used.
 func (r *vibeRegistry) get(key core.RatingKey, now time.Time) (*ephemeralEntry, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	el, ok := r.byKey[key]
+	e, ok := r.byKey.Get(key)
 	if !ok {
 		return nil, false
 	}
-	e := el.Value.(*ephemeralEntry)
 	if r.expired(e, now) {
-		r.removeLocked(el)
+		r.removeLocked(key)
 		return nil, false
 	}
-	r.order.MoveToFront(el)
 	cp := *e
 	return &cp, true
 }
@@ -147,25 +147,16 @@ func (r *vibeRegistry) bySig(sig string, now time.Time) (*ephemeralEntry, bool) 
 func (r *vibeRegistry) put(sig string, e *ephemeralEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if el, ok := r.byKey[e.key]; ok {
-		el.Value = e
-		r.order.MoveToFront(el)
-	} else {
-		r.byKey[e.key] = r.order.PushFront(e)
-	}
+	r.byKey.Add(e.key, e)
 	r.byQuery[sig] = e.key
-	for r.order.Len() > r.max {
-		r.removeLocked(r.order.Back())
-	}
 }
 
 // update mutates a live entry in place.
 func (r *vibeRegistry) update(key core.RatingKey, fn func(*ephemeralEntry)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if el, ok := r.byKey[key]; ok {
-		fn(el.Value.(*ephemeralEntry))
-		r.order.MoveToFront(el)
+	if e, ok := r.byKey.Get(key); ok {
+		fn(e)
 	}
 }
 
@@ -321,17 +312,19 @@ func (s *Service) studioByName(ctx context.Context, name string) (string, bool) 
 func (r *vibeRegistry) listFor(owner int64, now time.Time) []*ephemeralEntry {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.byKey.RemoveFunc(func(k core.RatingKey, e *ephemeralEntry) bool {
+		if !r.expired(e, now) {
+			return false
+		}
+		r.forgetQueriesLocked(k)
+		return true
+	})
 	var out []*ephemeralEntry
-	for el := r.order.Front(); el != nil; {
-		next := el.Next()
-		e := el.Value.(*ephemeralEntry)
-		if r.expired(e, now) {
-			r.removeLocked(el)
-		} else if e.owner == owner && e.promoted == 0 {
+	for _, e := range r.byKey.All() {
+		if e.owner == owner && e.promoted == 0 {
 			cp := *e
 			out = append(out, &cp)
 		}
-		el = next
 	}
 	return out
 }

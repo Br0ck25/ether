@@ -910,7 +910,7 @@ func (s *Service) scoreRelease(rel core.Release, profile core.QualityProfile, ca
 	if len(formatRel.Info.Languages) == 0 {
 		formatRel.Info.Languages = []string{assumedLanguage(t)}
 	}
-	formatScore, matches, err := scorer.ScoreWithScores(formatRel, profile.CustomFormatScores)
+	formatScore, matches, err := scorer.ScoreForTitle(formatRel, profile.CustomFormatScores, originalLanguage(t))
 	if err != nil {
 		return releaseScore{}, err
 	}
