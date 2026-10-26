@@ -482,3 +482,27 @@ effect immediately. Point the dashboard tab at Ether's `/ether/` URL.
 Only those origins may frame Ether; Plex sign-in and owner authentication remain
 required. Use HTTPS for both pages when the dashboard is served over HTTPS.
 An empty list restores the default framing prohibition.
+
+### Automatic RTX Video setup
+
+RTX Video Super Resolution remains **Off** by default. On Windows x64 with an
+NVIDIA RTX GPU as device 0 and a working NVIDIA driver, selecting **Automatic**
+or **On** downloads the pinned NVEncC 9.38 package from its upstream GitHub
+release. Ether checks its exact size and SHA-256 before extraction, installs it
+under `<data directory>/tools/nvenc-9.38-windows-amd64`, then verifies NVEncC,
+NGX and the required muxers. Windows' built-in `System32/tar.exe` is used to
+extract the package. The initial download is about 247 MB; subsequent starts
+reuse the installed runtime.
+
+Setup runs in the background and the hardware panel refreshes its status.
+Ordinary transcoding remains available while setup runs or if it fails.
+Switching back to **Off** cancels setup; it does not delete a completed runtime.
+Failures are shown in the hardware panel. Correct the reported problem and
+switch Off, then back to Automatic or On to retry. Ether does not install GPU
+drivers or repeatedly download a failing package in the background.
+
+An explicit **NVEncC executable path** remains owner-managed: Ether validates
+it but never downloads over it. Setup and path changes apply without restarting
+Ether. Enabling support does not guarantee every stream is enhanced: existing
+codec, source resolution, bandwidth, audio/subtitle and concurrency rules still
+apply, and an actual enhancement failure falls back to ordinary transcoding.

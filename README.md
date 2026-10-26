@@ -294,7 +294,7 @@ Ether is backed by ~1,600 offline unit and fault-injection tests, recorded proto
 
 **Current boundaries:**
 - Usenet archives must be store-mode (`m0`, plain or password-encrypted RAR4/RAR5/7z); compressed archives and RAR-wrapped torrents are skipped during resolution.
-- NVIDIA RTX Video Super Resolution (`nvenc-ngx-vsr`) requires native Windows, an NVIDIA RTX GPU, and `NVEncC64` 9.38 with NGX DLLs, is off by default, targets SDR H.264 HLS/DASH streams within configured height/concurrency bounds, and falls back to ordinary ABR renditions when bandwidth or concurrency requires it.
+- NVIDIA RTX Video Super Resolution (`nvenc-ngx-vsr`) requires native Windows, an NVIDIA RTX GPU, and `NVEncC64` 9.38 with NGX DLLs (installed automatically when enabled unless a custom path is configured), is off by default, targets SDR H.264 HLS/DASH streams within configured height/concurrency bounds, and falls back to ordinary ABR renditions when bandwidth or concurrency requires it.
 - No Plex Relay support—remote viewers connect directly via UPnP/NAT-PMP, a port forward, or your reverse proxy.
 - No DVR recording.
 

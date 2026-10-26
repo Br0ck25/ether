@@ -3,7 +3,7 @@ import { Cpu } from "lucide-react";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { Section } from "../../components/layout";
 import { apiFetch } from "../../lib/api";
-import { useAsync } from "../../lib/hooks";
+import { useAsync, useInterval } from "../../lib/hooks";
 
 type Hardware = {
   hwaccel?: { name: string; encoders: string[] | null; device?: string };
@@ -11,6 +11,7 @@ type Hardware = {
   error?: string;
   enhancement?: {
     backend: string;
+    setupState?: string;
     available: boolean;
     reason?: string;
     version?: string;
@@ -22,9 +23,13 @@ type Hardware = {
 /** Detected transcoding hardware: acceleration, encoders and the bundled FFmpeg. */
 export function HardwareStatus() {
   const hw = useAsync(
-    async () => (await apiFetch<{ value: Hardware | null }>("/status/hwaccel")).value ?? {},
+    async (signal) =>
+      (await apiFetch<{ value: Hardware | null }>("/status/hwaccel", { signal })).value ?? {},
     [],
   );
+  useInterval(() => {
+    if (!hw.loading) void hw.reload();
+  }, 5000);
   const data = hw.data;
   const accel = data?.hwaccel;
   const encoders = accel?.encoders ?? [];
@@ -95,7 +100,13 @@ export function HardwareStatus() {
                   ? `${data.enhancement.active} active`
                   : data.enhancement.available
                     ? "Detected · idle"
-                    : "Unavailable"}
+                    : data.enhancement.setupState === "off"
+                      ? "Off"
+                      : data.enhancement.setupState === "installing"
+                        ? "Installing runtime"
+                        : data.enhancement.setupState === "checking"
+                          ? "Checking support"
+                          : "Unavailable"}
               </p>
               <p className="mt-1 text-xs text-fg-muted">
                 {data.enhancement.reason ||

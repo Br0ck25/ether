@@ -15,10 +15,12 @@ type VideoEnhancement struct {
 // VideoEnhancementSupport is detection, not successful execution. Its
 // protocols are the transports verified for this backend version.
 type VideoEnhancementSupport struct {
-	Backend   string   `json:"backend"`
-	Available bool     `json:"available"`
-	Reason    string   `json:"reason,omitempty"`
-	Version   string   `json:"version,omitempty"`
-	Protocols []string `json:"protocols,omitempty"`
-	Active    int      `json:"active"`
+	// SetupState is off, checking, installing, ready, or unavailable.
+	SetupState string   `json:"setupState,omitempty"`
+	Backend    string   `json:"backend"`
+	Available  bool     `json:"available"`
+	Reason     string   `json:"reason,omitempty"`
+	Version    string   `json:"version,omitempty"`
+	Protocols  []string `json:"protocols,omitempty"`
+	Active     int      `json:"active"`
 }

@@ -391,7 +391,7 @@ export const TRANSCODE: FieldGroup[] = [
   {
     title: "Server video enhancement",
     description:
-      "Use NVIDIA RTX Video Super Resolution on this server to improve lower-resolution video before streaming. Requires a supported NVIDIA GPU and NVEnc installation. Enhancement uses additional GPU capacity.",
+      "Use NVIDIA RTX Video Super Resolution on this server to improve lower-resolution video before streaming. On supported Windows x64 servers, enabling this installs and verifies the required runtime automatically. Enhancement uses additional GPU capacity.",
     fields: [
       {
         key: "rtxVideo",
@@ -455,7 +455,7 @@ export const TRANSCODE: FieldGroup[] = [
             key: "executablePath",
             label: "NVEnc executable path",
             kind: "text",
-            help: "Path to NVEncC64.exe on this server. Restart Ether after changing it.",
+            help: "Optional path to your own NVEncC64.exe. Leave empty for automatic setup; custom installations are never overwritten.",
           },
         ],
       },

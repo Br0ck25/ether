@@ -55,19 +55,26 @@ func normalizedRTX(c config.RTXVideo) (config.RTXVideo, string) {
 }
 
 func (m *Manager) detectRTX(ctx context.Context, goos string) {
-	b := &m.rtx
-	b.configuredPath = m.cfg.RTXVideo.ExecutablePath
+	path, support := probeRTX(ctx, m.runner, goos, m.cfg.RTXVideo.ExecutablePath)
+	m.rtx.path, m.rtx.support = path, support
+	m.rtx.configuredPath = m.cfg.RTXVideo.ExecutablePath
+}
+
+func probeRTX(ctx context.Context, runner Runner, goos, configured string) (path string, support core.VideoEnhancementSupport) {
+	b := &rtxBackendState{configuredPath: configured}
+	defer func() { path, support = b.path, b.support }()
 	b.support.Backend = rtxBackend
+	b.support.SetupState = "unavailable"
 	fail := func(reason string) { b.support.Reason = reason }
 	if goos != "windows" {
 		fail("RTX Video requires native Windows and an NVIDIA RTX GPU")
 		return
 	}
-	path := b.configuredPath
-	if path == "" {
-		path = "NVEncC64.exe"
+	candidate := b.configuredPath
+	if candidate == "" {
+		candidate = "NVEncC64.exe"
 	}
-	resolved, err := exec.LookPath(path)
+	resolved, err := exec.LookPath(candidate)
 	if err != nil {
 		fail("NVEncC executable not found; install the NVEncC 9.38 x64 package")
 		return
@@ -83,7 +90,7 @@ func (m *Manager) detectRTX(ctx context.Context, goos string) {
 	defer cancel()
 	query := func(arg string) (string, error) {
 		var out boundedRTXOutput
-		err := m.runner.Run(ctx, Command{Path: resolved, Args: []string{arg}, Stdout: &out, Stderr: &out})
+		err := runner.Run(ctx, Command{Path: resolved, Args: []string{arg}, Stdout: &out, Stderr: &out})
 		return out.String(), err
 	}
 	version, err := query("--version")
@@ -103,8 +110,10 @@ func (m *Manager) detectRTX(ctx context.Context, goos string) {
 		return
 	}
 	b.support.Available = true
+	b.support.SetupState = "ready"
 	b.support.Protocols = []string{core.ProtocolHLS, core.ProtocolDASH}
 	b.support.Reason = "NVEncC/NGX detected; runtime success is reported per session"
+	return
 }
 
 // Detection output is bounded even for a broken owner-supplied executable.
@@ -166,8 +175,11 @@ func (m *Manager) enhanceDecision(info core.MediaInfo, caps core.ClientCaps, opt
 		return reject("off", "disabled by owner")
 	}
 	support := m.EnhancementStatus()
-	if c.ExecutablePath != m.rtx.configuredPath {
-		return reject("unavailable", "backend path changed; restart required")
+	m.rtx.mu.Lock()
+	configured := m.rtx.configuredPath
+	m.rtx.mu.Unlock()
+	if c.ExecutablePath != configured {
+		return reject("unavailable", "backend path changed; setup pending")
 	}
 	if !support.Available {
 		reason := support.Reason

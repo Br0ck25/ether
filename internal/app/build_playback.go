@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -20,7 +21,7 @@ func (a *App) buildPlayback(ctx context.Context, cfg config.Config) error {
 	dataDir := a.opts.DataDir
 	var err error
 	// Transcoder. A missing ffmpeg is not fatal: direct play still works.
-	a.transcoder, err = transcode.New(cfg.Transcode, log, transcode.WithRunStartHandler(func(input string, from, to time.Duration) {
+	a.transcoder, err = transcode.New(cfg.Transcode, log, transcode.WithRuntimeDir(filepath.Join(dataDir, "tools")), transcode.WithRunStartHandler(func(input string, from, to time.Duration) {
 		if a.playback != nil {
 			a.playback.WarmInput(input, from, to)
 		}

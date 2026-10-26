@@ -34,6 +34,7 @@ var ErrImageSubtitle = errors.New("transcode: bitmap subtitles cannot be convert
 type Option func(*options)
 
 type options struct {
+	runtimeDir     string
 	runner         Runner
 	finder         *finder
 	detectHW       bool
@@ -70,6 +71,11 @@ func defaultOptions() options {
 		rungDwell:      8 * time.Second,
 	}
 }
+
+// WithRuntimeDir enables managed optional tool installation in this node-local
+// directory. No downloads occur while RTX Video is off. Embedded/test managers
+// that omit this option never install software.
+func WithRuntimeDir(dir string) Option { return func(o *options) { o.runtimeDir = dir } }
 
 // WithRunner replaces the process runner (tests).
 func WithRunner(r Runner) Option { return func(o *options) { o.runner = r } }
@@ -149,6 +155,7 @@ func withFinder(f finder) Option { return func(o *options) { o.finder = &f } }
 
 // Manager runs ffmpeg for Ether. It implements core.Transcoder.
 type Manager struct {
+	rtxSetup       *rtxSetupWorker
 	audioMatchBusy atomic.Bool
 	rtx            rtxBackendState
 	pendingEncodes int
@@ -222,7 +229,9 @@ func New(cfg config.Transcode, logger *slog.Logger, opts ...Option) (*Manager, e
 	m.hw = hwDetector{runner: m.runner, ffmpeg: m.ffmpeg, goos: f.goos, log: m.log, statDevice: deviceExists}.
 		detect(ctx, mode, cfg.VAAPIDevice, m.feat)
 
-	m.detectRTX(ctx, f.goos)
+	if o.runtimeDir == "" {
+		m.detectRTX(ctx, f.goos)
+	}
 	m.tempDir = cfg.TempDir
 	if m.tempDir == "" {
 		m.tempDir = filepath.Join(os.TempDir(), "ether-transcode")
@@ -236,6 +245,7 @@ func New(cfg config.Transcode, logger *slog.Logger, opts ...Option) (*Manager, e
 
 	m.wg.Add(1)
 	go m.reaper()
+	m.startRTXSetup(f.goos)
 	return m, nil
 }
 
@@ -269,10 +279,15 @@ func (m *Manager) HWAccel() core.HWAccel {
 }
 
 // UpdateConfig applies changed limits (MaxTranscodes,
-// RemoteMaxBitrateKbps). Paths and hardware choice need a restart.
+// RemoteMaxBitrateKbps) and schedules optional RTX runtime setup. FFmpeg paths
+// and the ordinary hardware encoder choice still need a restart.
 func (m *Manager) UpdateConfig(cfg config.Transcode) {
 	m.mu.Lock()
+	previous := m.cfg.RTXVideo
 	m.cfg = cfg
+	if m.rtxSetup != nil && previous != cfg.RTXVideo && !m.closed {
+		m.rtxSetup.changedLocked()
+	}
 	m.mu.Unlock()
 }
 
@@ -690,6 +705,9 @@ func (m *Manager) Close() error {
 		return nil
 	}
 	m.closed = true
+	if m.rtxSetup != nil {
+		m.rtxSetup.cancel()
+	}
 	sessions := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
 		sessions = append(sessions, s)
