@@ -169,6 +169,18 @@ func Normalize(s *core.CollectionSpec) {
 // Validate checks a normalized spec. It returns a *ValidationError.
 func Validate(s *core.CollectionSpec) error {
 	ve := &ValidationError{}
+	if s.LocalOnly {
+		for _, src := range s.Sources {
+			if src.Kind != "catalog" {
+				ve.add("localOnly", "Local collections use only the catalogue source")
+			}
+		}
+		for _, r := range append(append([]core.CollectionRule{}, s.Rules...), s.Exclude...) {
+			if r.Field == "watchProvider" {
+				ve.add("localOnly", "Streaming-provider rules require remote discovery")
+			}
+		}
+	}
 	if s.Name == "" {
 		ve.add("name", "a name is required")
 	} else if len(s.Name) > 120 {

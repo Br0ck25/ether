@@ -3,6 +3,7 @@ package personalize
 import (
 	"context"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -115,8 +116,8 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 	// Every page opens with the viewer's top picks, which may repeat the
 	// Home's (toppicks.go); the rest of the page is what must differ.
 	for name, p := range map[string]*core.HomePreview{"home": home, "movies": movies, "shows": shows} {
-		if rows := visibleEngineRows(p.Rows); len(rows) == 0 || (rows[0].Kind != KindTop10 && rows[0].Kind != KindTop10Today) {
-			t.Errorf("%s does not open with top picks: %v", name, kindsOf(p.Rows))
+		if rows := visibleEngineRows(p.Rows); len(rows) == 0 || (rowByKind(rows, KindTrending) != nil && rows[0].Kind != KindTrending) {
+			t.Errorf("%s does not open with global trending: %v", name, kindsOf(p.Rows))
 		}
 	}
 	notLead := func(rows []core.HomeRow) []core.HomeRow {
@@ -148,7 +149,7 @@ func TestRecommendedPagesDifferFromHome(t *testing.T) {
 				t.Errorf("%s row %s leads with a Home lead title", name, r.HubID)
 			}
 		}
-		if s := jaccard(pageKeys(home.Rows, 12), pageKeys(p.Rows, 12)); s > 0.25 {
+		if s := jaccard(discoveryKeys(home.Rows), discoveryKeys(p.Rows)); s > 0.25 {
 			hk := pageKeys(home.Rows, 12)
 			for _, r := range visibleEngineRows(p.Rows) {
 				for i, it := range r.Items {
@@ -395,24 +396,25 @@ func TestSurfaceArmsLearnPerPage(t *testing.T) {
 		return testRow(kind, id, items(cat, keys...))
 	}
 	m := emptyModel(mk(KindTrending, "trending", 0), mk(KindNewReleases, "newreleases", 1))
-	first := func(section core.MediaType, arms map[string]arm) string {
+	scores := func(section core.MediaType, arms map[string]arm) map[string]float64 {
 		rows := run(m, func(a *assembly) { a.section = section; a.arms = arms })
-		return visibleEngineRows(rows)[0].Kind
+		out := map[string]float64{}
+		for _, r := range rows {
+			out[r.Kind] = r.Score
+		}
+		return out
 	}
-	movieHome := first("", nil)
-	moviePage := first(core.TypeMovie, nil)
-	// This viewer plays new releases on the Movies page and ignores
-	// trending there.
-	learned := map[string]arm{
-		surfaceKey(surfMovies, KindTrending):    {shows: 60, reward: 0},
-		surfaceKey(surfMovies, KindNewReleases): {shows: 60, reward: 30},
+	base := scores(core.TypeMovie, nil)
+	home := scores("", nil)
+	learned := map[string]arm{surfaceKey(surfMovies, KindTrending): {shows: 60, reward: 0}, surfaceKey(surfMovies, KindNewReleases): {shows: 60, reward: 30}}
+	got := scores(core.TypeMovie, learned)
+	if got[KindTrending] >= base[KindTrending] || got[KindNewReleases] <= base[KindNewReleases] {
+		t.Fatalf("scores did not learn: %v -> %v", base, got)
 	}
-	if got := first(core.TypeMovie, learned); got != KindNewReleases {
-		t.Fatalf("Movies page did not learn: %s (was %s)", got, moviePage)
+	if !reflect.DeepEqual(home, scores("", learned)) {
+		t.Fatal("Movies evidence changed Home scores")
 	}
-	if got := first("", learned); got != movieHome {
-		t.Fatalf("Movies evidence changed the Home: %s, was %s", got, movieHome)
-	}
+	// Editorial positions stay fixed even as the underlying bandit learns.
 }
 
 func TestKindShowsCountDistinctDaysPerSurface(t *testing.T) {
@@ -726,4 +728,14 @@ func TestLensHubIDsParse(t *testing.T) {
 	if hubKind("movie.era.1990") != KindEra || hubKind("watchlist.coming") != "watchlist.coming" {
 		t.Fatal("hubKind falls back to the id scheme for engine rows only")
 	}
+}
+
+func discoveryKeys(rows []core.HomeRow) map[core.RatingKey]bool {
+	var rest []core.HomeRow
+	for _, r := range rows {
+		if discoveryPriority(r.Kind) >= 5 {
+			rest = append(rest, r)
+		}
+	}
+	return pageKeys(rest, 12)
 }

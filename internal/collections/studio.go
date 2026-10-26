@@ -20,8 +20,22 @@ func (s *Service) ListSpecs(ctx context.Context) ([]core.CollectionSpec, error) 
 		return nil, err
 	}
 	out := make([]core.CollectionSpec, 0, len(rows))
+	var snap *snapshot
 	for _, r := range rows {
-		out = append(out, r.view())
+		if _, ok := localFacetSpec(r.spec); ok {
+			snap, _ = s.idx.get(ctx)
+			break
+		}
+	}
+	for _, r := range rows {
+		v := r.view()
+		if key, ok := localFacetSpec(r.spec); ok && snap != nil {
+			v.ItemCount = len(snap.facetKeys(key))
+			if v.Limit > 0 {
+				v.ItemCount = min(v.ItemCount, v.Limit)
+			}
+		}
+		out = append(out, v)
 	}
 	return out, nil
 }

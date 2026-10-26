@@ -2,7 +2,9 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/braedonsaunders/ether/internal/libraryfilter"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -358,4 +360,28 @@ func isNotFound(err error) bool {
 		return true
 	}
 	return strings.Contains(err.Error(), "not found")
+}
+
+func (h *Handler) handleVisibilityPreview(w http.ResponseWriter, r *http.Request) {
+	if h.deps.CatalogVisibility == nil {
+		writeError(w, 503, "unavailable", "Catalog preview unavailable")
+		return
+	}
+	var body struct {
+		Exclusions []core.LibraryExclusion `json:"exclusions"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10)).Decode(&body); err != nil {
+		writeError(w, 400, "bad_json", "Invalid filter")
+		return
+	}
+	if _, err := libraryfilter.Compile(body.Exclusions); err != nil {
+		writeError(w, 400, "invalid_filter", err.Error())
+		return
+	}
+	p, err := h.deps.CatalogVisibility(r.Context(), body.Exclusions)
+	if err != nil {
+		writeError(w, 500, "preview_failed", "Could not preview catalogue")
+		return
+	}
+	writeJSON(w, 200, p)
 }

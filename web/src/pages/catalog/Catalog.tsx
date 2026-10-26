@@ -24,6 +24,7 @@ import { ToolbarPicker } from "../../components/ToolbarPicker";
 import { Workspace } from "../../components/workspace";
 import { api } from "../../lib/api";
 import { useAsync, useDebouncedValue } from "../../lib/hooks";
+import { LibraryVisibility } from "./LibraryVisibility";
 import { CatalogSettings } from "./CatalogSettings";
 import { TitleInspector } from "./TitleInspector";
 import "./catalog.css";
@@ -42,6 +43,7 @@ export default function Catalog() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const settings = tab === "settings";
+  const visibility = tab === "visibility";
   const { health, refreshDashboard } = useApp();
   const status = health.find((h) => h.id === "catalog");
   return (
@@ -60,6 +62,14 @@ export default function Catalog() {
           ) : null}
           <Button
             size="sm"
+            variant={visibility ? "secondary" : "outline"}
+            onClick={() => navigate(visibility ? "/catalog" : "/catalog/visibility")}
+          >
+            <SlidersHorizontal size={14} />
+            Library visibility
+          </Button>
+          <Button
+            size="sm"
             variant={settings ? "secondary" : "outline"}
             onClick={() =>
               navigate(
@@ -75,7 +85,9 @@ export default function Catalog() {
         </>
       }
     >
-      {settings ? (
+      {visibility ? (
+        <LibraryVisibility />
+      ) : settings ? (
         <CatalogSettings />
       ) : (
         <CatalogBrowser params={params} setParams={setParams} refreshHealth={refreshDashboard} />

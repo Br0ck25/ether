@@ -32,7 +32,9 @@ export function RuleRow({
   region,
   index,
   kind,
+  allowedFields,
 }: {
+  allowedFields?: RuleField[];
   rule: Rule;
   onChange: (r: Rule) => void;
   onRemove: () => void;
@@ -58,7 +60,11 @@ export function RuleRow({
           <SearchSelect
             value={rule.field}
             onChange={(v) => v && onChange(withField(rule, v as RuleField))}
-            options={FIELD_OPTIONS}
+            options={
+              allowedFields
+                ? FIELD_OPTIONS.filter((f) => allowedFields.includes(f.value))
+                : FIELD_OPTIONS
+            }
             ariaLabel={`${label} field`}
             searchable
           />

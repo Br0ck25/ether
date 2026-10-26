@@ -27,6 +27,7 @@ type CollectionSpec struct {
 	Artwork    CollectionArtwork `json:"artwork"`
 	Targets    CollectionTargets `json:"targets"`
 	Enabled    bool              `json:"enabled"`
+	LocalOnly  bool              `json:"localOnly,omitempty"` // evaluate rules against the local catalogue only; no remote discovery
 	TemplateID string            `json:"templateId,omitempty"`
 	// Server-maintained.
 	UpdatedAt   *time.Time `json:"updatedAt,omitempty"`

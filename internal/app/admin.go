@@ -105,13 +105,14 @@ func (a *App) buildAdmin() http.Handler {
 			"database": a.databaseStatus,
 			"updates":  a.updateStatus,
 		},
-		ResolverTraces:  func(context.Context) (any, error) { return a.resolver.Traces(), nil },
-		Users:           a.users,
-		ViewerDirectory: a.viewerDirectory,
-		Personalization: a.personalize,
-		Collections:     a.collections,
-		CatalogHelper:   a.collections,
-		Images:          a.images,
+		ResolverTraces:    func(context.Context) (any, error) { return a.resolver.Traces(), nil },
+		Users:             a.users,
+		ViewerDirectory:   a.viewerDirectory,
+		Personalization:   a.personalize,
+		Collections:       a.collections,
+		CatalogHelper:     a.collections,
+		CatalogVisibility: a.catalog.PreviewVisibility,
+		Images:            a.images,
 	})
 }
 

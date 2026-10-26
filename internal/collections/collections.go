@@ -200,10 +200,11 @@ func New(db *sql.DB, cat core.Catalog, log *slog.Logger, opts ...Option) (*Servi
 	if err := s.seedBuiltins(ctx); err != nil {
 		return nil, fmt.Errorf("collections: built-ins: %w", err)
 	}
-	if !s.opts.noSeed {
-		if err := s.seedDefaults(ctx); err != nil {
-			return nil, fmt.Errorf("collections: seed: %w", err)
-		}
+	if err := s.separateDiscoveryCollections(ctx); err != nil {
+		return nil, err
+	}
+	if err := s.seedLibraryDefaults(ctx); err != nil {
+		return nil, fmt.Errorf("collections: defaults: %w", err)
 	}
 	return s, nil
 }
@@ -305,6 +306,15 @@ func (s *Service) invalidate(id int64) {
 // membersFor returns a row's members, building when it never was built,
 // was edited, or (live) the cached evaluation expired.
 func (s *Service) membersFor(ctx context.Context, row *specRow, wait bool) (*memberSet, error) {
+	if key, ok := localFacetSpec(row.spec); ok {
+		snap, err := s.idx.get(ctx)
+		if err != nil {
+			return nil, err
+		}
+		keys := append([]core.RatingKey(nil), snap.facetKeys(key)...)
+		row.itemCount = len(keys)
+		return s.newMemberSet(row.spec, keys, nil, snap.builtAt, "local-facet"), nil
+	}
 	ms := s.cached(row.id)
 	fresh := ms != nil && ms.builtAt.Equal(row.lastBuilt) && row.buildHash != ""
 	if row.spec.Refresh == RefreshLive {

@@ -24,19 +24,19 @@ func (c *availabilityCatalog) Children(ctx context.Context, k core.RatingKey) ([
 	if e != nil {
 		return nil, e
 	}
-	return c.availability.FilterDiscovery(ctx, ts), nil
+	return c.availability.FilterDiscovery(ctx, c.Catalog.FilterVisibility(ctx, ts)), nil
 }
 func (c *availabilityCatalog) Grandchildren(ctx context.Context, k core.RatingKey) ([]core.Title, error) {
 	ts, e := c.Catalog.Grandchildren(ctx, k)
 	if e != nil {
 		return nil, e
 	}
-	return c.availability.FilterDiscovery(ctx, ts), nil
+	return c.availability.FilterDiscovery(ctx, c.Catalog.FilterVisibility(ctx, ts)), nil
 }
 func (c *availabilityCatalog) Search(ctx context.Context, q string, types []core.MediaType, n int) ([]core.Title, error) {
 	ts, e := c.Catalog.Search(ctx, q, types, n)
 	if e != nil {
 		return nil, e
 	}
-	return c.availability.FilterDiscovery(ctx, ts), nil
+	return c.availability.FilterDiscovery(ctx, c.Catalog.FilterVisibility(ctx, ts)), nil
 }

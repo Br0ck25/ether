@@ -136,9 +136,9 @@ func TestPublishingToPlexRespectsTargetsAndRatings(t *testing.T) {
 	if listed(t, e, owner, core.TypeMovie, "Big Hits") != nil {
 		t.Fatal("disabled collection still listed")
 	}
-	// Built-ins and franchises keep working.
-	if listed(t, e, owner, core.TypeMovie, "Top Rated Movies") == nil {
-		t.Fatal("built-in missing")
+	// Discovery feeds remain addressable but are not browseable collections by default.
+	if listed(t, e, owner, core.TypeMovie, "Top Rated Movies") != nil {
+		t.Fatal("discovery feed leaked into Collections")
 	}
 }
 

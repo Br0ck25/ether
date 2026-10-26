@@ -63,7 +63,7 @@ func TestSeededSmartEvaluation(t *testing.T) {
 	}
 	var eighties *core.Collection
 	for i := range list {
-		if list[i].Title == "80s Sci-Fi Under 2 Hours" {
+		if list[i].Title == "Science Fiction" {
 			eighties = &list[i]
 		}
 	}
@@ -74,12 +74,12 @@ func TestSeededSmartEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if page.Total != 2 { // Alien Invasion + Saga Returns; modern film excluded by decade/runtime
+	if page.Total != 3 { // Every locally mirrored science-fiction movie.
 		t.Fatalf("80s smart: %+v", page)
 	}
 	// Load the second title runtime check: both < 2h.
 	for _, it := range page.Items {
-		if it.Runtime > 2*time.Hour || it.Year < 1980 || it.Year > 1989 {
+		if len(it.Genres) == 0 || it.Genres[0] != "Science Fiction" {
 			t.Fatalf("smart item out of rule: %+v", it)
 		}
 	}

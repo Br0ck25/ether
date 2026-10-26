@@ -13,6 +13,7 @@ import (
 // receives. It is pure: same inputs, same rows. Everything time-dependent
 // (rotation, exploration) is seeded by the local date.
 type assembly struct {
+	visit    int64 // fixed for this browsing visit; new visits vary discovery rows
 	hidden   map[core.RatingKey]bool
 	previous []presentedRow // currently browsed positions; never bypass eligibility
 	model    *userModel
@@ -594,7 +595,7 @@ func (a *assembly) adjust(c *candRow, it *candItem, target float64) float64 {
 //	score = bandit play rate × context multiplier × content strength
 //	        × row scale × daily rotation
 func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float64) {
-	rng := seeded("row", a.user.ID, a.day, a.hc.Bucket(), c.kind)
+	rng := seeded("row", a.user.ID, a.day, a.visit, a.hc.Bucket(), c.kind)
 	rate := a.banditRate(c, rng) // (surface, kind) arm with kind fallback (surfaces.go)
 
 	strength = 0.8
@@ -641,7 +642,7 @@ func (a *assembly) rowScore(c *candRow, items []candItem) (score, strength float
 	}
 	// Rotation between same-kind rows (which Because-you-watched rows show
 	// today) and among close rows.
-	rot := 1 + 0.16*(unit("rot", a.user.ID, a.day, c.id)-0.5)
+	rot := 1 + 0.16*(unit("rot", a.user.ID, a.day, a.visit, c.id)-0.5)
 	return rate * mult * scale * rot, strength
 }
 

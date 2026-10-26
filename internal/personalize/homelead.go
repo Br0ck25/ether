@@ -59,7 +59,9 @@ func leadFromRows(rows []core.HomeRow, items int) *homeLead {
 		if r.Hidden {
 			continue
 		}
-		seen++
+		if discoveryPriority(r.Kind) >= 5 {
+			seen++
+		}
 		if r.Source == core.RowSourcePlex {
 			continue // Continue Watching: in-progress titles never recur as picks
 		}

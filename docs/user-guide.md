@@ -506,3 +506,40 @@ it but never downloads over it. Setup and path changes apply without restarting
 Ether. Enabling support does not guarantee every stream is enhanced: existing
 codec, source resolution, bandwidth, audio/subtitle and concurrency rules still
 apply, and an actual enhancement failure falls back to ordinary transcoding.
+
+### Library visibility and discovery collections
+
+**Catalog → Library visibility** controls which titles Ether exposes to Plex.
+Add named exclusion groups, choose movies, TV, or both, and combine conditions
+with **Match all** or **Match any**. Any matching group hides the title across
+browsing, search, recommendations and collections. The preview uses only the
+local catalogue; it does not search indexers or fetch every title's details.
+Saving preserves metadata and watch history, and clearing the rules restores
+visibility subject to the normal release, availability and viewer restrictions.
+
+Country matches TMDB's origin/production country metadata, including
+co-productions, separately from original language. For example, a country rule
+for India also matches an English-language Indian production. Unknown metadata
+never matches an exclusion; the preview reports country coverage. Existing
+normal metadata refreshes fill gaps without a quota-consuming bulk lookup.
+
+Library collections and discovery rows are independent. Ether ships movie
+collections by genre and TV collections by locally known networks/studios.
+These match the local catalogue dynamically, and deleting a default keeps it
+deleted. Newly encountered TV networks/studios are added automatically. Use the
+collection editor to change rules, artwork, audience, or publication targets:
+**Collection only**, **Discovery rows**, or **Both**. Shipped trending and other
+feed sources stay available for rows but no longer clutter Plex's Collections tab.
+
+Default discovery starts with Continue Watching when populated, then Trending
+Now, personal picks and New & Noteworthy. Global TMDB daily and weekly charts
+refresh hourly, share one durable cache across viewers, and retain the last
+successful chart during temporary outages. Catalog settings show freshness;
+charts older than seven days are not advertised as current. Owner/viewer Home
+Designer placements still override defaults.
+
+Discovery rows stay stable during a browsing visit, including watched-state
+changes. A new client session or five minutes without browsing starts a fresh
+selection. Clients that do not send a session identifier use the idle boundary;
+Ether cannot distinguish an immediate app reopen from an ordinary refresh on
+those clients. Continue Watching remains live throughout.

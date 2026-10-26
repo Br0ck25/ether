@@ -136,6 +136,11 @@ func (c *Catalog) browseWhere(f core.Filter) (string, []any, error) {
 	var conds []string
 	var args []any
 	conds = append(conds, "t.browsable=1", "t.adult=0")
+	if f := c.visibilityFilter(); f != nil {
+		q, a := f.SQLHidden()
+		conds = append(conds, "NOT ("+q+")")
+		args = append(args, a...)
+	}
 	if len(f.ExcludeKeys) > 0 {
 		conds = append(conds, "t.key NOT IN ("+placeholders(len(f.ExcludeKeys))+")")
 		for _, k := range f.ExcludeKeys {

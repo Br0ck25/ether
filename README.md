@@ -110,7 +110,7 @@ What happens when a stream fails over at `00:52:18` from a Theatrical WEB-DL to 
 ### 4. Personalization inside stock Plex apps
 Viewers never leave the official Plex client, yet every person's Home screen is dynamically assembled for *them*, *their device*, and *the current hour*:
 * **Per-viewer taste models:** Tracks affinities across genres, keywords, directors, actors, decades, and languages with exponential time decay—separating completions and comfort rewatches from early abandons and unplayed impressions.
-* **Hierarchical Thompson-sampling bandits:** Row ordering uses a Beta-Bernoulli bandit that blends hand-tuned priors → server-wide evidence → the viewer's own play rate, seeded deterministically per `(viewer, day, row)` so Home explores daily without jumping around on every refresh.
+* **Hierarchical Thompson-sampling bandits:** Row ordering uses a Beta-Bernoulli bandit that blends hand-tuned priors → server-wide evidence → the viewer's own play rate, held stable during an active browsing visit, with fresh exploration when a new client session starts or after an idle break.
 * **Self-gated learned re-ranker:** A pooled logistic-regression model trains in the background during quiet hours on 48-hour impression-to-play attribution (debiasing row and item position at inference). It **refuses to activate** until it beats the hand-tuned baseline by a strict held-out AUC margin.
 * **Session-intent & Micro-Reason headers:** Clicking through 90s thrillers without pressing Play subtly lifts related rows for the next hour. Detail pages greet the viewer with a calibrated decision header:
   > **`96% Match · Directed by Denis Villeneuve · Ends at 10:45 PM`** *(resume-aware, local time, never faked for new users)*.
@@ -120,6 +120,8 @@ Viewers never leave the official Plex client, yet every person's Home screen is 
 ## The owner experience
 
 Everything is managed through `/ether/`—a fast, keyboard-friendly web UI built around live previews and slide-over drawers. Zero YAML files required.
+
+Global TMDB trending charts refresh hourly and survive restarts. Continue Watching leads the default discovery layout, followed by Trending Now. Browseable collections and discovery rows have independent placement controls, with movie-genre and TV-network/studio defaults. Catalog → Library visibility adds optional, previewable country, language, genre and numeric exclusion rules without replacing the catalogue browser or launching provider searches.
 
 ### Taste Intelligence & Per-Viewer Controls
 Inspect what the personalization engine has learned for each viewer—their top picks, taste confidence, peak viewing hours, typical session length, and genre/person affinities—alongside granular per-person content ratings, time windows, and stream caps.

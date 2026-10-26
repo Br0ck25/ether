@@ -145,7 +145,7 @@ var kinds = []kindInfo{
 		prior: 0.09, slug: "crowd", context: "crowd", surfaces: map[string]float64{surfHome: 1, surfMovies: 0.9, surfShows: 0.9}, group: groupPicks},
 	{kind: KindCrowdTrending, title: "Trending With Fans of What You Watch", description: "Titles trending right now (TMDB, and Trakt when it is set up) that fans of the viewer's favourites love: trendy, but personal.",
 		prior: 0.08, slug: "crowd.trending", context: "crowd.trending", surfaces: everywhere, group: groupPicks, lean: leanFresh},
-	{kind: KindTrending, title: "Trending This Week", description: "What is trending on TMDB this week.",
+	{kind: KindTrending, title: "Trending Now", description: "What is trending on TMDB this week.",
 		prior: 0.06, slug: "trending", context: "trending", surfaces: everywhere, group: groupExplore, lean: leanFresh},
 	{kind: KindPopularServer, title: "Popular on This Server", description: "What other viewers on this server watched most in the last 30 days.",
 		prior: 0.07, slug: "popular.server", context: "popular.server", surfaces: map[string]float64{surfHome: 1, surfMovies: 0.8, surfShows: 0.8}, group: groupHousehold},

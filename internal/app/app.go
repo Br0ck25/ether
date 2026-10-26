@@ -294,7 +294,7 @@ func (a *App) build(ctx context.Context, cfg config.Config) error {
 	// initialized auth service. Scorer consumers are built inside the model's
 	// dependency phase before its workers start.
 	for _, build := range []func(context.Context, config.Config) error{
-		a.buildCatalogue, a.buildIdentity, a.buildPersonalization,
+		a.buildCatalogue, func(context.Context, config.Config) error { a.safety.SetCatalogPolicy(a.catalog.Visible); return nil }, a.buildIdentity, a.buildPersonalization,
 		a.buildSources, a.buildPlayback, a.buildPrefetch, a.buildIntegrations,
 	} {
 		if err := build(ctx, cfg); err != nil {
@@ -373,6 +373,7 @@ func (a *App) Run(ctx context.Context) error {
 	// Tracked like every other background loop, so Run returns (and the
 	// caller closes the database) only after they have stopped.
 	background.start(func() { a.cluster.RunAsLeader(ctx, "catalogue sync", a.catalog.Run) })
+	background.start(func() { a.cluster.RunAsLeader(ctx, "trending charts", a.catalog.RunTrends) })
 	background.start(func() { a.cluster.RunAsLeader(ctx, "release availability", a.availability.Run) })
 	background.start(func() { a.cluster.RunAsLeader(ctx, "collection refresh", a.collections.Run) })
 	background.start(func() { a.trakt.Start(ctx) })

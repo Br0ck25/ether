@@ -10,8 +10,8 @@ import (
 // Keep a browsing page's positions through model, feedback and watch-state
 // refreshes. This stores identities only: every retained item must still pass
 // the current candidate generation, policy, context and cross-surface filters.
-// A new context/layout or 30 minutes without assembly starts a fresh draft.
-const presentationTTL = 30 * time.Minute
+// A new context/layout or five minutes without browsing starts a fresh draft.
+const presentationTTL = 5 * time.Minute
 const maxPresentations = 256
 
 type presentedRow struct {
@@ -19,6 +19,7 @@ type presentedRow struct {
 	keys []core.RatingKey
 }
 type presentation struct {
+	seed int64
 	rows []presentedRow
 	at   time.Time
 }
@@ -45,11 +46,13 @@ func (e *Engine) assemblePage(a *assembly, key memoKey, draft bool) []core.HomeR
 		e.presentations = map[memoKey]presentation{}
 	}
 	key = presentationKey(key, a.model.generic)
+	a.visit = now.UnixNano()
 	if old, ok := e.presentations[key]; ok && !now.Before(old.at) && now.Sub(old.at) < presentationTTL {
 		a.previous = old.rows
+		a.visit = old.seed
 	}
 	rows := a.run()
-	p := presentation{at: now}
+	p := presentation{at: now, seed: a.visit}
 	for _, row := range rows {
 		if row.Hidden {
 			continue
@@ -159,4 +162,16 @@ func (a *assembly) keepPreviouslyShown(c *candRow, eligible, ranked []candItem) 
 		}
 	}
 	return ranked
+}
+
+// Memo hits count as browsing activity, so a feedback refresh never starts a
+// new visit merely because assembly was avoided by the response cache.
+func (e *Engine) touchPresentation(k memoKey, generic bool) {
+	e.presentationMu.Lock()
+	defer e.presentationMu.Unlock()
+	k = presentationKey(k, generic)
+	if p, ok := e.presentations[k]; ok {
+		p.at = e.now()
+		e.presentations[k] = p
+	}
 }

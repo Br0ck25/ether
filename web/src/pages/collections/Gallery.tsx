@@ -43,7 +43,7 @@ import { CollectionDetail } from "./CollectionDetail";
 import { DescribeDialog } from "./DescribeDialog";
 import { newCollectionHref } from "./links";
 
-type Tab = "mine" | "templates" | "builtin";
+type Tab = "mine" | "rows" | "templates" | "builtin";
 type Filter = "all" | "live" | "draft";
 
 export default function CollectionsGallery({
@@ -56,7 +56,8 @@ export default function CollectionsGallery({
   const [routeParams, setParams] = useSearchParams();
   const params = browseSearch === undefined ? routeParams : new URLSearchParams(browseSearch);
   const rawTab = params.get("tab");
-  const tab: Tab = rawTab === "templates" || rawTab === "builtin" ? rawTab : "mine";
+  const tab: Tab =
+    rawTab === "rows" || rawTab === "templates" || rawTab === "builtin" ? rawTab : "mine";
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [category, setCategory] = useState("all");
@@ -76,12 +77,15 @@ export default function CollectionsGallery({
     }
     wasActive.current = active;
   }, [active, collections.reload]);
-  const mine = (collections.data ?? []).filter((c) => !c.builtIn);
+  const mine = (collections.data ?? []).filter((c) => c.targets.collectionsTab);
+  const rowSources = (collections.data ?? []).filter(
+    (c) => c.targets.homeRow || c.targets.sectionRow,
+  );
   const builtIn = (collections.data ?? []).filter((c) => c.builtIn);
   const needle = q.trim().toLowerCase();
   const match = (s: { name: string; description?: string }) =>
     !needle || `${s.name} ${s.description ?? ""}`.toLowerCase().includes(needle);
-  const items = (tab === "builtin" ? builtIn : mine).filter(
+  const items = (tab === "builtin" ? builtIn : tab === "rows" ? rowSources : mine).filter(
     (c) => match(c) && (tab !== "mine" || filter === "all" || c.enabled === (filter === "live")),
   );
   const categories = [...new Set((templates.data ?? []).map((t) => t.category))];
@@ -175,7 +179,7 @@ export default function CollectionsGallery({
     <>
       <Workspace
         title="Collections"
-        subtitle="Curate what shows up in Plex."
+        subtitle="Library collections and discovery rows, independently curated."
         actions={
           <>
             {tab !== "templates" ? (
@@ -267,13 +271,14 @@ export default function CollectionsGallery({
                 tabs={[
                   {
                     key: "mine",
-                    label: "Yours",
+                    label: "Library collections",
                     count: collections.data ? mine.length : undefined,
                   },
+                  { key: "rows", label: "Home & library rows", count: rowSources.length },
                   { key: "templates", label: "Templates", count: templates.data?.length },
                   {
                     key: "builtin",
-                    label: "Built-in",
+                    label: "Discovery sources",
                     count: collections.data ? builtIn.length : undefined,
                   },
                 ]}

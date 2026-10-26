@@ -37,9 +37,10 @@ type Policy struct {
 }
 
 type Service struct {
-	db       *sql.DB
-	mu       sync.RWMutex
-	policies map[int64]Policy
+	catalogAllowed func(*core.Title) bool // installed once before request serving
+	db             *sql.DB
+	mu             sync.RWMutex
+	policies       map[int64]Policy
 
 	invalMu sync.Mutex
 	inval   *clusterbus.Invalidator // nil on a standalone server
@@ -155,7 +156,14 @@ func (s *Service) Put(ctx context.Context, id int64, p Policy) error {
 	iv.Notify(strconv.FormatInt(id, 10))
 	return nil
 }
+
+// SetCatalogPolicy installs the global catalogue policy during app construction.
+func (s *Service) SetCatalogPolicy(fn func(*core.Title) bool) { s.catalogAllowed = fn }
+
 func (s *Service) Allowed(u *core.User, t *core.Title) bool {
+	if s.catalogAllowed != nil && !s.catalogAllowed(t) {
+		return false
+	}
 	if t == nil || t.Adult {
 		return false
 	}

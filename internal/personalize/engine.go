@@ -569,7 +569,7 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 	if section != "" && resolveDedupeHome(layoutDoc, u.ID, sectionName(section)) {
 		lead = e.homeLeadFor(ctx, &u, hc, layoutDoc, limit, wait)
 	}
-	key := memoKey{user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
+	key := memoKey{client: hc.ClientID, session: hc.SessionID, user: u.ID, section: section, bucket: hc.Bucket(), day: day, hour: hc.Now.Hour(), limit: limit, model: m.version,
 		layout: layoutVer, stats: stats.at.UnixNano(), owner: ownerVer, cw: progressSig(inprog),
 		limits: u.MaxContentRating + "|" + fmt.Sprint(u.AllowedSections, u.IsOwner), intent: intentVer, tuning: tune.key()}
 	if lead != nil {
@@ -602,6 +602,7 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 		key.limits += fmt.Sprint(keys)
 	}
 	if ent, ok := e.memoGet(key); ok && !draft {
+		e.touchPresentation(key, m.generic)
 		p.Rows, p.HomeDeduped = ent.rows, ent.deduped
 		return p
 	}
@@ -642,21 +643,22 @@ func (e *Engine) home(ctx context.Context, user *core.User, hc core.HubContext, 
 // new model, layout, statistics snapshot, owner rows or Continue Watching
 // change produces a new key, so entries never need invalidating.
 type memoKey struct {
-	user    int64
-	section core.MediaType
-	bucket  string
-	day     int
-	hour    int // layout schedules have hour windows
-	limit   int
-	model   uint64
-	layout  uint64
-	stats   int64
-	owner   int64
-	cw      string
-	limits  string
-	intent  uint64 // live session-intent version (#32); 0 = none
-	tuning  string // the page's resolved dials
-	lead    uint64 // what the Home leads with (Movies/TV dedupe); 0 = none
+	client, session string
+	user            int64
+	section         core.MediaType
+	bucket          string
+	day             int
+	hour            int // layout schedules have hour windows
+	limit           int
+	model           uint64
+	layout          uint64
+	stats           int64
+	owner           int64
+	cw              string
+	limits          string
+	intent          uint64 // live session-intent version (#32); 0 = none
+	tuning          string // the page's resolved dials
+	lead            uint64 // what the Home leads with (Movies/TV dedupe); 0 = none
 }
 
 type memoEntry struct {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/libraryfilter"
 )
 
 // FieldError is one validation problem, addressed by dotted field path.
@@ -273,6 +274,9 @@ func ValidateConfig(cfg config.Config) []FieldError {
 
 	if cfg.Catalog.MinPopularity < 0 {
 		v.add("catalog.minPopularity", "must be >= 0")
+	}
+	if _, err := libraryfilter.Compile(cfg.Catalog.Exclusions); err != nil {
+		v.add("catalog.exclusions", "%s", err.Error())
 	}
 	if cfg.Catalog.MinVotes < 0 {
 		v.add("catalog.minVotes", "must be >= 0")

@@ -7,6 +7,7 @@ import { TestButton, type TestState } from "../../components/fields";
 import { SettingsRow } from "../../components/SettingsRow";
 import { LevelBadge } from "../../components/status";
 import { api } from "../../lib/api";
+import { TrendingStatus } from "./TrendingStatus";
 import { CATALOG } from "../settings/schema";
 
 export function CatalogSettings() {
@@ -51,6 +52,7 @@ export function CatalogSettings() {
           />
         </div>
         <aside className="space-y-5" aria-label="Catalog status">
+          <TrendingStatus />
           {item ? (
             <SettingsSection title="Catalog health">
               <SettingsRow

@@ -1539,6 +1539,17 @@ export function createFakeServer(opts: FakeOptions = {}) {
           browsableShows: 24298,
           lastSync: new Date(Date.now() - 5 * 3600_000).toISOString(),
           sync: { running: false, titlesSeen: 63500 },
+          trending: ["movie", "show"].flatMap((mediaType) =>
+            ["day", "week"].map((window) => ({
+              mediaType,
+              window,
+              source: "TMDB",
+              scope: "Global",
+              titles: 200,
+              state: "fresh",
+              fetchedAt: new Date(Date.now() - 1800000).toISOString(),
+            })),
+          ),
         },
         debrid: debridStatus(),
         sources: {
@@ -2063,6 +2074,28 @@ export function createFakeServer(opts: FakeOptions = {}) {
             : "I couldn't find specific conditions, so this starts from the whole catalogue sorted by popularity.",
         });
       }
+      case "POST /catalog/visibility/preview": {
+        const groups =
+          (body as { exclusions: { mediaType: string; match: string; rules: Rule[] }[] })
+            .exclusions ?? [];
+        const items = catalog.filter((t) =>
+          groups.some(
+            (g) =>
+              (g.mediaType === "mixed" || g.mediaType === t.type) &&
+              (g.match === "any"
+                ? g.rules.some((r) => fieldValues(t, r.field).length > 0 && matches(t, r))
+                : g.rules.every((r) => fieldValues(t, r.field).length > 0 && matches(t, r))),
+          ),
+        );
+        return json({
+          total: catalog.length,
+          hidden: items.length,
+          movies: items.filter((t) => t.type === "movie").length,
+          shows: items.filter((t) => t.type === "show").length,
+          unknownCountry: catalog.filter((t) => !fieldValues(t, "country").length).length,
+          items: items.slice(0, 48).map(card),
+        });
+      }
       case "GET /catalog/browse": {
         const needle = (q.get("q") ?? "").toLowerCase();
         const type = q.get("type");
@@ -2386,6 +2419,13 @@ export function createFakeServer(opts: FakeOptions = {}) {
       if (i < 0) return err(404, "not_found", "no such user");
       state.users[i] = { ...state.users[i]!, ...(body as Partial<EtherUser>) };
       return json({ user: state.users[i] });
+    }
+    if (seg[0] === "config" && seg[1] && method === "GET") {
+      const key = seg[1] === "opensubtitles" ? "openSubtitles" : seg[1];
+      return json({
+        section: key,
+        value: (state.config as unknown as Record<string, unknown>)[key],
+      });
     }
     if (seg[0] === "config" && seg[1] && method === "PUT") {
       const key = seg[1] === "opensubtitles" ? "openSubtitles" : seg[1];

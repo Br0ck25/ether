@@ -149,3 +149,37 @@ func TestPresentationDoesNotOverrideOrderedRows(t *testing.T) {
 		t.Fatal("live ordered card disappeared")
 	}
 }
+
+func TestPresentationVisitSeedIsStableUntilIdleOrNewClientSession(t *testing.T) {
+	now := testNow
+	e := &Engine{opts: Options{Now: func() time.Time { return now }}}
+	key := memoKey{user: 1, client: "apple-tv", session: "visit-a"}
+	makeA := func() *assembly {
+		return &assembly{model: emptyModel(), hc: hubContext(testNow, core.DeviceTV), user: core.User{ID: 1}}
+	}
+	a := makeA()
+	e.assemblePage(a, key, false)
+	first := a.visit
+	now = now.Add(4 * time.Minute)
+	e.touchPresentation(key, false)
+	now = now.Add(4 * time.Minute)
+	a = makeA()
+	e.assemblePage(a, key, false)
+	if a.visit != first {
+		t.Fatal("active browsing shuffled")
+	}
+	now = now.Add(presentationTTL + time.Second)
+	a = makeA()
+	e.assemblePage(a, key, false)
+	if a.visit == first {
+		t.Fatal("idle visit did not rotate")
+	}
+	first = a.visit
+	now = now.Add(time.Second)
+	key.session = "visit-b"
+	a = makeA()
+	e.assemblePage(a, key, false)
+	if a.visit == first {
+		t.Fatal("new app session reused visit")
+	}
+}

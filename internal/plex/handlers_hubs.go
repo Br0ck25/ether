@@ -335,6 +335,7 @@ func (s *Server) hubContext(pr *Request, section int) core.HubContext {
 	hc := core.NewHubContext(s.now().Local(), pr.Product, pr.Platform, pr.Device)
 	hc.SectionID = section
 	hc.ClientID = pr.ClientID
+	hc.SessionID = pr.SessionID
 	return hc
 }
 

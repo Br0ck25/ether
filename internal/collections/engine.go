@@ -16,6 +16,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/catalog"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/libraryfilter"
 )
 
 // maxMembers caps how many titles a collection keeps (before its limit).
@@ -82,8 +83,10 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 
 	// Resolve names <-> ids in rules (keyword names for local matching,
 	// ids for TMDB pushdown).
-	s.resolveRuleRefs(ctx, rules, warn)
-	s.resolveRuleRefs(ctx, excludes, warn)
+	if !sp.LocalOnly {
+		s.resolveRuleRefs(ctx, rules, warn)
+		s.resolveRuleRefs(ctx, excludes, warn)
+	}
 	// Per-user rules (watched, in progress) are applied when serving each
 	// viewer; the build works on everything else.
 	rules = splitPersonal(rules, &res.personal)
@@ -132,9 +135,9 @@ func (s *Service) evaluate(ctx context.Context, spIn core.CollectionSpec, opt ev
 	// down to TMDB discover so the whole catalogue is searched for them.
 	assured := map[core.RatingKey]map[*rule]bool{}
 	var pushed []core.Title
-	if hasCatalog && s.api.c != nil {
+	if hasCatalog && s.api.c != nil && !sp.LocalOnly {
 		pushed, assured = s.pushdown(ctx, &sp, rules, warn)
-	} else if hasCatalog {
+	} else if hasCatalog && !sp.LocalOnly {
 		for _, r := range rules {
 			if r.detailOnly() && r.field != "watchProvider" {
 				warn("%s is only known for titles whose details were fetched; connect TMDB for complete results", r.field)
@@ -895,7 +898,13 @@ func (s *Service) filterForUser(ctx context.Context, keys []core.RatingKey, pr p
 	}
 	include, exclude := pr.include, pr.exclude
 	personal := len(include)+len(exclude) > 0
-	if max == "" && !personal {
+	var exposure *libraryfilter.Filter
+	if s.catCfg != nil {
+		if rules := s.catCfg().Exclusions; len(rules) > 0 {
+			exposure, _ = libraryfilter.Compile(rules)
+		}
+	}
+	if max == "" && !personal && exposure == nil {
 		return keys
 	}
 	var statuses map[core.RatingKey]core.WatchStatus
@@ -915,6 +924,12 @@ func (s *Service) filterForUser(ctx context.Context, keys []core.RatingKey, pr p
 		var e *entry
 		if snap != nil {
 			e = snap.entries[k]
+		}
+		if exposure != nil && e != nil {
+			t := e.card()
+			if exposure.Hidden(&t) {
+				continue
+			}
 		}
 		// A member the index no longer knows has no known rating, and an
 		// unknown rating exceeds every limit.

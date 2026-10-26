@@ -100,7 +100,7 @@ func (c *Catalog) Search(ctx context.Context, query string, types []core.MediaTy
 		add(filtered)
 	}
 	if c.client == nil {
-		return limitTitles(out, limit), nil
+		return limitTitles(c.FilterVisibility(ctx, out), limit), nil
 	}
 	var remote []core.Title
 	// Page through TMDB until we have enough or run out (max 3 pages).
@@ -162,7 +162,7 @@ func (c *Catalog) Search(ctx context.Context, query string, types []core.MediaTy
 	// Remote (TMDB relevance) order is preserved after local exact-prefix matches:
 	// keep simple stable order: exact title first, then popularity.
 	sortTitlesForSearch(out, query)
-	return limitTitles(out, limit), nil
+	return limitTitles(c.FilterVisibility(ctx, out), limit), nil
 }
 
 func sortTitlesForSearch(items []core.Title, q string) {
@@ -194,12 +194,15 @@ func (c *Catalog) List(ctx context.Context, list string, t core.MediaType, limit
 	if limit <= 0 {
 		limit = 20
 	}
+	if list == "trending_day" || list == "trending_week" {
+		return c.trendingList(ctx, list, t, limit)
+	}
 	cacheKey := list + "|" + string(t) + "|" + strconv.Itoa(limit)
 	c.listMu.Lock()
 	if e, ok := c.listCache[cacheKey]; ok && c.now().Before(e.expires) {
 		items := append([]core.Title(nil), e.items...)
 		c.listMu.Unlock()
-		return c.releasedTitles(items), nil
+		return c.releasedTitles(c.FilterVisibility(ctx, items)), nil
 	}
 	c.listMu.Unlock()
 	if c.client == nil {
@@ -257,8 +260,12 @@ func (c *Catalog) fetchList(ctx context.Context, list string, t core.MediaType, 
 	if pages < 1 {
 		pages = 1
 	}
-	if pages > 5 {
-		pages = 5
+	maxPages := 5
+	if list == "trending_day" || list == "trending_week" {
+		maxPages = trendPoolSize / 20
+	}
+	if pages > maxPages {
+		pages = maxPages
 	}
 	collectMovies := func(fn func(page int) (*tmdb.Paged[tmdb.Movie], error)) ([]core.Title, error) {
 		var out []core.Title
@@ -543,7 +550,7 @@ func (c *Catalog) ByExternalID(ctx context.Context, source, id string) (*core.Ti
 func (c *Catalog) releasedTitles(items []core.Title) []core.Title {
 	out := make([]core.Title, 0, len(items))
 	for _, t := range items {
-		if !t.Adult && t.IsReleased(c.now()) {
+		if !t.Adult && t.IsReleased(c.now()) && c.Visible(&t) {
 			out = append(out, t)
 		}
 	}

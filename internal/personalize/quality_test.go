@@ -96,8 +96,8 @@ func TestColdStartHome(t *testing.T) {
 			break
 		}
 	}
-	if first != KindTop10Today {
-		t.Fatalf("cold-start Home should lead with Top 10 today: %v", kinds)
+	if first != KindTrending {
+		t.Fatalf("cold-start Home should lead with global trending: %v", kinds)
 	}
 	top := rowByKind(p.Rows, KindTop10Today)
 	if !strings.Contains(top.Title, "Test Server") || len(top.Items) != 10 {

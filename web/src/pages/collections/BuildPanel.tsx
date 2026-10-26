@@ -85,6 +85,25 @@ export function BuildPanel({
       </section>
 
       <section aria-labelledby="sources-h">
+        <label className="mb-4 flex gap-3 rounded-lg border border-border p-4 text-sm">
+          <input
+            type="checkbox"
+            checked={Boolean(spec.localOnly)}
+            onChange={(e) =>
+              update({
+                localOnly: e.target.checked,
+                ...(e.target.checked ? { sources: [{ kind: "catalog" as const }] } : {}),
+              })
+            }
+          />
+          <span>
+            <strong>Local catalogue only</strong>
+            <span className="mt-1 block text-fg-muted">
+              Live matching without remote lookups. Ideal for genre, country and network
+              collections.
+            </span>
+          </span>
+        </label>
         <SectionHeading
           id="sources-h"
           title="Sources"

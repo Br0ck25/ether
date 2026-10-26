@@ -27,20 +27,22 @@ type SyncProgress struct {
 
 // Stats is the admin-UI snapshot of the mirror.
 type Stats struct {
-	Movies          int          `json:"movies"`
-	Shows           int          `json:"shows"`
-	Seasons         int          `json:"seasons"`
-	Episodes        int          `json:"episodes"`
-	BrowsableMovies int          `json:"browsableMovies"`
-	BrowsableShows  int          `json:"browsableShows"`
-	Collections     int          `json:"collections"`
-	LastSync        time.Time    `json:"lastSync,omitempty"`
-	Sync            SyncProgress `json:"sync"`
+	Trending        []TrendStatus `json:"trending"`
+	Movies          int           `json:"movies"`
+	Shows           int           `json:"shows"`
+	Seasons         int           `json:"seasons"`
+	Episodes        int           `json:"episodes"`
+	BrowsableMovies int           `json:"browsableMovies"`
+	BrowsableShows  int           `json:"browsableShows"`
+	Collections     int           `json:"collections"`
+	LastSync        time.Time     `json:"lastSync,omitempty"`
+	Sync            SyncProgress  `json:"sync"`
 }
 
 // Stats returns mirror counts, last sync time and current sync progress.
 func (c *Catalog) Stats(ctx context.Context) (Stats, error) {
 	var s Stats
+	s.Trending = c.TrendStatus(ctx)
 	count := func(q string, dst *int, args ...any) error {
 		return c.db.QueryRowContext(ctx, q, args...).Scan(dst)
 	}

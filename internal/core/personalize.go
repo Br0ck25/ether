@@ -31,6 +31,7 @@ type HubContext struct {
 	SectionID int       `json:"sectionId,omitempty"`
 	Product   string    `json:"product,omitempty"`  // X-Plex-Product
 	Platform  string    `json:"platform,omitempty"` // X-Plex-Platform
+	SessionID string    `json:"sessionId,omitempty"`
 	ClientID  string    `json:"clientId,omitempty"`
 }
 

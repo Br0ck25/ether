@@ -42,6 +42,7 @@ func (a *App) buildPersonalization(ctx context.Context, cfg config.Config) error
 	if a.personalize, err = personalize.New(personalize.Options{
 		DB: a.db, Catalog: a.catalog, State: a.state, Events: a.state, Users: a.users,
 		FilterAvailable: func(ctx context.Context, ts []core.Title) []core.Title {
+			ts = a.catalog.FilterVisibility(ctx, ts)
 			if a.availability == nil {
 				return ts
 			}

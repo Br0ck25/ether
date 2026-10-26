@@ -55,11 +55,11 @@ func TestAssemblyDedupesAcrossRows(t *testing.T) {
 		t.Fatalf("rows = %v", kindsOf(rows))
 	}
 	// The shared titles stay in the highest row.
-	if rows[0].Kind != KindTop10 {
-		t.Fatalf("Top 10 should outrank: %v", kindsOf(rows))
+	if rows[0].Kind != KindTrending {
+		t.Fatalf("Trending should lead discovery: %v", kindsOf(rows))
 	}
 	for _, k := range shared {
-		if seen[k] != rows[0].HubID {
+		if seen[k] != rows[1].HubID {
 			t.Fatalf("shared title %d in %s, want the top row", k, seen[k])
 		}
 	}

@@ -46,7 +46,7 @@ func (b builtin) spec() core.CollectionSpec {
 		Sources: []core.CollectionSource{{Kind: "tmdbList", List: b.list, MediaType: b.media}},
 		Match:   MatchAll, Sort: "source", Limit: 100, Refresh: RefreshHourly, Enabled: true,
 		Artwork: core.CollectionArtwork{Mode: "auto"},
-		Targets: core.CollectionTargets{CollectionsTab: true, Users: core.AllUsers()},
+		Targets: core.CollectionTargets{CollectionsTab: false, Users: core.AllUsers()},
 	}
 	Normalize(&sp)
 	return sp

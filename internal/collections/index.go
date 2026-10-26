@@ -71,7 +71,7 @@ func (e *entry) card() core.Title {
 		Key: e.key, Type: e.typ, Title: e.title, Year: e.year, Rating: e.rating, VoteCount: e.votes,
 		Popularity: e.pop, ContentRating: e.crating, PosterPath: e.poster, BackdropPath: e.backdrop,
 		Runtime: time.Duration(e.runtime) * time.Minute, Language: e.lang, Genres: e.genres,
-		CollectionID: e.collID,
+		CollectionID: e.collID, Countries: e.countriesLC, Studios: e.studiosLC,
 	}
 	if e.released != 0 {
 		t.Released = time.Unix(e.released, 0).UTC()
@@ -182,10 +182,12 @@ type index struct {
 }
 
 type snapshot struct {
-	entries map[core.RatingKey]*entry
-	order   []*entry // popularity desc, stable
-	print   fingerprint
-	builtAt time.Time
+	facetsOnce sync.Once
+	facets     map[string][]core.RatingKey
+	entries    map[core.RatingKey]*entry
+	order      []*entry // popularity desc, stable
+	print      fingerprint
+	builtAt    time.Time
 }
 
 type fingerprint struct {

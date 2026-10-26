@@ -27,9 +27,9 @@ func TestDiscoveryHeadAcrossPagesAndRenderedMetadata(t *testing.T) {
 						}
 					}
 					got := order(arrangeLayout(input, core.HomeLayout{}, 1, hubContext(testNow, core.DeviceWeb), section, 8))
-					want := []string{"top", "new", "trend", "crowd"}
+					want := []string{"trend", "top", "new", "crowd"}
 					if populated {
-						want = []string{"cw", "top", "new", "trend", "crowd"}
+						want = []string{"cw", "trend", "top", "new", "crowd"}
 					}
 					if !reflect.DeepEqual(got[:len(want)], want) {
 						t.Fatalf("rendered=%v populated=%v: %v", rendered, populated, got)
@@ -39,7 +39,7 @@ func TestDiscoveryHeadAcrossPagesAndRenderedMetadata(t *testing.T) {
 			// An explicit viewer anchor and an off policy win over new defaults.
 			d := core.HomeLayout{Viewers: []core.ViewerLayout{{UserID: 1, Pages: []core.LayoutPage{{Section: section, Rows: []core.RowPolicy{{Row: KindEra, Status: "always", Slot: 1}, {Row: KindNewReleases, Status: "off"}}}}}}}
 			got := order(arrangeLayout(rows, d, 1, hubContext(testNow, core.DeviceWeb), section, 8))
-			if got[0] != "theme" || got[1] != "top" || got[2] != "trend" {
+			if got[0] != "theme" || got[1] != "trend" || got[2] != "top" {
 				t.Fatal(got)
 			}
 			for _, id := range got {
@@ -81,7 +81,7 @@ func TestDiscoverySurvivesCandidateCapAndMixesHome(t *testing.T) {
 		a.model.taste.Confidence = 1
 		rows := a.run()
 		got := arrangeLayout(rows, core.HomeLayout{}, 1, a.hc, sectionName(section), 4)
-		want := []string{KindTop10, KindNewReleases, KindTrending, KindCrowd}
+		want := []string{KindTrending, KindTop10, KindNewReleases, KindCrowd}
 		if len(got) != 4 {
 			t.Fatalf("%s: %v", section, kindsOf(got))
 		}
@@ -90,7 +90,7 @@ func TestDiscoverySurvivesCandidateCapAndMixesHome(t *testing.T) {
 				t.Fatalf("%s: %v", section, kindsOf(got))
 			}
 			n := 24
-			if i == 0 {
+			if r.Kind == KindTop10 {
 				n = 10
 			}
 			if len(r.Items) != n {
@@ -117,7 +117,7 @@ func TestFinalizeRenderedRowsUsesCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(hubIDsOf(got), []string{"movie.top10", "movie.newreleases", "movie.trending", "movie.era.1990"}) {
+	if !reflect.DeepEqual(hubIDsOf(got), []string{"movie.trending", "movie.top10", "movie.newreleases", "movie.era.1990"}) {
 		t.Fatal(hubIDsOf(got))
 	}
 }

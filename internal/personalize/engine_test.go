@@ -204,7 +204,7 @@ func TestPreviewMatchesHubs(t *testing.T) {
 	sec := hubContext(testNow, core.DeviceTV)
 	sec.SectionID = 2
 	p, _ := h.e.PreviewHome(ctx, &u, sec, "shows", 12)
-	if len(p.Rows) < 3 || (p.Rows[0].Kind != KindTop10 && p.Rows[0].Kind != KindTop10Today) || p.Rows[1].Kind != KindTrending {
+	if len(p.Rows) < 3 || p.Rows[0].Kind != KindTrending || (p.Rows[1].Kind != KindTop10 && p.Rows[1].Kind != KindTop10Today) {
 		t.Fatalf("section preview head = %v", kindsOf(p.Rows))
 	}
 	for i, r := range p.Rows {

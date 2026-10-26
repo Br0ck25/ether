@@ -41,7 +41,7 @@ func TestConcurrentStartupSeedsOnce(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM collections_specs WHERE builtin=0`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 5 {
-		t.Fatalf("starter collections = %d, want 5", n)
+	if n != 19 {
+		t.Fatalf("starter collections = %d, want 19", n)
 	}
 }

@@ -12,6 +12,8 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/flight"
+	"github.com/braedonsaunders/ether/internal/libraryfilter"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/tmdb"
 )
@@ -145,12 +147,13 @@ var _ core.Catalog = (*Catalog)(nil)
 
 // Catalog implements core.Catalog.
 type Catalog struct {
-	db     *sql.DB
-	client TMDB
-	cfgMu  sync.RWMutex
-	cfg    config.Catalog
-	log    *slog.Logger
-	now    func() time.Time
+	visibility *libraryfilter.Filter
+	db         *sql.DB
+	client     TMDB
+	cfgMu      sync.RWMutex
+	cfg        config.Catalog
+	log        *slog.Logger
+	now        func() time.Time
 
 	staleAfter time.Duration
 	listTTL    time.Duration
@@ -162,8 +165,9 @@ type Catalog struct {
 	genreMu sync.Mutex
 	genres  map[string]map[int]string // mediaType -> id -> name
 
-	listMu    sync.Mutex
-	listCache map[string]listEntry
+	trendFlights flight.Group[string, trendSnapshot]
+	listMu       sync.Mutex
+	listCache    map[string]listEntry
 
 	syncMu     sync.Mutex
 	syncing    atomic.Bool
@@ -239,11 +243,15 @@ func New(db *sql.DB, client TMDB, cfg config.Catalog, log *slog.Logger, opts ...
 	if log == nil {
 		log = slog.Default()
 	}
+	visibility, err := libraryfilter.Compile(cfg.Exclusions)
+	if err != nil {
+		return nil, err
+	}
 	stale := cfg.RefreshInterval.D()
 	if stale <= 0 {
 		stale = 24 * time.Hour
 	}
-	c := &Catalog{db: db, client: client, cfg: cfg, log: log, now: time.Now,
+	c := &Catalog{visibility: visibility, db: db, client: client, cfg: cfg, log: log, now: time.Now,
 		staleAfter: stale, listTTL: 15 * time.Minute,
 		genres: map[string]map[int]string{}, listCache: map[string]listEntry{},
 		titleCache: map[core.RatingKey]cachedStoredTitle{}, countCache: map[string]cachedCount{},
@@ -263,9 +271,19 @@ func (e *simpleError) Error() string { return e.s }
 
 // UpdateConfig swaps the catalogue config (wire to config.Store.Subscribe).
 func (c *Catalog) UpdateConfig(cfg config.Catalog) {
+	f, err := libraryfilter.Compile(cfg.Exclusions)
+	if err != nil {
+		c.log.Error("catalog: invalid visibility rules")
+		return
+	}
 	c.cfgMu.Lock()
 	c.cfg = cfg
+	c.visibility = f
+	c.writeGen.Add(1)
 	c.cfgMu.Unlock()
+	c.listMu.Lock()
+	c.listCache = map[string]listEntry{}
+	c.listMu.Unlock()
 }
 
 func (c *Catalog) config() config.Catalog {

@@ -104,6 +104,7 @@ export interface TargetSchedule {
 }
 
 export interface CollectionSpec {
+  localOnly?: boolean;
   id?: string;
   name: string;
   description?: string;

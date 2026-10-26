@@ -1070,12 +1070,15 @@ func (b *builder) genTrakt() []*candRow {
 // ---- generic rows (every viewer, and new viewers' whole Home) ------------------------
 
 func (b *builder) genTrending() []*candRow {
-	src := b.both(func(t core.MediaType) []core.Title { return b.list("trending_week", t, 40) })
-	items := b.rank(src, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
-		return 0.75*rankScore(idx, n) + 0.25*fit, "Trending this week"
+	src := b.both(func(t core.MediaType) []core.Title {
+		return append(b.list("trending_day", t, 200), b.list("trending_week", t, 200)...)
 	})
-	r := withTyped(newRow(KindTrending, "trending", "Trending This Week", "What's trending on TMDB this week.", capItems(items, 40)), items)
-	r.minItems = 5
+	items := b.rankWith(src, func(t *core.Title, idx, n int, fit float64, _ string) (float64, string) {
+		return 0.85*rankScore(idx, n) + 0.15*fit, "Trending globally on TMDB"
+	}, true)
+	r := newRow(KindTrending, "trending", "Trending Now", "Global movie and TV trends, refreshed hourly.", capItems(items, 200))
+	r.typed = splitTyped(items, 200)
+	r.minItems = 5 // production assembly enforces the full 12-title floor
 	return []*candRow{r}
 }
 

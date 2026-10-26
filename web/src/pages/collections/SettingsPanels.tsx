@@ -568,6 +568,32 @@ export function AudiencePanel({ spec, update }: { spec: CollectionSpec; update: 
         <h3 id="where-h" className="text-sm font-semibold text-fg">
           Where it appears
         </h3>
+        <p className="text-sm text-fg-muted">
+          A browseable collection and a discovery row are independent. Choose either, or publish in
+          both places.
+        </p>
+        <div className="grid grid-cols-3 gap-2 py-2">
+          {[
+            { name: "Collection only", library: true, rows: false },
+            { name: "Discovery rows", library: false, rows: true },
+            { name: "Both", library: true, rows: true },
+          ].map((p) => (
+            <Button
+              key={p.name}
+              variant={
+                t.collectionsTab === p.library && t.homeRow === p.rows && t.sectionRow === p.rows
+                  ? "secondary"
+                  : "outline"
+              }
+              size="sm"
+              onClick={() =>
+                setTargets({ collectionsTab: p.library, homeRow: p.rows, sectionRow: p.rows })
+              }
+            >
+              {p.name}
+            </Button>
+          ))}
+        </div>
         <ToggleRow
           title="Collections tab"
           description="Listed with the other collections in the matching Plex libraries."

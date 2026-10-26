@@ -6,8 +6,8 @@ import (
 	"github.com/braedonsaunders/ether/internal/core"
 )
 
-// Continue Watching opens discovery when populated, followed by personal picks,
-// new releases, trending, and a viewing-history row. These
+// Continue Watching opens discovery when populated, followed by global trending, personal picks,
+// new releases, and a viewing-history row. These
 // are defaults only: explicit owner/viewer policies reserve their own slots.
 var leadKinds = []string{KindTop10, KindTop10Today}
 
@@ -18,13 +18,13 @@ func discoveryPriority(kind string) int {
 	case KindContinue:
 		return 0
 	case KindTop10:
-		return 1
-	case KindTop10Today:
 		return 2
-	case KindNewReleases:
+	case KindTop10Today:
 		return 3
-	case KindTrending:
+	case KindNewReleases:
 		return 4
+	case KindTrending:
+		return 1
 	case KindBecause, KindCrowd:
 		return 5
 	default:
@@ -68,7 +68,7 @@ func leadDefaults(rows []core.HomeRow, g, v *core.LayoutPage, maxRows int) (lead
 		reserved[slot] = true
 		slot++
 	}
-	groups := [][]string{{KindContinue}, leadKinds, {KindNewReleases}, {KindTrending}, {KindBecause, KindCrowd}}
+	groups := [][]string{{KindContinue}, {KindTrending}, leadKinds, {KindNewReleases}, {KindBecause, KindCrowd}}
 	for _, kinds := range groups {
 		// Only one headline per purpose; the remaining history/theme rows
 		// keep their stable personalized order further down the page.
