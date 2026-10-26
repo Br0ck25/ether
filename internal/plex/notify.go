@@ -369,6 +369,22 @@ func (s *Server) notifyPlaying(e playEntry, state string) {
 	}, e.user.ID)
 }
 
+// WatchStateChanged invalidates client library metadata after a committed watch
+// update. A playing notification only updates session status; clients can keep
+// their cached Continue Watching shelf until a library timeline event arrives.
+func (s *Server) WatchStateChanged(userID int64, key core.RatingKey) {
+	var kind core.MediaType
+	switch key.Kind() {
+	case core.KindMovie:
+		kind = core.TypeMovie
+	case core.KindEpisode:
+		kind = core.TypeEpisode
+	default:
+		return
+	}
+	s.notifyTimeline(key, kind, "", userID)
+}
+
 // notifyTimeline publishes a library timeline entry (watched-state change).
 func (s *Server) notifyTimeline(key core.RatingKey, t core.MediaType, title string, userID int64) {
 	sec, _ := s.sectionFor(t)

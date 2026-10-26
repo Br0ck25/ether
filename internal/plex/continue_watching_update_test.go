@@ -2,6 +2,7 @@ package plex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -94,5 +95,47 @@ func TestContinueWatchingRefreshIncludesPagination(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestPlaybackWatchRefreshUsesLibraryTimelineAndViewerScope(t *testing.T) {
+	f := newFixture()
+	defer f.srv.Close()
+	owner, _ := f.srv.notifier.subscribe([]string{"timeline"}, &ownerUser)
+	friend, _ := f.srv.notifier.subscribe(nil, &friendUser)
+	defer f.srv.notifier.unsubscribe(owner)
+	defer f.srv.notifier.unsubscribe(friend)
+	f.srv.WatchStateChanged(ownerUser.ID, bbE1.Key)
+	select {
+	case msg := <-owner.ch:
+		var body struct {
+			NotificationContainer struct {
+				Type          string
+				TimelineEntry []struct {
+					ItemID    string `json:"itemID"`
+					SectionID string `json:"sectionID"`
+					Type      int    `json:"type"`
+					State     int    `json:"state"`
+				}
+			}
+		}
+		if err := json.Unmarshal(msg.data, &body); err != nil {
+			t.Fatal(err)
+		}
+		n := body.NotificationContainer
+		if n.Type != "timeline" || len(n.TimelineEntry) != 1 {
+			t.Fatalf("bad refresh %s", msg.data)
+		}
+		e := n.TimelineEntry[0]
+		if e.ItemID != bbE1.Key.String() || e.SectionID != "2" || e.Type != 4 || e.State != 5 {
+			t.Fatalf("wrong episode refresh %s", msg.data)
+		}
+	default:
+		t.Fatal("playback watch change sent no library refresh")
+	}
+	select {
+	case msg := <-friend.ch:
+		t.Fatalf("other viewer received private watch update %s", msg.data)
+	default:
 	}
 }
