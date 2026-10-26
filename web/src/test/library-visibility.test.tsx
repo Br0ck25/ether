@@ -4,6 +4,21 @@ import { renderAppWith } from "./routes";
 import { calls } from "./harness";
 
 describe("Library visibility", () => {
+  it.each([null, undefined])("keeps empty previews usable when items is %s", async (items) => {
+    const { fake } = renderAppWith("/catalog/visibility", (_method, path) => {
+      if (path === "/config/catalog") return { value: {} };
+      if (path === "/catalog/visibility/preview")
+        return { total: 63996, hidden: 0, movies: 0, shows: 0, unknownCountry: 16721, items };
+    });
+    await screen.findByText(
+      "63,996 catalogue titles remain before release, availability and viewer restrictions.",
+    );
+    expect(screen.getByText("No custom exclusions")).toBeInTheDocument();
+    expect(screen.queryByText("Example matches")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add exclusion group" }));
+    await screen.findByLabelText("Group 1 name");
+    expect(calls(fake, "PUT", "/config/catalog")).toHaveLength(0);
+  });
   it("previews country rules locally and saves only the exclusions patch", async () => {
     const exclusions = [
       {

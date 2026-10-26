@@ -17,7 +17,8 @@ type Preview = {
   movies: number;
   shows: number;
   unknownCountry: number;
-  items: { key: string; title: string; year: number; poster?: string; posterPath?: string }[];
+  items?:
+    { key: string; title: string; year: number; poster?: string; posterPath?: string }[] | null;
 };
 const FIELDS: RuleField[] = [
   "country",
@@ -77,6 +78,7 @@ export function LibraryVisibility() {
     }
   };
   const dirty = JSON.stringify(groups) !== saved;
+  const items = preview.data?.items ?? [];
   return (
     <div className="catalog-scroll app-scroll">
       <div className="grid gap-6 p-5 lg:grid-cols-[minmax(0,1fr)_340px] lg:p-7">
@@ -267,11 +269,11 @@ export function LibraryVisibility() {
               lookups.
             </p>
           </div>
-          {preview.data?.items.length ? (
+          {items.length ? (
             <div className="rounded-xl border border-border p-4">
               <h3 className="mb-3 text-sm font-medium">Example matches</h3>
               <div className="grid grid-cols-3 gap-3">
-                {preview.data.items.slice(0, 12).map((t) => (
+                {items.slice(0, 12).map((t) => (
                   <div key={t.key}>
                     <Artwork
                       src={

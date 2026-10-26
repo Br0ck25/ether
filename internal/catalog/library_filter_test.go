@@ -46,6 +46,8 @@ func TestLibraryFilterPreviewBrowseAndPolicyAgree(t *testing.T) {
 		return core.CollectionRule{Field: f, Op: op, Value: json.RawMessage(v)}
 	}
 	for _, specs := range [][]core.LibraryExclusion{
+		nil,
+		{{Name: "No matches", MediaType: "mixed", Match: "all", Rules: []core.CollectionRule{rule("year", "gte", `2100`)}}},
 		{{Name: "Country", MediaType: "mixed", Match: "all", Rules: []core.CollectionRule{rule("country", "in", `["IN"]`)}}},
 		{{Name: "Movie country + rating", MediaType: "movie", Match: "all", Rules: []core.CollectionRule{rule("country", "in", `["IN"]`), rule("rating", "gte", `6`)}}},
 		{{Name: "Countries", MediaType: "movie", Match: "any", Rules: []core.CollectionRule{rule("country", "is", "\"US\""), rule("country", "is", "\"CA\"")}}, {Name: "TV", MediaType: "show", Match: "all", Rules: []core.CollectionRule{rule("rating", "between", `[7,9]`)}}},
@@ -71,6 +73,9 @@ func TestLibraryFilterPreviewBrowseAndPolicyAgree(t *testing.T) {
 			t.Fatal(err)
 		}
 		preview := raw.(VisibilityPreview)
+		if preview.Items == nil {
+			t.Fatal("empty preview must encode items as [], not null")
+		}
 		if preview.Hidden != hidden || preview.UnknownCountry != 1 {
 			t.Fatalf("preview=%+v", preview)
 		}

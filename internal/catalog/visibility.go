@@ -80,5 +80,8 @@ func (c *Catalog) PreviewVisibility(ctx context.Context, specs []core.LibraryExc
 		return nil, err
 	}
 	p.Items, err = c.queryTitles(ctx, `SELECT `+prefixedCols("t")+` FROM catalog_titles t WHERE `+base+` ORDER BY t.popularity DESC,t.key LIMIT 48`, args...)
+	if p.Items == nil {
+		p.Items = []core.Title{}
+	}
 	return p, err
 }
