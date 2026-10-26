@@ -5,7 +5,6 @@
 package artwork
 
 import (
-	"container/list"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/flight"
+	"github.com/braedonsaunders/ether/internal/lru"
 )
 
 var (
@@ -81,9 +81,7 @@ type Images struct {
 	log *slog.Logger
 
 	mu       sync.Mutex
-	used     int64
-	ll       *list.List
-	items    map[string]*list.Element
+	items    *lru.Cache[string, *memImage]
 	inflight flight.Group[string, *memImage]
 
 	diskMu    sync.Mutex
@@ -117,7 +115,9 @@ func NewImages(o ImagesOptions) *Images {
 	if o.Dir != "" {
 		_ = os.MkdirAll(o.Dir, 0o755)
 	}
-	return &Images{o: o, log: o.Logger, ll: list.New(), items: map[string]*list.Element{}}
+	return &Images{o: o, log: o.Logger, items: lru.New(lru.Options[string, *memImage]{MaxCost: o.MemoryBytes, Cost: func(_ string, img *memImage) int64 {
+		return int64(len(img.data))
+	}})}
 }
 
 // Get returns a TMDB image at the smallest size covering width w.
@@ -145,9 +145,7 @@ func (im *Images) GetURL(ctx context.Context, rawURL string) ([]byte, string, er
 
 func (im *Images) get(ctx context.Context, key string, load func(context.Context) ([]byte, string, error)) ([]byte, string, error) {
 	im.mu.Lock()
-	if el, ok := im.items[key]; ok {
-		im.ll.MoveToFront(el)
-		img := el.Value.(*memImage)
+	if img, ok := im.items.Get(key); ok {
 		im.mu.Unlock()
 		return img.data, img.ct, nil
 	}
@@ -224,29 +222,11 @@ func sniff(data []byte) string {
 }
 
 func (im *Images) addLocked(img *memImage) {
-	n := int64(len(img.data))
-	if n > im.o.MemoryBytes/4 {
+	// One image may take at most a quarter of the memory budget.
+	if int64(len(img.data)) > im.o.MemoryBytes/4 {
 		return
 	}
-	if el, ok := im.items[img.key]; ok {
-		im.removeLocked(el)
-	}
-	im.items[img.key] = im.ll.PushFront(img)
-	im.used += n
-	for im.used > im.o.MemoryBytes {
-		back := im.ll.Back()
-		if back == nil {
-			break
-		}
-		im.removeLocked(back)
-	}
-}
-
-func (im *Images) removeLocked(el *list.Element) {
-	img := el.Value.(*memImage)
-	im.ll.Remove(el)
-	delete(im.items, img.key)
-	im.used -= int64(len(img.data))
+	im.items.Add(img.key, img)
 }
 
 // Disk layout: <dir>/<sha1(key)[:2]>/<sha1(key)>, content type sniffed on read.
