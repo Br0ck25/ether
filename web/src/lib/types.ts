@@ -184,6 +184,8 @@ export interface DebridProviderStatus {
   failures?: number;
   cached?: number;
   notCached?: number;
+  /** Cached files the provider refused to serve (Real-Debrid infringing_file). */
+  blocked?: number;
   linksRefreshed?: number;
   /** Torrents reused from the account instead of re-added. */
   reused?: number;

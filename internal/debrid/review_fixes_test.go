@@ -74,7 +74,7 @@ func TestRealDebridErrorCodes(t *testing.T) {
 	p := newRealDebrid("k", ProviderOptions{})
 	for code, want := range map[int]error{
 		25: nil, // service unavailable: transient
-		35: ErrGone,
+		35: ErrBlocked, // infringing_file: not cached on this account
 		24: ErrGone,
 		22: ErrAuth,
 		36: ErrAuth,
@@ -82,7 +82,7 @@ func TestRealDebridErrorCodes(t *testing.T) {
 		30: core.ErrReleaseRejected,
 	} {
 		err := p.classify(http.StatusServiceUnavailable, rdError{Error: "x", ErrorCode: code})
-		for _, sentinel := range []error{ErrGone, ErrAuth, ErrRateLimited, core.ErrReleaseRejected} {
+		for _, sentinel := range []error{ErrGone, ErrBlocked, ErrAuth, ErrRateLimited, core.ErrReleaseRejected} {
 			if errors.Is(err, sentinel) != (sentinel == want) {
 				t.Errorf("code %d: %v (is %v = %v)", code, err, sentinel, errors.Is(err, sentinel))
 			}

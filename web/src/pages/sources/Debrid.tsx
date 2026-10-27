@@ -95,6 +95,7 @@ function activity(s: DebridProviderStatus): string[] {
   if (requests > 0) out.push(plural(requests, "request"));
   if (s.cached || s.notCached)
     out.push(`${Number(s.cached ?? 0)} cached · ${Number(s.notCached ?? 0)} not cached`);
+  if (s.blocked) out.push(`${Number(s.blocked)} blocked by provider`);
   if (s.failures) out.push(plural(Number(s.failures), "failure"));
   if (s.reused) out.push(`${Number(s.reused)} reused`);
   if (s.linksRefreshed) out.push(`${plural(Number(s.linksRefreshed), "link")} refreshed`);

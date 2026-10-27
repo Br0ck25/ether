@@ -34,6 +34,11 @@ var (
 	// ErrGone is a torrent, file or link the provider no longer has; the
 	// payload's stable identifiers can usually re-add it.
 	ErrGone = errors.New("debrid: torrent or link no longer available")
+	// ErrBlocked is a file the provider holds but refuses to serve, such
+	// as Real-Debrid's infringing_file answer to a cached torrent. Re-adding
+	// the torrent cannot help, so on this provider it counts as not cached;
+	// another provider may still serve it.
+	ErrBlocked = fmt.Errorf("debrid: the provider blocks this file: %w", core.ErrNotCached)
 	// ErrNoProvider means no debrid provider is enabled.
 	ErrNoProvider = errors.New("debrid: no debrid provider is enabled")
 	// ErrUnsupported is an operation a provider does not offer.

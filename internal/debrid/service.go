@@ -119,6 +119,7 @@ type ProviderStats struct {
 	Failures       int64      `json:"failures"`
 	Cached         int64      `json:"cached"`
 	NotCached      int64      `json:"notCached"`
+	Blocked        int64      `json:"blocked"` // cached files the provider refused to serve
 	LinksRefreshed int64      `json:"linksRefreshed"`
 	Reused         int64      `json:"reused"`
 	// Slots is how many API calls this node makes to the provider at once:
@@ -761,6 +762,9 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	linkDuration = time.Since(linkWallStarted)
 	observe(err)
 	if err != nil {
+		if errors.Is(err, ErrBlocked) {
+			s.blockedFile(ctx, e, hash, acq.TorrentID, acq.Added && cfg.RemoveUncached, req.MayRemove)
+		}
 		return Payload{}, err
 	}
 	linked := s.now().Sub(linkStart)
@@ -877,6 +881,10 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 		s.savePayload(ctx, p)
 		return p, nil
 	}
+	if errors.Is(err, ErrBlocked) {
+		s.blockedFile(ctx, e, p.InfoHash, p.TorrentID, false, nil)
+		return p, err
+	}
 	if !errors.Is(err, ErrGone) {
 		return p, err
 	}
@@ -890,6 +898,25 @@ func (s *Service) relink(ctx context.Context, e *entry, p Payload) (Payload, err
 	e.count(func(st *ProviderStats) { st.LinksRefreshed++ })
 	s.savePayload(ctx, out)
 	return out, nil
+}
+
+// blockedFile records a file the provider refuses to serve as not cached
+// there, so ranking stops promoting it and the next Play skips it without
+// API calls. A torrent Ether added for this attempt is removed again when
+// remove is set and no node streams from it.
+func (s *Service) blockedFile(ctx context.Context, e *entry, hash, torrentID string, remove bool, mayRemove func(context.Context, string) bool) {
+	e.count(func(st *ProviderStats) { st.Blocked++ })
+	if remove && torrentID != "" {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		if mayRemove == nil || mayRemove(rctx, torrentID) {
+			if err := e.p.Remove(rctx, torrentID); err == nil {
+				s.forgetTorrent(rctx, e.cfg.ID, hash)
+			}
+		}
+		cancel()
+	}
+	s.setKnown(ctx, e.cfg.ID, hash, "", false)
+	s.log.Info("debrid provider blocks file", "provider", displayName(e.cfg), "hash", hash)
 }
 
 func (s *Service) forgetTorrent(ctx context.Context, providerID, hash string) {

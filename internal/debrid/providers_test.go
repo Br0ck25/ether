@@ -181,6 +181,60 @@ func TestRealDebridUncachedIsRemoved(t *testing.T) {
 	}
 }
 
+// Real-Debrid's filename filter answers unrestrict with infringing_file for
+// a torrent that reached "downloaded". The release must count as not cached
+// on that account, leave no torrent behind and not be promoted or retried.
+func TestRealDebridInfringingFileIsNotCached(t *testing.T) {
+	f := &fakeRD{cached: true}
+	base := f.handler(t)
+	var unrestricts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/unrestrict/link" {
+			f.mu.Lock()
+			unrestricts++
+			f.mu.Unlock()
+			w.WriteHeader(503)
+			fmt.Fprint(w, `{"error":"infringing_file","error_code":35}`)
+			return
+		}
+		base.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	p := newRealDebrid(testKey, fastOpts(srv.URL))
+	cfg := config.Debrid{CachedOnly: true, RemoveUncached: true, Providers: []config.DebridProvider{{ID: "rd", Kind: "realdebrid", APIKey: testKey, Enabled: true}}}
+	svc := NewService(cfg, Options{NewProvider: func(config.DebridProvider, ProviderOptions) (Provider, error) { return p, nil }})
+	rel := core.Release{ID: "r1", Name: "Movie.2024.1080p", Protocol: core.ProtocolTorrent, InfoHash: testHash}
+
+	_, err := svc.Acquire(t.Context(), rel)
+	if !errors.Is(err, core.ErrNotCached) {
+		t.Fatalf("want not cached, got %v", err)
+	}
+	if svc.KnownCached(testHash) {
+		t.Fatal("a blocked file is still promoted as known cached")
+	}
+	f.mu.Lock()
+	deleted := append([]string(nil), f.deleted...)
+	f.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "T1" {
+		t.Fatalf("blocked torrent left on the account: deleted %v", deleted)
+	}
+	st := svc.Stats()[0]
+	if st.Blocked != 1 || st.Failures != 0 || st.State != "ok" {
+		t.Fatalf("stats %+v", st)
+	}
+
+	// The next Play skips the release on this account without API calls.
+	if _, err := svc.Acquire(t.Context(), rel); !errors.Is(err, core.ErrNotCached) {
+		t.Fatalf("second play: %v", err)
+	}
+	f.mu.Lock()
+	adds, calls := f.adds, unrestricts
+	f.mu.Unlock()
+	if adds != 1 || calls != 1 {
+		t.Fatalf("blocked release retried: adds=%d unrestricts=%d", adds, calls)
+	}
+}
+
 func TestRealDebridReusesExistingTorrentAndRejectsBadKey(t *testing.T) {
 	f := &fakeRD{existing: true}
 	srv := httptest.NewServer(f.handler(t))

@@ -96,8 +96,10 @@ func (p *realDebrid) classify(status int, e rdError) error {
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrAuth)
 	case 5, 34: // slow down, too many requests
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrRateLimited)
-	case 7, 24, 35: // resource not found, file unavailable, infringing file
+	case 7, 24: // resource not found, file unavailable
 		return fmt.Errorf("real-debrid: %s: %w", msg, ErrGone)
+	case 35: // infringing file: a cached torrent Real-Debrid will not serve
+		return fmt.Errorf("real-debrid: %s: %w", msg, ErrBlocked)
 	case 30: // torrent file invalid
 		return fmt.Errorf("real-debrid: %s: %w", msg, core.ErrReleaseRejected)
 	}
