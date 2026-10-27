@@ -293,6 +293,12 @@ func (s *Server) identity() Identity {
 	return id
 }
 
+// LibrarySections returns the canonical section identities for account
+// registration. The copy prevents publishers from changing local libraries.
+func (s *Server) LibrarySections() []Section {
+	return append([]Section(nil), s.sections...)
+}
+
 func (s *Server) buildSections() []Section {
 	secs := s.d.Sections
 	if len(secs) == 0 {

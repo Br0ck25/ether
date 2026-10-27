@@ -154,6 +154,7 @@ type Registrar struct {
 	forcePub      bool
 	mappingOn     bool
 	asyncID       string // outstanding connectivity request
+	libraries     []LibrarySection
 
 	presence *Presence
 }
@@ -338,6 +339,19 @@ func (r *Registrar) Trigger() {
 // re-checking addresses (e.g. after cluster membership changed).
 func (r *Registrar) RequestPublish() {
 	r.mu.Lock()
+	r.requestPublishLocked()
+	r.mu.Unlock()
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// SetLibrarySections connects account publishing to the actual PMS library
+// identities. Call during front-end construction and whenever sections change.
+func (r *Registrar) SetLibrarySections(sections []LibrarySection) {
+	r.mu.Lock()
+	r.libraries = slices.Clone(sections)
 	r.requestPublishLocked()
 	r.mu.Unlock()
 	select {
@@ -703,6 +717,7 @@ func mergeURIs(own, extra []string) []string {
 func (r *Registrar) PublishNow(ctx context.Context) error {
 	r.mu.Lock()
 	generation := r.pubGeneration
+	libraries := slices.Clone(r.libraries)
 	r.mu.Unlock()
 	cfg := r.o.Config.Get()
 	if cfg.Plex.Token == "" {
@@ -767,6 +782,7 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	reg := ServerRegistration{
 		Name: cfg.Server.FriendlyName, Version: r.o.Version, LocalAddresses: mergeURIs(lan, r.peerLANAddrs()), MappingState: mapping,
 		PrivatePort: serverPort(cfg),
+		Libraries:   libraries,
 	}
 	if len(lan) > 0 {
 		reg.PrivateAddress = lan[0]

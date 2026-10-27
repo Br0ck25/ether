@@ -87,11 +87,26 @@ type ServerRegistration struct {
 	MappingState string
 	// Now stamps the "date" attribute; zero means time.Now().
 	Now time.Time
+	// Libraries are Directory siblings of Server in the registration container.
+	// plex.tv uses these to populate Manage Library Access; publishing only
+	// connection addresses makes a server discoverable but not shareable.
+	Libraries []LibrarySection
+}
+
+// LibrarySection describes a local library, not a sharing grant. Key and UUID
+// must match the section exposed by the PMS HTTP API.
+type LibrarySection struct {
+	Key      int    `xml:"key,attr"`
+	Type     string `xml:"type,attr"`
+	Title    string `xml:"title,attr"`
+	UUID     string `xml:"uuid,attr"`
+	Language string `xml:"language,attr,omitempty"`
 }
 
 // registrationXML builds the body PMS 1.43.4 POSTs to servers.xml
 // (MyPlexManager::getServerXML): its generic serializer writing a
-// MediaContainer around one Server. Server::serialize emits, in order,
+// MediaContainer around one Server followed by the library Directories.
+// Server::serialize emits, in order,
 // name, host, address (skipped when empty or "0.0.0.0"), localAddresses
 // (comma-joined, IPv6 bracketed), port (skipped when 0), machineIdentifier,
 // version, date, and the optional protocol/product/deviceClass/
@@ -99,6 +114,13 @@ type ServerRegistration struct {
 // written. getServerXML additionally sets relay (bool) and, only when the
 // relay is on, relayProtocols="ssh". Ether never offers a relay.
 func registrationXML(machineID string, reg ServerRegistration) ([]byte, error) {
+	seen := make(map[int]bool, len(reg.Libraries))
+	for _, lib := range reg.Libraries {
+		if lib.Key <= 0 || lib.Type == "" || lib.Title == "" || lib.UUID == "" || seen[lib.Key] {
+			return nil, errors.New("plextv: invalid or duplicate library section")
+		}
+		seen[lib.Key] = true
+	}
 	now := reg.Now
 	if now.IsZero() {
 		now = time.Now()
@@ -132,11 +154,12 @@ func registrationXML(machineID string, reg ServerRegistration) ([]byte, error) {
 		Relay             string   `xml:"relay,attr"`
 	}
 	type container struct {
-		XMLName xml.Name `xml:"MediaContainer"`
-		Size    int      `xml:"size,attr"`
-		Server  serverElement
+		XMLName   xml.Name `xml:"MediaContainer"`
+		Size      int      `xml:"size,attr"`
+		Server    serverElement
+		Libraries []LibrarySection `xml:"Directory"`
 	}
-	body, err := xml.Marshal(container{Size: 1, Server: serverElement{
+	body, err := xml.Marshal(container{Size: 1 + len(reg.Libraries), Libraries: reg.Libraries, Server: serverElement{
 		Name: reg.Name, Address: address, LocalAddresses: strings.Join(locals, ","), Port: port,
 		MachineIdentifier: machineID, Version: reg.Version, Date: registrationDate(now), Relay: "0",
 	}})
