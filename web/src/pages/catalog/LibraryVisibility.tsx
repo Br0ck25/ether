@@ -1,6 +1,6 @@
 import { Badge, Button, Input, toast } from "@braedonsaunders/appkit-ui";
 import { Eye, Filter, Plus, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Segmented } from "../../components/fields";
 import { ErrorPanel } from "../../components/feedback";
 import { Artwork } from "../../components/Artwork";
@@ -41,13 +41,16 @@ export function LibraryVisibility() {
   const [groups, setGroups] = useState<Exclusion[]>([]);
   const [saved, setSaved] = useState("[]");
   const [saving, setSaving] = useState(false);
-  useEffect(() => {
-    if (stored.data) {
-      const v = stored.data.value.exclusions ?? [];
-      setGroups(v);
-      setSaved(JSON.stringify(v));
-    }
-  }, [stored.data]);
+  // Adopt stored settings in the render that delivers them. An effect would
+  // first commit an empty list, and could then replace a group the owner
+  // added in that moment.
+  const [adopted, setAdopted] = useState<typeof stored.data>(undefined);
+  if (stored.data && stored.data !== adopted) {
+    const v = stored.data.value.exclusions ?? [];
+    setAdopted(stored.data);
+    setGroups(v);
+    setSaved(JSON.stringify(v));
+  }
   const draft = useDebouncedValue(groups, 400);
   const complete = draft.every(
     (g) => g.name.trim() && g.rules.length && g.rules.every(isRuleComplete),

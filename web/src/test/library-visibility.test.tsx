@@ -52,6 +52,29 @@ describe("Library visibility", () => {
     expect(calls(fake, "PUT", "/config/catalog")[0]?.body).toEqual({ exclusions: [] });
     expect(calls(fake, "GET", "/catalog/search")).toHaveLength(0);
   });
+  it("never shows stored groups as empty while adopting them", async () => {
+    let flashedEmpty = false;
+    const observer = new MutationObserver(() => {
+      flashedEmpty ||= document.body.textContent?.includes("No custom exclusions") ?? false;
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    const exclusions = [
+      {
+        name: "Stored group",
+        mediaType: "mixed",
+        match: "all",
+        rules: [{ field: "country", op: "in", value: ["IN"] }],
+      },
+    ];
+    renderAppWith("/catalog/visibility", (method, path) => {
+      if (method === "GET" && path === "/config/catalog") return { value: { exclusions } };
+      if (path === "/catalog/visibility/preview")
+        return { total: 500, hidden: 1, movies: 1, shows: 0, unknownCountry: 0, items: [] };
+    });
+    expect(await screen.findByDisplayValue("Stored group")).toBeInTheDocument();
+    observer.disconnect();
+    expect(flashedEmpty).toBe(false);
+  });
   it("does not enable an example exclusion or save an incomplete group", async () => {
     const { fake } = renderAppWith("/catalog/visibility", (_method, path) => {
       if (path === "/config/catalog") return { value: {} };
