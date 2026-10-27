@@ -39,6 +39,11 @@ var (
 	// the torrent cannot help, so on this provider it counts as not cached;
 	// another provider may still serve it.
 	ErrBlocked = fmt.Errorf("debrid: the provider blocks this file: %w", core.ErrNotCached)
+	// ErrAddRefused is a provider refusing to add a torrent at all, as
+	// Real-Debrid does with infringing_file both for filtered names and,
+	// after a burst of adds, for any torrent for a while. The release is
+	// skipped on that provider for now and repeated refusals pause adds.
+	ErrAddRefused = fmt.Errorf("debrid: the provider refused to add the torrent: %w", core.ErrNotCached)
 	// ErrNoProvider means no debrid provider is enabled.
 	ErrNoProvider = errors.New("debrid: no debrid provider is enabled")
 	// ErrUnsupported is an operation a provider does not offer.

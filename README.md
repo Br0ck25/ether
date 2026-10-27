@@ -58,7 +58,7 @@ The table maps familiar workflows to Ether’s on-demand features. It does not c
 | :--- | :--- |
 | **Plex Media Server** *(for streaming)* | Clean-room implementation of the PMS HTTP/HLS/DASH/GDM protocol, `*.plex.direct` TLS, and `plex.tv` sharing. *(Keep PMS for your local files.)* |
 | **Sonarr & Radarr** | Resolution happens at **Play** time (or during detail-page warmup) using your quality profiles, custom formats, edition rules, and release pins. |
-| **Prowlarr & Jackett** | Native Newznab and Torznab manager with daily quota tracking, Retry-After backoff, result caching, 1-click Prowlarr import, and a built-in **Cardigann YAML** engine. |
+| **Prowlarr & Jackett** | Native Newznab and Torznab manager with daily quota tracking, Retry-After backoff, result caching, 1-click Prowlarr import, a built-in **Cardigann YAML** engine, and **Stremio stream addons** as torrent sources (paste an install link). |
 | **SABnzbd, NZBGet, NzbDAV, AltMount** | Native NNTP connection pools, wire-pipelined `BODY` fetching, SWAR yEnc decoding, and direct byte-range seeking inside store-mode RAR4, RAR5, and 7z sets (including password-protected stored archives). |
 | **zurg, rclone, Riven, plex_debrid** | Native HTTPS range streaming for **Real-Debrid, TorBox, AllDebrid, and Premiumize**—including single-episode extraction from torrent season packs without mounts. |
 | **Overseerr & Jellyseerr** | Released titles need no requests. Viewers' Plex and Trakt Watchlists sync automatically and notify them the moment newly released titles become playable. |
@@ -216,7 +216,7 @@ services:
 Open **`http://localhost:32400/ether/`** and finish the 4-step wizard:
 
 1. **Sign in with Plex** and claim the server. It appears in every Plex app on your account immediately.
-2. **Add a source:** a Usenet provider + Newznab indexer, *or* a debrid account (**Real-Debrid, TorBox, AllDebrid, Premiumize**) + torrent indexer / Cardigann site, *or* both.
+2. **Add a source:** a Usenet provider + Newznab indexer, *or* a debrid account (**Real-Debrid, TorBox, AllDebrid, Premiumize**) + torrent indexer, Cardigann site or Stremio addon, *or* both.
 3. **Choose a cache preset** (an SSD with 32–50 GiB is plenty to start).
 4. **Paste a free [TMDB API key](https://www.themoviedb.org/settings/api)** and optional integrations (Trakt, OpenSubtitles, local Ollama/LM Studio).
 
@@ -265,6 +265,12 @@ No. Every stream is fetched by your Ether server and served from Ether to the vi
 </details>
 
 <details>
+<summary><b>How does Ether treat my Real-Debrid account?</b></summary>
+
+Real-Debrid no longer reports which torrents it holds, so Ether adds only the top few candidates for a title you open, keeps the ones that are ready instantly and removes the rest. Answers are remembered so the same torrent isn't checked again, API calls are limited to four at a time, and rate limits pause the account cleanly. Files Real-Debrid refuses to serve (`infringing_file`) are removed and skipped in favour of the next release; when it refuses new torrents in a row, Ether pauses adding for a few minutes rather than retrying. A Stremio addon configured with your key can mark which torrents are cached, which saves those checks.
+</details>
+
+<details>
 <summary><b>Can I run Ether alongside my existing Plex Media Server?</b></summary>
 
 Yes—and if you have local media files on disk, that's the recommended setup. Run them on separate machines or put Ether on a different port, and both servers appear side-by-side in your Plex app. You can also import your existing PMS watch history, ratings, collections, and playlists into Ether in read-only mode.
@@ -280,7 +286,7 @@ Nothing. There is **zero telemetry or analytics**. Ether communicates only with 
 
 ## Where it stands today
 
-Ether is backed by ~1,600 offline unit and fault-injection tests, recorded protocol conformance checks against real Plex Media Server fixtures (`internal/pmsconform`), and hardware transcoding verification across Apple VideoToolbox, NVIDIA NVENC (plus optional Windows RTX Video Super Resolution), Intel QuickSync, and VAAPI.
+Ether is backed by 2,600+ offline unit, fault-injection and fuzz tests, recorded protocol conformance checks against real Plex Media Server fixtures (`internal/pmsconform`), and hardware transcoding verification across Apple VideoToolbox, NVIDIA NVENC (plus optional Windows RTX Video Super Resolution), Intel QuickSync, and VAAPI.
 
 | Capability | Status |
 | :--- | :--- |

@@ -177,6 +177,9 @@ func (p *realDebrid) Acquire(ctx context.Context, req AcquireRequest) (_ *Acquir
 		}
 		form := url.Values{"magnet": {req.Magnet}}
 		if err := p.do(ctx, apiRequest{method: http.MethodPost, path: "/torrents/addMagnet", form: form}, &out); err != nil {
+			if errors.Is(err, ErrBlocked) {
+				return nil, fmt.Errorf("real-debrid: addMagnet refused: %w", ErrAddRefused)
+			}
 			return nil, err
 		}
 		if out.ID == "" {

@@ -104,7 +104,58 @@ type entry struct {
 	state     string // "", "backoff", "auth_failed"
 	lastError string
 	stats     ProviderStats
+	// Add refusals (ErrAddRefused): consecutive count, the latest, and the
+	// pause on new torrents they caused.
+	addRefusals int
+	lastRefusal time.Time
+	addsUntil   time.Time
 }
+
+const (
+	// addRefusedTTL is how long a refused add skips that hash: short, since
+	// a refusal may be the account's add throttle rather than the torrent.
+	addRefusedTTL = 5 * time.Minute
+	addPauseMin   = 2 * time.Minute
+	addPauseMax   = 15 * time.Minute
+)
+
+// addRefused records a refused add. A second refusal in a row pauses new
+// torrents on the provider (existing torrents and links keep working),
+// doubling while refusals continue, so Ether does not keep provoking an
+// account-level throttle.
+func (e *entry) addRefused(now time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if now.Sub(e.lastRefusal) > addPauseMax {
+		e.addRefusals = 0
+	}
+	e.addRefusals++
+	e.lastRefusal = now
+	if e.addRefusals >= 2 {
+		e.addsUntil = now.Add(min(addPauseMin<<min(e.addRefusals-2, 3), addPauseMax))
+	}
+}
+
+// addAccepted ends a run of refusals.
+func (e *entry) addAccepted() {
+	e.mu.Lock()
+	e.addRefusals = 0
+	e.mu.Unlock()
+}
+
+// addsPaused reports a pause on new torrents as not cached for now: the
+// release is skipped on this provider without marking it.
+func (e *entry) addsPaused(now time.Time) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if now.Before(e.addsUntil) {
+		return fmt.Errorf("debrid provider %q is not adding torrents until %s: %w", displayName(e.cfg), e.addsUntil.Format(time.Kitchen), errAddsPaused)
+	}
+	return nil
+}
+
+// errAddsPaused is a release skipped while a provider's adds are paused.
+var errAddsPaused = fmt.Errorf("debrid: adds paused after refusals: %w", core.ErrNotCached)
 
 // ProviderStats are one provider's counters and latency EWMAs.
 type ProviderStats struct {
@@ -753,6 +804,9 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	findDuration = time.Since(findStarted)
 	readyStarted := time.Now()
 	if torrentID == "" {
+		if err := e.addsPaused(s.now()); err != nil {
+			return Payload{}, err
+		}
 		// Adding to the account: in a cluster one node adds, the others
 		// wait for its torrent id (no-op standalone).
 		id, release, err := s.claimAdd(ctx, e, hash)
@@ -764,21 +818,48 @@ func (s *Service) acquireOn(ctx context.Context, e *entry, base Payload, choose 
 	}
 	req := AcquireRequest{InfoHash: hash, Magnet: base.Magnet, TorrentID: torrentID, Choose: choose, CachedOnly: cfg.CachedOnly || core.IsBackgroundCheck(ctx),
 		RemoveUncached: cfg.RemoveUncached, MayRemove: s.mayRemove(e.cfg.ID)}
-	acq, err := e.p.Acquire(ctx, req)
-	if err != nil && !core.IsBackgroundCheck(ctx) && torrentID != "" && (errors.Is(err, ErrGone) || errors.Is(err, core.ErrNotCached)) {
+	acquire := func() (*Acquired, error) {
+		if req.TorrentID == "" {
+			if err := e.addsPaused(s.now()); err != nil {
+				return nil, err
+			}
+		}
+		acq, err := e.p.Acquire(ctx, req)
+		switch {
+		case errors.Is(err, ErrAddRefused):
+			e.addRefused(s.now())
+		case err == nil && acq.Added:
+			e.addAccepted()
+		}
+		return acq, err
+	}
+	acq, err := acquire()
+	if err != nil && !core.IsBackgroundCheck(ctx) && torrentID != "" && (errors.Is(err, ErrGone) || errors.Is(err, core.ErrNotCached)) && !errors.Is(err, ErrAddRefused) {
 		// The remembered torrent is gone or lacks the wanted file: add anew.
 		req.TorrentID = ""
 		id, release, cerr := s.reclaimAdd(ctx, e, hash, torrentID)
 		if cerr == nil {
 			defer release()
 			req.TorrentID = id
-			acq, err = e.p.Acquire(ctx, req)
+			acq, err = acquire()
 		} else {
 			err = cerr
 		}
 	}
 	readyDuration = time.Since(readyStarted)
+	if errors.Is(err, errAddsPaused) {
+		// Skipped without a provider call: says nothing about the torrent.
+		return Payload{}, err
+	}
 	observe(err)
+	if errors.Is(err, ErrAddRefused) {
+		// Not evidence about the torrent: skip it briefly, in memory only.
+		e.count(func(st *ProviderStats) { st.Blocked++ })
+		s.knownMu.Lock()
+		s.known[knownKey(e.cfg.ID, hash)] = knownState{until: s.now().Add(addRefusedTTL)}
+		s.knownMu.Unlock()
+		return Payload{}, err
+	}
 	if err != nil {
 		if errors.Is(err, core.ErrNotCached) {
 			e.count(func(st *ProviderStats) { st.NotCached++ })

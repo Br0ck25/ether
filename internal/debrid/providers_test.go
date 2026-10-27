@@ -624,3 +624,71 @@ func TestNewProviderAndErrorsNeverLeakKeys(t *testing.T) {
 	}
 
 }
+
+// Real-Debrid also answers addMagnet with infringing_file once an account
+// has added a burst of torrents. A refusal skips that hash briefly without
+// recording it as uncached; a second in a row pauses new adds (doubling)
+// so Ether stops provoking the throttle; the hash is retried later.
+func TestRealDebridAddRefusalsPauseAdds(t *testing.T) {
+	var mu sync.Mutex
+	adds := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/torrents/addMagnet":
+			mu.Lock()
+			adds++
+			mu.Unlock()
+			w.WriteHeader(451)
+			fmt.Fprint(w, `{"error":"infringing_file","error_code":35}`)
+		case "/torrents":
+			fmt.Fprint(w, `[]`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	now := time.Unix(1_800_000_000, 0)
+	p := newRealDebrid(testKey, fastOpts(srv.URL))
+	cfg := config.Debrid{CachedOnly: true, RemoveUncached: true, Providers: []config.DebridProvider{{ID: "rd", Kind: "realdebrid", APIKey: testKey, Enabled: true}}}
+	svc := NewService(cfg, Options{Now: func() time.Time { return now }, NewProvider: func(config.DebridProvider, ProviderOptions) (Provider, error) { return p, nil }})
+	rel := func(n int) core.Release {
+		h := strings.Repeat(fmt.Sprintf("%x", n), 40)[:40]
+		return core.Release{ID: h, Name: "Movie.2024.1080p", Protocol: core.ProtocolTorrent, InfoHash: h}
+	}
+	count := func() int { mu.Lock(); defer mu.Unlock(); return adds }
+	play := func(n int) {
+		t.Helper()
+		if _, err := svc.Acquire(t.Context(), rel(n)); !errors.Is(err, core.ErrNotCached) {
+			t.Fatalf("release %d: %v", n, err)
+		}
+	}
+
+	play(1)
+	play(2)
+	if count() != 2 {
+		t.Fatalf("adds %d", count())
+	}
+	play(3) // adds paused after two refusals in a row
+	if count() != 2 {
+		t.Fatalf("paused provider was asked to add: %d", count())
+	}
+	if st := svc.Stats()[0]; st.Failures != 0 || st.State != "ok" || st.Blocked != 2 {
+		t.Fatalf("stats %+v", st)
+	}
+	now = now.Add(3 * time.Minute) // pause over; a third refusal doubles it
+	play(3)
+	if count() != 3 {
+		t.Fatalf("adds %d after pause", count())
+	}
+	now = now.Add(3 * time.Minute)
+	play(4)
+	if count() != 3 {
+		t.Fatalf("doubled pause not applied: %d", count())
+	}
+	now = now.Add(10 * time.Minute) // refused hashes are retried, not remembered as uncached
+	play(1)
+	if count() != 4 {
+		t.Fatalf("refused hash was not retried: %d", count())
+	}
+}
