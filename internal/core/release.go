@@ -69,6 +69,12 @@ type Release struct {
 	// Target narrows a multi-file release (a season pack) to the wanted
 	// episode; set by the resolver on candidates before fetching.
 	Target *ReleaseTarget `json:"target,omitempty"`
+	// DebridCached and DebridUncached name the debrid services (config
+	// Debrid* kinds) the source reported as holding, or not holding, the
+	// torrent, such as a Stremio addon's cached marker (additive). Hints
+	// only: a provider's own answer always wins.
+	DebridCached   []string `json:"debridCached,omitempty"`
+	DebridUncached []string `json:"debridUncached,omitempty"`
 }
 
 // Resolution is the resolver's answer for a title and client: the winning

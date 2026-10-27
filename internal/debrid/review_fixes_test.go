@@ -73,7 +73,7 @@ func TestChooseFileRejectsOtherEpisodeInPartialPack(t *testing.T) {
 func TestRealDebridErrorCodes(t *testing.T) {
 	p := newRealDebrid("k", ProviderOptions{})
 	for code, want := range map[int]error{
-		25: nil, // service unavailable: transient
+		25: nil,        // service unavailable: transient
 		35: ErrBlocked, // infringing_file: not cached on this account
 		24: ErrGone,
 		22: ErrAuth,

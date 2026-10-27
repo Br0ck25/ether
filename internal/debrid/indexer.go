@@ -55,6 +55,7 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 	var results []core.Release
 	var err error
 	emit := func(batch []core.Release) {
+		x.svc.ApplyHints(ctx, batch)
 		if early != nil {
 			early.add(batch)
 		}
@@ -87,6 +88,9 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 		return results, err
 	}
 	enabled := x.svc.Enabled()
+	if enabled {
+		x.svc.ApplyHints(ctx, results)
+	}
 	var torrents []string
 	out := results[:0:0]
 	for _, r := range results {
@@ -188,6 +192,7 @@ func (x *Indexer) searchSeasonPacks(ctx context.Context, req core.SearchRequest)
 	if err != nil || len(results) == 0 {
 		return nil, nil
 	}
+	x.svc.ApplyHints(ctx, results)
 	var hashes []string
 	var packs []core.Release
 	for _, r := range results {
@@ -245,6 +250,9 @@ func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 		return results, err
 	}
 	enabled := x.svc.Enabled()
+	if enabled {
+		x.svc.ApplyHints(ctx, results)
+	}
 	var torrents []string
 	out := results[:0:0]
 	for _, r := range results {

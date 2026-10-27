@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -478,6 +479,45 @@ func (s *Service) knownFor(ctx context.Context, providerID, hash string) (cached
 		}
 	}
 	return cached, ok, torrentID
+}
+
+// hintTTL bounds how long a source's cached marker stands in for a
+// provider's own answer.
+const hintTTL = 30 * time.Minute
+
+// ApplyHints records the cached markers sources put on torrent releases
+// (core.Release.DebridCached and DebridUncached) for providers that have
+// no answer of their own about the hash. A provider the source reported as
+// holding the torrent is tried ahead of unknown ones; with CachedOnly, one
+// it reported as not holding it is skipped without adding the torrent.
+// Hints live in memory only and never replace a provider's answer.
+func (s *Service) ApplyHints(ctx context.Context, rels []core.Release) {
+	var entries []*entry
+	cachedOnly := false
+	for _, r := range rels {
+		if r.Protocol != core.ProtocolTorrent || r.InfoHash == "" || len(r.DebridCached)+len(r.DebridUncached) == 0 {
+			continue
+		}
+		if entries == nil {
+			if entries = s.active(); len(entries) == 0 {
+				return
+			}
+			cachedOnly = s.Config().CachedOnly
+		}
+		hash := strings.ToLower(r.InfoHash)
+		for _, e := range entries {
+			cached := slices.Contains(r.DebridCached, e.cfg.Kind)
+			if !cached && (!cachedOnly || !slices.Contains(r.DebridUncached, e.cfg.Kind)) {
+				continue
+			}
+			if _, ok, _ := s.knownFor(ctx, e.cfg.ID, hash); ok {
+				continue
+			}
+			s.knownMu.Lock()
+			s.known[knownKey(e.cfg.ID, hash)] = knownState{cached: cached, until: s.now().Add(hintTTL)}
+			s.knownMu.Unlock()
+		}
+	}
 }
 
 // KnownCached reports, without any API call, whether an enabled provider
