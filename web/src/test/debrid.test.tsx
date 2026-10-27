@@ -125,6 +125,7 @@ describe("Sources › Indexers protocol", () => {
       ["i1", ""],
       ["i2", "torrent"],
       ["i3", "torrent"],
+      ["i4", "torrent"],
     ]);
     const list = screen.getByRole("region", { name: "Indexers" });
     await waitFor(() => expect(within(list).getAllByText("Torznab")).toHaveLength(2));

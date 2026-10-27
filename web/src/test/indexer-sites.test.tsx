@@ -55,8 +55,8 @@ describe("Sources › Indexers built-in sites", () => {
     fireEvent.click(within(drawer).getByRole("button", { name: "Save indexer" }));
     await waitFor(() => expect(calls(fake, "PUT", "/config/indexers")).toHaveLength(1));
     const body = calls(fake, "PUT", "/config/indexers")[0]!.body as Indexer[];
-    expect(body).toHaveLength(4);
-    expect(body[3]).toMatchObject({
+    expect(body).toHaveLength(5);
+    expect(body[4]).toMatchObject({
       name: "Example Private",
       kind: "cardigann",
       definition: "example-private",
@@ -64,7 +64,7 @@ describe("Sources › Indexers built-in sites", () => {
       url: "https://example-private.invalid/",
       settings: { username: "alice" },
       secretSettings: { password: "s3cret" },
-      priority: 3,
+      priority: 4,
       enabled: true,
     });
     // Newznab indexers keep their redacted keys.
@@ -124,7 +124,7 @@ describe("Sources › Indexers built-in sites", () => {
     fireEvent.click(within(drawer).getByRole("button", { name: "Save indexer" }));
     await waitFor(() => expect(calls(fake, "PUT", "/config/indexers")).toHaveLength(1));
     const body = calls(fake, "PUT", "/config/indexers")[0]!.body as Indexer[];
-    expect(body[3]).toMatchObject({
+    expect(body.find((ix) => ix.id === "site-1")).toMatchObject({
       id: "site-1",
       dailyLimit: 80,
       secretSettings: { password: "••••" },

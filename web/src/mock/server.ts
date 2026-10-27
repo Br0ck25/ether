@@ -190,6 +190,20 @@ function defaultConfig(): EtherConfig {
         tvCategories: null,
         protocol: "torrent",
       },
+      {
+        id: "i4",
+        name: "Stream Addon",
+        url: "https://addon.example/manifest.json",
+        apiKey: "",
+        dailyLimit: 0,
+        dailyGrabs: 0,
+        priority: 3,
+        enabled: true,
+        movieCategories: null,
+        tvCategories: null,
+        protocol: "torrent",
+        kind: "stremio",
+      },
     ],
     debrid: {
       providers: [

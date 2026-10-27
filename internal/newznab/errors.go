@@ -74,3 +74,15 @@ func humanError(indexer string, err error) error {
 	}
 	return fmt.Errorf("indexer %q: %w", indexer, err)
 }
+
+// RateLimitError is a backend's rate-limit refusal (HTTP 429). The Client
+// pauses the indexer until RetryAfter, a Retry-After header value ("" for
+// the default pause), exactly as for a Newznab 429.
+type RateLimitError struct {
+	RetryAfter string
+	Err        error
+}
+
+func (e *RateLimitError) Error() string { return e.Err.Error() }
+
+func (e *RateLimitError) Unwrap() []error { return []error{e.Err, core.ErrBudgetExhausted} }

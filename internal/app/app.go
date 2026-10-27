@@ -45,6 +45,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/stats"
 	"github.com/braedonsaunders/ether/internal/store"
 	"github.com/braedonsaunders/ether/internal/stream"
+	"github.com/braedonsaunders/ether/internal/stremio"
 	"github.com/braedonsaunders/ether/internal/subtitles"
 	"github.com/braedonsaunders/ether/internal/sysload"
 	"github.com/braedonsaunders/ether/internal/tmdb"
@@ -127,6 +128,7 @@ type App struct {
 	engine      *stream.Engine
 	indexers    *newznab.Manager
 	sites       *cardigann.Service // built-in indexer sites from owner-installed definitions
+	addons      *stremio.Service   // Stremio stream addons configured as indexers
 	// Debrid: torrent releases stream through owner debrid accounts. The
 	// wrappers dispatch on the payload and delegate Usenet to engine and
 	// indexers, so every consumer uses media and sources.

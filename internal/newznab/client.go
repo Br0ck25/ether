@@ -605,7 +605,7 @@ func (c *Client) Search(ctx context.Context, req core.SearchRequest) ([]core.Rel
 	if c.Exhausted(ctx) {
 		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
 	}
-	if c.Config().IsBuiltin() {
+	if c.Config().UsesBackend() {
 		results, err := c.backendSearch(ctx, req)
 		if err != nil {
 			return nil, err
@@ -825,9 +825,10 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 	if c.Exhausted(ctx) {
 		return nil, fmt.Errorf("indexer %q: %w", c.Name(), core.ErrBudgetExhausted)
 	}
-	if c.Config().IsBuiltin() {
-		// Built-in sites: if Episode > 0, rescue via season-level search
-		// and OriginalTitle/aliases.
+	if cfg := c.Config(); cfg.UsesBackend() {
+		// Built-in sites and addons: if Episode > 0, rescue via season-level
+		// search; built-in sites also via OriginalTitle/aliases (an addon
+		// searches by identifier, so another title asks the same question).
 		var merged []core.Release
 		seen := map[string]bool{}
 		appendUnique := func(rs []core.Release) {
@@ -842,7 +843,7 @@ func (c *Client) SearchRescue(ctx context.Context, req core.SearchRequest) ([]co
 				}
 			}
 		}
-		if req.OriginalTitle != "" && !releaseparse.TitlesMatch(req.OriginalTitle, req.Title) {
+		if !cfg.IsStremio() && req.OriginalTitle != "" && !releaseparse.TitlesMatch(req.OriginalTitle, req.Title) {
 			alt := req
 			alt.Title, alt.OriginalTitle = req.OriginalTitle, ""
 			if rs, err := c.backendSearch(ctx, alt); err == nil {
@@ -964,7 +965,7 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 			return b, nil
 		}
 	}
-	if c.Config().IsBuiltin() {
+	if c.Config().UsesBackend() {
 		b, err := c.backend()
 		if err != nil {
 			return nil, err
@@ -1043,10 +1044,10 @@ func (c *Client) saveNZB(releaseID string, body []byte) {
 	}
 }
 
-// backend returns the search backend of a built-in indexer.
+// backend returns the search backend of a built-in site or addon.
 func (c *Client) backend() (Backend, error) {
 	if c.backends == nil {
-		return nil, fmt.Errorf("indexer %q: built-in indexers are not available", c.Name())
+		return nil, fmt.Errorf("indexer %q: built-in sites and addons are not available", c.Name())
 	}
 	return c.backends(c.Config())
 }
@@ -1060,6 +1061,10 @@ func (c *Client) backendSearch(ctx context.Context, req core.SearchRequest) ([]c
 	}
 	results, err := b.Search(ctx, req, c.reserve)
 	if err != nil {
+		var rl *RateLimitError
+		if errors.As(err, &rl) {
+			return nil, c.recordRateLimit(ctx, rl.RetryAfter, err)
+		}
 		return nil, err
 	}
 	name := c.Name()

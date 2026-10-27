@@ -154,7 +154,10 @@ func ValidateConfig(cfg config.Config) []FieldError {
 		f := fmt.Sprintf("indexers[%d]", i)
 		v.httpURL(f+".url", ix.URL, true)
 		if ix.Kind != "" {
-			v.oneOf(f+".kind", ix.Kind, config.IndexerKindNewznab, config.IndexerKindCardigann)
+			v.oneOf(f+".kind", ix.Kind, config.IndexerKindNewznab, config.IndexerKindCardigann, config.IndexerKindStremio)
+		}
+		if ix.IsStremio() && ix.Protocol != "" && ix.Protocol != "torrent" {
+			v.add(f+".protocol", "must be torrent for a Stremio addon")
 		}
 		if ix.IsBuiltin() && strings.TrimSpace(ix.Definition) == "" {
 			v.add(f+".definition", "is required for a built-in site")

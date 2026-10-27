@@ -29,7 +29,10 @@ export interface Indexer {
   tvCategories: number[] | null;
   /** "usenet" (Newznab, the default when empty or absent) or "torrent" (Torznab). */
   protocol?: IndexerProtocol | "";
-  /** "cardigann" for a built-in site; empty or "newznab" for a Newznab/Torznab URL. */
+  /**
+   * "cardigann" for a built-in site, "stremio" for a Stremio stream addon
+   * (always protocol "torrent"); empty or "newznab" for a Newznab/Torznab URL.
+   */
   kind?: IndexerKind | "";
   /** Installed definition id of a built-in site. */
   definition?: string;
@@ -40,7 +43,7 @@ export interface Indexer {
 }
 
 export type IndexerProtocol = "usenet" | "torrent";
-export type IndexerKind = "newznab" | "cardigann";
+export type IndexerKind = "newznab" | "cardigann" | "stremio";
 
 /** Definitions source and FlareSolverr for built-in sites (config.indexerSites). */
 export interface IndexerSitesConfig {

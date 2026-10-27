@@ -37,6 +37,27 @@ never downloads a whole file.
 Torrents whose video is inside RAR archives are skipped. A result that only
 offers a `.torrent` link costs one indexer download to read its hash.
 
+### Stremio addons as sources
+
+Under **Sources › Indexers**, **Add indexer › Stremio addon URL…** takes any
+Stremio stream addon's install link (`https://…/manifest.json` or
+`stremio://…`). Ether asks the addon for a title by its IMDb id, for movies
+and for each episode, and streams its torrent results through your debrid
+accounts exactly like Torznab results: the same quality rules, cache checks,
+season-pack handling and failover. **Test** checks that the addon serves
+movie and series streams. Some public addon instances serve only the Stremio
+app and refuse servers; Ether identifies itself honestly, so use an instance
+that allows servers or host the addon yourself.
+
+The link needs no debrid key: Ether checks your debrid accounts itself. A link
+configured with a key still works, and the addon's cached markers become hints
+for which torrents to try first; the key is then also stored in that link on
+this server.
+
+Self-hosted DMM hashlist indexers that speak Torznab, such as Zilean
+(`http://HOST:8182/torznab`) or StremThru (`https://HOST/v0/torznab`), can be
+added as Torznab URLs with protocol **Torrent (Torznab)**; Ether adds `/api`.
+
 ### Which source plays
 
 Ether never trades quality for speed. Among releases of the same quality, it

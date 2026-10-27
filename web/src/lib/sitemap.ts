@@ -99,7 +99,7 @@ export const PAGES: PageDef[] = [
         key: "indexers",
         title: "Indexers",
         keywords:
-          "newznab torznab torrent built-in sites definitions cardigann flaresolverr prowlarr budget api",
+          "newznab torznab torrent built-in sites definitions cardigann flaresolverr prowlarr stremio addon budget api",
       },
       {
         key: "debrid",

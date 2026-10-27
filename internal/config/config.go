@@ -159,8 +159,10 @@ type Indexer struct {
 	Protocol string `json:"protocol,omitempty"`
 	// Kind selects how the indexer is searched: "" or IndexerKindNewznab
 	// for a Newznab/Torznab API at URL, IndexerKindCardigann for a built-in
-	// site run from an owner-installed definition. For a built-in site URL
-	// is the site address and Protocol follows the definition.
+	// site run from an owner-installed definition, IndexerKindStremio for a
+	// Stremio stream addon. For a built-in site URL is the site address and
+	// Protocol follows the definition; for an addon URL is its install URL
+	// and results are torrents.
 	Kind string `json:"kind,omitempty"`
 	// Definition is the installed definition id of a built-in site.
 	Definition string `json:"definition,omitempty"`
@@ -175,13 +177,22 @@ type Indexer struct {
 const (
 	IndexerKindNewznab   = "newznab"
 	IndexerKindCardigann = "cardigann"
+	IndexerKindStremio   = "stremio"
 )
 
-// IsTorrent reports whether the indexer is a Torznab (torrent) indexer.
-func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" }
+// IsTorrent reports whether the indexer's results are torrents (Torznab or
+// a Stremio addon).
+func (ix Indexer) IsTorrent() bool { return ix.Protocol == "torrent" || ix.IsStremio() }
 
 // IsBuiltin reports whether the indexer is a built-in site.
 func (ix Indexer) IsBuiltin() bool { return ix.Kind == IndexerKindCardigann }
+
+// IsStremio reports whether the indexer is a Stremio stream addon.
+func (ix Indexer) IsStremio() bool { return ix.Kind == IndexerKindStremio }
+
+// UsesBackend reports whether the indexer is searched through a backend
+// rather than the Newznab API: a built-in site or a Stremio addon.
+func (ix Indexer) UsesBackend() bool { return ix.IsBuiltin() || ix.IsStremio() }
 
 type Cache struct {
 	Storage string `json:"storage,omitempty"` // local (default) or shared; restart required

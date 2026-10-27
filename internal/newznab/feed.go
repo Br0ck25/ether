@@ -22,7 +22,7 @@ func (m *Manager) FeedSources() []core.ReleaseFeed {
 		}
 		raw, _ := json.Marshal(cfg)
 		sum := sha256.Sum256(raw)
-		f := core.ReleaseFeed{ID: c.indexerID(), Name: c.Name(), Generation: hex.EncodeToString(sum[:]), Protocol: cfg.Protocol, Categories: recentCategories(cfg), Supported: !cfg.IsBuiltin()}
+		f := core.ReleaseFeed{ID: c.indexerID(), Name: c.Name(), Generation: hex.EncodeToString(sum[:]), Protocol: cfg.Protocol, Categories: recentCategories(cfg), Supported: !cfg.UsesBackend()}
 		if !f.Supported {
 			f.Reason = "This site does not expose a paginated recent-release feed; on-demand search remains available."
 		}
@@ -39,7 +39,7 @@ func (m *Manager) Recent(ctx context.Context, id string, offset, limit int) ([]c
 			continue
 		}
 		cfg := c.Config()
-		if !cfg.Enabled || cfg.IsBuiltin() {
+		if !cfg.Enabled || cfg.UsesBackend() {
 			return nil, fmt.Errorf("recent-release feed is not enabled")
 		}
 		return c.recent(ctx, offset, limit)

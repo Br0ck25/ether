@@ -334,7 +334,7 @@ func (c *Client) resolveTorrentCached(ctx context.Context, r core.Release) (core
 }
 
 func (c *Client) resolveTorrent(ctx context.Context, r core.Release) (core.Release, error) {
-	if c.Config().IsBuiltin() {
+	if c.Config().UsesBackend() {
 		b, err := c.backend()
 		if err != nil {
 			return r, err
