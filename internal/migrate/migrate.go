@@ -302,7 +302,9 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 			token = q.Token
 		}
 		v.Token = ""
-		accountID, accountErr := s.sourceAccount(ctx, base, token, v)
+		// Account discovery and detailed history are owner-only PMS endpoints.
+		// Personal library state must still use the selected viewer's token.
+		accountID, accountErr := s.sourceAccount(ctx, base, q.Token, v)
 		if accountErr != nil && q.HistoryOnly {
 			return p, accountErr
 		}
@@ -360,7 +362,7 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 		var history []media
 		he := accountErr
 		if he == nil {
-			history, he = s.pages(ctx, base, token, "/status/sessions/history/all?sort=viewedAt:asc&accountID="+strconv.FormatInt(accountID, 10))
+			history, he = s.pages(ctx, base, q.Token, "/status/sessions/history/all?sort=viewedAt:asc&accountID="+strconv.FormatInt(accountID, 10))
 		}
 		if he != nil {
 			p.Warnings = append(p.Warnings, "Detailed watch history unavailable for "+v.Name+"; last-viewed summaries will be imported")
