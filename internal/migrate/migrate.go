@@ -302,7 +302,8 @@ func (s *Service) Preview(ctx context.Context, q Request) (Plan, error) {
 			token = q.Token
 		}
 		v.Token = ""
-		// Account discovery and detailed history are owner-only PMS endpoints.
+		// Account discovery requires the owner token. Use it for explicitly
+		// account-scoped detailed history too; PMS permissions vary by version.
 		// Personal library state must still use the selected viewer's token.
 		accountID, accountErr := s.sourceAccount(ctx, base, q.Token, v)
 		if accountErr != nil && q.HistoryOnly {
