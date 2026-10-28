@@ -113,8 +113,12 @@ func productCaps(product, platform, device string) baseCaps {
 	switch {
 	case strings.Contains(pr, "apple tv") || pl == "tvos" || strings.Contains(dv, "apple tv"):
 		return appleTVCaps
-	case strings.Contains(pr, "plex web") || strings.Contains(pr, "plex for windows") || strings.Contains(pr, "plex for mac") || strings.Contains(pr, "plex for linux") || strings.Contains(pr, "plex desktop"):
+	case strings.Contains(pr, "plex web"):
 		return browserCaps(platform)
+	case strings.Contains(pr, "plex for windows") || strings.Contains(pr, "plex for mac") || strings.Contains(pr, "plex for linux") || strings.Contains(pr, "plex desktop"):
+		// Native desktop apps use mpv like HTPC. Their platform header is
+		// an OS, not a browser; per-request limitations still apply below.
+		return htpcCaps
 	case strings.Contains(pr, "ios") || pl == "ios" || pl == "ipados" || strings.Contains(dv, "iphone") || strings.Contains(dv, "ipad"):
 		return iosCaps
 	case strings.Contains(pr, "android") && (strings.Contains(pr, "tv") || strings.Contains(dv, "shield") || strings.Contains(dv, "tv")):
