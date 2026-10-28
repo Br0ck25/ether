@@ -30,6 +30,8 @@ type FormatMatch struct {
 type compiledSpec struct {
 	def core.FormatSpecification
 	re  *regexp2.Regexp
+	// sonarr reads SourceSpecification values in Sonarr's enum.
+	sonarr bool
 }
 type compiledFormat struct {
 	def   core.CustomFormat
@@ -39,6 +41,9 @@ type FormatScorer struct {
 	formats []compiledFormat
 	scores  map[string]int
 }
+
+// maxFormatSpecs bounds one format's specifications.
+const maxFormatSpecs = 500
 
 // NewFormatScorer validates every rule before publishing an immutable scorer.
 // .NET lookarounds used by TRaSH are supported; regex execution is time bounded.
@@ -55,13 +60,28 @@ func NewFormatScorer(defs []core.CustomFormat, scores map[string]int) (*FormatSc
 		if d.ID == "" {
 			d.ID = d.Name
 		}
-		if d.Name == "" || seen[d.ID] || len(d.Specifications) == 0 || len(d.Specifications) > 100 {
-			return nil, fmt.Errorf("custom format %q: missing name, duplicate id, or invalid specifications", d.Name)
+		switch {
+		case d.Name == "":
+			return nil, fmt.Errorf("custom format %q: missing name", d.ID)
+		case seen[d.ID]:
+			return nil, fmt.Errorf("custom format %q: duplicate id %q", d.Name, d.ID)
+		case len(d.Specifications) == 0:
+			return nil, fmt.Errorf("custom format %q: no specifications", d.Name)
+		case len(d.Specifications) > maxFormatSpecs:
+			// TRaSH's largest (Anime LQ Groups) has 137.
+			return nil, fmt.Errorf("custom format %q: more than %d specifications", d.Name, maxFormatSpecs)
 		}
 		seen[d.ID] = true
+		if d.App != "" && d.App != AppRadarr && d.App != AppSonarr {
+			return nil, fmt.Errorf("custom format %q: app must be radarr or sonarr", d.Name)
+		}
+		maxSource := 9 // Radarr's BLURAY
+		if d.App == AppSonarr {
+			maxSource = 7 // Sonarr's BlurayRaw
+		}
 		f := compiledFormat{def: d}
 		for _, spec := range d.Specifications {
-			c := compiledSpec{def: spec}
+			c := compiledSpec{def: spec, sonarr: d.App == AppSonarr}
 			switch spec.Implementation {
 			case "ReleaseTitleSpecification", "ReleaseGroupSpecification", "EditionSpecification":
 				var pattern string
@@ -89,7 +109,7 @@ func NewFormatScorer(defs []core.CustomFormat, scores map[string]int) (*FormatSc
 					if json.Unmarshal(spec.Fields["value"], &value) != nil {
 						return nil, fmt.Errorf("custom format %q: numeric native specification value required", d.Name)
 					}
-					if (spec.Implementation == "LanguageSpecification" && !knownLanguageValue(value)) || (spec.Implementation == "SourceSpecification" && (value < 0 || value > 9)) || (spec.Implementation == "QualityModifierSpecification" && (value < 0 || value > 5)) {
+					if (spec.Implementation == "LanguageSpecification" && !knownLanguageValue(value)) || (spec.Implementation == "SourceSpecification" && (value < 0 || value > maxSource)) || (spec.Implementation == "QualityModifierSpecification" && (value < 0 || value > 5)) {
 						return nil, fmt.Errorf("custom format %q: unsupported native enum value %d", d.Name, value)
 					}
 				}
@@ -151,6 +171,12 @@ func specMatch(s compiledSpec, r core.Release, original string) (bool, error) {
 	case "ResolutionSpecification":
 		return r.Info.Height == int(value), nil
 	case "SourceSpecification":
+		if s.sonarr {
+			// Sonarr's source enum: Unknown=0, Television=1, TelevisionRaw=2,
+			// Web=3, WebRip=4, DVD=5, Bluray=6, BlurayRaw=7 (remuxes).
+			source := map[core.Source]int{core.SourceHDTV: 1, core.SourceWEBDL: 3, core.SourceWEBRip: 4, core.SourceDVD: 5, core.SourceBluRay: 6, core.SourceRemux: 7}[r.Info.Source]
+			return source == int(value), nil
+		}
 		// Radarr's source enum: Unknown=0, CAM=1, TS=2, TC=3, WORKPRINT=4, DVD=5,
 		// TV=6, WEB-DL=7, WEBRip=8, BluRay=9.
 		source := map[core.Source]int{core.SourceCam: 1, core.SourceScreener: 5, core.SourceDVD: 5, core.SourceHDTV: 6, core.SourceWEBDL: 7, core.SourceWEBRip: 8, core.SourceBluRay: 9, core.SourceRemux: 9}[r.Info.Source]

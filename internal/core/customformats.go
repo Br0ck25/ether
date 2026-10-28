@@ -9,6 +9,9 @@ type CustomFormat struct {
 	Name           string                `json:"name"`
 	Scores         map[string]int        `json:"trash_scores,omitempty"`
 	Specifications []FormatSpecification `json:"specifications"`
+	// App names the Starr app whose enum values the specifications use:
+	// Sonarr numbers sources differently from Radarr. Empty means Radarr.
+	App string `json:"app,omitempty"`
 }
 
 type FormatSpecification struct {
