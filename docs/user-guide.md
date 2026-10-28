@@ -180,6 +180,86 @@ API only). Text subtitles stored inside a video play on direct play, but are
 not available while transcoding, because extracting them would mean reading
 the whole remote file. Picture subtitles (PGS, VobSub) are burned in.
 
+### Remote access for Jellyfin and Emby
+
+Jellyfin and Emby apps need no paid pass to stream from outside your home. The
+Jellyfin/Emby port speaks plain HTTP, so a sign-in code and the token an app
+receives would cross the internet unencrypted if you simply forward port 8096.
+Use one of the two setups below instead. Both keep every access code and token
+inside an encrypted connection.
+
+**Option 1: Tailscale (simplest, nothing exposed to the internet).**
+
+1. Install [Tailscale](https://tailscale.com/download) on the Ether server and
+   on each device that will watch, and sign in to the same tailnet. Viewers
+   outside your household need an invite (Tailscale's node sharing).
+2. In the app, add the server as `http://<server's Tailscale name or
+   100.x address>:8096`. Tailscale encrypts the connection, so plain `http`
+   is fine here.
+3. Optional HTTPS on the tailnet, which some apps prefer: on the server run
+   `tailscale serve --bg 8096`, then use the `https://…ts.net` address it
+   prints.
+
+Do not use Tailscale Funnel for this: it publishes the port to the whole
+internet.
+
+**Option 2: a reverse proxy with HTTPS (a domain name, reachable by anyone you
+give a code to).**
+
+1. Point a DNS name at your home address (a dynamic DNS name works) and forward
+   **TCP 443** (and 80, if your proxy needs it to get a certificate) on your
+   router to the machine running the proxy. Do **not** forward 8096.
+2. Run the proxy **on the same machine as Ether** and send it to
+   `127.0.0.1:8096`. Ether trusts a forwarded client address only from a
+   loopback proxy; this is what lets it tell home from away (for the remote
+   bitrate cap) and count failed sign-ins per real address. A proxy on another
+   machine makes every viewer look like the proxy.
+3. Turn response buffering off, so video starts at once and seeking works.
+
+Caddy (gets and renews the certificate itself):
+
+```
+ether.example.com {
+    reverse_proxy 127.0.0.1:8096 {
+        flush_interval -1
+    }
+}
+```
+
+nginx (with a certificate from certbot or similar):
+
+```
+server {
+    listen 443 ssl;
+    server_name ether.example.com;
+    # ssl_certificate / ssl_certificate_key as issued for your name
+
+    location / {
+        proxy_pass http://127.0.0.1:8096;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 3600s;
+        client_max_body_size 20m;
+    }
+}
+```
+
+In the app, add `https://ether.example.com` (no port).
+
+Whichever you choose:
+
+- Give every remote viewer their own access code (viewer **Access** tab), and
+  remove it when they should lose access. Five wrong sign-ins from one address
+  lock it for ten minutes.
+- Set a **remote bitrate cap** in Playback › Transcoding so a viewer on a slow
+  link is transcoded down instead of stalling. It applies to clients Ether
+  sees as outside your network, which includes anyone arriving through the
+  reverse proxy but not Tailscale (Ether treats Tailscale's 100.64.0.0/10
+  addresses as local).
+- Test from a phone on mobile data, with Wi-Fi off, before relying on it.
+
 ## Organise your Home
 
 Movies, TV and Home put populated **Continue Watching** first, followed by
