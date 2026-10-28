@@ -14,7 +14,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/store"
 )
 
-func setup(t *testing.T) (*collections.Service, *catalog.Catalog) {
+func setup(t *testing.T, opts ...collections.Option) (*collections.Service, *catalog.Catalog) {
 	t.Helper()
 	ctx := context.Background()
 	db, err := store.OpenMemory(ctx)
@@ -47,7 +47,8 @@ func setup(t *testing.T) (*collections.Service, *catalog.Catalog) {
 			t.Fatal(err)
 		}
 	}
-	svc, err := collections.New(db, cat, slog.Default(), collections.WithIndexTTL(0), collections.WithLiveTTL(0))
+	opts = append([]collections.Option{collections.WithIndexTTL(0), collections.WithLiveTTL(0)}, opts...)
+	svc, err := collections.New(db, cat, slog.Default(), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +141,49 @@ func TestCreateAndDeleteSmart(t *testing.T) {
 	// Builtins cannot be deleted.
 	if err := svc.DeleteSmart(ctx, collections.BuiltinKey("trending-week-movie")); !errors.Is(err, core.ErrNotFound) {
 		t.Fatalf("builtin delete: %v", err)
+	}
+}
+
+func TestHideFranchiseCollectionsAppliesWithoutRestart(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Catalog{}
+	svc, _ := setup(t, collections.WithCatalogConfig(func() config.Catalog { return cfg }))
+	for _, mediaType := range []core.MediaType{"", core.TypeMovie, core.TypeShow} {
+		cfg.HideFranchiseCollections = false
+		before, err := svc.List(ctx, nil, mediaType)
+		if err != nil {
+			t.Fatal(err)
+		}
+		curated := map[core.RatingKey]bool{}
+		franchises := 0
+		for _, c := range before {
+			if c.Kind == "franchise" {
+				franchises++
+			} else {
+				curated[c.Key] = true
+			}
+		}
+		if mediaType != core.TypeShow && franchises == 0 {
+			t.Fatal("fixture has no franchises")
+		}
+		cfg.HideFranchiseCollections = true
+		hidden, err := svc.List(ctx, nil, mediaType)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(hidden) != len(curated) {
+			t.Fatalf("curated collections changed: before=%v after=%v", before, hidden)
+		}
+		for _, c := range hidden {
+			if c.Kind == "franchise" || !curated[c.Key] {
+				t.Fatalf("unexpected collection: %+v", c)
+			}
+		}
+		cfg.HideFranchiseCollections = false
+		restored, err := svc.List(ctx, nil, mediaType)
+		if err != nil || len(restored) != len(before) {
+			t.Fatalf("restore: %v %v", restored, err)
+		}
 	}
 }
 

@@ -37,19 +37,27 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
 FROM debian:bookworm-slim AS runtime
 ARG TARGETARCH
 
-# Optional hardware-transcode userspace. Intel QSV needs intel-media-va-driver
-# from non-free; the open iHD-free fallback + Mesa VAAPI cover most iGPU/NVIDIA
-# (via nvidia-container-toolkit) cases. Install is best-effort-small: comment
-# out this block for a CPU-only image (~120 MB smaller).
+# Hardware-transcode userspace, loaded by the bundled ffmpeg at runtime:
+# libva + libva-drm (VAAPI on /dev/dri), Mesa VA drivers (AMD), and on amd64
+# Intel's iHD (Gen8+) and i965 (older) VA drivers plus the oneVPL QuickSync
+# runtime (Debian ships those for amd64 only). Keep in sync with
+# packaging/docker/Dockerfile.goreleaser.*.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates tzdata \
-      libva2 vainfo mesa-va-drivers \
+      libva2 libva-drm2 vainfo mesa-va-drivers \
       ocl-icd-libopencl1 \
+ && if [ "$TARGETARCH" = amd64 ]; then \
+      apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver libmfx-gen1.2; \
+    fi \
  && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd --system ether \
- && useradd --system --gid ether --home-dir /config --shell /usr/sbin/nologin ether \
+# Fixed UID/GID 999: what --system allocation gave every earlier image on
+# this base (the highest free system id), pinned so a future image can
+# still read an existing 0700 /config volume. Keep in sync with
+# packaging/docker/Dockerfile.goreleaser.*.
+RUN groupadd --system --gid 999 ether \
+ && useradd --system --uid 999 --gid ether --home-dir /config --shell /usr/sbin/nologin ether \
  && mkdir -p /config /cache /usr/lib/ether \
  && chown -R ether:ether /config /cache
 
@@ -59,6 +67,7 @@ COPY --from=build /out/ether /usr/lib/ether/ether
 # loudly otherwise — never ship an image that cannot transcode silently).
 COPY dist/ffmpeg/linux-${TARGETARCH}/ /usr/lib/ether/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/ether/
+COPY packaging/docker/entrypoint.sh /usr/lib/ether/entrypoint
 
 ENV ETHER_DATA_DIR=/config \
     XDG_CACHE_HOME=/cache
@@ -68,6 +77,7 @@ ENV ETHER_DATA_DIR=/config \
 EXPOSE 32400/tcp 32410-32414/udp 8096/tcp 7359/udp
 VOLUME ["/config", "/cache"]
 
-USER ether
+# Starts as root only to hand the volumes to PUID:PGID (default 999, the
+# ether account) and drop privileges; see packaging/docker/entrypoint.sh.
 WORKDIR /config
-ENTRYPOINT ["/usr/lib/ether/ether"]
+ENTRYPOINT ["/usr/lib/ether/entrypoint"]

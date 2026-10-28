@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/plex/model"
 )
 
 var errNotAvailable = core.ErrNotAvailable
@@ -278,8 +279,8 @@ func TestDirectPlayRange(t *testing.T) {
 	}
 	// Not available.
 	f.playback.failures[alien.Key] = core.ErrNotAvailable
-	if rec := f.get(t, "/library/parts/1000000000000348/1/file.mkv"); rec.Code != http.StatusNotFound {
-		t.Fatalf("unavailable part: %d", rec.Code)
+	if rec := f.get(t, "/library/parts/1000000000000348/1/file.mkv"); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("unavailable part: %d retry-after=%q", rec.Code, rec.Header().Get("Retry-After"))
 	}
 	f.playback.failures[alien.Key] = core.ErrStreamLimit
 	if rec := f.get(t, "/library/parts/1000000000000348/1/file.mkv"); rec.Code != http.StatusServiceUnavailable {
@@ -637,7 +638,7 @@ func TestEventSource(t *testing.T) {
 		t.Fatalf("first line %q", line)
 	}
 	go func() {
-		r, _ := http.NewRequest(http.MethodPut, ts.URL+"/:/scrobble?key=1000000000000550&identifier=com.plexapp.plugins.library", nil)
+		r, _ := http.NewRequest(http.MethodPut, ts.URL+"/:/scrobble?key="+bbE1.Key.String()+"&identifier=com.plexapp.plugins.library", nil)
 		r.Header.Set("X-Plex-Token", ownerToken)
 		if resp, err := http.DefaultClient.Do(r); err == nil {
 			resp.Body.Close()
@@ -650,8 +651,18 @@ func TestEventSource(t *testing.T) {
 		}
 		if strings.HasPrefix(line, "event: timeline") {
 			data, _ := br.ReadString('\n')
-			if !strings.Contains(data, `"itemID":"1000000000000550"`) {
-				t.Fatalf("data %q", data)
+			// PMS sends each entry bare on eventsource, not the websocket
+			// NotificationContainer, and names the episode's season and show.
+			var v struct {
+				TimelineEntry *model.TimelineEntry
+			}
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(strings.TrimSpace(data), "data: ")), &v); err != nil || v.TimelineEntry == nil {
+				t.Fatalf("data %q: %v", data, err)
+			}
+			e := v.TimelineEntry
+			if e.ItemID != bbE1.Key.String() || e.ParentItemID != bbE1.Key.Parent().String() ||
+				e.RootItemID != breakingBad.Key.String() || e.Type != 4 || e.State != 5 || e.Identifier != model.LibraryIdentifier {
+				t.Fatalf("timeline entry %+v", e)
 			}
 			return
 		}

@@ -15,7 +15,7 @@ const ACTIONS = [
   {
     title: "Add a debrid provider",
     href: "/sources/debrid",
-    keywords: "real-debrid torbox alldebrid premiumize torrent",
+    keywords: "real-debrid torbox alldebrid premiumize debrid-link debridlink offcloud torrent",
   },
   { title: "New collection", href: "/collections/new", keywords: "create" },
   { title: "New notification channel", href: "/notifications/channels", keywords: "alert" },

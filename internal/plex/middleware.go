@@ -308,6 +308,10 @@ func (s *Server) writeEmpty(w http.ResponseWriter, r *http.Request) {
 	s.write(w, r, &model.MediaContainer{})
 }
 
+// notAvailableRetryAfter is the Retry-After (seconds) sent with a 503 for a
+// title that cannot play right now.
+const notAvailableRetryAfter = "30"
+
 // writeErr maps a component error to an HTTP status.
 func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
@@ -317,8 +321,14 @@ func (s *Server) writeErr(w http.ResponseWriter, r *http.Request, err error) {
 		writeHTTPError(w, http.StatusUnauthorized)
 	case errors.Is(err, core.ErrStreamLimit):
 		writeHTTPError(w, http.StatusServiceUnavailable)
-	case errors.Is(err, core.ErrNotAvailable):
-		writeHTTPError(w, http.StatusNotFound)
+	case errors.Is(err, core.ErrNotAvailable), errors.Is(err, core.ErrDebridAuth):
+		// The title exists; nothing can play it right now (no release yet,
+		// nothing cached, no sources, a rejected debrid key). A 404 here
+		// reads as "this item is gone" and Plex apps show a bare "404
+		// error"; 503 says "temporarily", and the reason travels in the
+		// decision response the client fetched first.
+		w.Header().Set("Retry-After", notAvailableRetryAfter)
+		writeHTTPError(w, http.StatusServiceUnavailable)
 	case errors.Is(err, r.Context().Err()):
 		// client gone; nothing useful to write
 	default:

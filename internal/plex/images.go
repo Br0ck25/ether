@@ -330,6 +330,7 @@ func (s *Server) serveRemoteImage(w http.ResponseWriter, r *http.Request, u stri
 
 var metadataImageRe = regexp.MustCompile(`^/library/(?:metadata|collections)/(\d+)/(thumb|art|poster|banner|clearLogo|composite|squareArt)(?:/\d+)?$`)
 var playlistImageRe = regexp.MustCompile(`^/playlists/(\d+)/(composite|thumb|art)(?:/\d+)?$`)
+var discoveryImageRe = regexp.MustCompile(`^/library/metadata/(\d+)/discoveryPoster/[^/]+$`)
 
 // handlePhotoTranscode serves /photo/:/transcode. The url parameter may be
 // one of our own artwork paths (relative, or absolute on this server) or an
@@ -364,6 +365,16 @@ func (s *Server) handlePhotoTranscode(w http.ResponseWriter, r *http.Request) {
 	}
 	if !u.IsAbs() || s.isSelfHost(r, u.Host) {
 		path := u.Path
+		if m := discoveryImageRe.FindStringSubmatch(path); m != nil {
+			key, err := core.ParseRatingKey(m[1])
+			if err != nil {
+				writeHTTPError(w, http.StatusNotFound)
+				return
+			}
+			params := u.Query()
+			s.serveDiscoveryPoster(w, r, key, params.Get("kind"), params.Get("lang"))
+			return
+		}
 		if m := metadataImageRe.FindStringSubmatch(path); m != nil {
 			key, err := core.ParseRatingKey(m[1])
 			if err != nil {

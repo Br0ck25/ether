@@ -491,7 +491,7 @@ func (c *clusterState) onNotify(msg []byte) {
 	if !c.remote(msg, &ev) || ev.Type == "" {
 		return
 	}
-	c.s.notifier.deliver(notification{typ: ev.Type, data: []byte(ev.Data)}, ev.UserID)
+	c.s.notifier.deliver(newNotification(ev.Type, []byte(ev.Data)), ev.UserID)
 }
 
 // ---------------------------------------------------------------------------

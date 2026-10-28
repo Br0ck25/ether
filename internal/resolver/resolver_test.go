@@ -387,7 +387,7 @@ func TestExcludeAndUnreleased(t *testing.T) {
 	ctx := context.Background()
 	idx := &fakeIndexer{releases: movieReleases()}
 	svc := New(idx, fakeHealth{}, nil, testCfg(), Options{})
-	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps(), Exclude: []string{"uhd", "hd"}})
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: matrixTitle(), Client: webCaps(), Exclude: []string{"uhd", "hd"}})
 	if err != nil || res.Release.ID != "sd720" {
 		t.Fatalf("exclude res=%+v err=%v", res, err)
 	}

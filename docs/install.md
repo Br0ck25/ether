@@ -32,6 +32,10 @@ folder). Ether ships no content, providers or indexers; see
    The folder holds credentials, so it is readable only by SYSTEM and
    Administrators. Uninstalling keeps this data; delete the folder to
    purge.
+4. To upgrade, run a newer `EtherSetup-<version>.exe`. It waits for the
+   service to stop, replaces the program files and updates the existing
+   service in place, keeping its data directory (including one you set
+   with `ether service install --data-dir`).
 
 Manage the service with `ether.exe service start|stop|restart|status`
 from an elevated prompt, or from the tray menu.
@@ -46,6 +50,10 @@ from an elevated prompt, or from the tray menu.
    server (`Ether.app/Contents/Resources/ether`) while you are logged in.
 3. Data lives in `~/Library/Application Support/Ether`, logs in
    `~/Library/Application Support/Ether/logs`.
+4. To upgrade, quit the tray, replace **Ether** in Applications with the
+   new version and launch it. When the tray finds the server still
+   running the previous release, it restarts the server once onto the
+   new one.
 
 Requires macOS 13+. Signing and notarisation depend on the published package;
 check its release notes before installing.
@@ -59,7 +67,10 @@ sudo dnf install ./ether_<version>_linux_amd64.rpm    # Fedora/RHEL
 
 The package creates a dedicated `ether` system user, installs to
 `/usr/lib/ether`, enables and starts `ether.service` (systemd), and
-keeps data in `/var/lib/ether` and cache in `/var/cache/ether`.
+keeps data in `/var/lib/ether`. The segment cache defaults to
+`/var/lib/ether/cache`; the package also creates `/var/cache/ether`
+(writable by the service), which you can pick as the cache directory in
+the setup wizard or on the Cache page.
 `systemctl status ether` shows state; `journalctl -u ether` shows logs.
 Upgrades are just installing the new package (or a new Docker image) —
 Linux packages do not self-update.
@@ -91,9 +102,28 @@ with `-p 32400:32400` works for Plex Web and for claimed/remote
 connections, but LAN auto-discovery will not find the server.
 
 Volumes: `/config` (config, database, identity — back this up) and
-`/cache` (segment cache; budget is set in the web UI). VAAPI/QSV: pass
-`--device /dev/dri:/dev/dri`. NVENC: use the NVIDIA container toolkit
-flags shown in `docker-compose.example.yml`.
+`/cache` for the segment cache. The cache defaults to `/config/cache`
+until you select `/cache` as the cache directory in the setup wizard (or
+later on the Cache page), where its budget is set too.
+
+User and permissions: Ether runs as `PUID`:`PGID` (default 999:999, the
+image's `ether` account). Set them to the user that owns your folders, as
+for other NAS containers (e.g. `PUID=1026 PGID=100` on Synology, `PUID=99
+PGID=100` on Unraid). On start the container gives `/config` and `/cache`
+to that user when they belong to someone else (a one-time walk of their
+contents), adds the groups owning any passed-through `/dev/dri` nodes, and
+drops root before Ether starts. `UMASK` (e.g. `002`) is honoured too.
+`--user`/`user:` still works and runs Ether exactly as that user, in which
+case both volumes must already be writable by it.
+
+Hardware transcoding: for Intel QuickSync/VAAPI or AMD VAAPI pass
+`--device /dev/dri:/dev/dri`. The entrypoint adds the group that owns the
+render node (usually `0660 root:render`) automatically; with `--user` you
+add it yourself: `--group-add "$(stat -c %g /dev/dri/renderD128)"`. The image ships the
+VA-API loader, Mesa (AMD) and, on amd64, Intel's iHD/i965 drivers and the
+QuickSync runtime. The Transcoding page shows what the startup probe found.
+NVENC: use the NVIDIA container toolkit flags shown in
+`docker-compose.example.yml`.
 
 ## From a tarball/zip (any OS)
 

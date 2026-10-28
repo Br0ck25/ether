@@ -32,6 +32,37 @@ func TestParseInterleaved(t *testing.T) {
 	}
 }
 
+func TestDataDirExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  string
+		want bool
+	}{
+		{"defaulted", []string{"service", "install"}, "", false},
+		{"flag after subcommand", []string{"service", "install", "--data-dir", `D:\Ether`}, "", true},
+		{"flag before subcommand", []string{"--data-dir=/srv/ether", "service", "install"}, "", true},
+		{"environment", []string{"service", "install"}, "/srv/ether", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := flag.NewFlagSet("t", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+			fs.String("data-dir", "def", "")
+			_ = fs.Parse(tc.args)
+			parseInterleaved(fs, fs.Args())
+			getenv := func(k string) string {
+				if k == "ETHER_DATA_DIR" {
+					return tc.env
+				}
+				return ""
+			}
+			if got := dataDirExplicit(fs, getenv); got != tc.want {
+				t.Fatalf("dataDirExplicit = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLogLevelForOnlyReadsConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

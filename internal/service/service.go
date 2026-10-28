@@ -54,6 +54,11 @@ type Options struct {
 	WorkingDirectory string
 	// DataDir, when set, is exported to the service as ETHER_DATA_DIR.
 	DataDir string
+	// KeepInstalledDataDir makes Install, when the service is already
+	// registered, keep the registered ETHER_DATA_DIR instead of DataDir
+	// (an upgrade that did not ask for a data directory must not move
+	// the owner's). Fresh installs always use DataDir.
+	KeepInstalledDataDir bool
 	// EnvVars are extra environment variables for the service process.
 	EnvVars map[string]string
 	// UserName runs the service as this user (systemd/Windows). On Linux
@@ -203,6 +208,10 @@ type Service struct {
 	// secureData locks the data directory down before registration
 	// (Windows ACL; a no-op elsewhere).
 	secureData func(dir string) error
+	// updateInstalled rewrites an existing registration in place (Windows
+	// SCM); nil where that is not supported, in which case Install always
+	// does a fresh install.
+	updateInstalled func(cfg *ksvc.Config, keepDataDir bool) error
 }
 
 // New builds a Service around run. run may be nil for control-only use.
@@ -220,7 +229,7 @@ func New(run RunFunc, opts Options) (*Service, error) {
 	if err != nil {
 		return nil, fmt.Errorf("service: %w", err)
 	}
-	return &Service{opts: opts2, cfg: cfg, prog: prog, svc: ks, log: opts2.Logger, postInstall: applyPlatformRecovery, secureData: secureDataDir}, nil
+	return &Service{opts: opts2, cfg: cfg, prog: prog, svc: ks, log: opts2.Logger, postInstall: applyPlatformRecovery, secureData: secureDataDir, updateInstalled: updateInstalledPlatform}, nil
 }
 
 // newWithBackend is the test seam.
@@ -282,8 +291,40 @@ func (s *Service) runInteractive() error {
 	return err
 }
 
-// Install registers the service with the OS. May require elevation.
+// Install registers the service with the OS, or updates an existing
+// registration in place (see InstallOrUpdate). May require elevation.
 func (s *Service) Install() error {
+	_, err := s.InstallOrUpdate()
+	return err
+}
+
+// InstallOrUpdate registers the service or, when it is already registered
+// and the platform supports it (Windows), updates the registration in place
+// instead of deleting and recreating it: binary path, names, start type,
+// restart policy and environment. An update keeps the registered
+// ETHER_DATA_DIR, and leaves that directory's ACL alone, when
+// Options.KeepInstalledDataDir is set. A running service keeps running the
+// old binary until it is restarted. updated reports which path was taken.
+func (s *Service) InstallOrUpdate() (updated bool, err error) {
+	if s.updateInstalled != nil {
+		if _, err := s.svc.Status(); err == nil {
+			if !s.opts.KeepInstalledDataDir {
+				if err := s.lockDataDir(); err != nil {
+					return true, err
+				}
+			}
+			if err := s.updateInstalled(s.cfg, s.opts.KeepInstalledDataDir); err != nil {
+				return true, wrap("update", err)
+			}
+			s.applyRecovery()
+			return true, nil
+		}
+	}
+	return false, s.freshInstall()
+}
+
+// lockDataDir secures the data directory the registration points at.
+func (s *Service) lockDataDir() error {
 	// A service with its own account must keep access to the directory,
 	// so only the default LocalSystem service gets the restrictive ACL.
 	if s.secureData != nil && s.opts.UserName == "" {
@@ -291,17 +332,28 @@ func (s *Service) Install() error {
 			return fmt.Errorf("service: secure data directory: %w", err)
 		}
 	}
+	return nil
+}
+
+func (s *Service) freshInstall() error {
+	if err := s.lockDataDir(); err != nil {
+		return err
+	}
 	if err := s.svc.Install(); err != nil {
 		return wrap("install", err)
 	}
+	s.applyRecovery()
+	return nil
+}
+
+func (s *Service) applyRecovery() {
 	if s.postInstall != nil {
 		if err := s.postInstall(s.cfg.Name); err != nil {
-			// The service is registered with kardianos' single restart
-			// action; warn rather than fail the install.
+			// A fresh registration has kardianos' single restart action
+			// (an updated one its previous policy); warn rather than fail.
 			s.log.Warn("service installed but full restart policy not applied", "err", err)
 		}
 	}
-	return nil
 }
 
 // Uninstall removes the service registration. May require elevation.

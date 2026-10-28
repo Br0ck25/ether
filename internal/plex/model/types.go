@@ -65,6 +65,7 @@ type MediaContainer struct {
 	Meta           *Meta            `plex:"Meta,object"`
 	Directory      []Directory      `plex:"Directory"`
 	Metadata       []Metadata       `plex:"Metadata"`
+	Stream         []Stream         `plex:"Stream"` // subtitle search results
 	Hub            []Hub            `plex:"Hub"`
 	SearchResult   []SearchResult   `plex:"SearchResult"`
 	MediaProvider  []MediaProvider  `plex:"MediaProvider"`
@@ -486,6 +487,8 @@ type Stream struct {
 	Decision             string  `plex:"decision,omitempty"`
 	Location             string  `plex:"location,omitempty"`
 	External             *bool   `plex:"external"`
+	// Extra carries endpoint-specific attributes (subtitle search results).
+	Extra []Attr `plex:",attrs"`
 }
 
 // Hub is a row of items.

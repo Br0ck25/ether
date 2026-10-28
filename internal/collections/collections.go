@@ -605,7 +605,8 @@ func (s *Service) List(ctx context.Context, user *core.User, t core.MediaType) (
 		out = append(out, s.collectionFor(ctx, row, user, t, keys))
 	}
 	out = append(out, s.listEphemeral(user, t)...)
-	if t == "" || t == core.TypeMovie {
+	hideFranchises := s.catCfg != nil && s.catCfg().HideFranchiseCollections
+	if !hideFranchises && (t == "" || t == core.TypeMovie) {
 		fr, err := s.listFranchises(ctx, user)
 		if err == nil {
 			out = append(out, fr...)

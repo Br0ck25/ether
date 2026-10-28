@@ -21,7 +21,9 @@ func TestIntegrationSourceAudioLevelMatch(t *testing.T) {
 	t.Run("boost", func(t *testing.T) { testSourceAudioMatch(t, 0.75, 2.5) })
 }
 func testSourceAudioMatch(t *testing.T, replacementGain, wantGain float64) {
-	e := newRealEnv(t, WithoutHWDetection(), WithBuffering(time.Minute, 0, 0))
+	// The production budget (1.5s) is a latency guard; under the race
+	// detector on a busy CI runner the two real decodes can exceed it.
+	e := newRealEnv(t, WithoutHWDetection(), WithBuffering(time.Minute, 0, 0), WithAudioMatchBudget(20*time.Second))
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	for _, tc := range []struct {

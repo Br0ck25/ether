@@ -14,8 +14,9 @@ services:
       # ETHER_DATA_DIR: /config   # default in the image
     volumes:
       - ./config:/config          # config.json, database, identity
-      - ./cache:/cache            # segment cache (size it via the web UI)
-    # Intel/AMD VAAPI or QuickSync transcoding (optional):
+      - ./cache:/cache            # segment cache: select /cache in setup (default is /config/cache)
+    # Intel/AMD VAAPI or QuickSync transcoding (optional); the render
+    # node's group is added automatically:
     # devices:
     #   - /dev/dri:/dev/dri
     # NVIDIA NVENC (optional, needs nvidia-container-toolkit):

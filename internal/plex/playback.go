@@ -40,10 +40,27 @@ const (
 	msgNotAvailable = "Not available yet: no playable release of this title was found. Try again later."
 	msgStreamLimit  = "Stream limit reached: stop another stream on this server and try again."
 	msgPlayFailed   = "This title could not be played right now. Try again in a moment."
+	// Setup problems: the owner can fix these, and "not available" would
+	// send them looking for a missing release instead.
+	msgNoSources        = "Ether has no sources to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
+	msgNoTorrentSources = "Ether streams through your debrid account but has no torrent indexer to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
+	msgDebridAuth       = "Your debrid service rejected Ether's API key: check the account under Sources › Debrid."
+	msgNotCached        = "No cached release on your debrid account right now: every release found was uncached or blocked by the provider. Try again later."
+	msgDownloadQueued   = "Not cached yet: Ether sent it to your debrid service to download. Try again in a few minutes."
 )
 
 func playbackMessage(err error) string {
 	switch {
+	case errors.Is(err, core.ErrDebridAuth):
+		return msgDebridAuth
+	case errors.Is(err, core.ErrNoTorrentSources):
+		return msgNoTorrentSources
+	case errors.Is(err, core.ErrNoSources):
+		return msgNoSources
+	case errors.Is(err, core.ErrDownloadQueued):
+		return msgDownloadQueued
+	case onlyNotCached(err):
+		return msgNotCached
 	case errors.Is(err, core.ErrNotAvailable):
 		return msgNotAvailable
 	case errors.Is(err, core.ErrStreamLimit):
@@ -52,6 +69,38 @@ func playbackMessage(err error) string {
 		return "Indexers are temporarily at their limit. Ether will retry automatically; previously cached releases may still play."
 	}
 	return msgPlayFailed
+}
+
+// onlyNotCached reports whether every cause in err is core.ErrNotCached
+// (uncached, blocked or add-refused on the debrid accounts). The resolver
+// joins one error per failed candidate, so "every" means each joined branch;
+// errors.Is alone would match a single uncached torrent among Usenet
+// failures. A multi-%w error is treated the same way, which errs towards
+// the general message.
+func onlyNotCached(err error) bool {
+	for err != nil {
+		if err == core.ErrNotCached {
+			return true
+		}
+		switch x := err.(type) {
+		case interface{ Unwrap() []error }:
+			errs := x.Unwrap()
+			if len(errs) == 0 {
+				return false
+			}
+			for _, e := range errs {
+				if !onlyNotCached(e) {
+					return false
+				}
+			}
+			return true
+		case interface{ Unwrap() error }:
+			err = x.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // playRequest is a parsed decision/start request.
@@ -65,6 +114,9 @@ type playRequest struct {
 	audioSel  int // stream position, -1 = default
 	subSel    int // stream position, -1 = none/default
 	subSet    bool
+	// subStream is the subtitle picked by id (request or stored), to be
+	// found again in the session's MediaInfo (resolvePlaySubtitle).
+	subStream *core.StreamInfo
 	// mediaIndex is the "Play Version" position the viewer picked
 	// (0 = Auto / not sent); partReleaseID names the release directly
 	// when the request addressed a variant's Part key.
@@ -153,7 +205,7 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 		p.audioSel = sel.audio
 	}
 	if sel.subtitleSet {
-		p.subSel, p.subSet = sel.subtitle, true
+		p.subSel, p.subSet, p.subStream = sel.subtitle, true, sel.subtitleStream
 	}
 	if id, err := strconv.ParseInt(q.Get("audioStreamID"), 10, 64); err == nil {
 		if ref, ok := s.streams.lookup(id); ok && ref.key == key {
@@ -163,9 +215,10 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 	if v := q.Get("subtitleStreamID"); v != "" {
 		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
 			if id == 0 {
-				p.subSel, p.subSet = -1, true
-			} else if ref, ok := s.streams.lookup(id); ok && ref.key == key {
-				p.subSel, p.subSet = ref.index, true
+				p.subSel, p.subSet, p.subStream = -1, true, nil
+			} else if ref, ok := s.streams.lookup(id); ok && ref.key == key && ref.info.Type == "subtitle" {
+				info := ref.info
+				p.subSel, p.subSet, p.subStream = ref.index, true, &info
 			}
 		}
 	}
@@ -235,7 +288,8 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if err != nil {
 		return nil, nil, core.Decision{}, err
 	}
-	if !s.visibleTitle(ctx, pr.User, t) {
+	// Policy only: discovery evidence never blocks a play attempt.
+	if !s.playableTitle(ctx, pr.User, t) {
 		return nil, nil, core.Decision{}, core.ErrNotFound
 	}
 	if policy, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !policy.CanPlay(pr.User, p.caps.Remote, s.now()) {
@@ -254,6 +308,15 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if err != nil {
 		return t, nil, core.Decision{}, err
 	}
+	// Tracks cached or picked since the session's media was enriched (a
+	// subtitle search pick mid-playback) join its streams for this
+	// decision; text sidecars never enter the transcoder's input.
+	if info := s.withCachedSidecars(ctx, pr.User, t, ps.Info); len(info.Streams) != len(ps.Info.Streams) {
+		cp := *ps
+		cp.Info = info
+		ps = &cp
+	}
+	resolvePlaySubtitle(p, ps.Info)
 	s.applyStreamPreferences(ctx, pr, p, t, ps.Info)
 	applySelections(p, ps.Info, s.audioLanguages(pr.User))
 	dec := core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container, AudioStream: p.opts.AudioStream, SubtitleStream: p.opts.SubtitleStream}
@@ -301,10 +364,14 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if v := ps.Info.Video(); v != nil {
 		s.log.Debug("playback media decision", "key", p.key, "client", pr.ClientID, "device", pr.Device, "model", pr.Model, "platformVersion", pr.PlatformVersion, "video", v.Codec, "videoProfile", v.Profile, "height", v.Height, "bitDepth", v.BitDepth, "transfer", v.ColorTransfer, "dvProfile", v.DolbyVisionProfile, "dvLevel", v.DolbyVisionLevel, "dvCompatibility", v.DolbyVisionCompatibilityID, "kind", dec.Kind, "outputContainer", dec.Container, "videoCopy", dec.VideoCopy, "audioCopy", dec.AudioCopy, "hdrCap", p.caps.HDR10, "dvCap", p.caps.DolbyVision, "profileExtra", pr.ProfileExtra)
 	}
+	subtitle := -1
+	if p.subSet && p.subSel >= 0 && p.subSel < len(ps.Info.Streams) && ps.Info.Streams[p.subSel].Type == "subtitle" {
+		subtitle = p.subSel
+	}
 	s.transcodes.put(&transcodeEntry{
 		id: p.sessionID, playID: ps.ID, userID: pr.User.ID, clientID: pr.ClientID, key: p.key,
 		requested: requested,
-		decision:  dec, info: ps.Info, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
+		decision:  dec, info: ps.Info, subtitle: subtitle, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
 	})
 	return t, ps, dec, nil
 }
@@ -341,7 +408,11 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.log.Info("playback decision failed", "key", p.key, "user", pr.User.Username, "err", err)
+		s.log.Info("playback decision failed", "key", p.key, "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
+		// The client follows a failed decision with start.mpd/start.m3u8
+		// for the same session: answer it with this error, not a second
+		// full resolve that fails the same way.
+		s.transcodes.fail(p.sessionID, pr.User.ID, pr.ClientID, p.key, err, s.now())
 		s.write(w, r, s.decisionError(ctx, pr, t, err, p))
 		return
 	}
@@ -489,26 +560,50 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 	}
 
 	if dec.Kind == core.DecisionDirectPlay {
-		// Like PMS, list the video and the selected audio and subtitle
-		// streams only.
-		part.Decision = "directplay"
-		var kept []model.Stream
-		for _, st := range streams {
-			if st.StreamType != 1 && (st.Selected == nil || !*st.Selected) {
-				continue
-			}
-			st.Location = "direct"
-			kept = append(kept, st)
-		}
-		part.Stream = kept
-		return m
+		return directPlayMedia(m, streams)
 	}
+	applyTranscodeMedia(&m, dec, p.protocol)
+	var kept []model.Stream
+	for _, st := range streams {
+		ref, _ := s.streams.lookup(st.ID)
+		if shaped, keep := applyStreamDecision(st, ref.info, dec); keep {
+			kept = append(kept, shaped)
+		}
+	}
+	part.Stream = kept
+	if p.protocol == core.ProtocolDASH {
+		dashDecisionMedia(&m)
+	}
+	return m
+}
+
+// directPlayMedia preserves stream ordering and keeps selected tracks only.
+func directPlayMedia(m model.Media, streams []model.Stream) model.Media {
+	part := &m.Part[0]
+	// Like PMS, list the video and the selected audio and subtitle
+	// streams only.
+	part.Decision = "directplay"
+	var kept []model.Stream
+	for _, st := range streams {
+		if st.StreamType != 1 && (st.Selected == nil || !*st.Selected) {
+			continue
+		}
+		st.Location = "direct"
+		kept = append(kept, st)
+	}
+	part.Stream = kept
+	return m
+}
+
+// applyTranscodeMedia describes the output container and media dimensions.
+func applyTranscodeMedia(m *model.Media, dec core.Decision, protocol string) {
+	part := &m.Part[0]
 	// Describe the actual HLS segment container so native MDE does not see
 	// HEVC paired with the MPEG-TS container it cannot use.
 	m.SetTranscodeOrder()
 	part.SetTranscodeOrder()
 	m.AspectRatio = 0
-	m.Protocol = p.protocol
+	m.Protocol = protocol
 	m.Container = "mpegts"
 	if dec.Container == transcode.ContainerFMP4 {
 		m.Container = "mp4"
@@ -516,7 +611,7 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		m.Container = "mkv"
 	}
 	part.Container = m.Container
-	part.Protocol = p.protocol
+	part.Protocol = protocol
 	part.Decision = "transcode"
 	part.Key = ""
 	part.File = ""
@@ -545,85 +640,79 @@ func (s *Server) decisionMedia(t *core.Title, ps *core.PlaySession, dec core.Dec
 		m.AudioCodec = plexCodec(dec.AudioCodec)
 	}
 	part.Bitrate, part.Width, part.Height = m.Bitrate, m.Width, m.Height
-	var kept []model.Stream
-	for _, st := range streams {
-		ref, _ := s.streams.lookup(st.ID)
-		src := ref.info
-		st.Index = nil // segments carry their own stream layout
-		switch st.StreamType {
-		case 1:
-			st.Decision = "copy"
-			if dec.StripDolbyVision {
-				st.DOVIPresent, st.DOVIProfile, st.DOVILevel, st.DOVIVersion = nil, 0, 0, ""
-				st.DOVIBLCompatID, st.DOVIBLPresent, st.DOVIELPresent, st.DOVIRPUPresent = nil, nil, nil, nil
-				base := src
-				base.DolbyVision = false
-				st.DisplayTitle = videoDisplayTitle(base)
-				st.ExtendedDisplayTitle = st.DisplayTitle
+}
+
+// applyStreamDecision shapes one already-resolved stream without registry I/O.
+func applyStreamDecision(st model.Stream, src core.StreamInfo, dec core.Decision) (model.Stream, bool) {
+	st.Index = nil // segments carry their own stream layout
+	switch st.StreamType {
+	case 1:
+		st.Decision = "copy"
+		if dec.StripDolbyVision {
+			st.DOVIPresent, st.DOVIProfile, st.DOVILevel, st.DOVIVersion = nil, 0, 0, ""
+			st.DOVIBLCompatID, st.DOVIBLPresent, st.DOVIELPresent, st.DOVIRPUPresent = nil, nil, nil, nil
+			base := src
+			base.DolbyVision = false
+			st.DisplayTitle = videoDisplayTitle(base)
+			st.ExtendedDisplayTitle = st.DisplayTitle
+		}
+		if !dec.VideoCopy {
+			// A transcoded stream is new: PMS drops the source's
+			// profile and chroma details and reports 8-bit output.
+			st.Decision = "transcode"
+			if dec.VideoCodec != "" {
+				st.Codec = plexCodec(dec.VideoCodec)
 			}
-			if !dec.VideoCopy {
-				// A transcoded stream is new: PMS drops the source's
-				// profile and chroma details and reports 8-bit output.
-				st.Decision = "transcode"
-				if dec.VideoCodec != "" {
-					st.Codec = plexCodec(dec.VideoCodec)
-				}
-				if dec.MaxHeight > 0 && st.Height > dec.MaxHeight {
-					st.Width = st.Width * dec.MaxHeight / max(st.Height, 1)
-					st.Height = dec.MaxHeight
-				}
-				if dec.BitrateKbps > 0 {
-					st.Bitrate = dec.BitrateKbps
-				}
-				st.Profile, st.ChromaSubsampling, st.ScanType = "", "", ""
-				st.DOVIPresent, st.DOVIProfile = nil, 0
-				st.DOVIBLCompatID, st.DOVIBLPresent, st.DOVIELPresent, st.DOVIRPUPresent = nil, nil, nil, nil
-				st.DOVILevel, st.DOVIVersion, st.Level = 0, "", 0
-				if st.Codec == "h264" || dec.ToneMap {
-					st.BitDepth = 8
-				}
-				if dec.ToneMap {
-					st.ColorTrc, st.ColorPrimaries, st.ColorSpace = "bt709", "", ""
-				}
+			if dec.MaxHeight > 0 && st.Height > dec.MaxHeight {
+				st.Width = st.Width * dec.MaxHeight / max(st.Height, 1)
+				st.Height = dec.MaxHeight
 			}
-			st.Location = "segments-av"
-		case 2:
-			if st.Selected == nil || !*st.Selected {
-				continue
+			if dec.BitrateKbps > 0 {
+				st.Bitrate = dec.BitrateKbps
 			}
-			st.Decision = "copy"
-			if !dec.AudioCopy {
-				st.Decision = "transcode"
-				if dec.AudioCodec != "" {
-					st.Codec = plexCodec(dec.AudioCodec)
-				}
-				// Source-only details go, as in PMS's transcoded audio.
-				st.Profile, st.AudioChannelLayout, st.SamplingRate, st.Title = "", "", 0, ""
+			st.Profile, st.ChromaSubsampling, st.ScanType = "", "", ""
+			st.DOVIPresent, st.DOVIProfile = nil, 0
+			st.DOVIBLCompatID, st.DOVIBLPresent, st.DOVIELPresent, st.DOVIRPUPresent = nil, nil, nil, nil
+			st.DOVILevel, st.DOVIVersion, st.Level = 0, "", 0
+			if st.Codec == "h264" || dec.ToneMap {
+				st.BitDepth = 8
 			}
-			st.Location = "segments-av"
-		case 3:
-			if st.Selected == nil || !*st.Selected {
-				continue
-			}
-			switch {
-			case dec.BurnSubtitles:
-				st.Decision = "burn"
-				st.Location = "segments-video"
-			case src.External:
-				st.Decision = "copy"
-				st.Location = "sidecar"
-			default:
-				st.Decision = "copy"
-				st.Location = "segments-subtitle"
+			if dec.ToneMap {
+				st.ColorTrc, st.ColorPrimaries, st.ColorSpace = "bt709", "", ""
 			}
 		}
-		kept = append(kept, st)
+		st.Location = "segments-av"
+	case 2:
+		if st.Selected == nil || !*st.Selected {
+			return st, false
+		}
+		st.Decision = "copy"
+		if !dec.AudioCopy {
+			st.Decision = "transcode"
+			if dec.AudioCodec != "" {
+				st.Codec = plexCodec(dec.AudioCodec)
+			}
+			// Source-only details go, as in PMS's transcoded audio.
+			st.Profile, st.AudioChannelLayout, st.SamplingRate, st.Title = "", "", 0, ""
+		}
+		st.Location = "segments-av"
+	case 3:
+		if st.Selected == nil || !*st.Selected {
+			return st, false
+		}
+		switch {
+		case dec.BurnSubtitles:
+			st.Decision = "burn"
+			st.Location = "segments-video"
+		case src.External:
+			st.Decision = "copy"
+			st.Location = "sidecar"
+		default:
+			st.Decision = "copy"
+			st.Location = "segments-subtitle"
+		}
 	}
-	part.Stream = kept
-	if p.protocol == core.ProtocolDASH {
-		dashDecisionMedia(&m)
-	}
-	return m
+	return st, true
 }
 
 // handleStartHLS is /video/:/transcode/universal/start.m3u8.
@@ -649,6 +738,11 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusForbidden)
 		return
 	}
+	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
+		s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err, "decision", "remembered")
+		s.writeErr(w, r, err)
+		return
+	}
 	entry, ok := s.transcodes.get(p.sessionID)
 	var ps *core.PlaySession
 	if ok && entry.key == p.key && entry.userID == pr.User.ID {
@@ -659,7 +753,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		// preceding decision request. Reapply the normal policy and decision
 		// path before deciding whether a running encoder can be reused.
 		if _, ps, _, err = s.prepare(ctx, pr, &p); err != nil {
-			s.log.Info("start playback failed", "key", p.key, "err", err)
+			s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err)
 			s.writeErr(w, r, err)
 			return
 		}
@@ -670,6 +764,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		// An MDE client got "direct play OK" from the decision, judged the
 		// media unplayable itself and now asks for a stream: decide again
 		// without direct play so a needed transcode isn't a plain remux.
+		resolvePlaySubtitle(&p, ps.Info)
 		applySelections(&p, ps.Info, s.audioLanguages(pr.User))
 		dec = s.d.Transcoder.Decide(ps.Info, p.caps, p.opts)
 	}
@@ -972,7 +1067,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title, titleErr := s.d.Catalog.Get(ctx, key)
-	if titleErr != nil || !s.visibleTitle(ctx, pr.User, title) {
+	if titleErr != nil || !s.playableTitle(ctx, pr.User, title) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
@@ -997,7 +1092,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
 		ps, err = s.prepareForRelease(ctx, pr.User, key, caps, releaseID)
 		if err != nil {
-			s.log.Info("direct play failed", "key", key, "err", err)
+			s.log.Info("direct play failed", "key", key, "reason", playbackMessage(err), "err", err)
 			s.writeErr(w, r, err)
 			return
 		}
@@ -1032,9 +1127,10 @@ func (s *Server) handlePartSelect(w http.ResponseWriter, r *http.Request) {
 		if v := q.Get("subtitleStreamID"); v != "" {
 			if sid, err := strconv.ParseInt(v, 10, 64); err == nil {
 				if sid == 0 {
-					sel.subtitle, sel.subtitleSet = -1, true
+					sel.subtitle, sel.subtitleSet, sel.subtitleStream = -1, true, nil
 				} else if ref, ok := s.streams.lookup(sid); ok && int64(ref.key) == id && ref.info.Type == "subtitle" {
-					sel.subtitle, sel.subtitleSet = ref.index, true
+					info := ref.info
+					sel.subtitle, sel.subtitleSet, sel.subtitleStream = ref.index, true, &info
 				}
 			}
 		}
@@ -1051,7 +1147,9 @@ var subtitleContentTypes = map[string]string{
 }
 
 // handleStream serves external (sidecar) subtitle streams:
-// /library/streams/{id}[.ext].
+// /library/streams/{id}[.ext][?format=srt|vtt|webvtt]. Cached OpenSubtitles
+// tracks are UTF-8 (any encoding= parameter is satisfied) and served in
+// either format; other sidecars are served as stored.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	raw := chi.URLParam(r, "stream")
 	raw, _, _ = strings.Cut(raw, ".")
@@ -1080,9 +1178,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, http.StatusNotFound)
 			return
 		}
-		format := "srt"
-		if strings.HasSuffix(chi.URLParam(r, "stream"), ".vtt") {
-			format = "vtt"
+		format := subtitleFormat(r.URL.Query().Get("format"))
+		if _, ext, ok := strings.Cut(chi.URLParam(r, "stream"), "."); ok {
+			format = subtitleFormat(ext)
 		}
 		reader, actual, err := s.d.Subtitles.OpenFormat(src, format)
 		if err != nil {

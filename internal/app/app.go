@@ -63,6 +63,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -196,6 +197,21 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	}
 	if warning := config.DataDirWarning(opts.DataDir); warning != "" {
 		a.log.Warn(warning)
+	}
+	// ETHER_PORT sets the HTTP port before the UI is reachable, e.g. to run
+	// next to a Plex Media Server already using 32400 with host networking.
+	// It is saved, so plex.tv, LAN discovery and port mapping all agree.
+	if v := strings.TrimSpace(os.Getenv("ETHER_PORT")); v != "" {
+		port, perr := strconv.Atoi(v)
+		if perr != nil || port < 1 || port > 65535 {
+			return nil, fmt.Errorf("ETHER_PORT=%q: want a port between 1 and 65535", v)
+		}
+		if a.cfg.Get().Server.Port != port {
+			if err := a.cfg.Update(func(c *config.Config) error { c.Server.Port = port; return nil }); err != nil {
+				return nil, fmt.Errorf("ETHER_PORT: %w", err)
+			}
+			a.log.Info("server port set from ETHER_PORT", "port", port)
+		}
 	}
 	cfg := a.cfg.Get()
 	if opts.Spike {
@@ -414,11 +430,11 @@ func (a *App) Run(ctx context.Context) error {
 	background.start(func() { a.runEgress(ctx) })
 	background.start(func() { a.runCredentialUpgrade(ctx) })
 
-	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
-	ln, err := net.Listen("tcp", addr)
+	ln, err := a.listen(cfg)
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", addr, err)
+		return err
 	}
+	cfg = a.cfg.Get() // the port may have moved off a busy default
 	dl := newDualListener(ln, func() *tls.Config { return a.certs.TLSConfig() })
 	srv := &http.Server{
 		Handler:           a.handler,
@@ -426,7 +442,7 @@ func (a *App) Run(ctx context.Context) error {
 		IdleTimeout:       120 * time.Second,
 		ErrorLog:          slog.NewLogLogger(a.log.Handler(), slog.LevelDebug),
 	}
-	a.log.Info("Ether listening", "addr", addr, "ui", fmt.Sprintf("http://localhost:%d/ether/", cfg.Server.Port),
+	a.log.Info("Ether listening", "addr", ln.Addr().String(), "ui", fmt.Sprintf("http://localhost:%d/ether/", cfg.Server.Port),
 		"version", a.opts.Version, "spike", cfg.Spike.Enabled)
 
 	errc := make(chan error, 1)
@@ -528,4 +544,47 @@ func appendUnique(xs []string, more ...string) []string {
 		}
 	}
 	return xs
+}
+
+// fallbackPorts are tried, in order, when the default port 32400 is already
+// taken, normally by a Plex Media Server on the same machine.
+var fallbackPorts = []int{32450, 32451, 32452, 32453, 32454, 32455, 32456, 32457, 32458, 32459}
+
+// listen binds the configured port. When that is the default 32400 and it
+// is in use, Ether moves to the first free fallback port and saves it, so
+// it runs next to Plex out of the box; plex.tv publishes the port, so Plex
+// apps follow. A port the owner chose (or ETHER_PORT) is never moved.
+func (a *App) listen(cfg config.Config) (net.Listener, error) {
+	addr := net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(cfg.Server.Port))
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		return ln, nil
+	}
+	if cfg.Server.Port != config.DefaultPort || !addrInUse(err) || os.Getenv("ETHER_PORT") != "" {
+		return nil, fmt.Errorf("listen %s: %w", addr, err)
+	}
+	for _, port := range fallbackPorts {
+		alt, aerr := net.Listen("tcp", net.JoinHostPort(cfg.Server.BindAddress, strconv.Itoa(port)))
+		if aerr != nil {
+			continue
+		}
+		if uerr := a.cfg.Update(func(c *config.Config) error { c.Server.Port = port; return nil }); uerr != nil {
+			alt.Close()
+			return nil, fmt.Errorf("save port %d: %w", port, uerr)
+		}
+		a.log.Warn("port 32400 is in use (usually by Plex Media Server); Ether moved to another port and saved it",
+			"port", port, "ui", fmt.Sprintf("http://localhost:%d/ether/", port))
+		return alt, nil
+	}
+	return nil, fmt.Errorf("listen %s: %w (and ports %d-%d are also in use)", addr, err, fallbackPorts[0], fallbackPorts[len(fallbackPorts)-1])
+}
+
+// addrInUse reports a bind failure because the port is taken: EADDRINUSE,
+// or WSAEADDRINUSE (10048), which Windows reports instead.
+func addrInUse(err error) bool {
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+	return errno == syscall.EADDRINUSE || errno == 10048
 }

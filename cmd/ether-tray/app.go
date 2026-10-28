@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -63,6 +64,10 @@ type app struct {
 	autostart *Autostart
 	openURL   func(string) error
 	log       *slog.Logger
+	version   string // empty: updater.Version (tests override)
+	// staleChecked is set once the restart-after-upgrade decision has been
+	// made for this tray start (see restartStaleServer).
+	staleChecked atomic.Bool
 }
 
 func newApp(log *slog.Logger) *app {
@@ -173,6 +178,17 @@ func serverExecutable() string {
 
 func (a *app) webUIURL() string { return a.baseURL + "/ether/" }
 
+// openUI opens the web UI at the server's configured port and returns the
+// process exit code (`ether-tray --open`, used by installer shortcuts so
+// they follow the port the server actually chose).
+func (a *app) openUI() int {
+	if err := OpenBrowser(a.webUIURL()); err != nil {
+		a.log.Error("ether-tray: open web UI", "url", a.webUIURL(), "err", err)
+		return 1
+	}
+	return 0
+}
+
 func (a *app) openEther() {
 	if err := a.openURL(a.webUIURL()); err != nil {
 		a.log.Warn("tray: open Ether UI", "err", err)
@@ -186,8 +202,15 @@ func (a *app) openPlex() {
 }
 
 // pollOnce fetches status, tolerating an absent server (Running=false).
+// The first status that names the server's release also settles whether
+// the server must be restarted onto the binary this install ships.
 func (a *app) pollOnce(ctx context.Context) Status {
 	st, _ := a.status.Poll(ctx)
+	if restarted, err := a.restartStaleServer(st); err != nil && a.log != nil {
+		a.log.Warn("tray: restart server after upgrade", "err", err)
+	} else if restarted {
+		st, _ = a.status.Poll(ctx)
+	}
 	return st
 }
 

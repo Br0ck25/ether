@@ -156,7 +156,7 @@ func TestCustomFormatScoresAndMinimumAppearInTrace(t *testing.T) {
 	cfg.Resolver.MinCustomFormatScore = &minimum
 	svc := New(&fakeIndexer{releases: movieReleases()}, nil, nil, cfg, Options{})
 	defer svc.Close()
-	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: appleTVCaps()})
+	res, err := svc.Resolve(context.Background(), core.ResolveRequest{Title: matrixTitle(), Client: webCaps()})
 	if err != nil || res.Release.ID != "sd720" {
 		t.Fatalf("custom score %+v %v", res, err)
 	}

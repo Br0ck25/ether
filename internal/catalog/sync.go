@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -112,7 +113,13 @@ func (c *Catalog) Run(ctx context.Context) {
 		if full.Remaining(c.now()) == 0 {
 			err := c.Sync(ctx)
 			delay := c.refreshInterval()
-			if err != nil && ctx.Err() == nil {
+			switch {
+			case err == nil || ctx.Err() != nil:
+			case errors.Is(err, tmdb.ErrNoKey):
+				// A fresh install before setup: expected, not an error.
+				c.log.Info("catalog: waiting for a TMDB API key (add it in setup or Integrations)")
+				delay = min(delay, 5*time.Minute)
+			default:
 				c.log.Error("catalog: refresh sync", "err", err)
 				delay = min(delay, 5*time.Minute)
 			}
@@ -527,12 +534,17 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 	}
 	if len(links) > 0 {
 		tx, err := c.db.BeginTx(ctx, nil)
-		if err == nil {
+		if err != nil {
+			c.log.Debug("catalog: begin person credits", "person", personID, "err", err)
+		} else {
+			defer tx.Rollback() // after Commit this returns ErrTxDone, ignorable
 			for _, l := range links {
 				_, _ = tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
 					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb)
 			}
-			if tx.Commit() == nil {
+			if err := tx.Commit(); err != nil {
+				c.log.Debug("catalog: commit person credits", "person", personID, "err", err)
+			} else {
 				c.writeGen.Add(1)
 			}
 		}

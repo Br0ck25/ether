@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
+	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/remote"
 )
 
@@ -63,6 +64,7 @@ type Status struct {
 	ResourceConnections []ResourceConnection `json:"resourceConnections,omitempty"`
 	PublicAddress       string               `json:"publicAddress,omitempty"` // as plex.tv sees us
 	PlexPass            bool                 `json:"plexPass"`                // owner subscription active
+	OwnerFeatures       []string             `json:"ownerFeatures"`           // granted by plex.tv
 
 	RemoteAccess bool                 `json:"remoteAccess"`
 	Reachability *remote.Reachability `json:"reachability,omitempty"`
@@ -79,6 +81,10 @@ type Status struct {
 	Friends         int       `json:"friends"`
 	LastFriendSync  time.Time `json:"lastFriendSync,omitempty"`
 	FriendSyncError string    `json:"friendSyncError,omitempty"`
+	// TokenRejected reports that plex.tv answered the server token with
+	// 401/403 (publishing or friend sync): typically the device record
+	// still belongs to an account the server was claimed by before.
+	TokenRejected bool `json:"tokenRejected,omitempty"`
 }
 
 // RegistrarOptions configures a Registrar. Only Config is required; nil
@@ -104,6 +110,7 @@ type RegistrarOptions struct {
 	MappingInterval      time.Duration // UPnP/NAT-PMP renew check (5m)
 	CertInterval         time.Duration // certificate expiry check (1w, observed when not near expiry)
 	ReachabilityInterval time.Duration // remote self-test (1h, observed)
+	OwnerInterval        time.Duration // owner account / Plex Pass re-check (6h)
 
 	// PeerURIs, when set (clustered servers), returns the other live
 	// nodes' connection URIs in publication order. PublishNow appends them,
@@ -157,7 +164,14 @@ type Registrar struct {
 	libraries     []LibrarySection
 
 	presence *Presence
+
+	// claimedToken is the server token while claimed; a switch to
+	// unclaimed releases it (releaseClaim).
+	claimedToken string
 }
+
+// rejectedRetry spaces out friend syncs while plex.tv rejects the token.
+const rejectedRetry = 15 * time.Minute
 
 const (
 	taskAddress = "address"
@@ -166,6 +180,7 @@ const (
 	taskMapping = "mapping"
 	taskCert    = "cert"
 	taskReach   = "reach"
+	taskOwner   = "owner"
 )
 
 // NewRegistrar validates options and returns a registrar; call Start.
@@ -191,6 +206,7 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 	def(&o.MappingInterval, 5*time.Minute)
 	def(&o.CertInterval, 7*24*time.Hour)
 	def(&o.ReachabilityInterval, time.Hour)
+	def(&o.OwnerInterval, 6*time.Hour)
 	if o.Version == "" {
 		o.Version = DefaultServerVersion
 	}
@@ -221,6 +237,12 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 		wake:    make(chan struct{}, 1),
 		mapWake: make(chan struct{}, 1),
 		next:    map[string]time.Time{},
+	}
+	if c := o.Config.Get(); c.Plex.Claimed {
+		r.claimedToken = c.Plex.Token
+	}
+	if sub, ok := o.Config.(interface{ Subscribe(func(config.Config)) }); ok {
+		sub.Subscribe(r.onConfig)
 	}
 	r.presence = NewPresence(PresenceOptions{
 		Client: client,
@@ -376,6 +398,7 @@ func (r *Registrar) Status() Status {
 	st.Connections = slices.Clone(st.Connections)
 	st.PublishedURIs = slices.Clone(st.PublishedURIs)
 	st.ResourceConnections = slices.Clone(st.ResourceConnections)
+	st.OwnerFeatures = slices.Clone(st.OwnerFeatures)
 	st.UPnP = r.o.Mapper.Status()
 	if r.o.Certs != nil {
 		st.Cert = r.o.Certs.Info()
@@ -466,6 +489,14 @@ func (r *Registrar) runDue(ctx context.Context) {
 	}
 	if r.due(taskFriends, r.o.FriendSyncInterval) {
 		_ = r.SyncFriendsNow(ctx)
+	}
+	// Plex Pass bought, renewed or lapsed while running: Live TV and the
+	// owner features clients see follow without a restart.
+	if r.due(taskOwner, r.o.OwnerInterval) {
+		if err := r.RefreshOwner(ctx); err != nil && ctx.Err() == nil {
+			r.log.Debug("plex.tv owner refresh failed", "err", err)
+			r.schedule(taskOwner, r.o.Now().Add(10*time.Minute))
+		}
 	}
 	if cfg.Plex.RemoteAccess && r.due(taskReach, r.o.ReachabilityInterval) {
 		r.CheckReachability(ctx)
@@ -756,12 +787,14 @@ func (r *Registrar) PublishNow(ctx context.Context) error {
 	r.st.LastPublish = now
 	if err != nil {
 		r.st.LastPublishError = err.Error()
+		r.st.TokenRejected = errors.Is(err, core.ErrUnauthorized)
 		r.mu.Unlock()
 		r.log.Warn("publish connections failed", "err", err)
 		return err
 	}
 	r.st.PublishedURIs = uris
 	r.st.LastPublishError = ""
+	r.st.TokenRejected = false
 	r.pubFail = 0
 	if r.pubGeneration == generation {
 		r.forcePub = false
@@ -839,6 +872,12 @@ func (r *Registrar) SyncFriendsNow(ctx context.Context) error {
 	r.st.LastFriendSync = r.o.Now()
 	if err != nil {
 		r.st.FriendSyncError = err.Error()
+		if errors.Is(err, core.ErrUnauthorized) {
+			// A rejected token stays rejected until the owner re-claims:
+			// retry rarely instead of every minute.
+			r.st.TokenRejected = true
+			r.next[taskFriends] = r.o.Now().Add(rejectedRetry)
+		}
 		r.log.Warn("friend sync failed", "err", err)
 		return err
 	}
@@ -981,33 +1020,112 @@ func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, 
 		}
 	}
 	r.mu.Lock()
+	r.claimedToken = res.ServerToken
+	r.st.TokenRejected = false
 	r.st.PlexPass = res.Owner.Subscription.Active
+	r.st.OwnerFeatures = ownerFeatures(nil, res.Owner.Subscription.Features)
 	r.next[taskFriends] = time.Time{}
 	r.next[taskCert] = time.Time{}
+	// The claim reads the account's subscription flag; the owner refresh
+	// also consults the subscriptions list (lifetime passes), so run it on
+	// the next tick.
+	r.next[taskOwner] = time.Time{}
 	r.mu.Unlock()
+	featureCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	features, featureErr := r.client.Features(featureCtx, res.ServerToken)
+	cancel()
+	if featureErr != nil {
+		// Claim succeeded. Keep the legacy names and let the immediate owner
+		// refresh retry this auxiliary request instead of undoing the claim.
+		r.log.Warn("plex.tv owner features unavailable after claim", "err", featureErr)
+	} else {
+		r.mu.Lock()
+		// The owner may have unclaimed or switched accounts during the fetch.
+		if r.claimedToken == res.ServerToken {
+			r.st.OwnerFeatures = ownerFeatures(features, res.Owner.Subscription.Features)
+		}
+		r.mu.Unlock()
+	}
 	r.refreshConfigStatus(r.o.Config.Get())
 	r.log.Info("server claimed", "owner", res.Owner.Username, "method", res.Method)
 	r.Trigger()
 	return res, nil
 }
 
-// Unclaim forgets the server token (sign out). The plex.tv device record
-// stays until the owner removes it from their account.
+// Unclaim signs the server out of plex.tv: its device record is removed
+// from the owner's account (best effort), so another account can claim it,
+// and the server token is forgotten.
 func (r *Registrar) Unclaim(ctx context.Context) error {
+	token := r.o.Config.Get().Plex.Token
+	r.mu.Lock()
+	r.claimedToken = "" // released here, not again by onConfig
+	r.mu.Unlock()
 	if err := r.o.Config.Update(func(c *config.Config) error {
-		c.Plex.Token = ""
 		c.Plex.Claimed = false
 		return nil
 	}); err != nil {
 		return err
 	}
+	r.releaseClaim(ctx, token)
+	return nil
+}
+
+// onConfig notices the owner switching Claimed off (Settings) and releases
+// the claim. Without the release the old account keeps the device record
+// and a later claim by another account is refused by plex.tv with 401s.
+func (r *Registrar) onConfig(c config.Config) {
+	r.mu.Lock()
+	prev := r.claimedToken
+	if c.Plex.Claimed {
+		r.claimedToken = c.Plex.Token
+		r.mu.Unlock()
+		return
+	}
+	r.claimedToken = ""
+	r.mu.Unlock()
+	if prev != "" {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			r.releaseClaim(ctx, prev)
+		}()
+	}
+}
+
+// releaseClaim removes this server's device record from the account behind
+// token, then forgets token if it is still the stored one (a sign-in that
+// happened meanwhile keeps its new token) and clears the plex.tv status.
+func (r *Registrar) releaseClaim(ctx context.Context, token string) {
+	r.mu.Lock()
+	r.claimedToken = ""
+	r.mu.Unlock()
+	if token != "" {
+		switch removed, err := r.client.RemoveDevice(ctx, token); {
+		case err != nil:
+			r.log.Warn("could not remove this server from the previous Plex account; remove it under Authorized Devices on plex.tv before claiming with another account", "err", err)
+		case removed:
+			r.log.Info("server removed from the previous Plex account")
+		}
+	}
+	if err := r.o.Config.Update(func(c *config.Config) error {
+		if !c.Plex.Claimed && c.Plex.Token == token {
+			c.Plex.Token = ""
+		}
+		return nil
+	}); err != nil {
+		r.log.Warn("forget server token", "err", err)
+	}
 	r.mu.Lock()
 	r.st.Listed = false
+	r.st.PlexPass = false
+	r.st.OwnerFeatures = nil
 	r.st.PublishedURIs = nil
 	r.st.ResourceConnections = nil
+	r.st.LastPublishError = ""
+	r.st.FriendSyncError = ""
+	r.st.TokenRejected = false
 	r.mu.Unlock()
 	r.refreshConfigStatus(r.o.Config.Get())
-	return nil
 }
 
 // RefreshOwner re-reads the owner's account (Plex Pass state) and passes it
@@ -1019,6 +1137,12 @@ func (r *Registrar) RefreshOwner(ctx context.Context) error {
 	}
 	acct, err := r.client.User(ctx, cfg.Plex.Token)
 	if err != nil {
+		return err
+	}
+	features, err := r.client.Features(ctx, cfg.Plex.Token)
+	if err != nil {
+		// An incomplete refresh must not erase a previously verified UUID
+		// snapshot. runDue retries in ten minutes instead of six hours.
 		return err
 	}
 	pass := acct.Subscription.Active
@@ -1033,7 +1157,13 @@ func (r *Registrar) RefreshOwner(ctx context.Context) error {
 		}
 	}
 	r.mu.Lock()
+	if r.claimedToken != cfg.Plex.Token {
+		r.mu.Unlock()
+		return errors.New("plextv: owner changed during refresh")
+	}
 	r.st.PlexPass = pass
+	r.st.OwnerFeatures = ownerFeatures(features, acct.Subscription.Features)
+	r.next[taskOwner] = r.o.Now().Add(r.o.OwnerInterval)
 	r.mu.Unlock()
 	if r.o.Users != nil {
 		return r.o.Users.SetOwner(ctx, *acct, cfg.Plex.Token)

@@ -130,6 +130,10 @@ type Deps struct {
 	CatalogStatus   StatusFunc // "catalog" — catalogue sync/stats
 	RemoteStatus    StatusFunc // "remote" — remote access
 	HWAccelStatus   StatusFunc // "hwaccel" — transcoding hardware
+
+	// CacheRestartRequired reports whether the saved folder/storage differs
+	// from the running cache, including changes made during initial setup.
+	CacheRestartRequired func() bool
 	// SystemLoad is this machine's recent CPU, memory, network and GPU
 	// load, served on its own route because only the Overview polls it.
 	SystemLoad StatusFunc

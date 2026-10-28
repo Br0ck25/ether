@@ -78,7 +78,12 @@ function debridOn(v: unknown): boolean {
   return isPlainObject(v) && v.enabled === true;
 }
 
-export function indexersHealth(v: unknown): HealthItem {
+/**
+ * Indexer budgets from the "indexers" status section. With the "debrid"
+ * section it also warns when debrid is on but no enabled indexer returns
+ * torrents: every play would then fail with nothing to stream.
+ */
+export function indexersHealth(v: unknown, debrid?: unknown): HealthItem {
   const base = {
     id: "indexers" as const,
     label: "Indexers",
@@ -90,6 +95,15 @@ export function indexersHealth(v: unknown): HealthItem {
   const rows = v.filter(isPlainObject);
   if (rows.length === 0)
     return { ...base, level: "error", summary: "No indexers configured", details: [] };
+  const enabled = rows.filter((r) => r.enabled !== false);
+  if (enabled.length === 0)
+    return {
+      ...base,
+      level: "warn",
+      summary: "No indexers enabled",
+      details: ["Ether has nothing to search until an indexer is enabled."],
+    };
+  const noTorrent = debridOn(debrid) && !enabled.some((r) => r.torrent === true);
   let exhausted = 0;
   let remaining = 0;
   let limited = 0;
@@ -112,12 +126,21 @@ export function indexersHealth(v: unknown): HealthItem {
   let level: HealthLevel = "ok";
   if (exhausted > 0 && exhausted === rows.length) level = "error";
   else if (exhausted > 0) level = "warn";
-  const summary =
+  let summary =
     limited === 0
       ? `${plural(rows.length, "indexer")} · no daily limits`
       : exhausted > 0
         ? `${exhausted} of ${plural(rows.length, "indexer")} out of searches today`
         : `${plural(rows.length, "indexer")} · ${remaining} searches left today`;
+  if (noTorrent) {
+    details.unshift(
+      "Debrid streams torrents, but no enabled indexer returns them. Add a Stremio addon or Torznab indexer.",
+    );
+    if (level !== "error") {
+      level = "warn";
+      summary = "No torrent indexer for debrid";
+    }
+  }
   return { ...base, level, summary, details, fill: limit > 0 ? used / limit : undefined };
 }
 
@@ -203,6 +226,30 @@ export function remoteHealth(v: unknown): HealthItem {
   if (str(v.publicAddress)) details.push(`Public address ${str(v.publicAddress)}`);
   details.push(presence.connected ? "Connected to plex.tv" : "Not connected to plex.tv");
   if (v.listed === false) details.push("Not yet published to plex.tv");
+  if (v.tokenRejected === true)
+    return {
+      ...base,
+      level: "error",
+      summary: "plex.tv rejects this server's sign-in",
+      details: [
+        ...details,
+        "If this server was claimed by another Plex account before, remove it from that account under Authorized Devices on plex.tv, then sign out and claim it again here.",
+      ],
+    };
+  if (str(v.lastPublishError))
+    return {
+      ...base,
+      level: "warn",
+      summary: "Publishing to plex.tv is failing",
+      details: [...details, str(v.lastPublishError)],
+    };
+  if (str(v.friendSyncError))
+    return {
+      ...base,
+      level: "warn",
+      summary: "Shared users are not syncing",
+      details: [...details, str(v.friendSyncError)],
+    };
   if (presence.connected === false)
     return { ...base, level: "warn", summary: "plex.tv connection lost", details };
   if (v.remoteAccess === true) {
@@ -255,7 +302,7 @@ export function computeHealth(
   const s = sections ?? {};
   return [
     usenetHealth(s.providers, s.debrid),
-    indexersHealth(s.indexers),
+    indexersHealth(s.indexers, s.debrid),
     cacheHealth(s.cache),
     catalogHealth(s.catalog, now),
     remoteHealth(s.remote),

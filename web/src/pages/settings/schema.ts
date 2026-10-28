@@ -174,7 +174,7 @@ export const PLEX: FieldGroup[] = [
         key: "claimed",
         label: "Claimed",
         kind: "bool",
-        help: "Set by the setup wizard when the server is linked to your Plex account.",
+        help: "Set by the setup wizard when the server is linked to your Plex account. Turning it off signs the server out of Plex: it is removed from the account's devices so another account can claim it.",
       },
       { key: "token", label: "Owner token", kind: "secret" },
       { key: "clientIdentifier", label: "Client identifier", kind: "readonly" },
@@ -300,6 +300,12 @@ export const CATALOG: FieldGroup[] = [
       { key: "minPopularity", label: "Minimum popularity", kind: "number", min: 0, step: 1 },
       { key: "minVotes", label: "Minimum votes", kind: "number", min: 0, step: 10 },
       { key: "includeAdult", label: "Include adult titles", kind: "bool" },
+      {
+        key: "hideFranchiseCollections",
+        label: "Hide automatic franchise collections",
+        kind: "bool",
+        help: "Hide TMDB franchise groups such as Zootopia from Plex's Collections tab. Your curated collections and Home rows stay available. Applies after saving; refresh the Collections tab in Plex.",
+      },
     ],
   },
 ];
@@ -601,7 +607,7 @@ export const DEBRID: FieldGroup[] = [
         key: "cachedOnly",
         label: "Cached torrents only",
         kind: "bool",
-        help: "Only use torrents your debrid service already holds. Nothing is downloaded and playback never waits.",
+        help: "Only use torrents your debrid service already holds. Nothing is downloaded and playback never waits. Turn off to have Ether send the best uncached release of a title to your first debrid service when someone presses Play; it plays once the download finishes (the app says so meanwhile).",
       },
       {
         key: "removeUncached",

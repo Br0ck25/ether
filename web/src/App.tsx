@@ -166,10 +166,14 @@ function navigation(setupComplete: boolean): SidebarNavGroup[] {
 }
 
 function HealthIndicator() {
-  const { health, overall, dashboard, dashboardError } = useApp();
+  const { health, overall, dashboard, dashboardError, boot } = useApp();
   const [open, setOpen] = useState(false);
-  const label =
-    overall === "ok" || overall === "off"
+  // Before setup finishes, unconfigured sources and an unclaimed server are
+  // expected, not problems: show progress instead of a red verdict.
+  const settingUp = !boot.setupComplete;
+  const label = settingUp
+    ? "Setting up"
+    : overall === "ok" || overall === "off"
       ? "All systems normal"
       : overall === "unknown"
         ? "Checking…"
@@ -185,7 +189,7 @@ function HealthIndicator() {
           aria-label={`Server health: ${label}`}
           className="inline-flex h-9 items-center gap-2 rounded-md px-2.5 text-sm text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         >
-          <StatusDot level={overall === "off" ? "ok" : overall} pulse />
+          <StatusDot level={settingUp ? "unknown" : overall === "off" ? "ok" : overall} pulse />
           <span className="hidden md:inline">{label}</span>
         </button>
       }
@@ -194,6 +198,11 @@ function HealthIndicator() {
         <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-wider text-fg-subtle">
           Server health
         </p>
+        {settingUp ? (
+          <p className="px-2 pb-2 text-sm text-fg-muted">
+            Finish setup to bring everything online. Items below fill in as you go.
+          </p>
+        ) : null}
         {dashboardError && !dashboard ? (
           <p className="px-2 pb-2 text-sm text-danger">Status is unavailable right now.</p>
         ) : null}

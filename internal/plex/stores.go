@@ -17,14 +17,20 @@ import (
 // streamRef is what a Stream id points at.
 type streamRef struct {
 	key   core.RatingKey
-	index int // position in MediaInfo.Streams
+	index int // position in MediaInfo.Streams when last rendered
 	info  core.StreamInfo
+	slot  string // identity within the title (see streamSlot)
 }
 
 // streamRegistry hands out stable Stream ids. Ids are a hash of (ratingKey,
 // stream position) so they survive restarts; the registry resolves them back
 // (for /library/streams/{id} and audioStreamID/subtitleStreamID params) and
 // probes past the rare collision.
+//
+// External (sidecar) subtitles hash their source instead: they follow the
+// embedded streams, whose count differs between the estimate shown before
+// play and the probed release, so a position would name a different stream
+// (or none) once playback starts.
 type streamRegistry struct {
 	mu   sync.Mutex
 	byID map[int64]streamRef
@@ -35,10 +41,23 @@ const maxStreamRefs = 200_000
 func newStreamRegistry() *streamRegistry { return &streamRegistry{byID: map[int64]streamRef{}} }
 
 func streamHash(key core.RatingKey, index int) int64 {
+	return slotHash(key, strconv.Itoa(index))
+}
+
+func slotHash(key core.RatingKey, slot string) int64 {
 	h := fnv.New64a()
-	h.Write([]byte(strconv.FormatInt(int64(key), 10) + "/" + strconv.Itoa(index)))
+	h.Write([]byte(strconv.FormatInt(int64(key), 10) + "/" + slot))
 	// Keep ids small and positive so every client parses them as int32.
 	return int64(h.Sum64()%2_000_000_000) + 1
+}
+
+// streamSlot is a stream's identity within its title: its position, or
+// for a sidecar with a known source, that source.
+func streamSlot(index int, info core.StreamInfo) string {
+	if info.External && info.ExternalURL != "" {
+		return "external/" + info.ExternalURL
+	}
+	return strconv.Itoa(index)
 }
 
 func (r *streamRegistry) register(key core.RatingKey, index int, info core.StreamInfo) int64 {
@@ -47,11 +66,12 @@ func (r *streamRegistry) register(key core.RatingKey, index int, info core.Strea
 	if len(r.byID) >= maxStreamRefs {
 		r.byID = map[int64]streamRef{}
 	}
-	id := streamHash(key, index)
+	slot := streamSlot(index, info)
+	id := slotHash(key, slot)
 	for {
 		ref, ok := r.byID[id]
-		if !ok || (ref.key == key && ref.index == index) {
-			r.byID[id] = streamRef{key: key, index: index, info: info}
+		if !ok || (ref.key == key && ref.slot == slot) {
+			r.byID[id] = streamRef{key: key, index: index, info: info, slot: slot}
 			return id
 		}
 		id++ // collision: probe
@@ -73,6 +93,11 @@ type selection struct {
 	audioSet    bool
 	subtitle    int // position, -1 = none
 	subtitleSet bool
+	// subtitleStream is the chosen subtitle when it was picked by stream
+	// id, so the choice is found again in a differently shaped MediaInfo
+	// (the estimate before play, the probed release after); see
+	// resolveSubtitle.
+	subtitleStream *core.StreamInfo
 }
 
 type selectionStore struct {
@@ -113,12 +138,23 @@ type transcodeEntry struct {
 	requested   playRequest // original decision/start inputs, before policy refinement
 	decision    core.Decision
 	info        core.MediaInfo
+	subtitle    int // selected subtitle's position in info, -1 = none
 	caps        core.ClientCaps
 	opts        core.DecideOptions
 	offset      time.Duration
 	started     bool // StartHLS ran
 	updatedAt   time.Time
+	// A failed decision for this binding (failKey, failErr at failedAt):
+	// the start request that follows it answers with the same error at
+	// once instead of resolving again. One-shot and short-lived.
+	failKey  core.RatingKey
+	failErr  error
+	failedAt time.Time
 }
+
+// decisionFailureTTL bounds how long a failed decision answers the start
+// request that follows it; after that a start resolves afresh.
+const decisionFailureTTL = 15 * time.Second
 
 type transcodeTable struct {
 	mu sync.Mutex
@@ -164,6 +200,37 @@ func (t *transcodeTable) get(id string) (*transcodeEntry, bool) {
 	}
 	cp := *e
 	return &cp, true
+}
+
+// fail records a failed decision on the binding the decision claimed. A
+// binding owned by another viewer or device is left alone.
+func (t *transcodeTable) fail(id string, userID int64, clientID string, key core.RatingKey, err error, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.m[id]
+	if !ok || e.userID != userID || e.clientID != clientID || err == nil {
+		return
+	}
+	e.failKey, e.failErr, e.failedAt, e.updatedAt = key, err, now, now
+}
+
+// takeFailure returns and clears a recent failed decision for this viewer's
+// binding and title.
+func (t *transcodeTable) takeFailure(id string, userID int64, key core.RatingKey, now time.Time) (error, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.m[id]
+	if !ok || e.failErr == nil {
+		return nil, false
+	}
+	err, match := e.failErr, e.userID == userID && e.failKey == key && now.Sub(e.failedAt) < decisionFailureTTL
+	if e.userID == userID {
+		e.failKey, e.failErr, e.failedAt = 0, nil, time.Time{}
+	}
+	if !match {
+		return nil, false
+	}
+	return err, true
 }
 
 func (t *transcodeTable) touch(id string, now time.Time) {

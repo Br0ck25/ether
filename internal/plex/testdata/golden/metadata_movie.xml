@@ -7,7 +7,7 @@
 <Stream id="1875505719" streamType="2" canNormalizeLoudness="0" selected="1" default="1" codec="eac3" index="1" channels="6" bitrate="640" language="English" languageTag="en" languageCode="eng" audioChannelLayout="5.1(side)" samplingRate="48000" displayTitle="English (EAC3 5.1)" extendedDisplayTitle="English (EAC3 5.1)" />
 <Stream id="363877508" streamType="2" canNormalizeLoudness="0" codec="aac" index="2" channels="2" bitrate="128" language="French" languageTag="fr" languageCode="fre" samplingRate="48000" displayTitle="French (AAC Stereo)" extendedDisplayTitle="French (AAC Stereo)" />
 <Stream id="852249297" streamType="3" canAutoSync="0" codec="srt" index="3" language="English" languageTag="en" languageCode="eng" displayTitle="English (SRT)" extendedDisplayTitle="English (SRT)" />
-<Stream id="1433646774" streamType="3" canAutoSync="0" codec="srt" key="/library/streams/1433646774" language="Spanish" languageTag="es" languageCode="spa" format="srt" displayTitle="Spanish (SRT External)" extendedDisplayTitle="Spanish (SRT External)" external="1" />
+<Stream id="1513126264" streamType="3" canAutoSync="0" codec="srt" key="/library/streams/1513126264" language="Spanish" languageTag="es" languageCode="spa" format="srt" displayTitle="Spanish (SRT External)" extendedDisplayTitle="Spanish (SRT External)" external="1" />
 </Part>
 </Media>
 <Image alt="Fjord Harbor" type="coverPoster" url="/library/metadata/1000000000000550/thumb/1790812800" />

@@ -104,7 +104,8 @@ export const PAGES: PageDef[] = [
       {
         key: "debrid",
         title: "Debrid",
-        keywords: "real-debrid realdebrid torbox alldebrid premiumize torrent cached",
+        keywords:
+          "real-debrid realdebrid torbox alldebrid premiumize debrid-link debridlink offcloud torrent cached",
       },
       {
         key: "availability",

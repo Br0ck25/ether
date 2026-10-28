@@ -50,6 +50,10 @@ type Remaining struct {
 	GrabsLimit     int    `json:"grabsLimit"`
 	GrabsRemaining int    `json:"grabsRemaining"`
 	RetryAt        int64  `json:"retryAt,omitempty"` // service-reported throttling; automatic retry (Unix seconds)
+	// Enabled and Torrent let the dashboard warn when nothing can be
+	// searched, or when debrid has no torrent indexer to search.
+	Enabled bool `json:"enabled"`
+	Torrent bool `json:"torrent"` // Torznab, a Stremio addon or a torrent built-in site
 }
 
 func (c *Client) indexerID() string {
@@ -175,6 +179,7 @@ func (c *Client) Remaining(ctx context.Context) (Remaining, error) {
 		Indexer: c.Name(), Day: c.today(),
 		HitsUsed: hits, HitsLimit: cfg.DailyLimit, HitsRemaining: -1,
 		GrabsUsed: grabs, GrabsLimit: cfg.DailyGrabs, GrabsRemaining: -1,
+		Enabled: cfg.Enabled, Torrent: cfg.IsTorrent(),
 	}
 	if cfg.DailyLimit > 0 {
 		r.HitsRemaining = max(0, cfg.DailyLimit-hits)

@@ -117,7 +117,8 @@ export interface SiteUpdateReport {
   failed: { id: string; error: string }[];
 }
 
-export type DebridKind = "realdebrid" | "torbox" | "alldebrid" | "premiumize";
+export type DebridKind =
+  "realdebrid" | "torbox" | "alldebrid" | "premiumize" | "debridlink" | "offcloud";
 
 /** One owner-supplied debrid account. `apiKey` is redacted to "••••" when set. */
 export interface DebridProvider {
@@ -283,6 +284,7 @@ export interface EtherConfig {
     minPopularity: number;
     minVotes: number;
     includeAdult: boolean;
+    hideFranchiseCollections?: boolean;
     refreshInterval: string;
   };
   resolver: {
@@ -367,6 +369,11 @@ export interface QualityProfile {
   maxSizeMbPerMin: number;
   preferredLanguages: string[] | null;
   allowCam: boolean;
+  /** Imported profiles: the only source-resolution pairs allowed, e.g. "webdl-1080". */
+  allowedQualities?: string[] | null;
+  /** Imported profiles: custom format scores by trash ID, overriding the defaults. */
+  customFormatScores?: Record<string, number> | null;
+  minCustomFormatScore?: number | null;
 }
 
 export interface QualityRule {
@@ -387,6 +394,7 @@ export interface SetupStatus {
   setupComplete: boolean;
   requiredComplete: boolean;
   steps: SetupStep[];
+  cacheRestartRequired?: boolean;
 }
 export interface Bootstrap {
   ok: boolean;

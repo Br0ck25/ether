@@ -126,6 +126,7 @@ type Service struct {
 	quality   config.Quality
 	scorer    *FormatScorer
 	scorerErr error
+	sources   string // sourcesKey of the applied config
 
 	mu            sync.RWMutex
 	bad           map[string]badMark // release id -> blocklist mark
@@ -197,13 +198,60 @@ func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config
 	return s
 }
 
-// UpdateConfig swaps the resolver/quality config snapshot.
+// UpdateConfig swaps the resolver/quality config snapshot. When the owner
+// changes where releases come from (indexers, Usenet or debrid accounts,
+// debrid's cached-only switch), cached searches and "not available"
+// answers describe the old sources and are forgotten.
 func (s *Service) UpdateConfig(cfg config.Config) {
+	key := sourcesKey(cfg)
 	s.cfgMu.Lock()
-	defer s.cfgMu.Unlock()
 	s.rcfg = cfg.Resolver
 	s.quality = cfg.Quality
 	s.scorer, s.scorerErr = NewFormatScorer(cfg.Resolver.CustomFormats, cfg.Resolver.CustomFormatScores)
+	changed := s.sources != "" && s.sources != key
+	s.sources = key
+	s.cfgMu.Unlock()
+	if changed {
+		s.forgetSourceResults(context.Background())
+	}
+}
+
+// sourcesKey fingerprints the settings that decide which releases a search
+// can find and which of them can play.
+func sourcesKey(cfg config.Config) string {
+	var b strings.Builder
+	for _, ix := range cfg.Indexers {
+		fmt.Fprintf(&b, "i|%s|%t|%s|%s|%s\n", ix.ID, ix.Enabled, ix.URL, ix.Kind, ix.Protocol)
+	}
+	for _, p := range cfg.Usenet.Providers {
+		fmt.Fprintf(&b, "u|%s|%t\n", p.ID, p.Enabled)
+	}
+	fmt.Fprintf(&b, "d|%t\n", cfg.Debrid.CachedOnly)
+	for _, d := range cfg.Debrid.Providers {
+		fmt.Fprintf(&b, "d|%s|%s|%t\n", d.ID, d.Kind, d.Enabled)
+	}
+	return b.String()
+}
+
+// forgetSourceResults drops cached searches, "not available" answers and
+// briefly-skipped failed sources, so the next play searches the current
+// sources afresh.
+func (s *Service) forgetSourceResults(ctx context.Context) {
+	s.mu.Lock()
+	for k, e := range s.avail {
+		if !e.available {
+			delete(s.avail, k)
+		}
+	}
+	clear(s.searchCache)
+	clear(s.failedHealth)
+	s.mu.Unlock()
+	if s.db != nil {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM resolver_availability WHERE available = 0`); err != nil {
+			s.log.Warn("forget unavailable titles", "err", err)
+		}
+	}
+	s.log.Info("sources changed: cleared cached searches and unavailable titles")
 }
 
 func (s *Service) resolverCfg() config.Resolver {
@@ -482,6 +530,16 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 	}
 
+	// Nothing to search at all (no enabled indexer, or debrid as the only
+	// source without a torrent indexer) is a setup problem: say so instead
+	// of "not available", and record nothing about the title.
+	if pin == nil && len(discovered) == 0 {
+		if err := s.missingSources(); err != nil {
+			trace.Err = err.Error()
+			return nil, err
+		}
+	}
+
 	// Fast path: cached unavailable answer, unless this is a failover
 	// request that already knows about specific releases, the viewer
 	// picked a specific version, or the owner pinned a release.
@@ -648,6 +706,21 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
 }
 
+// sourceInventory is implemented by indexers that know whether anything is
+// configured to search (debrid.Indexer, newznab.Manager).
+type sourceInventory interface {
+	MissingSources() error
+}
+
+// missingSources reports core.ErrNoSources (or core.ErrNoTorrentSources)
+// when the indexer can tell there is nothing to search.
+func (s *Service) missingSources() error {
+	if inv, ok := s.indexer.(sourceInventory); ok {
+		return inv.MissingSources()
+	}
+	return nil
+}
+
 func searchCacheKey(req core.SearchRequest) string {
 	return fmt.Sprintf("%s|%v|%s|%d|%d|%d", req.Type, req.IDs, strings.ToLower(req.Title), req.Year, req.Season, req.Episode)
 }
@@ -809,7 +882,7 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 		if reason != "" {
 			ct.Rejected = true
 			switch reason {
-			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later",
+			case "above profile max height", "below profile min height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later",
 				// Size ranges are per profile: a remux too large for a
 				// download or mobile profile still plays for others.
 				"size too small for runtime", "size too large for runtime":
@@ -934,7 +1007,7 @@ func minFormatScore(rcfg config.Resolver, profile core.QualityProfile) *int {
 
 // rejectReason returns "" to accept, or the reason to drop a release.
 // preferred (the viewer's explicit Play Version pick) bypasses the
-// profile-policy gates — max height, DV policy, imported quality gates,
+// profile-policy gates — resolution bounds, DV policy, imported quality gates,
 // per-profile size range — but never the hard client gates or the
 // identity/absolute-size sanity checks.
 func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.SearchRequest,
@@ -974,6 +1047,14 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 			return "sample"
 		}
 	}
+	if reason := rejectIdentity(rel, t, sreq); reason != "" {
+		return reason
+	}
+	return rejectPolicy(rel, t, profile, caps, preferred)
+}
+
+// rejectIdentity checks the result's reported identity without client policy.
+func rejectIdentity(rel core.Release, t *core.Title, sreq core.SearchRequest) string {
 	isEpisode := sreq.Type == core.TypeEpisode
 	idMatch, idConflict := releaseparse.CompareTitleIDs(rel.TitleIDs, sreq.IDs)
 	if idConflict {
@@ -1039,6 +1120,11 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 			return "year mismatch"
 		}
 	}
+	return ""
+}
+
+// rejectPolicy applies client support and quality/size policy in rejection order.
+func rejectPolicy(rel core.Release, t *core.Title, profile core.QualityProfile, caps core.ClientCaps, preferred bool) string {
 	// Client / profile hard gates. The viewer's explicit pick bypasses the
 	// profile-policy gates (an explicit 4K pick on a 1080p profile must
 	// still resolve), never the client's codec support.
@@ -1055,6 +1141,9 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	}
 	if !preferred && profile.MaxHeight > 0 && rel.Info.Height > profile.MaxHeight {
 		return "above profile max height"
+	}
+	if !preferred && profile.MinHeight > 0 && rel.Info.Height > 0 && rel.Info.Height < profile.MinHeight {
+		return "below profile min height"
 	}
 	if !preferred && rel.Info.DolbyVision && !profile.AllowDolbyVision && !(rel.Info.HDR10 && profile.AllowHDR) {
 		return "dolby vision not allowed for client"

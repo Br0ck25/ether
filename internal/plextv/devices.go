@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +70,36 @@ func (c *Client) PublishConnectionsWith(ctx context.Context, serverToken string,
 		accept: "application/xml",
 	})
 	return err
+}
+
+// RemoveDevice deletes this server's device record from the account behind
+// token, so the machine identifier is free to be claimed by another account:
+// GET /devices.xml finds the record by client identifier, then
+// DELETE /devices/{id}.xml removes it (what the plex.tv Authorized Devices
+// page does). It reports false when the account lists no such device.
+func (c *Client) RemoveDevice(ctx context.Context, token string) (bool, error) {
+	resp, err := c.do(ctx, request{method: http.MethodGet, path: "/devices.xml", token: token, accept: "application/xml"})
+	if err != nil {
+		return false, err
+	}
+	root, err := parseXMLNode(resp.body)
+	if err != nil {
+		return false, fmt.Errorf("plextv: devices: %w", err)
+	}
+	for _, d := range root.findAll("Device") {
+		if d.attr("clientIdentifier") != c.id.ClientIdentifier {
+			continue
+		}
+		id := d.attr("id")
+		if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+			return false, fmt.Errorf("plextv: device record without a numeric id")
+		}
+		if _, err := c.do(ctx, request{method: http.MethodDelete, path: "/devices/" + id + ".xml", token: token, accept: "application/xml"}); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // ServerRegistration is the server info PMS sends to POST /servers.xml

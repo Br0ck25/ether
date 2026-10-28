@@ -33,4 +33,4 @@ if [ -d /run/systemd/system ]; then
   fi
 fi
 
-echo "Ether installed. Open http://localhost:32400/ether/ to finish setup."
+echo "Ether installed. Open http://localhost:32400/ether/ to finish setup (if Plex already uses 32400, Ether moves to 32450: see 'journalctl -u ether')."

@@ -77,6 +77,9 @@ type Service struct {
 	knownMu sync.Mutex
 	known   map[string]knownState // providerID|hash
 
+	queuedMu sync.Mutex
+	queued   map[string]queuedDownload // queueKey -> the download sent for that title
+
 	// Cluster (cluster.go); all nil/zero on a standalone server.
 	clusterMu sync.RWMutex
 	node      clusterbus.Node
@@ -309,6 +312,11 @@ func (e *entry) blocked(now time.Time) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if now.Before(e.until) {
+		if e.state == "auth_failed" {
+			// Keep the cause classifiable: playback tells the viewer the
+			// key was rejected rather than that nothing was found.
+			return fmt.Errorf("debrid provider %q paused until %s (%s): %w", displayName(e.cfg), e.until.Format(time.Kitchen), e.lastError, ErrAuth)
+		}
 		return fmt.Errorf("debrid provider %q paused until %s (%s)", displayName(e.cfg), e.until.Format(time.Kitchen), e.lastError)
 	}
 	return nil
@@ -713,7 +721,8 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 	base := Payload{Key: key, ReleaseID: rel.ID, InfoHash: hash, Magnet: magnet, Target: rel.Target, Release: rel.Name}
 	choose := func(files []File) (File, error) { return ChooseFile(files, rel.Target) }
 	var errs []error
-	notCached := 0
+	var knownUncached []*entry
+	notCached, tried := 0, 0
 	for _, e := range entries {
 		if err := e.blocked(s.now()); err != nil {
 			errs = append(errs, err)
@@ -721,8 +730,10 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 		}
 		if cached, ok, _ := s.knownFor(ctx, e.cfg.ID, hash); ok && !cached {
 			notCached++
+			knownUncached = append(knownUncached, e)
 			continue
 		}
+		tried++
 		p, err := s.acquireOn(ctx, e, base, choose)
 		if err == nil {
 			s.savePayload(ctx, p)
@@ -741,13 +752,95 @@ func (s *Service) Acquire(ctx context.Context, rel core.Release) ([]byte, error)
 			errs = append(errs, fmt.Errorf("%s: %w", displayName(e.cfg), err))
 		}
 	}
+	if tried == 0 && len(knownUncached) > 0 {
+		if p, ok, err := s.queueDownload(ctx, rel, knownUncached[0], base, choose); ok {
+			if err == nil {
+				s.savePayload(ctx, p)
+				s.log.Info("debrid release ready", "release", rel.Name, "provider", displayName(knownUncached[0].cfg), "file", p.Name())
+				return p.Encode(), nil
+			}
+			if !errors.Is(err, core.ErrNotCached) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%q: %w", rel.Name, core.ErrDownloadQueued)
+		}
+	}
+	notCachedErr := core.ErrNotCached
+	if tried > 0 && !s.Config().CachedOnly && !core.IsBackgroundCheck(ctx) {
+		// Providers without an availability check were asked to add the
+		// torrent, which (cached-only off) leaves it downloading.
+		notCachedErr = core.ErrDownloadQueued
+	}
 	if len(errs) == 0 {
-		return nil, fmt.Errorf("%q: %w", rel.Name, core.ErrNotCached)
+		return nil, fmt.Errorf("%q: %w", rel.Name, notCachedErr)
 	}
 	if notCached > 0 {
 		return nil, fmt.Errorf("%q: %w (%v)", rel.Name, core.ErrNotCached, errors.Join(errs...))
 	}
 	return nil, errors.Join(errs...)
+}
+
+// queuedTTL is how long a title's queued download stands for the title: other
+// releases of it are not sent as well.
+const queuedTTL = 6 * time.Hour
+
+type queuedDownload struct {
+	hash, provider string
+	at             time.Time
+}
+
+// queueKey identifies what a release is for (a movie, or one episode), so
+// one download is queued per title rather than one per candidate release.
+func queueKey(rel core.Release) string {
+	ids := rel.TitleIDs
+	se := ""
+	if t := rel.Target; t != nil {
+		if t.ExpectedIDs != (core.IDs{}) {
+			ids = t.ExpectedIDs
+		}
+		se = fmt.Sprintf("|s%de%d", t.Season, t.Episode)
+	}
+	if ids != (core.IDs{}) {
+		return fmt.Sprintf("%d|%s|%d%s", ids.TMDB, ids.IMDB, ids.TVDB, se)
+	}
+	if t := strings.ToLower(strings.TrimSpace(rel.Info.Title)); t != "" {
+		return fmt.Sprintf("%s|%v|%v%s", t, rel.Info.Seasons, rel.Info.Episodes, se)
+	}
+	return "hash|" + strings.ToLower(rel.InfoHash) // nothing says what it is for
+}
+
+// queueDownload handles a torrent every provider reported uncached when the
+// owner turned cached-only off: the first provider by priority is asked to
+// download it (or, once queued, to serve it when done). One release per
+// title is queued; ok is false when the release is not the title's queued
+// one, or for background checks, which never start downloads.
+func (s *Service) queueDownload(ctx context.Context, rel core.Release, e *entry, base Payload, choose func([]File) (File, error)) (Payload, bool, error) {
+	if s.Config().CachedOnly || core.IsBackgroundCheck(ctx) {
+		return Payload{}, false, nil
+	}
+	key, hash, now := queueKey(rel), base.InfoHash, s.now()
+	s.queuedMu.Lock()
+	if s.queued == nil {
+		s.queued = map[string]queuedDownload{}
+	}
+	q, ok := s.queued[key]
+	if ok && now.Sub(q.at) < queuedTTL && (q.hash != hash || q.provider != e.cfg.ID) {
+		s.queuedMu.Unlock()
+		return Payload{}, false, nil
+	}
+	first := !ok || now.Sub(q.at) >= queuedTTL
+	if first {
+		if len(s.queued) >= 10_000 {
+			clear(s.queued)
+		}
+		s.queued[key] = queuedDownload{hash: hash, provider: e.cfg.ID, at: now}
+	}
+	s.queuedMu.Unlock()
+	p, err := s.acquireOn(ctx, e, base, choose)
+	if first && errors.Is(err, core.ErrNotCached) {
+		s.log.Info("sent uncached torrent to download", "release", rel.Name, "provider", displayName(e.cfg))
+	}
+	return p, true, err
 }
 
 // acquireOn resolves a torrent on one provider: reuse an existing torrent

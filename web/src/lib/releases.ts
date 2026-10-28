@@ -1,5 +1,5 @@
 import { apiFetch } from "./api";
-import type { ResolverTrace } from "./types";
+import type { QualityProfile, ResolverTrace } from "./types";
 
 /** Release console API (/ether/api/releases): search, pins, blocklist, history. */
 
@@ -145,6 +145,49 @@ export interface ConsoleProfiles {
   special: string[];
 }
 
+export type StarrApp = "radarr" | "sonarr";
+
+/** A TRaSH Guides quality profile offered for import. */
+export interface TrashProfile {
+  /** File name without .json; what the import endpoints take. */
+  id: string;
+  trashId?: string;
+  name: string;
+  /** Plain text; never HTML. */
+  description?: string;
+  group?: number;
+  /** The guide page (always https://trash-guides.info). */
+  url?: string;
+  scoreSet?: string;
+  formats: number;
+}
+
+/** present: already in Custom scoring; add: added by the import. */
+export type ImportFormatStatus = "present" | "add" | "unsupported" | "missing";
+
+export interface ImportFormat {
+  id: string;
+  name: string;
+  score: number;
+  status: ImportFormatStatus;
+  reason?: string;
+}
+
+/** A previewed import: the profile as it will be saved and its custom formats. */
+export interface QualityImportPlan {
+  app: StarrApp;
+  profile: QualityProfile;
+  scoreSet?: string;
+  formats: ImportFormat[];
+  skippedQualities: string[];
+  warnings: string[];
+}
+
+/** A TRaSH profile by id, or pasted profile JSON. */
+export type QualityImportSource = { app: StarrApp } & (
+  { profile: string; json?: undefined } | { json: string; profile?: undefined }
+);
+
 /** Profile names the server understands beside the configured ones. */
 export const PROFILE_NONE = "none";
 export const PROFILE_DOWNLOAD = "download";
@@ -213,10 +256,33 @@ export const releaseConsole = {
     return { items: res.items ?? [], total: res.total ?? 0 };
   },
   historyEntry: (id: number) => apiFetch<HistoryRecord>(`${base}/history/${id}`),
+  trashProfiles: async (app: StarrApp, signal?: AbortSignal) =>
+    (await apiFetch<{ items: TrashProfile[] | null }>(`${base}/trash/${app}/profiles`, { signal }))
+      .items ?? [],
+  previewImport: (source: QualityImportSource, signal?: AbortSignal) =>
+    apiFetch<QualityImportPlan>(`${base}/quality-import/preview`, {
+      method: "POST",
+      body: JSON.stringify(source),
+      signal,
+    }),
+  importProfile: (source: QualityImportSource, name: string) =>
+    post<{ name: string; formatsAdded: number }>("/quality-import", { ...source, name }),
 };
 
+/** "WEB-DL 1080p" for an imported quality gate such as "webdl-1080"; DVD has no resolution. */
+export function qualityGateLabel(gate: string): string {
+  const [source = "", height = ""] = gate.split("-");
+  const name = SOURCES[source] ?? source;
+  return source === "dvd" ? name : `${name} ${height === "2160" ? "4K" : `${height}p`}`;
+}
+
+/** "Blu-ray" for a source key. */
+export function sourceLabel(source: string): string {
+  return SOURCES[source] ?? source;
+}
+
 /** "4K", "1080p", or "SD" for unknown heights. */
-export function resolutionLabel(info: ReleaseInfo | undefined): string {
+function resolutionLabel(info: ReleaseInfo | undefined): string {
   const h = info?.height ?? 0;
   if (h >= 2160) return "4K";
   if (h > 0) return `${h}p`;

@@ -677,7 +677,9 @@ func newTestManager(t *testing.T, fr *fakeRunner, cfg config.Transcode, opts ...
 		withFinder(finder{goos: "darwin", isExec: isExecutable}),
 		WithBuffering(24*time.Second, 0, 0),
 		withPollInterval(5 * time.Millisecond),
-		WithSegmentTimeout(5 * time.Second),
+		// Generous: a race-instrumented run on a busy CI runner can take
+		// several seconds per segment. Tests that need a timeout set their own.
+		WithSegmentTimeout(30 * time.Second),
 		withRungDwell(0), // rung switches are immediate unless a test opts in
 	}, opts...)
 	m, err := New(cfg, testLogger(t), all...)

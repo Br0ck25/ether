@@ -224,13 +224,24 @@ func TestSetupStatusAndGating(t *testing.T) {
 		Steps            []admin.SetupStep `json:"steps"`
 	}
 	decode(t, rec, &st)
-	if st.RequiredComplete || len(st.Steps) != 5 {
+	if st.RequiredComplete || len(st.Steps) != 6 {
 		t.Fatalf("bad setup status: %+v", st)
 	}
 
 	rec = serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{}`))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("complete with missing steps: got %d want 409 (%s)", rec.Code, rec.Body)
+	}
+	// Forcing never finishes an unclaimed server: nobody could sign in.
+	rec = serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{"force":true}`))
+	if rec.Code != http.StatusConflict || store.Get().SetupComplete || !strings.Contains(rec.Body.String(), "plex_required") {
+		t.Fatalf("forced complete without a Plex owner: %d %s", rec.Code, rec.Body)
+	}
+	if err := store.Update(func(c *config.Config) error {
+		c.Plex.Token, c.Plex.Claimed = "owner-token", true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	rec = serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{"force":true}`))
 	if rec.Code != 200 || !store.Get().SetupComplete {
@@ -241,6 +252,49 @@ func TestSetupStatusAndGating(t *testing.T) {
 	// intentionally locked out (fail closed), proving post-setup auth.
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("reopen without token after setup: got %d want 401", rec.Code)
+	}
+}
+
+func TestSetupReportsCacheRestartUntilSavedDirectoryIsActive(t *testing.T) {
+	store := newStore(t, seededConfig)
+	activeDir := store.Get().Cache.Dir
+	h := admin.New(admin.Deps{
+		Config: store, IsOwnerToken: storedOwner(store),
+		CacheRestartRequired: func() bool { return store.Get().Cache.Dir != activeDir },
+	})
+	selectedDir := t.TempDir()
+	if err := store.Update(func(c *config.Config) error {
+		c.Cache.Dir = selectedDir
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete setup: %d %s", rec.Code, rec.Body)
+	}
+	var status struct {
+		SetupComplete        bool `json:"setupComplete"`
+		CacheRestartRequired bool `json:"cacheRestartRequired"`
+	}
+	decode(t, rec, &status)
+	if !status.SetupComplete || !status.CacheRestartRequired {
+		t.Fatalf("setup must preserve the pending restart: %+v", status)
+	}
+	for _, restarted := range []bool{false, true} {
+		if restarted {
+			activeDir = selectedDir
+		}
+		r := req(http.MethodGet, "/ether/api/setup/status", "")
+		r.Header.Set("X-Plex-Token", ownerToken)
+		rec = serve(h, r)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup status: %d %s", rec.Code, rec.Body)
+		}
+		decode(t, rec, &status)
+		if !status.SetupComplete || status.CacheRestartRequired == restarted {
+			t.Fatalf("restarted=%v: unexpected setup status %+v", restarted, status)
+		}
 	}
 }
 

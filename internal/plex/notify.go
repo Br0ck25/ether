@@ -2,8 +2,10 @@ package plex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -142,7 +144,46 @@ type subscriber struct {
 
 type notification struct {
 	typ  string
-	data []byte // JSON NotificationContainer
+	data []byte   // JSON NotificationContainer (websocket)
+	sse  [][]byte // one bare entry object per event (eventsource)
+}
+
+func newNotification(typ string, data []byte) notification {
+	return notification{typ: typ, data: data, sse: sseEntries(data)}
+}
+
+// sseEntries splits a JSON NotificationContainer into the payloads PMS sends
+// on /:/eventsource/notifications: one {"<Entry>":{...}} object per entry,
+// with no container (recorded from PMS 1.43). Clients that read the
+// eventsource stream ignore the websocket container, so library changes
+// never reached their cached hubs.
+func sseEntries(data []byte) [][]byte {
+	var root struct {
+		NotificationContainer map[string]json.RawMessage
+	}
+	if json.Unmarshal(data, &root) != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(root.NotificationContainer))
+	for k, v := range root.NotificationContainer {
+		if len(v) > 0 && v[0] == '[' {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	var out [][]byte
+	for _, k := range keys {
+		var items []json.RawMessage
+		if json.Unmarshal(root.NotificationContainer[k], &items) != nil {
+			continue
+		}
+		for _, item := range items {
+			if b, err := json.Marshal(map[string]json.RawMessage{k: item}); err == nil {
+				out = append(out, b)
+			}
+		}
+	}
+	return out
 }
 
 type notifier struct {
@@ -185,7 +226,7 @@ func encodeNotification(nc model.NotificationContainer) (notification, bool) {
 		return notification{}, false
 	}
 	data = []byte(strings.TrimSuffix(string(data), "\n"))
-	return notification{typ: nc.Type, data: data}, true
+	return newNotification(nc.Type, data), true
 }
 
 // publish delivers to every interested subscriber, dropping for slow ones.
@@ -338,8 +379,14 @@ func (s *Server) handleEventSource(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			arm()
-			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.typ, msg.data); err != nil {
-				return
+			payloads := msg.sse
+			if len(payloads) == 0 {
+				payloads = [][]byte{msg.data}
+			}
+			for _, data := range payloads {
+				if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", msg.typ, data); err != nil {
+					return
+				}
 			}
 			fl.Flush()
 		}
@@ -389,17 +436,28 @@ func (s *Server) WatchStateChanged(userID int64, key core.RatingKey) {
 func (s *Server) notifyTimeline(key core.RatingKey, t core.MediaType, title string, userID int64) {
 	sec, _ := s.sectionFor(t)
 	typeNum := map[core.MediaType]int{core.TypeMovie: 1, core.TypeShow: 2, core.TypeSeason: 3, core.TypeEpisode: 4}[t]
+	// PMS names an episode's season and show, and a season's show, so a
+	// client can refresh the show's rows (Continue Watching, On Deck).
+	var parent, root string
+	switch key.Kind() {
+	case core.KindEpisode:
+		parent, root = key.Parent().String(), core.ShowKey(key.TMDB()).String()
+	case core.KindSeason:
+		parent = key.Parent().String()
+	}
 	s.publishNotification(model.NotificationContainer{
 		Type: "timeline",
 		Size: 1,
 		TimelineEntry: []model.TimelineEntry{{
-			Identifier: model.LibraryIdentifier,
-			SectionID:  fmt.Sprint(sec.ID),
-			ItemID:     key.String(),
-			Type:       typeNum,
-			Title:      title,
-			State:      5,
-			UpdatedAt:  s.now().Unix(),
+			Identifier:   model.LibraryIdentifier,
+			SectionID:    fmt.Sprint(sec.ID),
+			ItemID:       key.String(),
+			ParentItemID: parent,
+			RootItemID:   root,
+			Type:         typeNum,
+			Title:        title,
+			State:        5,
+			UpdatedAt:    s.now().Unix(),
 		}},
 	}, userID)
 }

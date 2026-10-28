@@ -17,6 +17,9 @@ import (
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	a := newApp(log)
+	if len(os.Args) > 1 && os.Args[1] == "--open" {
+		os.Exit(a.openUI())
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := a.runHeadless(ctx); err != nil {

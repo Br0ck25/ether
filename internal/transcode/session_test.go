@@ -58,7 +58,9 @@ func startSession(t *testing.T, m *Manager, req core.HLSRequest) *Session {
 
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	// Generous: real ffmpeg work on a busy, race-instrumented CI runner can
+	// take several seconds; a condition that holds returns at once.
+	deadline := time.Now().Add(30 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %s", what)

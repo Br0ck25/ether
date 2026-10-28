@@ -278,3 +278,104 @@ func TestSemReservedLiveCombinedBackgroundAndResize(t *testing.T) {
 	s.Release(core.PriorityReadahead)
 	s.Release(core.PriorityReadahead)
 }
+
+func TestPrioSemAvailableDoesNotMutateState(t *testing.T) {
+	type semSnapshot struct {
+		inUse, nonLive, prefetching int
+		waiting                     [numPriorities]int
+		closed                      bool
+	}
+	snapshot := func(s *prioSem) semSnapshot {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		snap := semSnapshot{inUse: s.inUse, nonLive: s.nonLive, prefetching: s.prefetching, closed: s.closed}
+		for p := range s.waiters {
+			snap.waiting[p] = s.waiters[p].Len()
+		}
+		return snap
+	}
+	checkUntil := func(t *testing.T, s *prioSem, prio core.Priority, until time.Time, want int) {
+		t.Helper()
+		before := snapshot(s)
+		if got := s.available(prio, until); got != want {
+			t.Fatalf("available(%d) = %d, want %d", prio, got, want)
+		}
+		if after := snapshot(s); after != before {
+			t.Fatalf("available(%d) mutated state: before %+v, after %+v", prio, before, after)
+		}
+	}
+	check := func(t *testing.T, s *prioSem, prio core.Priority, want int) {
+		t.Helper()
+		checkUntil(t, s, prio, time.Time{}, want)
+	}
+
+	s := newPrioSem(4, 1)
+	s.reserveLive = true
+	if !s.TryAcquire(core.PriorityLive) || !s.TryAcquire(core.PriorityPrefetch) {
+		t.Fatal("setup acquires should succeed")
+	}
+	// inUse=2, nonLive=1, prefetching=1 (at its cap).
+	check(t, s, core.PriorityLive, 2)
+	check(t, s, core.PriorityReadahead, 2)
+	check(t, s, core.PriorityPrefetch, 0)
+	s.Release(core.PriorityPrefetch)
+	s.Release(core.PriorityLive)
+
+	// Prefetch with grantable slots: probes take and untake prefetch slots.
+	s = newPrioSem(4, 2)
+	check(t, s, core.PriorityPrefetch, 2)
+
+	// Burst: readahead may borrow the reserved live slot only until a
+	// future deadline; with a zero deadline it may not.
+	s = newPrioSem(2, 1)
+	s.reserveLive = true
+	if !s.TryAcquire(core.PriorityReadahead) {
+		t.Fatal("setup readahead acquire should succeed")
+	}
+	checkUntil(t, s, core.PriorityReadahead, time.Time{}, 0)
+	checkUntil(t, s, core.PriorityReadahead, time.Now().Add(time.Minute), 1)
+	s.Release(core.PriorityReadahead)
+
+	// mustQueue isolated: a free slot exists, but a queued readahead waiter
+	// blocks readahead/prefetch probes; live (more urgent) is unaffected.
+	s = newPrioSem(2, 1)
+	s.reserveLive = true
+	if !s.TryAcquire(core.PriorityReadahead) {
+		t.Fatal("setup readahead acquire should succeed")
+	}
+	queuedRA := acquireAsync(s, context.Background(), core.PriorityReadahead)
+	waitQueued(t, s, core.PriorityReadahead, 1)
+	s.mu.Lock()
+	s.reserveLive = false // direct, no dispatch: the waiter stays queued
+	s.mu.Unlock()
+	check(t, s, core.PriorityReadahead, 0)
+	check(t, s, core.PriorityPrefetch, 0)
+	check(t, s, core.PriorityLive, 1)
+	s.Close()
+	if err := <-queuedRA; !errors.Is(err, ErrPoolClosed) {
+		t.Fatalf("queued readahead err = %v, want ErrPoolClosed", err)
+	}
+	s.Release(core.PriorityReadahead)
+
+	// mustQueue: a queued waiter makes every priority report 0, and the
+	// probe must not disturb the waiter or the counters.
+	s = newPrioSem(1, 1)
+	if err := s.Acquire(context.Background(), core.PriorityLive); err != nil {
+		t.Fatal(err)
+	}
+	queued := acquireAsync(s, context.Background(), core.PriorityReadahead)
+	waitQueued(t, s, core.PriorityReadahead, 1)
+	for _, prio := range []core.Priority{core.PriorityLive, core.PriorityReadahead, core.PriorityPrefetch} {
+		check(t, s, prio, 0)
+	}
+
+	// Closed: still 0 and still no mutation.
+	s.Close()
+	if err := <-queued; !errors.Is(err, ErrPoolClosed) {
+		t.Fatalf("queued waiter err = %v, want ErrPoolClosed", err)
+	}
+	for _, prio := range []core.Priority{core.PriorityLive, core.PriorityReadahead, core.PriorityPrefetch} {
+		check(t, s, prio, 0)
+	}
+	s.Release(core.PriorityLive) // holders may still release
+}

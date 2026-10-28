@@ -391,6 +391,26 @@ describe("health", () => {
     expect(usenetHealth([], { enabled: true }).level).toBe("off");
     expect(usenetHealth([], { enabled: false }).level).toBe("error");
   });
+  it("warns when debrid has no torrent indexer or nothing is enabled", () => {
+    const nzb = { indexer: "NZBgeek", hitsLimit: 0, enabled: true, torrent: false };
+    const tz = { indexer: "Torznab", hitsLimit: 0, enabled: true, torrent: true };
+    const debrid = { enabled: true };
+    const noTorrent = indexersHealth([nzb], debrid);
+    expect(noTorrent.level).toBe("warn");
+    expect(noTorrent.summary).toBe("No torrent indexer for debrid");
+    expect(noTorrent.details[0]).toContain("Stremio addon or Torznab");
+    // A disabled torrent indexer does not count.
+    expect(indexersHealth([nzb, { ...tz, enabled: false }], debrid).level).toBe("warn");
+    expect(indexersHealth([nzb, tz], debrid).level).toBe("ok");
+    // Without debrid, Usenet-only indexers are fine.
+    expect(indexersHealth([nzb], { enabled: false }).level).toBe("ok");
+    expect(indexersHealth([nzb]).level).toBe("ok");
+    const off = indexersHealth([{ ...nzb, enabled: false }]);
+    expect([off.level, off.summary]).toEqual(["warn", "No indexers enabled"]);
+    expect(
+      computeHealth({ indexers: [nzb], debrid }, now).find((x) => x.id === "indexers")?.level,
+    ).toBe("warn");
+  });
   it("flags real problems", () => {
     expect(usenetHealth([]).level).toBe("error");
     expect(usenetHealth({ error: "boom" }).summary).toBe("boom");

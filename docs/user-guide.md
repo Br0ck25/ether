@@ -5,12 +5,13 @@ normal Plex apps to browse and watch.
 
 ## Set up
 
-Sign in to Plex, add your Usenet providers and indexers (Newznab/Torznab URLs
-or built-in sites), and choose a cache folder and budget. Configure quality profiles for your network and remote
-connections. Ether supplies no media, provider accounts or indexer access.
-
-You can also stream torrents that your own debrid account (Real-Debrid, TorBox,
-AllDebrid or Premiumize) already holds.
+The setup wizard signs you in to Plex, then asks where Ether streams from: a
+debrid account (Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link or
+Offcloud), a Usenet provider, or both, each tested before you continue. Next add at least one
+indexer: a Stremio stream addon's install link or a Torznab URL for debrid,
+and a Newznab URL for Usenet. Finally choose a cache folder and budget.
+Configure quality profiles for your network and remote connections afterwards.
+Ether supplies no media, provider accounts or indexer access.
 
 ## Stream torrents through debrid
 
@@ -315,6 +316,56 @@ file under these names:
 
 Preview thumbnails appear while a title plays and fill in as playback
 progresses.
+
+## Subtitles from OpenSubtitles
+
+With OpenSubtitles enabled, Ether adds subtitles in each viewer's preferred
+languages (**Audio & subtitles**) when a release doesn't include them. They
+appear in the Plex app's subtitle menu as external tracks, such as "English (SRT
+External)", and subtitle mode **Always** selects them.
+
+- Ether downloads them while a title's page is open and when playback starts.
+  The first time a title is opened they can take a few seconds to appear; reopen
+  the page or start playback to see them.
+- **Search** in the Plex subtitle menu lists OpenSubtitles results for a
+  language. Choosing one downloads it, adds it to the title for every viewer and
+  selects it for you.
+- Every download counts against the OpenSubtitles daily quota. Signing in with
+  an OpenSubtitles account raises it. Ether limits background downloads so
+  browsing doesn't use it up.
+- When a stream is converted, text subtitles are sent alongside the video
+  rather than burned into it.
+
+## Import a quality profile from TRaSH Guides
+
+Coming from Radarr or Sonarr? Open **Releases › Quality profiles** and choose
+**Import from TRaSH Guides**. Pick **Radarr** for movies or **Sonarr** for
+shows, then choose a profile, such as *HD Bluray + WEB* or *[SQP] SQP-1
+(2160p)*. Ether shows what it will add before saving:
+
+- the qualities the profile allows, its resolution range, source order and
+  minimum custom format score;
+- every custom format the profile scores, with its score from the profile's
+  TRaSH score set: **Added** formats join **Custom scoring**, **Already in
+  Custom scoring** ones are reused unchanged, and any Ether can't evaluate
+  (indexer flags, for example) are listed but left out;
+- what doesn't carry over. Upgrade and cutoff settings don't apply, because
+  Ether picks the best release each time something plays. Qualities with no
+  streaming equivalent, such as Raw-HD or SDTV, are skipped. Radarr's
+  "Original" language rule isn't a hard filter in Ether.
+
+Rename the profile if you like, then choose **Add profile**. Your other
+profiles keep ranking releases exactly as before: they score the newly added
+formats 0, as Radarr and Sonarr do for formats a profile doesn't list. The new
+profile's drawer shows its imported rules; **Allow all** removes the quality
+limits.
+
+Ether reads the profiles from TRaSH Guides on GitHub and keeps them for an
+hour. If GitHub is unreachable or its hourly request limit is used up, switch
+to **Paste JSON** and paste or upload a profile file from the guide's
+`docs/json/radarr/quality-profiles` or `docs/json/sonarr/quality-profiles`
+folder. Custom formats Ether can't fetch are marked **Not found**; paste them
+under **Custom scoring** and import the profile again.
 
 ## Choose and fix releases
 

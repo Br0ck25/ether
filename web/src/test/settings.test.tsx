@@ -6,6 +6,30 @@ import { renderAppWith } from "./routes";
 const WAIT = { timeout: 4000 };
 
 describe("Settings", () => {
+  it("saves automatic franchise visibility without changing other catalog settings", async () => {
+    const { fake } = renderApp("/catalog/settings");
+    const toggle = await screen.findByLabelText("Hide automatic franchise collections", {}, WAIT);
+    expect(toggle).not.toBeChecked();
+    const before = { ...fake.state.config.catalog };
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/catalog")).toHaveLength(1), WAIT);
+    expect(calls(fake, "PUT", "/config/catalog")[0]!.body).toEqual({
+      ...before,
+      hideFranchiseCollections: true,
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Unsaved changes" })).toBeNull(),
+    );
+    fireEvent.click(screen.getByLabelText("Hide automatic franchise collections"));
+    fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/catalog")).toHaveLength(2), WAIT);
+    expect(calls(fake, "PUT", "/config/catalog")[1]!.body).toEqual({
+      ...before,
+      hideFranchiseCollections: false,
+    });
+  });
+
   it("round-trips redacted secrets and saves only the changed service", async () => {
     const { fake } = renderApp("/services/opensubtitles", {}, (f) => {
       f.state.config.openSubtitles = {

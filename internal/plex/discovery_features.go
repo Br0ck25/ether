@@ -266,6 +266,18 @@ func (s *Server) decorateDiscoveryMetadata(ctx context.Context, pr *Request, t *
 	}
 }
 func (s *Server) handleDiscoveryPoster(w http.ResponseWriter, r *http.Request) {
+	k, e := core.ParseRatingKey(chi.URLParam(r, "id"))
+	if e != nil {
+		writeHTTPError(w, 400)
+		return
+	}
+	q := r.URL.Query()
+	s.serveDiscoveryPoster(w, r, k, q.Get("kind"), q.Get("lang"))
+}
+
+// serveDiscoveryPoster also serves Plex's photo transcode wrapper. Keep the
+// authenticated outer request: credentials inside an artwork URL grant nothing.
+func (s *Server) serveDiscoveryPoster(w http.ResponseWriter, r *http.Request, k core.RatingKey, kind, lang string) {
 	d := s.d.Discovery
 	if d == nil || d.Overlays == nil {
 		writeHTTPError(w, 404)
@@ -273,17 +285,11 @@ func (s *Server) handleDiscoveryPoster(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	pr := FromContext(ctx)
-	k, e := core.ParseRatingKey(chi.URLParam(r, "id"))
-	if e != nil {
-		writeHTTPError(w, 400)
-		return
-	}
 	t, e := s.d.Catalog.Get(ctx, k)
 	if e != nil || pr.User == nil || !s.visibleTitle(ctx, pr.User, t) {
 		writeHTTPError(w, 404)
 		return
 	}
-	lang := r.URL.Query().Get("lang")
 	if lang == "" {
 		lang = pr.Language
 	}
@@ -307,7 +313,7 @@ func (s *Server) handleDiscoveryPoster(w http.ResponseWriter, r *http.Request) {
 	}
 	var data []byte
 	var ct string
-	switch r.URL.Query().Get("kind") {
+	switch kind {
 	case "backdrop":
 		data, ct, e = d.Overlays.Backdrop(ctx, pr.User, t, lang)
 	case "logo":

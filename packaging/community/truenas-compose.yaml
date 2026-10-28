@@ -1,7 +1,6 @@
 # TrueNAS SCALE 24.10+ Apps > Discover Apps > Custom App > Install via YAML.
-# Create local datasets and grant /config + /cache write access to the image's
-# ether UID/GID before installing; determine them with `docker run --rm
-# --entrypoint id ghcr.io/braedonsaunders/ether:latest ether` on a Docker host.
+# Create local datasets and set PUID/PGID below to their owner (TrueNAS's apps
+# user is 568); the container hands /config and /cache to that user on start.
 services:
   ether:
     image: ghcr.io/braedonsaunders/ether:latest
@@ -10,11 +9,13 @@ services:
     environment:
       ETHER_DATA_DIR: /config
       TZ: Etc/UTC
+      PUID: "568"
+      PGID: "568"
     volumes:
       - /mnt/tank/apps/ether/config:/config
       - /mnt/tank/apps/ether/cache:/cache
       - /mnt/tank/media:/media:ro
-    # Optional hardware acceleration, with the render GID in group_add:
+    # Optional hardware acceleration; the render node's group is added
+    # automatically:
     # devices: ["/dev/dri:/dev/dri"]
-    # group_add: ["107"]
     stop_grace_period: 30s

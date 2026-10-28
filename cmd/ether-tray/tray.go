@@ -19,6 +19,9 @@ import (
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	a := newApp(log)
+	if len(os.Args) > 1 && os.Args[1] == "--open" {
+		os.Exit(a.openUI())
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--headless" {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

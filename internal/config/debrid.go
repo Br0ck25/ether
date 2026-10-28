@@ -6,10 +6,12 @@ const (
 	DebridTorBox     = "torbox"
 	DebridAllDebrid  = "alldebrid"
 	DebridPremiumize = "premiumize"
+	DebridDebridLink = "debridlink"
+	DebridOffcloud   = "offcloud"
 )
 
 // DebridKinds lists the supported debrid services.
-var DebridKinds = []string{DebridRealDebrid, DebridTorBox, DebridAllDebrid, DebridPremiumize}
+var DebridKinds = []string{DebridRealDebrid, DebridTorBox, DebridAllDebrid, DebridPremiumize, DebridDebridLink, DebridOffcloud}
 
 // Debrid configures owner-supplied debrid accounts. Torrent releases from
 // Torznab indexers are added to a debrid service that already holds them
@@ -37,7 +39,7 @@ type Debrid struct {
 type DebridProvider struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
-	Kind     string `json:"kind"` // realdebrid, torbox, alldebrid, premiumize
+	Kind     string `json:"kind"` // realdebrid, torbox, alldebrid, premiumize, debridlink, offcloud
 	APIKey   string `json:"apiKey"`
 	Priority int    `json:"priority"` // lower is tried first
 	Enabled  bool   `json:"enabled"`

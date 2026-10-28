@@ -26,12 +26,43 @@ type Indexer struct {
 	inner   core.Indexer
 	svc     *Service
 	flights flight.Group[string, []byte]
+	// usenetReady reports whether a Usenet provider is enabled; nil means
+	// unknown (no debrid-only source check).
+	usenetReady func() bool
 }
 
 var _ core.Indexer = (*Indexer)(nil)
 
 // NewIndexer wraps inner.
 func NewIndexer(inner core.Indexer, svc *Service) *Indexer { return &Indexer{inner: inner, svc: svc} }
+
+// SetUsenetReady wires the "is a Usenet provider enabled" check used by
+// MissingSources. Call before the indexer is used.
+func (x *Indexer) SetUsenetReady(fn func() bool) { x.usenetReady = fn }
+
+// sourceInventory is what MissingSources needs from the inner indexer
+// (implemented by *newznab.Manager).
+type sourceInventory interface {
+	MissingSources() error
+	HasTorrentIndexer() bool
+}
+
+// MissingSources reports core.ErrNoSources when no indexer is enabled, and
+// core.ErrNoTorrentSources when debrid is the only way to play (no Usenet
+// provider) but no enabled indexer returns torrents.
+func (x *Indexer) MissingSources() error {
+	inv, ok := x.inner.(sourceInventory)
+	if !ok {
+		return nil
+	}
+	if err := inv.MissingSources(); err != nil {
+		return err
+	}
+	if x.usenetReady != nil && !x.usenetReady() && x.svc != nil && x.svc.Enabled() && !inv.HasTorrentIndexer() {
+		return core.ErrNoTorrentSources
+	}
+	return nil
+}
 
 // Inner returns the wrapped indexer.
 func (x *Indexer) Inner() core.Indexer { return x.inner }
@@ -128,8 +159,11 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 	cacheDuration, hashCount = time.Since(cacheStart), len(torrents)
 	kept := out[:0]
 	anyCached := false
+	// With cached-only off an uncached torrent is still playable later
+	// (playback sends it to download), so it stays, ranked after cached ones.
+	dropUncached := definitive && x.svc.Config().CachedOnly
 	for _, r := range out {
-		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
+		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && dropUncached && !cached[r.InfoHash] {
 			continue
 		}
 		if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
@@ -281,8 +315,9 @@ func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 		cancel()
 	}
 	kept := out[:0]
+	dropUncached := definitive && x.svc.Config().CachedOnly
 	for _, r := range out {
-		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
+		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && dropUncached && !cached[r.InfoHash] {
 			continue
 		}
 		kept = append(kept, r)

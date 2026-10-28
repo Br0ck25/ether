@@ -53,6 +53,7 @@ import { createMetadataMock } from "./metadata";
 import { createMaintenance } from "./maintenance";
 import { createReleaseConsoleMock } from "./releases";
 import { createSitesMock } from "./sites";
+import { createTrashMock } from "./trash";
 import { createCacheMock } from "./cache";
 import { createLiveTVMock } from "./livetv";
 import { TEMPLATES } from "./templates";
@@ -403,6 +404,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const catalog = buildCatalog();
   const byKey = new Map(catalog.map((t) => [t.key, t]));
   const releaseConsole = createReleaseConsoleMock(catalog);
+  const trash = createTrashMock();
   const maintenance = createMaintenance();
   const sites = createSitesMock();
   const cacheMock = createCacheMock();
@@ -1597,6 +1599,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
           grabsUsed: 3,
           grabsLimit: ix.dailyGrabs,
           grabsRemaining: ix.dailyGrabs - 3,
+          enabled: ix.enabled,
+          torrent: ix.protocol === "torrent" || ix.kind === "stremio",
         })),
         providers: (state.config.usenet.providers ?? []).map((p, i) => ({
           id: p.id,
@@ -1810,6 +1814,9 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
     const tvr = liveTV.handle(method, seg, q, body);
     if (tvr) return json(tvr.body, tvr.status);
+
+    const tr = trash.handle(method, seg, body, state.config);
+    if (tr) return json(tr.body, tr.status);
 
     const rc = releaseConsole.handle(method, seg, q, body);
     if (rc)

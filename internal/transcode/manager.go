@@ -53,6 +53,9 @@ type options struct {
 	// rungDwell is how long a run keeps producing its rung before a
 	// request on another rung may replace it (see Session.rungDwellLocked).
 	rungDwell time.Duration
+	// audioMatchBudget bounds the best-effort loudness analysis before a
+	// source swap (see Session.prepareAudioMatch).
+	audioMatchBudget time.Duration
 }
 
 func defaultOptions() options {
@@ -69,6 +72,8 @@ func defaultOptions() options {
 		dashURLs:       PlexDASHURLs,
 		manifestWait:   15 * time.Second,
 		rungDwell:      8 * time.Second,
+
+		audioMatchBudget: defaultAudioMatchBudget,
 	}
 }
 
@@ -76,6 +81,13 @@ func defaultOptions() options {
 // directory. No downloads occur while RTX Video is off. Embedded/test managers
 // that omit this option never install software.
 func WithRuntimeDir(dir string) Option { return func(o *options) { o.runtimeDir = dir } }
+
+// WithAudioMatchBudget bounds the best-effort loudness analysis run before a
+// source swap (default 1.5s). Integration tests on slow or race-instrumented
+// machines raise it; production keeps the short budget so a swap never waits.
+func WithAudioMatchBudget(d time.Duration) Option {
+	return func(o *options) { o.audioMatchBudget = d }
+}
 
 // WithRunner replaces the process runner (tests).
 func WithRunner(r Runner) Option { return func(o *options) { o.runner = r } }
