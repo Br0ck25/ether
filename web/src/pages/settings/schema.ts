@@ -174,7 +174,7 @@ export const PLEX: FieldGroup[] = [
         key: "claimed",
         label: "Claimed",
         kind: "bool",
-        help: "Set by the setup wizard when the server is linked to your Plex account.",
+        help: "Set by the setup wizard when the server is linked to your Plex account. Turning it off signs the server out of Plex: it is removed from the account's devices so another account can claim it.",
       },
       { key: "token", label: "Owner token", kind: "secret" },
       { key: "clientIdentifier", label: "Client identifier", kind: "readonly" },

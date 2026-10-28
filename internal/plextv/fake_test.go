@@ -58,6 +58,10 @@ type fakePlexTV struct {
 	requests     []string
 	headers      map[string]http.Header // path -> last headers
 	resources    map[string][]Resource  // token -> extra resources
+	// deviceOwner is the account holding this server's device record (0 =
+	// none). Like plex.tv, publishing for another account is refused.
+	deviceOwner   int64
+	deviceDeletes int
 }
 
 const fakeHash = "0a1b2c3d4e5f60718293a4b5c6d7e8f9"
@@ -233,13 +237,33 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
   <authentication-token>%s</authentication-token>
 </user>`, owner.Email, owner.ID, owner.UUID, owner.Username, owner.Title, st)
 	case r.Method == http.MethodPut && r.URL.Path == "/devices/"+f.machineID:
+		if !authed || (f.deviceOwner != 0 && f.deviceOwner != acct.ID) {
+			w.WriteHeader(401)
+			io.WriteString(w, `<errors><error>Invalid authentication token.</error></errors>`)
+			return
+		}
+		f.deviceOwner = acct.ID
+		f.putCount++
+		f.published = r.URL.Query()["Connection[][uri]"]
+		io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><Device/>`)
+	case r.Method == http.MethodGet && r.URL.Path == "/devices.xml":
 		if !authed {
 			w.WriteHeader(401)
 			return
 		}
-		f.putCount++
-		f.published = r.URL.Query()["Connection[][uri]"]
-		io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><Device/>`)
+		w.Header().Set("Content-Type", "application/xml")
+		io.WriteString(w, `<MediaContainer><Device id="77" name="Phone" clientIdentifier="phone-1" provides="client"/>`)
+		if f.deviceOwner == acct.ID {
+			fmt.Fprintf(w, `<Device id="1822812611" name="Ether" product="Plex Media Server" clientIdentifier=%q provides="server" token="secret"/>`, f.machineID)
+		}
+		io.WriteString(w, `</MediaContainer>`)
+	case r.Method == http.MethodDelete && r.URL.Path == "/devices/1822812611.xml":
+		if !authed || f.deviceOwner != acct.ID {
+			w.WriteHeader(401)
+			return
+		}
+		f.deviceOwner = 0
+		f.deviceDeletes++
 	case r.Method == http.MethodPost && r.URL.Path == "/servers.xml":
 		// PMS: token only as auth_token, no other query parameters, XML body.
 		if !authed || r.Header.Get("X-Plex-Token") != "" || len(r.URL.Query()) != 1 || r.Header.Get("Content-Type") != "application/xml" {

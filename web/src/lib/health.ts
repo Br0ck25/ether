@@ -226,6 +226,30 @@ export function remoteHealth(v: unknown): HealthItem {
   if (str(v.publicAddress)) details.push(`Public address ${str(v.publicAddress)}`);
   details.push(presence.connected ? "Connected to plex.tv" : "Not connected to plex.tv");
   if (v.listed === false) details.push("Not yet published to plex.tv");
+  if (v.tokenRejected === true)
+    return {
+      ...base,
+      level: "error",
+      summary: "plex.tv rejects this server's sign-in",
+      details: [
+        ...details,
+        "If this server was claimed by another Plex account before, remove it from that account under Authorized Devices on plex.tv, then sign out and claim it again here.",
+      ],
+    };
+  if (str(v.lastPublishError))
+    return {
+      ...base,
+      level: "warn",
+      summary: "Publishing to plex.tv is failing",
+      details: [...details, str(v.lastPublishError)],
+    };
+  if (str(v.friendSyncError))
+    return {
+      ...base,
+      level: "warn",
+      summary: "Shared users are not syncing",
+      details: [...details, str(v.friendSyncError)],
+    };
   if (presence.connected === false)
     return { ...base, level: "warn", summary: "plex.tv connection lost", details };
   if (v.remoteAccess === true) {
