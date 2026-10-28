@@ -256,9 +256,7 @@ func TestRunLogsSyncCheckAndRecordPassFailures(t *testing.T) {
 		}
 	}
 	out := &lockedBuffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(out, nil)))
-	defer slog.SetDefault(prev)
+	s.o.Logger = slog.New(slog.NewTextHandler(out, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
