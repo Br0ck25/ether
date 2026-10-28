@@ -60,6 +60,11 @@ func TestStremioCatalogSource(t *testing.T) {
 	if got := strings.Join(titlesOf(series), ","); got != "Office Life" {
 		t.Fatalf("manifest + catalog: %s %v", got, series.Warnings)
 	}
+	// A "type/id" choice copied from the warning works as the catalog id.
+	pasted := preview(core.CollectionSource{Kind: "stremioCatalog", URL: ext.URL + "/cfg123/manifest.json", Params: map[string]string{"catalog": "series/shows"}})
+	if got := strings.Join(titlesOf(pasted), ","); got != "Office Life" {
+		t.Fatalf("type/id catalog: %s %v", got, pasted.Warnings)
+	}
 	// With no catalog chosen the warning lists the choices, not the search catalogs.
 	none := preview(core.CollectionSource{Kind: "stremioCatalog", URL: ext.URL + "/cfg123/manifest.json"})
 	w := strings.Join(none.Warnings, " ")

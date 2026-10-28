@@ -184,7 +184,7 @@ function SourceBody({
           />
           <Input
             value={source.params?.catalog ?? ""}
-            placeholder="Catalog id (leave empty if the link names one)"
+            placeholder="Catalog id, e.g. series/my-list (leave empty if the link names one)"
             aria-label={`${label} catalog id`}
             onChange={(e) =>
               onChange({
@@ -199,7 +199,8 @@ function SourceBody({
             </p>
           ) : (
             <p className="text-xs text-fg-muted">
-              Preview lists the catalogs the addon offers when none is chosen.
+              The orange preview message lists the addon&apos;s catalogs when none is chosen; copy
+              one (e.g. series/my-list) here.
             </p>
           )}
         </div>

@@ -3,6 +3,7 @@ package jellyfin
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ func ServeDiscovery(ctx context.Context, bind string, httpPort int, id, name str
 	if err != nil {
 		return err
 	}
+	slog.Info("Jellyfin and Emby LAN discovery listening", "addr", pc.LocalAddr().String())
 	go func() { <-ctx.Done(); _ = pc.Close() }()
 	buf := make([]byte, 512)
 	for {
@@ -50,6 +52,7 @@ func ServeDiscovery(ctx context.Context, bind string, httpPort int, id, name str
 		})
 		_ = pc.SetWriteDeadline(time.Now().Add(time.Second))
 		_, _ = pc.WriteTo(reply, from)
+		slog.Info("answered a Jellyfin or Emby app's server search", "from", from.String(), "address", host)
 	}
 }
 
