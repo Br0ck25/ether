@@ -98,6 +98,32 @@ function normalizedIndexer(ix: Indexer): Indexer {
   return isStremio(ix) ? { ...ix, url: normalizeAddonUrl(ix.url), protocol: "torrent" } : ix;
 }
 
+/**
+ * The draft as saved: rows added but never filled in are dropped, so an
+ * empty row can't fail validation and block the step.
+ */
+export function savedDraft(cfg: EtherConfig): EtherConfig {
+  const blank = (...v: (string | undefined)[]) => v.every((x) => !x?.trim());
+  return {
+    ...cfg,
+    usenet: {
+      ...cfg.usenet,
+      providers: (cfg.usenet.providers ?? []).filter(
+        (p) => !blank(p.name, p.host, p.username, p.password),
+      ),
+    },
+    indexers: (cfg.indexers ?? [])
+      .filter((ix) => !blank(ix.name, ix.url, ix.apiKey))
+      .map(normalizedIndexer),
+    ...(cfg.debrid && {
+      debrid: {
+        ...cfg.debrid,
+        providers: (cfg.debrid.providers ?? []).filter((d) => !blank(d.name, d.apiKey)),
+      },
+    }),
+  };
+}
+
 /** Whether a wizard step may be left: required steps must be complete and tested (or explicitly skipped). */
 export function canAdvance(
   step: number,
@@ -337,7 +363,7 @@ export default function Setup() {
     setSaving(true);
     setError(null);
     try {
-      setCfg(await api.putConfig({ ...cfg, indexers: indexers.map(normalizedIndexer) }));
+      setCfg(await api.putConfig(savedDraft(cfg)));
       if (step < STEPS.length - 1) setStep(step + 1);
       else {
         await api.setupComplete(Object.values(skipped).some(Boolean));

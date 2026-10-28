@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { createFakeServer } from "../mock/server";
-import Setup, { canAdvance } from "../pages/Setup";
+import Setup, { canAdvance, savedDraft } from "../pages/Setup";
 import type { Indexer, UsenetProvider } from "../lib/types";
 import { api } from "../lib/api";
 import { calls, renderApp } from "./harness";
@@ -94,6 +94,36 @@ describe("canAdvance gating", () => {
   it("cache and optional steps never block", () => {
     expect(canAdvance(3, base)).toBe(true);
     expect(canAdvance(4, base)).toBe(true);
+  });
+});
+
+describe("savedDraft", () => {
+  it("drops rows that were added but never filled in, keeping started ones", () => {
+    const cfg = createFakeServer().state.config;
+    const blankProvider = { ...provider, id: "p2", name: "", host: "", username: "", password: "" };
+    const started = {
+      ...provider,
+      id: "p3",
+      name: "",
+      host: "news2.example.com",
+      username: "",
+      password: "",
+    };
+    const blankIndexer = { ...indexer, id: "i2", name: "", url: "", apiKey: "" };
+    const draft = savedDraft({
+      ...cfg,
+      usenet: { providers: [blankProvider, provider, started] },
+      indexers: [indexer, blankIndexer],
+      debrid: cfg.debrid && {
+        ...cfg.debrid,
+        providers: [
+          { id: "d1", name: "", kind: "realdebrid", apiKey: " ", priority: 0, enabled: true },
+        ],
+      },
+    });
+    expect(draft.usenet.providers?.map((p) => p.id)).toEqual(["p1", "p3"]);
+    expect(draft.indexers?.map((ix) => ix.id)).toEqual(["i1"]);
+    if (cfg.debrid) expect(draft.debrid?.providers).toEqual([]);
   });
 });
 

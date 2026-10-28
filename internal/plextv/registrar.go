@@ -105,6 +105,7 @@ type RegistrarOptions struct {
 	MappingInterval      time.Duration // UPnP/NAT-PMP renew check (5m)
 	CertInterval         time.Duration // certificate expiry check (1w, observed when not near expiry)
 	ReachabilityInterval time.Duration // remote self-test (1h, observed)
+	OwnerInterval        time.Duration // owner account / Plex Pass re-check (6h)
 
 	// PeerURIs, when set (clustered servers), returns the other live
 	// nodes' connection URIs in publication order. PublishNow appends them,
@@ -167,6 +168,7 @@ const (
 	taskMapping = "mapping"
 	taskCert    = "cert"
 	taskReach   = "reach"
+	taskOwner   = "owner"
 )
 
 // NewRegistrar validates options and returns a registrar; call Start.
@@ -192,6 +194,7 @@ func NewRegistrar(o RegistrarOptions) (*Registrar, error) {
 	def(&o.MappingInterval, 5*time.Minute)
 	def(&o.CertInterval, 7*24*time.Hour)
 	def(&o.ReachabilityInterval, time.Hour)
+	def(&o.OwnerInterval, 6*time.Hour)
 	if o.Version == "" {
 		o.Version = DefaultServerVersion
 	}
@@ -468,6 +471,14 @@ func (r *Registrar) runDue(ctx context.Context) {
 	}
 	if r.due(taskFriends, r.o.FriendSyncInterval) {
 		_ = r.SyncFriendsNow(ctx)
+	}
+	// Plex Pass bought, renewed or lapsed while running: Live TV and the
+	// owner features clients see follow without a restart.
+	if r.due(taskOwner, r.o.OwnerInterval) {
+		if err := r.RefreshOwner(ctx); err != nil && ctx.Err() == nil {
+			r.log.Debug("plex.tv owner refresh failed", "err", err)
+			r.schedule(taskOwner, r.o.Now().Add(10*time.Minute))
+		}
 	}
 	if cfg.Plex.RemoteAccess && r.due(taskReach, r.o.ReachabilityInterval) {
 		r.CheckReachability(ctx)
@@ -987,6 +998,10 @@ func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, 
 	r.st.OwnerFeatures = slices.Clone(res.Owner.Subscription.Features)
 	r.next[taskFriends] = time.Time{}
 	r.next[taskCert] = time.Time{}
+	// The claim reads the account's subscription flag; the owner refresh
+	// also consults the subscriptions list (lifetime passes), so run it on
+	// the next tick.
+	r.next[taskOwner] = time.Time{}
 	r.mu.Unlock()
 	r.refreshConfigStatus(r.o.Config.Get())
 	r.log.Info("server claimed", "owner", res.Owner.Username, "method", res.Method)
@@ -1040,6 +1055,7 @@ func (r *Registrar) RefreshOwner(ctx context.Context) error {
 	r.mu.Lock()
 	r.st.PlexPass = pass
 	r.st.OwnerFeatures = slices.Clone(acct.Subscription.Features)
+	r.next[taskOwner] = r.o.Now().Add(r.o.OwnerInterval)
 	r.mu.Unlock()
 	if r.o.Users != nil {
 		return r.o.Users.SetOwner(ctx, *acct, cfg.Plex.Token)
