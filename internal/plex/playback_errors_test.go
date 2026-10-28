@@ -164,6 +164,7 @@ func TestPlaybackMessageNamesTheCause(t *testing.T) {
 		{"uncached and a timeout", errors.Join(notCached("a"), errors.New("timeout")), msgNotAvailable},
 		{"uncached among not-available", errors.Join(notCached("a"), fmt.Errorf("x: %w", core.ErrNotAvailable)), msgNotAvailable},
 		{"plain not available", fmt.Errorf("%q: %w", "x", core.ErrNotAvailable), msgNotAvailable},
+		{"sent to download", errors.Join(notCached("a"), fmt.Errorf("%q: %w", "b", core.ErrDownloadQueued)), msgDownloadQueued},
 		{"stream limit", core.ErrStreamLimit, msgStreamLimit},
 	}
 	for _, c := range cases {

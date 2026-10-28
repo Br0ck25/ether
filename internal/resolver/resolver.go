@@ -126,6 +126,7 @@ type Service struct {
 	quality   config.Quality
 	scorer    *FormatScorer
 	scorerErr error
+	sources   string // sourcesKey of the applied config
 
 	mu            sync.RWMutex
 	bad           map[string]badMark // release id -> blocklist mark
@@ -197,13 +198,60 @@ func New(indexer core.Indexer, health core.HealthChecker, db *sql.DB, cfg config
 	return s
 }
 
-// UpdateConfig swaps the resolver/quality config snapshot.
+// UpdateConfig swaps the resolver/quality config snapshot. When the owner
+// changes where releases come from (indexers, Usenet or debrid accounts,
+// debrid's cached-only switch), cached searches and "not available"
+// answers describe the old sources and are forgotten.
 func (s *Service) UpdateConfig(cfg config.Config) {
+	key := sourcesKey(cfg)
 	s.cfgMu.Lock()
-	defer s.cfgMu.Unlock()
 	s.rcfg = cfg.Resolver
 	s.quality = cfg.Quality
 	s.scorer, s.scorerErr = NewFormatScorer(cfg.Resolver.CustomFormats, cfg.Resolver.CustomFormatScores)
+	changed := s.sources != "" && s.sources != key
+	s.sources = key
+	s.cfgMu.Unlock()
+	if changed {
+		s.forgetSourceResults(context.Background())
+	}
+}
+
+// sourcesKey fingerprints the settings that decide which releases a search
+// can find and which of them can play.
+func sourcesKey(cfg config.Config) string {
+	var b strings.Builder
+	for _, ix := range cfg.Indexers {
+		fmt.Fprintf(&b, "i|%s|%t|%s|%s|%s\n", ix.ID, ix.Enabled, ix.URL, ix.Kind, ix.Protocol)
+	}
+	for _, p := range cfg.Usenet.Providers {
+		fmt.Fprintf(&b, "u|%s|%t\n", p.ID, p.Enabled)
+	}
+	fmt.Fprintf(&b, "d|%t\n", cfg.Debrid.CachedOnly)
+	for _, d := range cfg.Debrid.Providers {
+		fmt.Fprintf(&b, "d|%s|%s|%t\n", d.ID, d.Kind, d.Enabled)
+	}
+	return b.String()
+}
+
+// forgetSourceResults drops cached searches, "not available" answers and
+// briefly-skipped failed sources, so the next play searches the current
+// sources afresh.
+func (s *Service) forgetSourceResults(ctx context.Context) {
+	s.mu.Lock()
+	for k, e := range s.avail {
+		if !e.available {
+			delete(s.avail, k)
+		}
+	}
+	clear(s.searchCache)
+	clear(s.failedHealth)
+	s.mu.Unlock()
+	if s.db != nil {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM resolver_availability WHERE available = 0`); err != nil {
+			s.log.Warn("forget unavailable titles", "err", err)
+		}
+	}
+	s.log.Info("sources changed: cleared cached searches and unavailable titles")
 }
 
 func (s *Service) resolverCfg() config.Resolver {

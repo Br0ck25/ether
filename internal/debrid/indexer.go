@@ -159,8 +159,11 @@ func (x *Indexer) SearchWith(ctx context.Context, req core.SearchRequest, arrive
 	cacheDuration, hashCount = time.Since(cacheStart), len(torrents)
 	kept := out[:0]
 	anyCached := false
+	// With cached-only off an uncached torrent is still playable later
+	// (playback sends it to download), so it stays, ranked after cached ones.
+	dropUncached := definitive && x.svc.Config().CachedOnly
 	for _, r := range out {
-		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
+		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && dropUncached && !cached[r.InfoHash] {
 			continue
 		}
 		if r.Protocol == core.ProtocolTorrent && (cached[r.InfoHash] || x.svc.KnownCached(r.InfoHash)) {
@@ -312,8 +315,9 @@ func (x *Indexer) SearchRescue(ctx context.Context, req core.SearchRequest) ([]c
 		cancel()
 	}
 	kept := out[:0]
+	dropUncached := definitive && x.svc.Config().CachedOnly
 	for _, r := range out {
-		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && definitive && !cached[r.InfoHash] {
+		if r.Protocol == core.ProtocolTorrent && r.InfoHash != "" && dropUncached && !cached[r.InfoHash] {
 			continue
 		}
 		kept = append(kept, r)

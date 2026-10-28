@@ -601,7 +601,7 @@ export const DEBRID: FieldGroup[] = [
         key: "cachedOnly",
         label: "Cached torrents only",
         kind: "bool",
-        help: "Only use torrents your debrid service already holds. Nothing is downloaded and playback never waits.",
+        help: "Only use torrents your debrid service already holds. Nothing is downloaded and playback never waits. Turn off to have Ether send the best uncached release of a title to your first debrid service when someone presses Play; it plays once the download finishes (the app says so meanwhile).",
       },
       {
         key: "removeUncached",

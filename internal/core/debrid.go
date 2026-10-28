@@ -31,6 +31,10 @@ type ReleaseTarget struct {
 // so it wraps ErrNotAvailable and is not a permanent failure.
 var ErrNotCached = fmt.Errorf("not cached by any debrid provider: %w", ErrNotAvailable)
 
+// ErrDownloadQueued reports that an uncached torrent was handed to a debrid
+// account to download (cached-only off): not playable yet, but it will be.
+var ErrDownloadQueued = fmt.Errorf("sent to the debrid service to download: %w", ErrNotCached)
+
 // ErrNoSources reports that there is nothing to search: no enabled indexer
 // at all. A configuration problem, not proof a title has no release, so
 // callers must not record the title as unavailable.

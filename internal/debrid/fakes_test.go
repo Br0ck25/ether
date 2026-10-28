@@ -159,6 +159,8 @@ type fakeProvider struct {
 	lastAdded string
 	adds      int           // torrents added to the account
 	acqDelay  time.Duration // Acquire latency before touching the account
+	// downloading counts uncached torrents left on the account (cached-only off).
+	downloading int
 }
 
 func newFakeProvider(kind string, media *mediaServer, files []File) *fakeProvider {
@@ -222,6 +224,12 @@ func (p *fakeProvider) Acquire(_ context.Context, req AcquireRequest) (*Acquired
 		return nil, fmt.Errorf("fake: %w", ErrAuth)
 	}
 	if !p.cached[req.InfoHash] {
+		if !req.CachedOnly && p.torrents[req.InfoHash] == "" {
+			// Left on the account to download, like the real services.
+			p.torrents[req.InfoHash] = fmt.Sprintf("T%d", len(p.torrents)+p.removed+1)
+			p.adds++
+			p.downloading++
+		}
 		p.mu.Unlock()
 		return nil, fmt.Errorf("fake: %w", core.ErrNotCached)
 	}

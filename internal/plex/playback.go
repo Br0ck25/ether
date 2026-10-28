@@ -46,6 +46,7 @@ const (
 	msgNoTorrentSources = "Ether streams through your debrid account but has no torrent indexer to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
 	msgDebridAuth       = "Your debrid service rejected Ether's API key: check the account under Sources › Debrid."
 	msgNotCached        = "No cached release on your debrid account right now: every release found was uncached or blocked by the provider. Try again later."
+	msgDownloadQueued   = "Not cached yet: Ether sent it to your debrid service to download. Try again in a few minutes."
 )
 
 func playbackMessage(err error) string {
@@ -56,6 +57,8 @@ func playbackMessage(err error) string {
 		return msgNoTorrentSources
 	case errors.Is(err, core.ErrNoSources):
 		return msgNoSources
+	case errors.Is(err, core.ErrDownloadQueued):
+		return msgDownloadQueued
 	case onlyNotCached(err):
 		return msgNotCached
 	case errors.Is(err, core.ErrNotAvailable):
