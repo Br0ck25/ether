@@ -458,14 +458,22 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 		c.personMu.Unlock()
 		return
 	}
-	if len(c.personHydrated) >= 2048 {
-		c.personHydrated = map[int64]time.Time{}
-	}
-	c.personHydrated[personID] = now
 	c.personMu.Unlock()
+	// Stamp only after a successful hydration: stamping before the
+	// work would suppress retries for 24h when the credit insert
+	// transaction below fails and rolls back.
+	stampHydrated := func() {
+		c.personMu.Lock()
+		if len(c.personHydrated) >= 2048 {
+			c.personHydrated = map[int64]time.Time{}
+		}
+		c.personHydrated[personID] = now
+		c.personMu.Unlock()
+	}
 
 	var have int
 	if err := c.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT key) FROM catalog_credits WHERE person_tmdb=?`, personID).Scan(&have); err == nil && have >= 8 {
+		stampHydrated()
 		return
 	}
 	bctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -532,20 +540,31 @@ func (c *Catalog) ensurePersonCredits(ctx context.Context, personID int64) {
 	if len(summaries) > 0 {
 		_ = c.upsertMany(ctx, summaries, upsertOpts{browsable: true})
 	}
+	if len(links) == 0 {
+		// Hydration succeeded but there was nothing to persist.
+		stampHydrated()
+	}
 	if len(links) > 0 {
 		tx, err := c.db.BeginTx(ctx, nil)
 		if err != nil {
-			c.log.Debug("catalog: begin person credits", "person", personID, "err", err)
+			c.log.Warn("catalog: begin person credits", "person", personID, "err", err)
 		} else {
 			defer tx.Rollback() // after Commit this returns ErrTxDone, ignorable
+			var insertErr error
 			for _, l := range links {
-				_, _ = tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
-					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb)
+				if _, err := tx.ExecContext(ctx, `INSERT INTO catalog_credits(key,person_tmdb,name,role,kind,ord,thumb) VALUES(?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+					int64(l.key), personID, personName, l.role, l.kind, l.ord, personThumb); err != nil {
+					insertErr = err
+					break
+				}
 			}
-			if err := tx.Commit(); err != nil {
-				c.log.Debug("catalog: commit person credits", "person", personID, "err", err)
+			if insertErr != nil {
+				c.log.Warn("catalog: insert person credits", "person", personID, "err", insertErr)
+			} else if err := tx.Commit(); err != nil {
+				c.log.Warn("catalog: commit person credits", "person", personID, "err", err)
 			} else {
 				c.writeGen.Add(1)
+				stampHydrated()
 			}
 		}
 	}
