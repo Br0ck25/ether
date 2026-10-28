@@ -40,6 +40,10 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 			}
 		},
 		Logger: a.log.With("component", "release-console"),
+		Guides: resolver.NewTrashGuides(resolver.TrashOptions{
+			UserAgent: "Ether/" + a.opts.Version + " (+https://github.com/braedonsaunders/ether)",
+		}),
+		SaveConfig: a.saveValidated,
 	})
 	a.discoveryHandlers(m)
 	adoptionHandlers(a, m)

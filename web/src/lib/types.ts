@@ -367,6 +367,11 @@ export interface QualityProfile {
   maxSizeMbPerMin: number;
   preferredLanguages: string[] | null;
   allowCam: boolean;
+  /** Imported profiles: the only source-resolution pairs allowed, e.g. "webdl-1080". */
+  allowedQualities?: string[] | null;
+  /** Imported profiles: custom format scores by trash ID, overriding the defaults. */
+  customFormatScores?: Record<string, number> | null;
+  minCustomFormatScore?: number | null;
 }
 
 export interface QualityRule {

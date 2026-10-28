@@ -300,6 +300,7 @@ export function RecordDrawer({
   onSave,
   saving = false,
   saveLabel,
+  saveDisabled,
   onRemove,
   removeLabel = "Remove",
   removeDisabled,
@@ -314,6 +315,8 @@ export function RecordDrawer({
   onSave: () => void;
   saving?: boolean;
   saveLabel: string;
+  /** Holds the save back until the record is ready, e.g. a preview has loaded. */
+  saveDisabled?: boolean;
   /** Shown for existing records only. */
   onRemove?: () => void;
   removeLabel?: string;
@@ -348,7 +351,7 @@ export function RecordDrawer({
           <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button size="sm" onClick={onSave} disabled={saving}>
+          <Button size="sm" onClick={onSave} disabled={saving || saveDisabled}>
             {saving ? "Saving…" : saveLabel}
           </Button>
         </div>
