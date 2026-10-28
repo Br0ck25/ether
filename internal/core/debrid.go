@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
@@ -29,6 +30,21 @@ type ReleaseTarget struct {
 // instantly. It is a per-release skip, never proof the release is broken,
 // so it wraps ErrNotAvailable and is not a permanent failure.
 var ErrNotCached = fmt.Errorf("not cached by any debrid provider: %w", ErrNotAvailable)
+
+// ErrNoSources reports that there is nothing to search: no enabled indexer
+// at all. A configuration problem, not proof a title has no release, so
+// callers must not record the title as unavailable.
+var ErrNoSources = fmt.Errorf("no indexers to search: %w", ErrNotAvailable)
+
+// ErrNoTorrentSources reports that debrid is the only way to play (no
+// Usenet provider) but no enabled indexer returns torrents (Torznab, a
+// Stremio addon or a torrent built-in site).
+var ErrNoTorrentSources = fmt.Errorf("debrid has no torrent indexer to search: %w", ErrNoSources)
+
+// ErrDebridAuth is a debrid service rejecting the configured API key (or an
+// account that cannot use the API). A configuration problem, never a
+// release failure.
+var ErrDebridAuth = errors.New("debrid: authentication failed")
 
 // TargetReleaseID derives a stable release ID for one episode of a
 // multi-file release, so health, pins, cache and bad marks apply to the

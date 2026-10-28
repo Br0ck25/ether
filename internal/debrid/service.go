@@ -309,6 +309,11 @@ func (e *entry) blocked(now time.Time) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if now.Before(e.until) {
+		if e.state == "auth_failed" {
+			// Keep the cause classifiable: playback tells the viewer the
+			// key was rejected rather than that nothing was found.
+			return fmt.Errorf("debrid provider %q paused until %s (%s): %w", displayName(e.cfg), e.until.Format(time.Kitchen), e.lastError, ErrAuth)
+		}
 		return fmt.Errorf("debrid provider %q paused until %s (%s)", displayName(e.cfg), e.until.Format(time.Kitchen), e.lastError)
 	}
 	return nil

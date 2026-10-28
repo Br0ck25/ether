@@ -53,6 +53,9 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		tried      []string
 		alternates []core.Release
 		lastErr    error
+		// allUncached: every release that failed to open was a torrent
+		// no debrid account could serve (uncached, blocked, add refused).
+		allUncached = true
 	)
 	fallback := func(size int64) core.MediaInfo {
 		info := EstimateInfo(s.title, s.caps, profile)
@@ -65,6 +68,9 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 			res, err = m.nextResolution(ctx, s, tried, alternates)
 			if err != nil {
 				if lastErr != nil && errors.Is(err, core.ErrNotAvailable) {
+					if errors.Is(lastErr, core.ErrDebridAuth) {
+						return nil, fmt.Errorf("%w (last failure: %v): %w", err, lastErr, core.ErrDebridAuth)
+					}
 					return nil, fmt.Errorf("%w (last failure: %v)", err, lastErr)
 				}
 				return nil, err
@@ -81,6 +87,7 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 			return nil, ctx.Err()
 		}
 		lastErr = err
+		allUncached = allUncached && errors.Is(err, core.ErrNotCached)
 		m.log.Warn("release failed to open", "release", res.Release.Name, "err", err)
 		tried = append(tried, res.Release.ID)
 		if len(res.Alternates) > 0 {
@@ -88,7 +95,23 @@ func (m *Manager) openInitial(ctx context.Context, s *session, profile core.Qual
 		}
 		res = nil
 	}
-	return nil, fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotAvailable, len(tried), lastErr)
+	return nil, releasesFailed(len(tried), lastErr, allUncached)
+}
+
+// releasesFailed is the error after every attempted release failed to open.
+// It always wraps core.ErrNotAvailable and keeps the owner-facing cause
+// classifiable: a debrid service rejecting its API key (a configuration
+// problem) or every release uncached on the debrid accounts. Other release
+// errors stay text only, so release-level sentinels (ErrNotFound and the
+// like) cannot change how the failure is reported to the client.
+func releasesFailed(n int, lastErr error, allUncached bool) error {
+	switch {
+	case errors.Is(lastErr, core.ErrDebridAuth):
+		return fmt.Errorf("%w: %d releases failed (last: %v): %w", core.ErrNotAvailable, n, lastErr, core.ErrDebridAuth)
+	case allUncached && n > 0:
+		return fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotCached, n, lastErr)
+	}
+	return fmt.Errorf("%w: %d releases failed (last: %v)", core.ErrNotAvailable, n, lastErr)
 }
 
 // nextResolution returns the next release to try: an untried alternate when
