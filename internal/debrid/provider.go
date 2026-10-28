@@ -216,6 +216,8 @@ var kindLabels = map[string]string{
 	config.DebridTorBox:     "TorBox",
 	config.DebridAllDebrid:  "AllDebrid",
 	config.DebridPremiumize: "Premiumize",
+	config.DebridDebridLink: "Debrid-Link",
+	config.DebridOffcloud:   "Offcloud",
 }
 
 // ---------------------------------------------------------------------------
