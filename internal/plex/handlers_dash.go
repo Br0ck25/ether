@@ -47,6 +47,11 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusForbidden)
 		return
 	}
+	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
+		s.log.Info("start DASH playback failed", "key", p.key, "reason", playbackMessage(err), "err", err, "decision", "remembered")
+		s.writeErr(w, r, err)
+		return
+	}
 	entry, ok := s.transcodes.get(p.sessionID)
 	var ps *core.PlaySession
 	if ok && entry.key == p.key && entry.userID == pr.User.ID {
@@ -54,7 +59,7 @@ func (s *Server) handleStartDASH(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok || ps == nil || !p.sameSettings(entry.requested) {
 		if _, ps, _, err = s.prepare(ctx, pr, &p); err != nil {
-			s.log.Info("start DASH playback failed", "key", p.key, "err", err)
+			s.log.Info("start DASH playback failed", "key", p.key, "reason", playbackMessage(err), "err", err)
 			s.writeErr(w, r, err)
 			return
 		}

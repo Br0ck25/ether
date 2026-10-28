@@ -1591,6 +1591,8 @@ export function createFakeServer(opts: FakeOptions = {}) {
           grabsUsed: 3,
           grabsLimit: ix.dailyGrabs,
           grabsRemaining: ix.dailyGrabs - 3,
+          enabled: ix.enabled,
+          torrent: ix.protocol === "torrent" || ix.kind === "stremio",
         })),
         providers: (state.config.usenet.providers ?? []).map((p, i) => ({
           id: p.id,

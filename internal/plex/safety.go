@@ -40,6 +40,18 @@ func (s *Server) visibleTitle(ctx context.Context, u *core.User, t *core.Title) 
 	if len(s.availableForViewer(ctx, u, []core.Title{*t})) == 0 {
 		return false
 	}
+	return s.playableTitle(ctx, u, t)
+}
+
+// playableTitle is visibleTitle without the availability-discovery filter:
+// content policy, section access and the show's inherited policy only.
+// Discovery evidence hides recent titles from lists, but it is a guess about
+// releases, not a permission: a viewer who presses Play on such a title still
+// gets a resolve attempt and a readable decision instead of a bare 404.
+func (s *Server) playableTitle(ctx context.Context, u *core.User, t *core.Title) bool {
+	if !s.titleVisible(u, t) {
+		return false
+	}
 	if t.ShowKey != 0 {
 		show, err := s.d.Catalog.Get(ctx, t.ShowKey)
 		if err != nil || !s.titleVisible(u, show) {

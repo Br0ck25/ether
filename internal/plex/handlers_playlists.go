@@ -170,10 +170,12 @@ func (s *Server) resolveURI(ctx context.Context, pr *Request, uri string) ([]cor
 		var out []core.RatingKey
 		for _, k := range keys {
 			// An addressed title (or the show above it) the viewer may
-			// not see never reaches a playlist or play queue.
+			// not see never reaches a playlist or play queue. Policy only:
+			// discovery evidence hides a recent title from lists but must
+			// not stop a viewer queueing it to play.
 			switch k.Kind() {
 			case core.KindShow, core.KindSeason, core.KindMovie, core.KindEpisode:
-				if t, err := s.metadataTitle(ctx, pr, k); err == nil && !s.visibleTitle(ctx, pr.User, t) {
+				if t, err := s.metadataTitle(ctx, pr, k); err == nil && !s.playableTitle(ctx, pr.User, t) {
 					return nil, core.ErrNotFound
 				}
 			}

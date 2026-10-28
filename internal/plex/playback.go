@@ -40,10 +40,24 @@ const (
 	msgNotAvailable = "Not available yet: no playable release of this title was found. Try again later."
 	msgStreamLimit  = "Stream limit reached: stop another stream on this server and try again."
 	msgPlayFailed   = "This title could not be played right now. Try again in a moment."
+	// Setup problems: the owner can fix these, and "not available" would
+	// send them looking for a missing release instead.
+	msgNoSources        = "Ether has no sources to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
+	msgNoTorrentSources = "Ether streams through your debrid account but has no torrent indexer to search: add a Stremio addon or Torznab indexer under Sources › Indexers."
+	msgDebridAuth       = "Your debrid service rejected Ether's API key: check the account under Sources › Debrid."
+	msgNotCached        = "No cached release on your debrid account right now: every release found was uncached or blocked by the provider. Try again later."
 )
 
 func playbackMessage(err error) string {
 	switch {
+	case errors.Is(err, core.ErrDebridAuth):
+		return msgDebridAuth
+	case errors.Is(err, core.ErrNoTorrentSources):
+		return msgNoTorrentSources
+	case errors.Is(err, core.ErrNoSources):
+		return msgNoSources
+	case onlyNotCached(err):
+		return msgNotCached
 	case errors.Is(err, core.ErrNotAvailable):
 		return msgNotAvailable
 	case errors.Is(err, core.ErrStreamLimit):
@@ -52,6 +66,38 @@ func playbackMessage(err error) string {
 		return "Indexers are temporarily at their limit. Ether will retry automatically; previously cached releases may still play."
 	}
 	return msgPlayFailed
+}
+
+// onlyNotCached reports whether every cause in err is core.ErrNotCached
+// (uncached, blocked or add-refused on the debrid accounts). The resolver
+// joins one error per failed candidate, so "every" means each joined branch;
+// errors.Is alone would match a single uncached torrent among Usenet
+// failures. A multi-%w error is treated the same way, which errs towards
+// the general message.
+func onlyNotCached(err error) bool {
+	for err != nil {
+		if err == core.ErrNotCached {
+			return true
+		}
+		switch x := err.(type) {
+		case interface{ Unwrap() []error }:
+			errs := x.Unwrap()
+			if len(errs) == 0 {
+				return false
+			}
+			for _, e := range errs {
+				if !onlyNotCached(e) {
+					return false
+				}
+			}
+			return true
+		case interface{ Unwrap() error }:
+			err = x.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // playRequest is a parsed decision/start request.
@@ -235,7 +281,8 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if err != nil {
 		return nil, nil, core.Decision{}, err
 	}
-	if !s.visibleTitle(ctx, pr.User, t) {
+	// Policy only: discovery evidence never blocks a play attempt.
+	if !s.playableTitle(ctx, pr.User, t) {
 		return nil, nil, core.Decision{}, core.ErrNotFound
 	}
 	if policy, ok := s.d.AccessPolicy.(core.PlaybackAccessPolicy); ok && !policy.CanPlay(pr.User, p.caps.Remote, s.now()) {
@@ -341,7 +388,11 @@ func (s *Server) handleDecision(w http.ResponseWriter, r *http.Request) {
 		if ctx.Err() != nil {
 			return
 		}
-		s.log.Info("playback decision failed", "key", p.key, "user", pr.User.Username, "err", err)
+		s.log.Info("playback decision failed", "key", p.key, "user", pr.User.Username, "reason", playbackMessage(err), "err", err)
+		// The client follows a failed decision with start.mpd/start.m3u8
+		// for the same session: answer it with this error, not a second
+		// full resolve that fails the same way.
+		s.transcodes.fail(p.sessionID, pr.User.ID, pr.ClientID, p.key, err, s.now())
 		s.write(w, r, s.decisionError(ctx, pr, t, err, p))
 		return
 	}
@@ -649,6 +700,11 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, http.StatusForbidden)
 		return
 	}
+	if err, failed := s.transcodes.takeFailure(p.sessionID, pr.User.ID, p.key, s.now()); failed {
+		s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err, "decision", "remembered")
+		s.writeErr(w, r, err)
+		return
+	}
 	entry, ok := s.transcodes.get(p.sessionID)
 	var ps *core.PlaySession
 	if ok && entry.key == p.key && entry.userID == pr.User.ID {
@@ -659,7 +715,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		// preceding decision request. Reapply the normal policy and decision
 		// path before deciding whether a running encoder can be reused.
 		if _, ps, _, err = s.prepare(ctx, pr, &p); err != nil {
-			s.log.Info("start playback failed", "key", p.key, "err", err)
+			s.log.Info("start playback failed", "key", p.key, "reason", playbackMessage(err), "err", err)
 			s.writeErr(w, r, err)
 			return
 		}
@@ -972,7 +1028,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	title, titleErr := s.d.Catalog.Get(ctx, key)
-	if titleErr != nil || !s.visibleTitle(ctx, pr.User, title) {
+	if titleErr != nil || !s.playableTitle(ctx, pr.User, title) {
 		writeHTTPError(w, http.StatusNotFound)
 		return
 	}
@@ -997,7 +1053,7 @@ func (s *Server) handlePart(w http.ResponseWriter, r *http.Request) {
 		caps := pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps)
 		ps, err = s.prepareForRelease(ctx, pr.User, key, caps, releaseID)
 		if err != nil {
-			s.log.Info("direct play failed", "key", key, "err", err)
+			s.log.Info("direct play failed", "key", key, "reason", playbackMessage(err), "err", err)
 			s.writeErr(w, r, err)
 			return
 		}

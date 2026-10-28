@@ -119,6 +119,28 @@ func (m *Manager) Indexers() []core.Indexer {
 // Name implements core.Indexer.
 func (m *Manager) Name() string { return "indexers" }
 
+// MissingSources reports core.ErrNoSources when no indexer is enabled:
+// a search would return nothing whatever the title.
+func (m *Manager) MissingSources() error {
+	for _, cl := range m.Clients() {
+		if cl.Config().Enabled {
+			return nil
+		}
+	}
+	return core.ErrNoSources
+}
+
+// HasTorrentIndexer reports whether an enabled indexer returns torrents
+// (Torznab, a Stremio addon or a torrent built-in site).
+func (m *Manager) HasTorrentIndexer() bool {
+	for _, cl := range m.Clients() {
+		if cfg := cl.Config(); cfg.Enabled && cfg.IsTorrent() {
+			return true
+		}
+	}
+	return false
+}
+
 // Remaining returns budget state for every indexer.
 func (m *Manager) Remaining(ctx context.Context) ([]Remaining, error) {
 	var out []Remaining

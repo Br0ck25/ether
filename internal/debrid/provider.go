@@ -28,7 +28,8 @@ var (
 	errDuplicateTorrent = errors.New("debrid: torrent already exists")
 	// ErrAuth is a rejected API key or an account that cannot use the API
 	// (expired premium). A configuration problem: never a release failure.
-	ErrAuth = errors.New("debrid: authentication failed")
+	// It is core.ErrDebridAuth so a playback error can name the cause.
+	ErrAuth = core.ErrDebridAuth
 	// ErrRateLimited is HTTP 429 or the provider's equivalent.
 	ErrRateLimited = errors.New("debrid: rate limited")
 	// ErrGone is a torrent, file or link the provider no longer has; the

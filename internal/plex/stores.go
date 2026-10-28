@@ -118,7 +118,17 @@ type transcodeEntry struct {
 	offset      time.Duration
 	started     bool // StartHLS ran
 	updatedAt   time.Time
+	// A failed decision for this binding (failKey, failErr at failedAt):
+	// the start request that follows it answers with the same error at
+	// once instead of resolving again. One-shot and short-lived.
+	failKey  core.RatingKey
+	failErr  error
+	failedAt time.Time
 }
+
+// decisionFailureTTL bounds how long a failed decision answers the start
+// request that follows it; after that a start resolves afresh.
+const decisionFailureTTL = 15 * time.Second
 
 type transcodeTable struct {
 	mu sync.Mutex
@@ -164,6 +174,37 @@ func (t *transcodeTable) get(id string) (*transcodeEntry, bool) {
 	}
 	cp := *e
 	return &cp, true
+}
+
+// fail records a failed decision on the binding the decision claimed. A
+// binding owned by another viewer or device is left alone.
+func (t *transcodeTable) fail(id string, userID int64, clientID string, key core.RatingKey, err error, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.m[id]
+	if !ok || e.userID != userID || e.clientID != clientID || err == nil {
+		return
+	}
+	e.failKey, e.failErr, e.failedAt, e.updatedAt = key, err, now, now
+}
+
+// takeFailure returns and clears a recent failed decision for this viewer's
+// binding and title.
+func (t *transcodeTable) takeFailure(id string, userID int64, key core.RatingKey, now time.Time) (error, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.m[id]
+	if !ok || e.failErr == nil {
+		return nil, false
+	}
+	err, match := e.failErr, e.userID == userID && e.failKey == key && now.Sub(e.failedAt) < decisionFailureTTL
+	if e.userID == userID {
+		e.failKey, e.failErr, e.failedAt = 0, nil, time.Time{}
+	}
+	if !match {
+		return nil, false
+	}
+	return err, true
 }
 
 func (t *transcodeTable) touch(id string, now time.Time) {
