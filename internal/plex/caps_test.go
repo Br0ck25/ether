@@ -6,8 +6,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/plex/model"
+	"github.com/braedonsaunders/ether/internal/resolver"
 )
 
 func TestParseRequestHeadersAndQuery(t *testing.T) {
@@ -109,10 +111,16 @@ func TestClientCapsByProduct(t *testing.T) {
 		{"Plex Web", "Chrome", "OSX", true, false, false, 2160, true},
 		{"Plex Web", "Safari", "OSX", true, true, false, 2160, false},
 		{"Plex Web", "Firefox", "Windows", false, false, false, 2160, true},
+		{"Plex for Linux", "Linux", "standalone", false, false, false, 2160, true},
+		{"PLEX FOR LINUX", "linux", "standalone", false, false, false, 2160, true},
+		{"Plex for Windows", "Windows", "standalone", false, false, false, 2160, true},
+		{"Plex for Mac", "macOS", "standalone", false, false, false, 2160, true},
+		{"Plex Desktop", "Linux", "standalone", false, false, false, 2160, true},
 		{"Plex for Android (TV)", "Android", "SHIELD Android TV", true, true, false, 2160, true},
 		{"Plex for Android (Mobile)", "Android", "Pixel 8", true, false, false, 1080, true},
 		{"Plex for Roku", "Roku", "Roku Ultra", true, true, false, 2160, true},
 		{"Unknown Thing", "", "", false, false, false, 1080, false},
+		{"Unknown Thing", "Linux", "standalone", false, false, false, 1080, false},
 	}
 	for _, c := range cases {
 		pr := &Request{Product: c.product, Platform: c.platform, Device: c.device}
@@ -123,6 +131,36 @@ func TestClientCapsByProduct(t *testing.T) {
 		if !caps.SupportsVideo("h264") || !caps.SupportsAudio("aac") {
 			t.Errorf("%s: missing baseline codecs", c.product)
 		}
+	}
+}
+
+func TestLinuxDesktopProfileLimits(t *testing.T) {
+	quality := config.Quality{
+		Default:  "4K",
+		Profiles: []core.QualityProfile{{Name: "4K", MinHeight: 1080, MaxHeight: 2160}},
+	}
+	for _, tc := range []struct {
+		name, header, value string
+		wantHeight          int
+	}{
+		{"desktop default", "", "", 2160},
+		{"profile height limit", "X-Plex-Client-Profile-Extra", "add-limitation(scope=videoCodec&scopeName=h264&type=upperBound&name=video.height&value=1080)", 1080},
+		{"legacy resolution limit", "X-Plex-Client-Capabilities", "videoDecoders=h264{resolution:720}", 720},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/library/metadata/1000000000950028", nil)
+			r.Header.Set("X-Plex-Product", "Plex for Linux")
+			r.Header.Set("X-Plex-Platform", "Linux")
+			r.Header.Set("X-Plex-Model", "standalone")
+			if tc.header != "" {
+				r.Header.Set(tc.header, tc.value)
+			}
+			caps := ParseRequest(r).ClientCaps(0)
+			profile := resolver.SelectProfile(quality, caps, nil)
+			if profile.MaxHeight != tc.wantHeight {
+				t.Fatalf("profile max height = %d, want %d (client caps: %+v)", profile.MaxHeight, tc.wantHeight, caps)
+			}
+		})
 	}
 }
 

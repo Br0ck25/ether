@@ -113,7 +113,7 @@ func productCaps(product, platform, device string) baseCaps {
 	switch {
 	case strings.Contains(pr, "apple tv") || pl == "tvos" || strings.Contains(dv, "apple tv"):
 		return appleTVCaps
-	case strings.Contains(pr, "plex web") || strings.Contains(pr, "plex for windows") || strings.Contains(pr, "plex for mac") || strings.Contains(pr, "plex desktop"):
+	case strings.Contains(pr, "plex web") || strings.Contains(pr, "plex for windows") || strings.Contains(pr, "plex for mac") || strings.Contains(pr, "plex for linux") || strings.Contains(pr, "plex desktop"):
 		return browserCaps(platform)
 	case strings.Contains(pr, "ios") || pl == "ios" || pl == "ipados" || strings.Contains(dv, "iphone") || strings.Contains(dv, "ipad"):
 		return iosCaps
