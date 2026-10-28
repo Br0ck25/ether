@@ -86,6 +86,11 @@ describe("canAdvance gating", () => {
     );
     expect(canAdvance(1, { ...none, debrid: [{ ...rd, enabled: false }] })).toBe(false);
   });
+  it("requires a working TMDB key on the last step, or the explicit skip", () => {
+    expect(canAdvance(4, { ...base, tmdbReady: false })).toBe(false);
+    expect(canAdvance(4, { ...base, tmdbReady: true })).toBe(true);
+    expect(canAdvance(4, { ...base, tmdbReady: false, skipped: { 4: true } })).toBe(true);
+  });
   it("cache and optional steps never block", () => {
     expect(canAdvance(3, base)).toBe(true);
     expect(canAdvance(4, base)).toBe(true);

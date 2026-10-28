@@ -16,6 +16,7 @@ import (
 
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
+	"github.com/braedonsaunders/ether/internal/tmdb"
 )
 
 // ---- Setup status ----
@@ -41,10 +42,16 @@ func SetupStatus(cfg config.Config) (steps []SetupStep, complete bool) {
 	} else if cfg.Plex.Token != "" {
 		plexDetail = "signed in, not claimed"
 	}
-	enabledProviders := 0
+	// Sources: a debrid account or a Usenet provider; either is enough.
+	enabledProviders, enabledDebrid := 0, 0
 	for _, p := range cfg.Usenet.Providers {
 		if p.Enabled {
 			enabledProviders++
+		}
+	}
+	for _, p := range cfg.Debrid.Providers {
+		if p.Enabled && strings.TrimSpace(p.APIKey) != "" {
+			enabledDebrid++
 		}
 	}
 	enabledIndexers := 0
@@ -56,13 +63,15 @@ func SetupStatus(cfg config.Config) (steps []SetupStep, complete bool) {
 	cacheDone := strings.TrimSpace(cfg.Cache.Dir) != "" && cfg.Cache.BudgetBytes >= 0
 	steps = []SetupStep{
 		{ID: "plex", Title: "Sign in to plex.tv and claim", Complete: plexDone, Required: true, Detail: plexDetail},
-		{ID: "usenet", Title: "Usenet providers", Complete: enabledProviders > 0, Required: true,
-			Detail: fmt.Sprintf("%d enabled", enabledProviders)},
+		{ID: "sources", Title: "Debrid accounts or Usenet providers", Complete: enabledProviders+enabledDebrid > 0, Required: true,
+			Detail: fmt.Sprintf("%d debrid, %d Usenet enabled", enabledDebrid, enabledProviders)},
 		{ID: "indexers", Title: "Indexers", Complete: enabledIndexers > 0, Required: true,
 			Detail: fmt.Sprintf("%d enabled", enabledIndexers)},
 		{ID: "cache", Title: "Cache folder and disk budget", Complete: cacheDone, Required: true, Detail: cfg.Cache.Dir},
+		// Without TMDB there is no catalogue; a build may bundle a key.
+		{ID: "catalog", Title: "TMDB API key", Complete: tmdb.ResolveKey(cfg.Catalog) != "", Required: true},
 		{ID: "optional", Title: "Optional integrations", Complete: true, Required: false,
-			Detail: "TMDB key, Trakt, OpenSubtitles, LLM, cam policy"},
+			Detail: "Trakt, OpenSubtitles, LLM, cam policy"},
 	}
 	complete = cfg.SetupComplete
 	return steps, complete
@@ -87,6 +96,15 @@ func (h *Handler) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = decodeJSONLenient(r, &body) // empty body tolerated
 	steps, _ := SetupStatus(h.deps.Config.Get())
+	// Never even when forced: after setup only the server's Plex owner can
+	// open the admin UI, so finishing unclaimed would lock everyone out.
+	for _, s := range steps {
+		if s.ID == "plex" && !s.Complete {
+			writeError(w, http.StatusConflict, "plex_required",
+				"sign in to Plex and claim this server first: after setup only its Plex owner can open this page")
+			return
+		}
+	}
 	if !body.Force {
 		for _, s := range steps {
 			if s.Required && !s.Complete {

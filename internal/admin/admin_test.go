@@ -224,13 +224,24 @@ func TestSetupStatusAndGating(t *testing.T) {
 		Steps            []admin.SetupStep `json:"steps"`
 	}
 	decode(t, rec, &st)
-	if st.RequiredComplete || len(st.Steps) != 5 {
+	if st.RequiredComplete || len(st.Steps) != 6 {
 		t.Fatalf("bad setup status: %+v", st)
 	}
 
 	rec = serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{}`))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("complete with missing steps: got %d want 409 (%s)", rec.Code, rec.Body)
+	}
+	// Forcing never finishes an unclaimed server: nobody could sign in.
+	rec = serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{"force":true}`))
+	if rec.Code != http.StatusConflict || store.Get().SetupComplete || !strings.Contains(rec.Body.String(), "plex_required") {
+		t.Fatalf("forced complete without a Plex owner: %d %s", rec.Code, rec.Body)
+	}
+	if err := store.Update(func(c *config.Config) error {
+		c.Plex.Token, c.Plex.Claimed = "owner-token", true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	rec = serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{"force":true}`))
 	if rec.Code != 200 || !store.Get().SetupComplete {

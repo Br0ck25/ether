@@ -191,14 +191,26 @@ func NewProvider(cfg config.DebridProvider, opts ProviderOptions) (Provider, err
 	return nil, fmt.Errorf("debrid: unknown provider kind %q", cfg.Kind)
 }
 
+// displayName names an account in logs and errors: the owner's name for it,
+// else its service ("Real-Debrid"), never the internal id.
 func displayName(cfg config.DebridProvider) string {
 	if cfg.Name != "" {
 		return cfg.Name
 	}
-	if cfg.ID != "" {
-		return cfg.ID
+	if label, ok := kindLabels[cfg.Kind]; ok {
+		return label
 	}
-	return cfg.Kind
+	if cfg.Kind != "" {
+		return cfg.Kind
+	}
+	return cfg.ID
+}
+
+var kindLabels = map[string]string{
+	config.DebridRealDebrid: "Real-Debrid",
+	config.DebridTorBox:     "TorBox",
+	config.DebridAllDebrid:  "AllDebrid",
+	config.DebridPremiumize: "Premiumize",
 }
 
 // ---------------------------------------------------------------------------

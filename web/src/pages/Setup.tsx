@@ -36,7 +36,7 @@ const STEPS = [
   { title: "Sources", heading: "Where Ether streams from" },
   { title: "Indexers", heading: "Indexers and addons" },
   { title: "Cache", heading: "Cache folder and disk budget" },
-  { title: "Extras", heading: "Optional integrations" },
+  { title: "Catalogue", heading: "Catalogue and extras" },
 ];
 const GIB = 1024 ** 3;
 
@@ -107,6 +107,8 @@ export function canAdvance(
     indexers: Indexer[];
     providerTests: Record<string, TestState>;
     indexerTests: Record<string, TestState>;
+    /** The TMDB key was tested or is already saved (false blocks the last step). */
+    tmdbReady?: boolean;
     /** Debrid accounts and their tests (absent on servers without debrid). */
     debrid?: DebridProvider[];
     debridTests?: Record<string, TestState>;
@@ -134,6 +136,9 @@ export function canAdvance(
         enabled.every((i) => i.url.trim() && opts.indexerTests[i.id]?.status === "ok")
       );
     }
+    case 4:
+      // Without TMDB there is no catalogue to browse.
+      return opts.tmdbReady !== false;
     default:
       return true;
   }
@@ -151,6 +156,17 @@ export default function Setup() {
   const [providerTests, setProviderTests] = useState<Record<string, TestState>>({});
   const [indexerTests, setIndexerTests] = useState<Record<string, TestState>>({});
   const [debridTests, setDebridTests] = useState<Record<string, TestState>>({});
+  // A build with a bundled TMDB key needs none from the owner.
+  const [tmdbBundled, setTmdbBundled] = useState(false);
+  useEffect(() => {
+    api
+      .setupStatus()
+      .then((s) => {
+        const catalog = s.steps.find((x) => x.id === "catalog");
+        setTmdbBundled(Boolean(catalog?.complete));
+      })
+      .catch(() => {});
+  }, []);
   const [optTests, setOptTests] = useState<Record<string, TestState>>({});
   const [pin, setPin] = useState<{ id: string; code: string; authUrl: string } | null>(null);
   const [pinDone, setPinDone] = useState(false);
@@ -269,10 +285,12 @@ export default function Setup() {
             indexerTests,
             debrid: cfg.debrid?.providers ?? [],
             debridTests,
+            tmdbReady:
+              optTests.tmdb?.status === "ok" || cfg.catalog.tmdbKey === "••••" || tmdbBundled,
             skipped,
           })
         : false,
-    [cfg, step, providerTests, indexerTests, debridTests, skipped],
+    [cfg, step, providerTests, indexerTests, debridTests, optTests, tmdbBundled, skipped],
   );
 
   if (loadError && !cfg)
@@ -387,7 +405,8 @@ export default function Setup() {
           <Button variant="ghost" disabled={step === 0 || saving} onClick={() => setStep(step - 1)}>
             Back
           </Button>
-          {step < 3 ? (
+          {/* Plex cannot be skipped: after setup only its owner can sign in. */}
+          {step !== 0 && step !== 3 ? (
             <label className="flex items-center gap-2 text-xs text-fg-muted">
               <Checkbox
                 checked={Boolean(skipped[step])}
@@ -397,7 +416,7 @@ export default function Setup() {
             </label>
           ) : null}
           <span className="flex-1" />
-          {!advanceOk && step < 3 ? (
+          {!advanceOk && step !== 3 ? (
             <span className="hidden text-xs text-fg-muted sm:inline">
               Complete and test this step to continue.
             </span>
@@ -435,22 +454,30 @@ export default function Setup() {
             </Alert>
           ) : null}
           {pin ? (
-            <div className="rounded-xl border border-border bg-surface p-4">
-              <p className="text-sm text-fg">Enter this code at plex.tv:</p>
-              <p className="my-2 font-mono text-3xl font-bold tracking-[0.3em] text-fg">
-                {pin.code}
+            <div className="space-y-3 rounded-xl border border-border bg-surface p-4">
+              <p className="text-sm text-fg">
+                A plex.tv window opened. Sign in there and allow Ether; this page continues on its
+                own.
               </p>
-              <p className="flex items-center gap-2 text-sm text-fg-muted">
-                <a
-                  href={pin.authUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+              <div className="flex flex-wrap items-center gap-3 text-sm text-fg-muted">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.open(pin.authUrl, "_blank", "noopener,noreferrer")}
                 >
                   Open plex.tv sign-in <ExternalLink size={13} />
-                </a>
-                · waiting for approval <Spinner size={13} label="Waiting" />
-              </p>
+                </Button>
+                <span className="inline-flex items-center gap-2">
+                  Waiting for approval <Spinner size={13} label="Waiting" />
+                </span>
+              </div>
+              {/* Short PINs can also be typed at plex.tv/link; strong ones cannot. */}
+              {pin.code.length <= 8 ? (
+                <p className="text-sm text-fg-muted">
+                  Or enter <span className="font-mono font-semibold text-fg">{pin.code}</span> at
+                  plex.tv/link.
+                </p>
+              ) : null}
             </div>
           ) : !plexSigned ? (
             <Button disabled={saving} onClick={() => void startPin()}>
@@ -839,13 +866,29 @@ export default function Setup() {
       ) : null}
 
       {step === 4 ? (
-        <div className="space-y-4">
-          <p className="text-sm text-fg-muted">All of these can be set up later in Settings.</p>
-          <div className="grid gap-4 rounded-xl border border-border bg-surface p-4 sm:grid-cols-2">
-            <Field
-              label="Your TMDB API key"
-              hint="Enter your personal TMDB v3 API key or v4 read token."
-            >
+        <div className="space-y-6">
+          <section
+            className="space-y-3 rounded-xl border border-border bg-surface p-4"
+            aria-labelledby="setup-tmdb"
+          >
+            <div>
+              <h3 id="setup-tmdb" className="text-sm font-semibold text-fg">
+                Movie and TV catalogue
+              </h3>
+              <p className="text-sm text-fg-muted">
+                Ether builds your Plex library from TMDB, so a TMDB API key is required. It is free:{" "}
+                <a
+                  href="https://www.themoviedb.org/settings/api"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                >
+                  get one at themoviedb.org <ExternalLink size={13} />
+                </a>
+                , then paste it here and test it.
+              </p>
+            </div>
+            <Field label="TMDB API key" hint="Your v3 API key or v4 read access token.">
               <div className="space-y-2">
                 <SecretInput
                   ariaLabel="TMDB API key"
@@ -860,6 +903,11 @@ export default function Setup() {
                 />
               </div>
             </Field>
+          </section>
+          <p className="text-sm text-fg-muted">
+            Optional. You can add these later under Integrations.
+          </p>
+          <div className="grid gap-4 rounded-xl border border-border bg-surface p-4 sm:grid-cols-2">
             <Field label="Trakt client ID">
               <Input
                 value={cfg.trakt.clientId}
@@ -913,7 +961,7 @@ export default function Setup() {
           <Alert variant="info">
             <AlertDescription>
               Finishing setup locks this admin page to your Plex account. You can reopen setup later
-              from Settings.
+              from Connectivity.
             </AlertDescription>
           </Alert>
         </div>
@@ -933,7 +981,9 @@ function LanguageModelFields({
   test: ReactNode;
 }) {
   const { providers } = useLLMProviders();
-  const provider = findProvider(providers, llm.provider);
+  // "None" selected: no endpoint, key or model fields (findProvider reads an
+  // empty id as the custom endpoint).
+  const provider = llm.provider ? findProvider(providers, llm.provider) : undefined;
   return (
     <>
       <Field label="Language model provider" hint="Powers “Describe it” and themed Home rows.">

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -112,7 +113,13 @@ func (c *Catalog) Run(ctx context.Context) {
 		if full.Remaining(c.now()) == 0 {
 			err := c.Sync(ctx)
 			delay := c.refreshInterval()
-			if err != nil && ctx.Err() == nil {
+			switch {
+			case err == nil || ctx.Err() != nil:
+			case errors.Is(err, tmdb.ErrNoKey):
+				// A fresh install before setup: expected, not an error.
+				c.log.Info("catalog: waiting for a TMDB API key (add it in setup or Integrations)")
+				delay = min(delay, 5*time.Minute)
+			default:
 				c.log.Error("catalog: refresh sync", "err", err)
 				delay = min(delay, 5*time.Minute)
 			}
