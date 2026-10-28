@@ -19,6 +19,10 @@ import (
 // compares the same passage in two releases, then holds ONE gain for the new
 // source. No silence riding, AGC, or change to the viewer's processing rules.
 const audioMatchDuration = 6 * time.Second
+
+// defaultAudioMatchBudget keeps the loudness analysis off the swap's
+// critical path; WithAudioMatchBudget overrides it.
+const defaultAudioMatchBudget = 1500 * time.Millisecond
 const audioMatchRate = 8000
 
 type audioMatchKey struct {
@@ -34,7 +38,7 @@ type audioMatchState struct {
 
 // prepareAudioMatch is best-effort and only spends time while media is already
 // buffered. At most one pair runs per Manager, with two single-thread decoders,
-// a shared 1.5s deadline, bounded PCM, and joined cancellation. A cold or broken
+// a shared deadline (1.5s by default), bounded PCM, and joined cancellation. A cold or broken
 // input never delays an unbuffered rescue and never rejects a playable source.
 func (s *Session) prepareAudioMatch(ctx context.Context, input string, info core.MediaInfo, at time.Duration) {
 	s.mu.Lock()
@@ -69,7 +73,11 @@ func (s *Session) prepareAudioMatch(ctx context.Context, input string, info core
 		return
 	}
 	defer s.m.audioMatchBusy.Store(false)
-	ctx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	budget := s.m.opts.audioMatchBudget
+	if budget <= 0 {
+		budget = defaultAudioMatchBudget
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	// Use a passage behind the buffered boundary, normally already in the
 	// source cache, rather than fetching further ahead of playback.
