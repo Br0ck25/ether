@@ -159,49 +159,66 @@ func TestRegistrarFeatureLookupFailureDoesNotUndoClaim(t *testing.T) {
 	}
 }
 
-func TestOwnerFeatureRefreshDoesNotRestoreUnclaimedEntitlements(t *testing.T) {
-	f := newFakePlexTV(t, testMachineID)
-	f.addUser("user-token", owner())
-	f.features = []Feature{{ID: "pass", UUID: "82999dd3-a2be-482e-9f44-357879b4f603"}}
-	var block atomic.Bool
-	started, release := make(chan struct{}), make(chan struct{})
-	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/api/v2/features" && block.Load() {
-			close(started)
-			select {
-			case <-release:
-			case <-req.Context().Done():
-				return
-			}
+func TestOwnerFeatureLookupDoesNotRestoreUnclaimedEntitlements(t *testing.T) {
+	for _, duringClaim := range []bool{false, true} {
+		name := "refresh"
+		if duringClaim {
+			name = "claim"
 		}
-		f.handle(w, req)
-	})
-	r, err := NewRegistrar(RegistrarOptions{Config: &memConfig{cfg: testConfig()}, Client: newServerClient(t, f)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	if _, err := r.Claim(ctx, "user-token"); err != nil {
-		t.Fatal(err)
-	}
-	block.Store(true)
-	done := make(chan error, 1)
-	go func() { done <- r.RefreshOwner(ctx) }()
-	select {
-	case <-started:
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	if err := r.Unclaim(ctx); err != nil {
-		close(release)
-		t.Fatal(err)
-	}
-	close(release)
-	if err := <-done; err == nil {
-		t.Fatal("stale refresh succeeded after unclaim")
-	}
-	if st := r.Status(); st.PlexPass || len(st.OwnerFeatures) != 0 {
-		t.Fatal("old owner entitlements survived unclaim")
+		t.Run(name, func(t *testing.T) {
+			f := newFakePlexTV(t, testMachineID)
+			f.addUser("user-token", owner())
+			f.features = []Feature{{ID: "pass", UUID: "82999dd3-a2be-482e-9f44-357879b4f603"}}
+			var block atomic.Bool
+			started, release := make(chan struct{}), make(chan struct{})
+			f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.URL.Path == "/api/v2/features" && block.Load() {
+					close(started)
+					select {
+					case <-release:
+					case <-req.Context().Done():
+						return
+					}
+				}
+				f.handle(w, req)
+			})
+			r, err := NewRegistrar(RegistrarOptions{Config: &memConfig{cfg: testConfig()}, Client: newServerClient(t, f)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if !duringClaim {
+				if _, err := r.Claim(ctx, "user-token"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			block.Store(true)
+			done := make(chan error, 1)
+			go func() {
+				if duringClaim {
+					_, err := r.Claim(ctx, "user-token")
+					done <- err
+				} else {
+					done <- r.RefreshOwner(ctx)
+				}
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if err := r.Unclaim(ctx); err != nil {
+				close(release)
+				t.Fatal(err)
+			}
+			close(release)
+			if err := <-done; !duringClaim && err == nil {
+				t.Fatal("stale refresh succeeded after unclaim")
+			}
+			if st := r.Status(); st.PlexPass || len(st.OwnerFeatures) != 0 {
+				t.Fatal("old owner entitlements survived unclaim")
+			}
+		})
 	}
 }

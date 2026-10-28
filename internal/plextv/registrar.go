@@ -1019,19 +1019,11 @@ func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, 
 			return nil, fmt.Errorf("plextv: set owner: %w", err)
 		}
 	}
-	featureCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	features, featureErr := r.client.Features(featureCtx, res.ServerToken)
-	cancel()
-	if featureErr != nil {
-		// Claim succeeded. Keep the legacy names and let the immediate owner
-		// refresh retry this auxiliary request instead of undoing the claim.
-		r.log.Warn("plex.tv owner features unavailable after claim", "err", featureErr)
-	}
 	r.mu.Lock()
 	r.claimedToken = res.ServerToken
 	r.st.TokenRejected = false
 	r.st.PlexPass = res.Owner.Subscription.Active
-	r.st.OwnerFeatures = ownerFeatures(features, res.Owner.Subscription.Features)
+	r.st.OwnerFeatures = ownerFeatures(nil, res.Owner.Subscription.Features)
 	r.next[taskFriends] = time.Time{}
 	r.next[taskCert] = time.Time{}
 	// The claim reads the account's subscription flag; the owner refresh
@@ -1039,6 +1031,21 @@ func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, 
 	// the next tick.
 	r.next[taskOwner] = time.Time{}
 	r.mu.Unlock()
+	featureCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	features, featureErr := r.client.Features(featureCtx, res.ServerToken)
+	cancel()
+	if featureErr != nil {
+		// Claim succeeded. Keep the legacy names and let the immediate owner
+		// refresh retry this auxiliary request instead of undoing the claim.
+		r.log.Warn("plex.tv owner features unavailable after claim", "err", featureErr)
+	} else {
+		r.mu.Lock()
+		// The owner may have unclaimed or switched accounts during the fetch.
+		if r.claimedToken == res.ServerToken {
+			r.st.OwnerFeatures = ownerFeatures(features, res.Owner.Subscription.Features)
+		}
+		r.mu.Unlock()
+	}
 	r.refreshConfigStatus(r.o.Config.Get())
 	r.log.Info("server claimed", "owner", res.Owner.Username, "method", res.Method)
 	r.Trigger()
