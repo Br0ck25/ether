@@ -394,6 +394,9 @@ func (r *Registrar) Status() Status {
 	r.mu.Lock()
 	st := r.st
 	r.mu.Unlock()
+	if r.o.Config != nil && r.o.Config.Get().Plex.EmulatePlexPass {
+		st.PlexPass = true
+	}
 	st.LANAddresses = slices.Clone(st.LANAddresses)
 	st.Connections = slices.Clone(st.Connections)
 	st.PublishedURIs = slices.Clone(st.PublishedURIs)

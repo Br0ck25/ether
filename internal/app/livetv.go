@@ -13,7 +13,7 @@ func (a *App) buildLiveTV() error {
 		tc = a.transcoder
 	}
 	svc, err := livetv.New(livetv.Options{DB: a.db, Sealer: a.cfg, Catalog: a.catalog, Collections: a.collections, Playback: a.playback, Transcoder: tc, Allowed: a.safety.Allowed, CanPlay: a.safety.CanPlay, StreamLimit: func(u *core.User) int { return playback.UserStreamLimit(a.cfg.Get(), a.safety.UserPolicy(u)) }, Warm: func(ctx context.Context, key core.RatingKey) error {
-		if !a.registrar.Status().PlexPass {
+		if !a.hasPlexPass() {
 			return core.ErrUnauthorized
 		}
 		u, err := a.users.Owner(ctx)

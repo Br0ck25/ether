@@ -18,7 +18,7 @@ func (a *App) extraHomeRows(ctx context.Context, u *core.User, hc core.HubContex
 		rows, _ := a.discoveryPersonal.Hubs(ctx, u, limit)
 		out = append(out, rows...)
 	}
-	if section == "home" && a.livetv != nil && a.registrar != nil && a.registrar.Status().PlexPass {
+	if section == "home" && a.livetv != nil && a.hasPlexPass() {
 		row, err := a.livetv.HomeHub(ctx, u, limit)
 		if err == nil && len(row.Items) > 0 {
 			out = append(out, row)

@@ -114,6 +114,7 @@ function defaultConfig(): EtherConfig {
       ownerUsername: "owner",
       claimed: true,
       remoteAccess: true,
+      emulatePlexPass: false,
       useUpnp: true,
       publicPort: 32400,
       publicHost: "",

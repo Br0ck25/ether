@@ -265,6 +265,10 @@ func (s *Server) identity() Identity {
 		id.MyPlexSubscription, id.OwnerFeatures = s.d.OwnerSubscription()
 	}
 	c := s.cfg()
+	if c.Plex.EmulatePlexPass {
+		id.MyPlexSubscription = true
+		id.OwnerFeatures = mergeOwnerFeatures(id.OwnerFeatures, EmulatedOwnerFeatures())
+	}
 	if id.MachineIdentifier == "" {
 		id.MachineIdentifier = c.Server.MachineIdentifier
 	}

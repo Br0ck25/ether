@@ -88,11 +88,15 @@ type Plex struct {
 	OwnerUsername    string `json:"ownerUsername"`
 	Claimed          bool   `json:"claimed"`
 	// Remote access
-	RemoteAccess bool     `json:"remoteAccess"`
-	UseUPnP      bool     `json:"useUpnp"`
-	PublicPort   int      `json:"publicPort"` // manual port forward; 0 = same as Server.Port
-	PublicHost   string   `json:"publicHost"` // override detected WAN IP
-	CustomURLs   []string `json:"customUrls"`
+	RemoteAccess bool `json:"remoteAccess"`
+	// EmulatePlexPass reports an active Plex Pass subscription and owner
+	// feature entitlements to connected Plex apps so remote streaming and
+	// Live TV work without a paid Plex Pass.
+	EmulatePlexPass bool     `json:"emulatePlexPass"`
+	UseUPnP         bool     `json:"useUpnp"`
+	PublicPort      int      `json:"publicPort"` // manual port forward; 0 = same as Server.Port
+	PublicHost      string   `json:"publicHost"` // override detected WAN IP
+	CustomURLs      []string `json:"customUrls"`
 	// TLS certificate for *.plex.direct (or a self-signed fallback).
 	CertFile          string `json:"certFile"`
 	KeyFile           string `json:"keyFile"`
