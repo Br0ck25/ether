@@ -255,10 +255,26 @@ function ProfileList({ quality, commit }: { quality: Quality; commit: Commit }) 
 
   async function remove() {
     if (!editing) return;
-    const { index, draft } = editing;
+    const { index } = editing;
+    // The saved name: the drawer's draft may hold an unsaved rename.
+    const name = profiles[index]?.name ?? editing.draft.name;
+    const rest = profiles.filter((_, j) => j !== index);
+    const fallback = rest[0]?.name ?? "";
+    const usedBy = rules.filter((r) => r.profile === name).length;
+    const moves = [quality.default, quality.remote].includes(name);
+    // Rules and defaults may not name a missing profile: removing one also
+    // removes its client rules and moves the defaults to another profile.
+    const consequences = [
+      usedBy
+        ? `${usedBy === 1 ? "The client rule" : `${usedBy} client rules`} using it will be removed.`
+        : "",
+      moves && fallback ? `Clients that used it as a default will use ${fallback}.` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     const ok = await confirmDialog({
       title: "Remove profile?",
-      message: `${draft.name || "This profile"} will be removed.`,
+      message: `${name || "This profile"} will be removed.${consequences ? ` ${consequences}` : ""}`,
       confirmLabel: "Remove",
       tone: "danger",
     });
@@ -267,7 +283,13 @@ function ProfileList({ quality, commit }: { quality: Quality; commit: Commit }) 
     setError(null);
     try {
       await commit(
-        { ...quality, profiles: profiles.filter((_, j) => j !== index) },
+        {
+          ...quality,
+          profiles: rest,
+          rules: rules.filter((r) => r.profile !== name),
+          default: quality.default === name ? fallback : quality.default,
+          remote: quality.remote === name ? fallback : quality.remote,
+        },
         "Profile removed",
       );
       setEditing(null);

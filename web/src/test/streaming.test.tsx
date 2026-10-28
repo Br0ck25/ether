@@ -136,6 +136,20 @@ describe("Releases", () => {
     expect(body.rules?.[0]).toMatchObject({ product: "Plex for Apple TV", profile: "UHD" });
   });
 
+  it("removes a profile a client rule uses, with its rules (#9)", async () => {
+    const { fake } = renderApp("/releases/quality");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit 4K" }, WAIT));
+    const drawer = await screen.findByRole("dialog", { name: "4K" });
+    fireEvent.click(within(drawer).getByRole("button", { name: "Remove profile" }));
+    expect(await screen.findByText(/The client rule using it will be removed/)).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(calls(fake, "PUT", "/config/quality")).toHaveLength(1));
+    const body = calls(fake, "PUT", "/config/quality")[0]!.body as EtherConfig["quality"];
+    expect(body.profiles?.map((p) => p.name)).toEqual(["1080p"]);
+    expect(body.rules).toEqual([]);
+    expect(body).toMatchObject({ default: "1080p", remote: "1080p" });
+  });
+
   it("discards invalid scoring drafts before editing startup settings", async () => {
     const { fake } = renderApp("/releases/scoring");
     const defs = await screen.findByLabelText("Custom format definitions", {}, WAIT);
