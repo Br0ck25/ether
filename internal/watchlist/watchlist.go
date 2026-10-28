@@ -48,6 +48,7 @@ type Settings struct {
 	Recaps        bool `json:"recaps"`
 }
 type Options struct {
+	Logger       *slog.Logger
 	Catalog      core.Catalog
 	Resolver     core.Resolver
 	Engine       core.Engine
@@ -82,6 +83,9 @@ type Item struct {
 }
 
 func New(db *sql.DB, o Options) *Service {
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
@@ -441,10 +445,10 @@ func (s *Service) Run(ctx context.Context) {
 			}
 			job, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			if err := s.Sync(job, &us[i]); err != nil {
-				slog.Default().Warn("watchlist sync failed", "user", us[i].ID, "err", err)
+				s.o.Logger.Warn("watchlist sync failed", "user", us[i].ID, "err", err)
 			}
 			if err := s.Check(job, &us[i]); err != nil {
-				slog.Default().Warn("watchlist check failed", "user", us[i].ID, "err", err)
+				s.o.Logger.Warn("watchlist check failed", "user", us[i].ID, "err", err)
 			}
 			cancel()
 		}
@@ -480,7 +484,7 @@ func (s *Service) recordPass(ctx context.Context) {
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO watchlist_meta(k,v) VALUES('last_pass',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`,
 		strconv.FormatInt(s.o.Now().UnixMilli(), 10)); err != nil {
-		slog.Default().Warn("watchlist: record pass failed", "err", err)
+		s.o.Logger.Warn("watchlist: record pass failed", "err", err)
 	}
 }
 func (s *Service) user(ctx context.Context, id int64) (*core.User, error) {

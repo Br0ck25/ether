@@ -267,31 +267,40 @@ func imdbID(id string) string {
 	return "tt" + id
 }
 
-// hashFromURL finds a 40-hex info hash in a playback link: addons
-// configured with a debrid key answer with links to their own resolver
-// that carry the hash as a path segment or query value.
+// hashFromURL reads explicit hash query fields or the known Torrentio-style
+// /resolve/{provider}/{credential}/{hash}/... route. Arbitrary hexadecimal
+// URL values may be credentials or opaque IDs, not torrent identities.
 func hashFromURL(raw string) string {
-	if raw == "" {
-		return ""
-	}
 	u, err := url.Parse(raw)
-	if err != nil {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return ""
 	}
-	for _, seg := range strings.Split(u.Path, "/") {
-		if len(seg) == 40 {
-			if h := newznab.NormalizeInfoHash(seg); h != "" {
-				return h
+	hash := ""
+	for key, values := range u.Query() {
+		switch strings.ToLower(key) {
+		case "infohash", "info_hash", "hash", "btih":
+			for _, value := range values {
+				if candidate := newznab.NormalizeInfoHash(value); candidate != "" {
+					if hash != "" && candidate != hash {
+						return ""
+					}
+					hash = candidate
+				}
 			}
 		}
 	}
-	for _, vs := range u.Query() {
-		for _, v := range vs {
-			if len(v) == 40 {
-				if h := newznab.NormalizeInfoHash(v); h != "" {
-					return h
-				}
-			}
+	if hash != "" {
+		return hash
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	for i := 0; i+3 < len(parts); i++ {
+		if parts[i] != "resolve" {
+			continue
+		}
+		switch strings.ToLower(parts[i+1]) {
+		case config.DebridRealDebrid, config.DebridAllDebrid, config.DebridPremiumize,
+			config.DebridTorBox, config.DebridDebridLink, config.DebridOffcloud:
+			return newznab.NormalizeInfoHash(parts[i+3])
 		}
 	}
 	return ""

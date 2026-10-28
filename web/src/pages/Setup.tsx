@@ -803,7 +803,7 @@ export default function Setup() {
                   {addon ? (
                     <Field
                       label="Addon link"
-                      hint="The addon's install link (https:// or stremio://). Ether checks your debrid accounts itself, so the link needs no debrid key."
+                      hint="The addon's install link (https:// or stremio://). It must expose torrent results, not only direct or proxied playback links. Ether checks your debrid accounts itself, so the link needs no debrid key."
                     >
                       <Input
                         value={ix.url}
