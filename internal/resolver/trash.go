@@ -56,6 +56,7 @@ type TrashOptions struct {
 	UserAgent string
 	TTL       time.Duration // cache lifetime, default 1h
 	Now       func() time.Time
+	Parallel  int // file fetches in flight, default trashParallel
 }
 
 // TrashGuides reads TRaSH Guides profiles and custom formats, caching what
@@ -95,6 +96,9 @@ func NewTrashGuides(o TrashOptions) *TrashGuides {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.Parallel <= 0 {
+		o.Parallel = trashParallel
 	}
 	return &TrashGuides{o: o, dirs: map[string]trashCached[[]string]{}, files: map[string]trashCached[[]byte]{}, flights: map[string]*trashFlight{}}
 }
@@ -240,10 +244,10 @@ func (g *TrashGuides) CustomFormats(ctx context.Context, app string, want map[st
 	return found, nil
 }
 
-// each runs fn over names with at most trashParallel calls in flight,
+// each runs fn over names with at most o.Parallel calls in flight,
 // starting no more once fn returns false or ctx ends.
 func (g *TrashGuides) each(ctx context.Context, names []string, fn func(int, string) bool) {
-	sem := make(chan struct{}, trashParallel)
+	sem := make(chan struct{}, g.o.Parallel)
 	var wg sync.WaitGroup
 	var stop sync.Once
 	stopped := make(chan struct{})

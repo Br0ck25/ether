@@ -187,7 +187,10 @@ func TestTrashCustomFormatsFindsByIDAndStopsEarly(t *testing.T) {
 		tree["radarr/cf/zz-filler-"+strconv.Itoa(i)+".json"] = `{"trash_id":"filler","name":"Filler","specifications":[]}`
 	}
 	gh := newFakeGitHub(t, tree)
-	g := gh.guides(nil)
+	// One fetch at a time makes the stopping point exact; with more in
+	// flight, how many extra files start before the last match lands
+	// depends on scheduling.
+	g := NewTrashGuides(TrashOptions{APIBase: gh.srv.URL + "/api", RawBase: gh.srv.URL + "/raw", UserAgent: "Ether/test", Parallel: 1})
 	// "WEB Tier 01" lives in web-tier-1.json, not the guessed web-tier-01.json.
 	found, err := g.CustomFormats(context.Background(), AppRadarr, map[string]string{"BR-DISK": "cf-brdisk", "WEB Tier 01": "cf-web1"})
 	if err != nil {
@@ -196,10 +199,17 @@ func TestTrashCustomFormatsFindsByIDAndStopsEarly(t *testing.T) {
 	if found["cf-brdisk"].Name != "BR-DISK" || found["cf-web1"].Scores["sqp-1-2160p"] != 1800 || len(found) != 2 {
 		t.Fatalf("found %+v", found)
 	}
-	// Listed in name order, web-tier-1.json comes before the fillers.
+	// The guessed br-disk.json first, then the rest in name order up to
+	// web-tier-1.json; none of the fillers after it.
+	want := 1
+	for name := range tree {
+		if f, ok := strings.CutPrefix(name, "radarr/cf/"); ok && f != "br-disk.json" && f <= "web-tier-1.json" {
+			want++
+		}
+	}
 	_, files := gh.fetched()
-	if files > 21 {
-		t.Fatalf("fetched every file (%d) instead of stopping once found", files)
+	if files != want {
+		t.Fatalf("fetched %d files, want %d (stop once every format is found)", files, want)
 	}
 	// Cached: the same lookup fetches nothing.
 	if _, err := g.CustomFormats(context.Background(), AppRadarr, map[string]string{"BR-DISK": "cf-brdisk"}); err != nil {
