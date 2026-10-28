@@ -58,7 +58,12 @@ func main() {
 			dir = abs
 		}
 		// The data dir is baked into the registration as ETHER_DATA_DIR.
-		svc, err := service.New(nil, service.Options{DataDir: dir})
+		// Re-installing over an existing registration (an upgrade) keeps
+		// the registered one unless a data dir was asked for explicitly.
+		svc, err := service.New(nil, service.Options{
+			DataDir:              dir,
+			KeepInstalledDataDir: !dataDirExplicit(fs, os.Getenv),
+		})
 		if err != nil {
 			fatal(err)
 		}
@@ -154,6 +159,18 @@ func parseInterleaved(fs *flag.FlagSet, args []string) []string {
 		positional = append(positional, rest[0])
 		args = rest[1:]
 	}
+}
+
+// dataDirExplicit reports whether the data directory was chosen on purpose
+// (--data-dir or ETHER_DATA_DIR) rather than defaulted.
+func dataDirExplicit(fs *flag.FlagSet, getenv func(string) string) bool {
+	explicit := getenv("ETHER_DATA_DIR") != ""
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "data-dir" {
+			explicit = true
+		}
+	})
+	return explicit
 }
 
 func fatal(err error) {
