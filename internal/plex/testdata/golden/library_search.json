@@ -1,0 +1,111 @@
+{
+  "MediaContainer": {
+    "size": 1,
+    "SearchResult": [
+      {
+        "score": 1,
+        "Metadata": {
+          "ratingKey": "1000000000000550",
+          "key": "/library/metadata/1000000000000550",
+          "guid": "com.plexapp.agents.themoviedb://550?lang=en",
+          "slug": "fjord-harbor",
+          "studio": "Northlight Pictures",
+          "type": "movie",
+          "title": "Fjord Harbor",
+          "librarySectionTitle": "Movies",
+          "contentRating": "R",
+          "summary": "An insomniac office worker...",
+          "audienceRating": 8.4,
+          "year": 1999,
+          "tagline": "Quiet waters run deep.",
+          "thumb": "/library/metadata/1000000000000550/thumb/1790812800",
+          "art": "/library/metadata/1000000000000550/art/1790812800",
+          "duration": 8340000,
+          "originallyAvailableAt": "1999-10-15",
+          "addedAt": 1790812800,
+          "updatedAt": 1790812800,
+          "audienceRatingImage": "themoviedb://image.rating",
+          "Media": [
+            {
+              "id": 1000000000000550,
+              "duration": 8340000,
+              "bitrate": 7600,
+              "width": 1920,
+              "height": 1080,
+              "aspectRatio": 1.78,
+              "audioChannels": 6,
+              "audioCodec": "eac3",
+              "videoCodec": "h264",
+              "videoResolution": "1080",
+              "container": "mkv",
+              "videoFrameRate": "24p",
+              "videoProfile": "high",
+              "hasVoiceActivity": false,
+              "Part": [
+                {
+                  "id": 1000000000000550,
+                  "key": "/library/parts/1000000000000550/1790812800/file.mkv",
+                  "duration": 8340000,
+                  "file": "/ether/Fjord Harbor (1999).mkv",
+                  "size": 8000000000,
+                  "container": "mkv",
+                  "videoProfile": "high"
+                }
+              ]
+            }
+          ],
+          "Image": [
+            {
+              "alt": "Fjord Harbor",
+              "type": "coverPoster",
+              "url": "/library/metadata/1000000000000550/thumb/1790812800"
+            },
+            {
+              "alt": "Fjord Harbor",
+              "type": "background",
+              "url": "/library/metadata/1000000000000550/art/1790812800"
+            }
+          ],
+          "UltraBlurColors": {
+            "topLeft": "8c000c",
+            "topRight": "542400",
+            "bottomRight": "600007",
+            "bottomLeft": "538700"
+          },
+          "Genre": [
+            {
+              "tag": "Drama"
+            },
+            {
+              "tag": "Thriller"
+            }
+          ],
+          "Country": [
+            {
+              "tag": "United States of America"
+            }
+          ],
+          "Director": [
+            {
+              "tag": "Mara Ellison"
+            }
+          ],
+          "Writer": [
+            {
+              "tag": "Sasha Petrov"
+            }
+          ],
+          "Role": [
+            {
+              "tag": "Theo Varga"
+            },
+            {
+              "tag": "Lucas Brandt"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
+

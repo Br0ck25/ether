@@ -1,0 +1,184 @@
+{
+  "MediaContainer": {
+    "size": 1,
+    "allowSync": "0",
+    "directPlayDecisionCode": 3000,
+    "directPlayDecisionText": "App cannot direct play this item. Direct play is disabled.",
+    "generalDecisionCode": 1001,
+    "generalDecisionText": "Direct play not available; Conversion OK.",
+    "identifier": "com.plexapp.plugins.library",
+    "librarySectionID": "1",
+    "librarySectionTitle": "Movies",
+    "librarySectionUUID": "1dc336c6-64af-dcfe-d33e-ccd1243d2b6a",
+    "mediaTagPrefix": "/system/bundle/media/flags/",
+    "mediaTagVersion": "1720000000",
+    "resourceSession": "client-1",
+    "transcodeDecisionCode": 1001,
+    "transcodeDecisionText": "Direct play not available; Conversion OK.",
+    "Metadata": [
+      {
+        "addedAt": 1790812800,
+        "art": "/library/metadata/1000000000000550/art/1790812800",
+        "audienceRating": 8.4,
+        "audienceRatingImage": "themoviedb://image.rating",
+        "contentRating": "R",
+        "duration": 8340000,
+        "guid": "com.plexapp.agents.themoviedb://550?lang=en",
+        "key": "/library/metadata/1000000000000550",
+        "librarySectionID": "1",
+        "librarySectionKey": "/library/sections/1",
+        "librarySectionTitle": "Movies",
+        "originallyAvailableAt": "1999-10-15",
+        "ratingKey": "1000000000000550",
+        "slug": "fjord-harbor",
+        "studio": "Northlight Pictures",
+        "summary": "An insomniac office worker...",
+        "tagline": "Quiet waters run deep.",
+        "thumb": "/library/metadata/1000000000000550/thumb/1790812800",
+        "title": "Fjord Harbor",
+        "type": "movie",
+        "updatedAt": 1790812800,
+        "year": 1999,
+        "Media": [
+          {
+            "hasVoiceActivity": "0",
+            "id": "1000000000000550",
+            "videoProfile": "high",
+            "audioChannels": 6,
+            "audioCodec": "eac3",
+            "bitrate": 7600,
+            "container": "mpegts",
+            "duration": 8340000,
+            "height": 1080,
+            "protocol": "hls",
+            "videoCodec": "h264",
+            "videoFrameRate": "24p",
+            "videoResolution": "1080p",
+            "width": 1920,
+            "selected": true,
+            "Part": [
+              {
+                "id": "1000000000000550",
+                "videoProfile": "high",
+                "bitrate": 7600,
+                "container": "mpegts",
+                "duration": 8340000,
+                "height": 1080,
+                "protocol": "hls",
+                "width": 1920,
+                "decision": "transcode",
+                "selected": true,
+                "Stream": [
+                  {
+                    "bitDepth": 8,
+                    "bitrate": 7000,
+                    "chromaSubsampling": "4:2:0",
+                    "codec": "h264",
+                    "default": true,
+                    "displayTitle": "1080p",
+                    "extendedDisplayTitle": "1080p (H.264)",
+                    "frameRate": 23.976,
+                    "height": 1080,
+                    "id": "1387133930",
+                    "profile": "high",
+                    "streamType": 1,
+                    "width": 1920,
+                    "decision": "copy",
+                    "location": "segments-av"
+                  },
+                  {
+                    "audioChannelLayout": "5.1(side)",
+                    "bitrate": 640,
+                    "canNormalizeLoudness": "0",
+                    "channels": 6,
+                    "codec": "eac3",
+                    "default": true,
+                    "displayTitle": "English (EAC3 5.1)",
+                    "extendedDisplayTitle": "English (EAC3 5.1)",
+                    "id": "1875505719",
+                    "language": "English",
+                    "languageCode": "eng",
+                    "languageTag": "en",
+                    "samplingRate": 48000,
+                    "selected": true,
+                    "streamType": 2,
+                    "decision": "copy",
+                    "location": "segments-av"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "UltraBlurColors": [
+          {
+            "bottomLeft": "538700",
+            "bottomRight": "600007",
+            "topLeft": "8c000c",
+            "topRight": "542400"
+          }
+        ],
+        "Genre": [
+          {
+            "filter": "genre=Drama",
+            "id": "1106135894",
+            "tag": "Drama"
+          },
+          {
+            "filter": "genre=Thriller",
+            "id": "45642825",
+            "tag": "Thriller"
+          }
+        ],
+        "Country": [
+          {
+            "filter": "country=United+States+of+America",
+            "id": "1765229598",
+            "tag": "United States of America"
+          }
+        ],
+        "Rating": [
+          {
+            "image": "themoviedb://image.rating",
+            "type": "audience",
+            "value": "8.4"
+          }
+        ],
+        "Director": [
+          {
+            "filter": "director=7467",
+            "id": "7467",
+            "tag": "Mara Ellison",
+            "tagKey": "tmdb-person-7467"
+          }
+        ],
+        "Writer": [
+          {
+            "filter": "writer=7468",
+            "id": "7468",
+            "tag": "Sasha Petrov",
+            "tagKey": "tmdb-person-7468"
+          }
+        ],
+        "Role": [
+          {
+            "filter": "actor=287",
+            "id": "287",
+            "role": "Alex Mercer",
+            "tag": "Theo Varga",
+            "tagKey": "tmdb-person-287",
+            "thumb": "https://image.tmdb.org/t/p/w185/brad.jpg"
+          },
+          {
+            "filter": "actor=819",
+            "id": "819",
+            "role": "The Narrator",
+            "tag": "Lucas Brandt",
+            "tagKey": "tmdb-person-819"
+          }
+        ]
+      }
+    ]
+  }
+}
+

@@ -1,0 +1,24 @@
+/dist/
+/bin/
+/ether
+/ether-tray
+/ether.exe
+/ether-tray.exe
+node_modules/
+.pnpm-store/
+*.db
+*.db-*
+.DS_Store
+/.claude/worktrees/
+/.scratch/
+/.playwright-cli/
+
+# Keep research, plans, agent instructions and development notes local.
+*.md
+/docs/benchmarks/
+!/README.md
+!/LEGAL.md
+!/THIRD_PARTY_NOTICES.md
+!/docs/install.md
+!/docs/user-guide.md
+!/packaging/community/README.md

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<caps>
+  <server version="1.0" title="FakeIndexer" type="private"/>
+  <limits max="100" default="50"/>
+  <searching>
+    <search available="yes" supportedParams="q"/>
+    <movie-search available="yes" supportedParams="q,imdbid,tmdbid"/>
+    <tv-search available="yes" supportedParams="q,tvdbid,tmdbid,imdbid,season,ep"/>
+  </searching>
+  <categories>
+    <category id="2000" name="Movies"><subcat id="2040" name="Movies/HD"/></category>
+    <category id="5000" name="TV"><subcat id="5040" name="TV/HD"/></category>
+  </categories>
+</caps>

@@ -1,0 +1,107 @@
+---
+# Synthetic definition for tests: a public HTML tracker.
+id: fakepublic
+name: Fake Public
+description: A synthetic public tracker used by Ether's tests
+language: en-US
+type: public
+encoding: UTF-8
+links:
+  - https://fakepublic.invalid/
+legacylinks:
+  - https://old.fakepublic.invalid/
+
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies/HD, desc: "Movies HD", default: true}
+    - {id: 2, cat: TV/HD, desc: "TV HD"}
+    - {id: 3, cat: Audio, desc: "Music"}
+  modes:
+    search: [q]
+    movie-search: [q, imdbid]
+    tv-search: [q, season, ep]
+
+settings:
+  - name: sort
+    type: select
+    label: Sort
+    default: added
+    options:
+      added: Date added
+      seeders: Seeders
+  - name: freeleech
+    type: checkbox
+    label: Freeleech only
+    default: false
+  - name: info_note
+    type: info
+    label: About
+    default: Public site; no account needed.
+
+search:
+  paths:
+    - path: browse.php
+      categories: [1, 3]
+    - path: "tv/{{ .Keywords }}"
+      categories: [2]
+  keywordsfilters:
+    - name: re_replace
+      args: ["[^a-zA-Z0-9]+", " "]
+    - name: trim
+  inputs:
+    $raw: "{{ range .Categories }}c{{.}}=1&{{end}}"
+    search: "{{ if .Query.IMDBID }}{{ .Query.IMDBID }}{{ else }}{{ .Keywords }}{{ end }}"
+    sort: "{{ .Config.sort }}"
+    fl: "{{ if .Config.freeleech }}1{{ end }}"
+  rows:
+    selector: table#torrents > tbody > tr:has(a.title)
+    filters:
+      - name: andmatch
+    dateheaders:
+      selector: td.date-header
+      filters:
+        - name: dateparse
+          args: "2006-01-02"
+  fields:
+    category:
+      selector: a[href*="cat="]
+      attribute: href
+      filters:
+        - name: querystring
+          args: cat
+    title:
+      selector: a.title
+    details:
+      selector: a.title
+      attribute: href
+    download:
+      selector: a[href^="download.php"]
+      attribute: href
+      optional: true
+    magnet:
+      selector: a[href^="magnet:"]
+      attribute: href
+      optional: true
+    size:
+      selector: td.size
+    seeders:
+      selector: td.seeders
+    leechers:
+      selector: td.leechers
+    grabs:
+      selector: td.snatched
+      optional: true
+    date:
+      selector: td.added
+      optional: true
+      filters:
+        - name: timeago
+    imdbid:
+      selector: a[href*="imdb.com/title/tt"]
+      attribute: href
+    downloadvolumefactor:
+      case:
+        img[alt="Free"]: 0
+        "*": 1
+    uploadvolumefactor:
+      text: 1

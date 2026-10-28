@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # Stage the pinned ffmpeg/ffprobe (packaging/ffmpeg.lock.json,
+      # SHA-256 verified by scripts/fetch-ffmpeg.sh) and put them first on
+      # PATH so the real integration tests in internal/transcode run
+      # instead of skipping on exec.LookPath("ffmpeg").
+      - name: Resolve pinned ffmpeg platform
+        id: ffmpeg
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) goos=linux ;;
+            macOS) goos=darwin ;;
+            Windows) goos=windows ;;
+            *) echo "::error::unsupported runner OS $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          case "$RUNNER_ARCH" in
+            X64) goarch=amd64 ;;
+            ARM64) goarch=arm64 ;;
+            *) echo "::error::unsupported runner arch $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          echo "platform=$goos-$goarch" >> "$GITHUB_OUTPUT"
+          echo "dir=dist/ffmpeg/$goos-$goarch" >> "$GITHUB_OUTPUT"
+      - name: Cache pinned ffmpeg
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.ffmpeg.outputs.dir }}
+          # Exact key only (no restore-keys): a lock bump must re-fetch,
+          # never revive the previous pin.
+          key: ffmpeg-${{ steps.ffmpeg.outputs.platform }}-${{ hashFiles('packaging/ffmpeg.lock.json') }}
+      - name: Stage pinned ffmpeg/ffprobe
+        shell: bash
+        env:
+          FFMPEG_PLATFORM: ${{ steps.ffmpeg.outputs.platform }}
+          FFMPEG_DIR: ${{ steps.ffmpeg.outputs.dir }}
+        run: |
+          bash scripts/fetch-ffmpeg.sh "$FFMPEG_PLATFORM"
+          # GITHUB_PATH must hold a native Windows path on Windows, where
+          # later steps run under pwsh but this one runs under Git Bash.
+          staged="$GITHUB_WORKSPACE/$FFMPEG_DIR"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            staged=$(cygpath -w "$staged")
+          fi
+          echo "$staged" >> "$GITHUB_PATH"
+          echo "Staged $FFMPEG_PLATFORM ffmpeg/ffprobe at $staged"
+      - name: Verify ffmpeg/ffprobe resolve to the staged pins
+        # A fresh shell, so PATH reflects GITHUB_PATH exactly as the test
+        # steps will see it. Fails hard: a broken stage must never let the
+        # integration tests quietly skip back to green.
+        shell: bash
+        env:
+          FFMPEG_DIR: ${{ steps.ffmpeg.outputs.dir }}
+        run: |
+          ext=""
+          if [ "$RUNNER_OS" = "Windows" ]; then ext=.exe; fi
+          staged="$GITHUB_WORKSPACE/$FFMPEG_DIR"
+          test -f "$staged/.sha256" || { echo "::error::staged ffmpeg missing .sha256 marker" >&2; exit 1; }
+          show_version() { out=$("$1" -hide_banner -version); echo "${out%%$'\n'*}"; }
+          show_version "$staged/ffmpeg$ext"
+          show_version "$staged/ffprobe$ext"
+          for tool in ffmpeg ffprobe; do
+            found=$(command -v "$tool") || { echo "::error::$tool not on PATH" >&2; exit 1; }
+            echo "PATH $tool -> $found"
+            case "$found" in
+              *"/$FFMPEG_DIR/"*) ;;
+              *) echo "::error::$tool resolves outside the staged pin: $found" >&2; exit 1 ;;
+            esac
+          done
+          show_version ffmpeg
+          show_version ffprobe
+      - name: gofmt
+        if: runner.os != 'Windows'
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then echo "::error::gofmt needed:"; echo "$out"; exit 1; fi
+      - name: Build (CGO_ENABLED=0 — the shipped configuration)
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./...
+      - name: Verify bundled TMDB linker symbol
+        env:
+          CGO_ENABLED: "0"
+          ETHER_TEST_BUNDLED_KEY: ether-linker-smoke
+        run: go test ./internal/tmdb -run TestBundledKeyLinker -ldflags "-X github.com/braedonsaunders/ether/internal/tmdb.BundledKey=ether-linker-smoke"
+      - name: Vet
+        env:
+          CGO_ENABLED: "0"
+        run: go vet ./...
+      - name: Vet tray with CGO (macOS systray build)
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "1"
+        run: go vet ./cmd/ether-tray/
+      - name: Test (race)
+        # -race needs CGO; the code under test is identical to the CGO=0
+        # build except the macOS tray GUI file, which is excluded here on
+        # macOS by CGO_ENABLED=0 for the test step below instead.
+        if: runner.os != 'macOS'
+        # Guardian subprocesses inherit race instrumentation; the expanded
+        # real-media suite needs more than Go's default ten-minute package cap.
+        run: go test -race -timeout 20m ./...
+      - name: Test (macOS, headless tray)
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
+      - name: Cross-compile matrix
+        if: runner.os == 'Linux'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go build ./cmd/ether ./cmd/ether-tray ./internal/...
+          done
+
+  vulnerabilities:
+    name: Go vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  web:
+    name: Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+      - name: Audit web and development dependencies
+        working-directory: web
+        run: pnpm audit --audit-level=moderate
+      - name: Formatting
+        working-directory: web
+        run: pnpm format:check
+      - name: Typecheck
+        working-directory: web
+        run: pnpm typecheck
+      - name: Test
+        working-directory: web
+        run: pnpm test
+      - name: Build
+        working-directory: web
+        run: pnpm build
+      - name: Embedded UI is up to date
+        run: |
+          # internal/admin/dist is committed so `go build` works without Node;
+          # it must match a fresh build of web/.
+          git status --porcelain internal/admin/dist
+          test -z "$(git status --porcelain internal/admin/dist)" || {
+            echo "::error::internal/admin/dist is stale: run 'pnpm build' in web/ and commit the result"; exit 1; }
+
+  packaging:
+    name: Packaging checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Shellcheck scripts
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh packaging/linux/*.sh packaging/macos/*.sh
+      - name: Goreleaser config check
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: "~> v2"
+          args: check
+      - name: Validate ffmpeg lock JSON
+        run: python3 -m json.tool packaging/ffmpeg.lock.json > /dev/null
+      - name: Validate plists
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          for p in ["packaging/macos/Info.plist", "packaging/macos/io.github.braedonsaunders.ether.plist"]:
+              plistlib.load(open(p, "rb"))
+              print("ok", p)
+          PY
+      - name: Docker image builds (host ffmpeg staged)
+        run: |
+          scripts/fetch-ffmpeg.sh linux-amd64
+          docker build -t ether:ci .

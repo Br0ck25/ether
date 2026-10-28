@@ -1,0 +1,24 @@
+---
+# Synthetic definition for tests: a site behind a browser challenge.
+id: fakecf
+name: Fake Challenge
+links:
+  - https://fakecf.invalid/
+caps:
+  categorymappings:
+    - {id: 1, cat: Movies}
+  modes:
+    search: [q]
+search:
+  paths:
+    - path: search
+  inputs:
+    q: "{{ .Keywords }}"
+  rows:
+    selector: li
+  fields:
+    title:
+      selector: span
+    magnet:
+      selector: a
+      attribute: href

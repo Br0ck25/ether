@@ -1,0 +1,10 @@
+# Keep LF everywhere: golden files and fixtures are compared byte-for-byte,
+# and Windows checkouts would otherwise convert them to CRLF.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.rar binary
+*.7z binary
+*.zip binary
+*.p12 binary

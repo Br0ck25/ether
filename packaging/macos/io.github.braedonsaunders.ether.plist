@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the Ether *server*. build-app.sh ships this template inside
+  Ether.app/Contents/Resources; the tray (or `ether service install`, which
+  renders the same thing via internal/service) installs it as
+  ~/Library/LaunchAgents/io.github.braedonsaunders.ether.plist with __APP_CONTENTS__
+  replaced by the Ether.app/Contents path, then `launchctl bootstrap`s it.
+  KeepAlive mirrors PMS: the server runs while the user is logged in.
+  Ether writes its own rotated log and crash trace under
+  ~/Library/Application Support/Ether/logs, so stdout/stderr (which
+  launchd would never rotate) are discarded.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.braedonsaunders.ether</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__APP_CONTENTS__/Resources/ether</string>
+	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>ETHER_DATA_DIR</key>
+		<string>__HOME__/Library/Application Support/Ether</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>5</integer>
+	<key>StandardOutPath</key>
+	<string>/dev/null</string>
+	<key>StandardErrorPath</key>
+	<string>/dev/null</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>

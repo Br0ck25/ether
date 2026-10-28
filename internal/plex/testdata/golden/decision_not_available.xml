@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="1" allowSync="0" directPlayDecisionCode="3000" directPlayDecisionText="Not available yet: no playable release of this title was found. Try again later." generalDecisionCode="2000" generalDecisionText="Not available yet: no playable release of this title was found. Try again later." identifier="com.plexapp.plugins.library" librarySectionID="1" librarySectionTitle="Movies" librarySectionUUID="1dc336c6-64af-dcfe-d33e-ccd1243d2b6a" mediaTagPrefix="/system/bundle/media/flags/" mediaTagVersion="1720000000" resourceSession="client-1" transcodeDecisionCode="4000" transcodeDecisionText="Not available yet: no playable release of this title was found. Try again later.">
+<Video addedAt="1790812800" art="/library/metadata/1000000000000550/art/1790812800" audienceRating="8.4" audienceRatingImage="themoviedb://image.rating" contentRating="R" duration="8340000" guid="com.plexapp.agents.themoviedb://550?lang=en" key="/library/metadata/1000000000000550" librarySectionID="1" librarySectionKey="/library/sections/1" librarySectionTitle="Movies" originallyAvailableAt="1999-10-15" ratingKey="1000000000000550" slug="fjord-harbor" studio="Northlight Pictures" summary="An insomniac office worker..." tagline="Quiet waters run deep." thumb="/library/metadata/1000000000000550/thumb/1790812800" title="Fjord Harbor" type="movie" updatedAt="1790812800" year="1999">
+<UltraBlurColors bottomLeft="538700" bottomRight="600007" topLeft="8c000c" topRight="542400" />
+<Genre filter="genre=Drama" id="1106135894" tag="Drama" />
+<Genre filter="genre=Thriller" id="45642825" tag="Thriller" />
+<Country filter="country=United+States+of+America" id="1765229598" tag="United States of America" />
+<Rating image="themoviedb://image.rating" type="audience" value="8.4" />
+<Director filter="director=7467" id="7467" tag="Mara Ellison" tagKey="tmdb-person-7467" />
+<Writer filter="writer=7468" id="7468" tag="Sasha Petrov" tagKey="tmdb-person-7468" />
+<Role filter="actor=287" id="287" role="Alex Mercer" tag="Theo Varga" tagKey="tmdb-person-287" thumb="https://image.tmdb.org/t/p/w185/brad.jpg" />
+<Role filter="actor=819" id="819" role="The Narrator" tag="Lucas Brandt" tagKey="tmdb-person-819" />
+</Video>
+</MediaContainer>

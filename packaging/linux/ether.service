@@ -1,0 +1,34 @@
+[Unit]
+Description=Ether media server
+Documentation=https://github.com/braedonsaunders/ether
+After=network-online.target
+Wants=network-online.target
+# Never stop retrying: Ether must come back by itself after any failure.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ether
+Group=ether
+ExecStart=/usr/lib/ether/ether
+WorkingDirectory=/var/lib/ether
+Environment=ETHER_DATA_DIR=/var/lib/ether
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Ether writes only to its data/cache dirs and needs no privileges.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ether /var/cache/ether
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# Transcoding: allow GPU render nodes when present (VAAPI/QSV).
+SupplementaryGroups=render video
+
+[Install]
+WantedBy=multi-user.target

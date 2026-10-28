@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Ether" class="ether-logo" data-motion="static" style="--ink:#f0f0e9;--accent:#52dfc5">
+<title>Ether</title><desc>Continuum: a continuous current folded into an e.</desc>
+<style>
+ .ether-ink{stroke:var(--ink)}.ether-accent{stroke:var(--accent)}
+ .ether-trace{stroke-dasharray:1;stroke-dashoffset:0}
+ [data-motion=animated] .ether-trace{animation:ether-draw .8s cubic-bezier(.22,.68,.16,1) var(--delay,0s) backwards}
+ [data-motion=animated] .ether-signal{animation:ether-draw .8s cubic-bezier(.22,.68,.16,1) var(--delay,0s) backwards,ether-breathe 5s ease-in-out 2s infinite}
+ @keyframes ether-draw{from{stroke-dashoffset:1}}
+ @keyframes ether-breathe{0%,20%,70%,100%{opacity:1}45%{opacity:.5}}
+ @media(prefers-reduced-motion:reduce){.ether-trace,.ether-signal{animation:none!important}}</style>
+<rect width="128" height="128" rx="28" fill="#0f172a"/>
+<g transform="translate(16 16)" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M80 17H43C24 17 11 30 11 48S24 79 43 79H80" pathLength="1" stroke-width="9" class="ether-trace ether-ink" style="--delay:0.05s"/><path d="M78 32H43C33 32 27 38 27 48S33 64 43 64H78" pathLength="1" stroke-width="8" class="ether-trace ether-accent" style="--delay:0.24s"/><path d="M45 48H80" pathLength="1" stroke-width="8" class="ether-trace ether-accent ether-signal" style="--delay:0.52s"/></g>
+
+</svg>

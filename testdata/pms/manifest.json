@@ -1,0 +1,24 @@
+{
+  "discoveryWarnings": [],
+  "fixtureCounts": {
+    "appletv": 54,
+    "ios": 54,
+    "web": 54
+  },
+  "fixturePolicy": "Response listings are trimmed to the first 50 entries per repeated container child.",
+  "requestErrors": null,
+  "trimmedResponses": [
+    "web /hubs/sections/{{section}} trimmed to first 50 entries",
+    "web /hubs/sections/{{section}} trimmed to first 50 entries",
+    "web /:/prefs trimmed to first 50 entries",
+    "web /:/prefs trimmed to first 50 entries",
+    "ios /hubs/sections/{{section}} trimmed to first 50 entries",
+    "ios /hubs/sections/{{section}} trimmed to first 50 entries",
+    "ios /:/prefs trimmed to first 50 entries",
+    "ios /:/prefs trimmed to first 50 entries",
+    "appletv /hubs/sections/{{section}} trimmed to first 50 entries",
+    "appletv /hubs/sections/{{section}} trimmed to first 50 entries",
+    "appletv /:/prefs trimmed to first 50 entries",
+    "appletv /:/prefs trimmed to first 50 entries"
+  ]
+}

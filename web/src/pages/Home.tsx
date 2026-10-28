@@ -1,0 +1,597 @@
+import { DashboardPanel } from "@braedonsaunders/appkit-dashboard/primitives";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Badge,
+  Button,
+  EmptyState,
+  Skeleton,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  cn,
+} from "@braedonsaunders/appkit-ui";
+import {
+  Activity,
+  BarChart3,
+  Film,
+  HeartPulse,
+  MonitorPlay,
+  PlayCircle,
+  RefreshCw,
+  Table2,
+  TrendingUp,
+} from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { useApp, useLiveDashboard } from "../app-context";
+import { Artwork } from "../components/Artwork";
+import { Meter, TimeBars } from "../components/charts";
+import { ErrorPanel, LoadingRows } from "../components/feedback";
+import { ServerPanel } from "../components/ServerPanel";
+import { LevelBadge, StatusDot } from "../components/status";
+import { api } from "../lib/api";
+import type { ActivityDay, RowInsight } from "../lib/contract";
+import { formatNumber, formatPercent, formatRate, plural, relativeTime } from "../lib/format";
+import { normalizeSessions, type HealthItem, type NowPlaying } from "../lib/health";
+import { useAsync } from "../lib/hooks";
+import { useTitle } from "../lib/titles";
+
+function greeting(now = new Date()): string {
+  const h = now.getHours();
+  return h < 5
+    ? "Good night"
+    : h < 12
+      ? "Good morning"
+      : h < 17
+        ? "Good afternoon"
+        : "Good evening";
+}
+
+/**
+ * The Overview is a cockpit: on a wide, tall enough window every panel is on
+ * one screen with no page scroll (panels scroll inside); narrower windows
+ * stack the panels and scroll the page.
+ */
+export default function Home() {
+  useLiveDashboard();
+  const { boot, dashboard, dashboardError, refreshDashboard, health } = useApp();
+  const activity = useAsync((_s) => api.activity(), []);
+  const rows = useAsync((_s) => api.rowInsights(), []);
+  const sessions = useMemo(() => normalizeSessions(dashboard?.sections.sessions), [dashboard]);
+  const hw = dashboard?.sections.hwaccel as
+    { hwaccel?: { name?: string }; ffmpeg?: string; error?: string } | undefined;
+  const problems = health.filter((h) => h.level === "error" || h.level === "warn");
+
+  const status = !dashboard
+    ? null
+    : problems.length
+      ? `${plural(problems.length, "thing")} ${problems.length === 1 ? "needs" : "need"} attention`
+      : "Everything is healthy";
+
+  return (
+    <div className="@container flex min-h-0 flex-1 flex-col">
+      <div className="app-scroll min-h-0 flex-1 overflow-y-auto cockpit:overflow-hidden">
+        <div className="reveal mx-auto flex w-full max-w-(--breakpoint-2xl) flex-col gap-4 p-4 sm:p-6 cockpit:h-full cockpit:max-w-none cockpit:min-h-0 cockpit:pb-5">
+          <header className="flex shrink-0 flex-wrap items-end justify-between gap-3">
+            <div className="min-w-0">
+              <h1 className="text-xl font-semibold text-fg">Overview</h1>
+              <p className="truncate text-sm text-fg-muted">
+                {greeting()}. {boot.serverName || "Ether"}
+                {status ? ` · ${status}` : ""}
+                {sessions.length ? ` · ${plural(sessions.length, "stream")} live` : ""}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void refreshDashboard();
+                void activity.reload();
+                void rows.reload();
+              }}
+            >
+              <RefreshCw size={14} /> Refresh
+            </Button>
+          </header>
+
+          {!boot.setupComplete ? (
+            <Alert variant="warning" className="shrink-0">
+              <AlertTitle>Setup isn't finished</AlertTitle>
+              <AlertDescription>
+                Plex apps can't find Ether until setup is complete.{" "}
+                <Link className="font-medium underline" to="/setup">
+                  Continue setup
+                </Link>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {dashboardError && !dashboard ? (
+            <div className="shrink-0">
+              <ErrorPanel error={dashboardError} onRetry={() => void refreshDashboard()} />
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 @3xl:grid-cols-2 cockpit:min-h-0 cockpit:flex-1 cockpit:grid-cols-12">
+            {/* Each cockpit column is its own stack: the upper panel sizes to
+                its content (up to a cap) and the lower one takes the rest. */}
+            <div className="flex min-w-0 flex-col gap-4 @3xl:col-span-2 cockpit:col-span-5 cockpit:min-h-0">
+              <NowPlayingPanel
+                loading={!dashboard}
+                sessions={sessions}
+                className="shrink-0 cockpit:max-h-[58%]"
+              />
+              <ActivityPanel state={activity} className="cockpit:min-h-0 cockpit:flex-1" />
+            </div>
+            <ServerPanel hwaccel={hw?.hwaccel?.name} className="cockpit:col-span-4" />
+            <div className="flex min-w-0 flex-col gap-4 cockpit:col-span-3 cockpit:min-h-0">
+              <HealthPanel
+                loading={!dashboard}
+                items={health}
+                className="shrink-0 cockpit:max-h-[68%]"
+              />
+              <RowsPanel state={rows} className="cockpit:min-h-0 cockpit:flex-1" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Lists inside a fixed cockpit cell scroll on their own. */
+const scrollBody = "cockpit:overflow-y-auto";
+
+function NowPlayingPanel({
+  loading,
+  sessions,
+  className,
+}: {
+  loading: boolean;
+  sessions: NowPlaying[];
+  className?: string;
+}) {
+  const total = sessions.reduce((n, s) => n + s.speedBps, 0);
+  return (
+    <DashboardPanel
+      title="Now playing"
+      icon={<PlayCircle size={16} />}
+      className={className}
+      bodyClassName={scrollBody}
+      actions={
+        <span className="flex items-center gap-2">
+          {sessions.length ? (
+            <Badge variant="info">
+              {plural(sessions.length, "stream")}
+              {total > 0 ? ` · ${formatRate(total)}` : ""}
+            </Badge>
+          ) : null}
+          <Link to="/activity/now" className="text-xs font-medium text-primary hover:underline">
+            Activity
+          </Link>
+        </span>
+      }
+    >
+      {loading ? (
+        <LoadingRows rows={2} />
+      ) : sessions.length === 0 ? (
+        <EmptyState
+          icon={<MonitorPlay />}
+          title="Nothing playing"
+          description="Streams appear here the moment someone presses play in Plex."
+          className="py-6"
+        />
+      ) : (
+        <ul className="space-y-3">
+          {sessions.map((s) => (
+            <SessionCard key={s.id || s.key} s={s} />
+          ))}
+        </ul>
+      )}
+    </DashboardPanel>
+  );
+}
+
+function SessionCard({ s }: { s: NowPlaying }) {
+  const title = useTitle(s.key);
+  return (
+    <li className="relative overflow-hidden rounded-lg border border-border">
+      <Artwork src={title?.backdrop} alt="" title="" className="absolute inset-0" icon={<span />} />
+      <div className="scrim-left absolute inset-0" />
+      <div className="relative flex gap-3 p-3">
+        <Artwork
+          src={title?.poster}
+          alt={s.title}
+          title={s.title}
+          className="aspect-[2/3] w-14 shrink-0 rounded-md shadow-md sm:w-16"
+        />
+        <div className="min-w-0 flex-1 text-on-scrim">
+          <p className="truncate font-semibold">{title?.title ?? s.title}</p>
+          <p className="truncate text-sm opacity-80">
+            {s.user} · {s.device}
+            {s.product && s.product !== s.device ? ` (${s.product})` : ""}
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <Badge variant={s.decision === "transcode" ? "warning" : "success"}>
+              {s.decision === "transcode"
+                ? "Transcoding"
+                : s.decision === "copy"
+                  ? "Direct stream"
+                  : s.decision
+                    ? "Direct play"
+                    : "Starting"}
+            </Badge>
+            {s.remote ? <Badge variant="info">Remote</Badge> : null}
+            {s.failovers ? (
+              <Badge variant="warning">
+                {s.failovers} failover{s.failovers === 1 ? "" : "s"}
+              </Badge>
+            ) : null}
+            <Badge variant="secondary">{formatRate(s.speedBps)}</Badge>
+          </div>
+          <div className="mt-2 max-w-md">
+            {s.progress !== null ? (
+              <Meter
+                onScrim
+                value={s.progress}
+                label={`Started ${relativeTime(s.startedAt)}`}
+                valueLabel={`${Math.round(s.progress * 100)}% watched`}
+              />
+            ) : (
+              <p className="text-xs opacity-80">Waiting for playback position</p>
+            )}
+          </div>
+          {s.decisionReason ? (
+            <p className="mt-1.5 text-xs opacity-80">{s.decisionReason}</p>
+          ) : null}
+          {s.release ? (
+            <p className="mt-1.5 truncate font-mono text-[11px] opacity-70" title={s.release}>
+              {s.release}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+/** Health: anything that needs attention first, each one link from its fix. */
+function HealthPanel({
+  loading,
+  items,
+  className,
+}: {
+  loading: boolean;
+  items: HealthItem[];
+  className?: string;
+}) {
+  const problems = items.filter((h) => h.level === "error" || h.level === "warn");
+  const rest = items.filter((h) => !problems.includes(h));
+  const severe = problems.some((h) => h.level === "error");
+  return (
+    <DashboardPanel
+      title="Health"
+      icon={<HeartPulse size={16} />}
+      className={className}
+      bodyClassName={cn("px-3 py-2", scrollBody)}
+      actions={
+        loading ? null : problems.length ? (
+          <Badge variant={severe ? "destructive" : "warning"}>{problems.length} to fix</Badge>
+        ) : (
+          <LevelBadge level="ok" label="All healthy" />
+        )
+      }
+    >
+      {loading ? (
+        <LoadingRows rows={4} />
+      ) : (
+        <>
+          {problems.length ? (
+            <section
+              role="region"
+              aria-label="Needs attention"
+              className={cn(
+                "mb-2 rounded-lg p-1",
+                severe ? "bg-danger-subtle" : "bg-warning-subtle",
+              )}
+            >
+              <ul className="space-y-0.5">
+                {problems.map((h) => (
+                  <HealthRow key={h.id} h={h} fix />
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          <ul className="space-y-0.5">
+            {rest.map((h) => (
+              <HealthRow key={h.id} h={h} />
+            ))}
+          </ul>
+        </>
+      )}
+    </DashboardPanel>
+  );
+}
+
+const LEVEL_TEXT: Record<HealthItem["level"], string> = {
+  ok: "Healthy",
+  warn: "Degraded",
+  error: "Failing",
+  off: "Off",
+  unknown: "Unknown",
+};
+
+const LEVEL_TONE: Record<HealthItem["level"], string> = {
+  ok: "text-success",
+  warn: "text-warning",
+  error: "text-danger",
+  off: "text-fg-subtle",
+  unknown: "text-fg-subtle",
+};
+
+function HealthRow({ h, fix = false }: { h: HealthItem; fix?: boolean }) {
+  return (
+    <li className="relative flex items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-surface-hover">
+      <StatusDot level={h.level} pulse={fix} className="mt-1.5" />
+      <span className="min-w-0 flex-1" title={h.details.join("\n") || undefined}>
+        <span className="flex items-center gap-2">
+          <Link
+            to={h.href}
+            className="shrink-0 text-sm font-medium text-fg after:absolute after:inset-0 focus-visible:outline-none focus-visible:after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring/50"
+          >
+            {h.label}
+          </Link>
+          <span className="min-w-0 flex-1">
+            {h.fill !== undefined ? (
+              <Meter
+                value={h.fill}
+                tone={h.fill > 0.95 && h.id !== "cache" ? "warning" : "primary"}
+              />
+            ) : null}
+          </span>
+          {fix ? (
+            <Link
+              to={h.href}
+              className="relative z-10 shrink-0 text-xs font-medium text-primary hover:underline"
+            >
+              Fix
+            </Link>
+          ) : (
+            <span className={cn("shrink-0 text-xs font-medium", LEVEL_TONE[h.level])}>
+              {LEVEL_TEXT[h.level]}
+            </span>
+          )}
+        </span>
+        <span className="block truncate text-xs text-fg-muted">{h.summary}</span>
+      </span>
+    </li>
+  );
+}
+
+/** A headline figure inside a panel: label, value, one line of context. */
+function Readout({ label, value, detail }: { label: string; value: ReactNode; detail: ReactNode }) {
+  return (
+    <div className="min-w-0 border-l border-border-subtle pl-3 first:border-l-0 first:pl-0">
+      <dt className="truncate text-[11px] font-medium uppercase tracking-wide text-fg-subtle">
+        {label}
+      </dt>
+      <dd className="truncate text-xl font-semibold text-fg">{value}</dd>
+      <dd className="truncate text-xs text-fg-muted">{detail}</dd>
+    </div>
+  );
+}
+
+function ActivityPanel({
+  state,
+  className,
+}: {
+  state: ReturnType<typeof useAsync<ActivityDay[]>>;
+  className?: string;
+}) {
+  const [metric, setMetric] = useState<"plays" | "hours">("plays");
+  const [asTable, setAsTable] = useState(false);
+  const days = state.data ?? [];
+  const totals = useMemo(() => {
+    const plays = days.reduce((n, x) => n + x.plays, 0);
+    const hours = days.reduce((n, x) => n + x.hours, 0);
+    const peakViewers = days.reduce((n, x) => Math.max(n, x.uniqueViewers), 0);
+    const half = Math.floor(days.length / 2);
+    const recent = days.slice(half).reduce((n, x) => n + x.plays, 0);
+    const earlier = days.slice(0, half).reduce((n, x) => n + x.plays, 0);
+    return { plays, hours, peakViewers, change: earlier > 0 ? (recent - earlier) / earlier : null };
+  }, [days]);
+  const data = days.map((d) => ({
+    key: d.date,
+    label: new Date(`${d.date}T12:00:00`).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    }),
+    value: d[metric],
+    detail:
+      metric === "plays"
+        ? `${formatNumber(d.hours, 1)} h · ${plural(d.uniqueViewers, "viewer")}`
+        : `${plural(d.plays, "play")} · ${plural(d.uniqueViewers, "viewer")}`,
+  }));
+  const na = state.error ? "—" : undefined;
+  return (
+    <DashboardPanel
+      title="Activity · last 30 days"
+      icon={<BarChart3 size={16} />}
+      className={className}
+      bodyClassName="flex min-h-0 flex-col gap-3"
+      actions={
+        <div className="flex items-center gap-1">
+          <div
+            role="radiogroup"
+            aria-label="Metric"
+            className="inline-flex rounded-md border border-border bg-bg-subtle p-0.5"
+          >
+            {(["plays", "hours"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={metric === m}
+                onClick={() => setMetric(m)}
+                className={`rounded px-2 py-0.5 text-xs font-medium ${metric === m ? "bg-surface text-fg shadow-sm" : "text-fg-muted hover:text-fg"}`}
+              >
+                {m === "plays" ? "Plays" : "Hours"}
+              </button>
+            ))}
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2"
+            onClick={() => setAsTable((t) => !t)}
+            aria-pressed={asTable}
+            title={asTable ? "Show chart" : "Show as table"}
+          >
+            {asTable ? <BarChart3 size={14} /> : <Table2 size={14} />}
+            <span className="sr-only">{asTable ? "Show chart" : "Show as table"}</span>
+          </Button>
+        </div>
+      }
+    >
+      {state.loading && !state.data ? (
+        <Skeleton className="h-full min-h-40 w-full" />
+      ) : (
+        <>
+          <dl className="grid shrink-0 grid-cols-3 gap-3">
+            <Readout
+              label="Plays · 30 days"
+              value={na ?? formatNumber(totals.plays, 0)}
+              detail={
+                totals.change === null
+                  ? "Across every viewer"
+                  : `${totals.change >= 0 ? "+" : "−"}${formatPercent(Math.abs(totals.change))} vs. prior`
+              }
+            />
+            <Readout
+              label="Hours watched"
+              value={na ?? formatNumber(totals.hours, 0)}
+              detail="Last 30 days"
+            />
+            <Readout
+              label="Busiest day"
+              value={na ?? plural(totals.peakViewers, "viewer")}
+              detail="Peak in one day"
+            />
+          </dl>
+          {state.error ? (
+            <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
+          ) : days.length === 0 ? (
+            <EmptyState
+              icon={<Activity />}
+              title="No plays yet"
+              description="Activity appears after the first title is watched."
+              className="py-6"
+            />
+          ) : asTable ? (
+            <div className="max-h-56 min-h-0 overflow-auto cockpit:max-h-none cockpit:flex-1">
+              <Table containerClassName="border-0 shadow-none">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Day</TableHead>
+                    <TableHead className="text-right">Plays</TableHead>
+                    <TableHead className="text-right">Hours</TableHead>
+                    <TableHead className="text-right">Viewers</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {[...days].reverse().map((d) => (
+                    <TableRow key={d.date}>
+                      <TableCell>{d.date}</TableCell>
+                      <TableCell className="text-right tabular-nums">{d.plays}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatNumber(d.hours, 1)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{d.uniqueViewers}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <TimeBars
+              fill
+              className="h-44 cockpit:h-auto cockpit:flex-1"
+              data={data}
+              ariaLabel={`${metric === "plays" ? "Plays" : "Hours watched"} per day over the last 30 days`}
+              valueFormat={(v) => formatNumber(v, metric === "hours" ? 1 : 0)}
+            />
+          )}
+        </>
+      )}
+    </DashboardPanel>
+  );
+}
+
+function RowsPanel({
+  state,
+  className,
+}: {
+  state: ReturnType<typeof useAsync<RowInsight[]>>;
+  className?: string;
+}) {
+  const rows = [...(state.data ?? [])].sort((a, b) => b.playRate - a.playRate).slice(0, 6);
+  const maxRate = Math.max(0.0001, ...rows.map((r) => r.playRate));
+  return (
+    <DashboardPanel
+      title="Best rows"
+      icon={<TrendingUp size={16} />}
+      className={className}
+      bodyClassName={scrollBody}
+      actions={
+        <Link to="/home" className="text-xs font-medium text-primary hover:underline">
+          Home
+        </Link>
+      }
+    >
+      {state.error ? (
+        <ErrorPanel error={state.error} onRetry={() => void state.reload()} />
+      ) : state.loading && !state.data ? (
+        <LoadingRows rows={4} />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={<Film />}
+          title="No row data yet"
+          description="Once viewers browse Plex Home, the rows that lead to plays rank here."
+          className="py-6"
+        />
+      ) : (
+        <ol className="space-y-2.5">
+          {rows.map((r, i) => (
+            <li
+              key={r.hubId}
+              title={`${r.plays7d} plays from ${r.impressions7d} impressions in 7 days`}
+            >
+              <div className="mb-1 flex items-baseline justify-between gap-2 text-sm">
+                <span className="min-w-0 truncate text-fg">
+                  <span className="mr-1.5 tabular-nums text-fg-subtle">{i + 1}</span>
+                  {r.title}
+                </span>
+                <span className="shrink-0 tabular-nums text-fg-muted">
+                  {formatPercent(r.playRate, 1)}
+                </span>
+              </div>
+              <div className="h-1.5 rounded-full bg-bg-subtle">
+                <div
+                  className="h-full rounded-full bg-primary"
+                  style={{ width: `${(r.playRate / maxRate) * 100}%` }}
+                />
+              </div>
+              <p className="mt-0.5 text-[11px] text-fg-subtle">
+                {r.plays7d} plays · {formatNumber(r.impressions7d, 0)} impressions
+              </p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </DashboardPanel>
+  );
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MediaContainer size="1">
+<Video ratingKey="1000000000000550" key="/library/metadata/1000000000000550" guid="com.plexapp.agents.themoviedb://550?lang=en" slug="fjord-harbor" studio="Northlight Pictures" type="movie" title="Fjord Harbor" librarySectionTitle="Movies" librarySectionID="1" librarySectionKey="/library/sections/1" contentRating="R" summary="An insomniac office worker..." audienceRating="8.4" viewOffset="60000" year="1999" tagline="Quiet waters run deep." thumb="/library/metadata/1000000000000550/thumb/1790812800" art="/library/metadata/1000000000000550/art/1790812800" duration="8340000" originallyAvailableAt="1999-10-15" addedAt="1790812800" updatedAt="1790812800" audienceRatingImage="themoviedb://image.rating" sessionKey="1">
+<Media id="1000000000000550" duration="8340000" bitrate="7600" width="1920" height="1080" aspectRatio="1.78" audioChannels="6" audioCodec="eac3" videoCodec="h264" videoResolution="1080" container="mkv" videoFrameRate="24p" videoProfile="high" hasVoiceActivity="0">
+<Part id="1000000000000550" key="/library/parts/1000000000000550/1790812800/file.mkv" duration="8340000" file="/ether/Fjord Harbor (1999).mkv" size="8000000000" container="mkv" videoProfile="high" />
+</Media>
+<Image alt="Fjord Harbor" type="coverPoster" url="/library/metadata/1000000000000550/thumb/1790812800" />
+<Image alt="Fjord Harbor" type="background" url="/library/metadata/1000000000000550/art/1790812800" />
+<UltraBlurColors topLeft="8c000c" topRight="542400" bottomRight="600007" bottomLeft="538700" />
+<Genre tag="Drama" />
+<Genre tag="Thriller" />
+<Country tag="United States of America" />
+<Director tag="Mara Ellison" />
+<Writer tag="Sasha Petrov" />
+<Role tag="Theo Varga" />
+<Role tag="Lucas Brandt" />
+<User id="1001" title="Owner" />
+<Player address="192.168.1.50" device="OSX" machineIdentifier="client-1" platform="Chrome" product="Plex Web" state="playing" title="Chrome" local="1" relayed="0" secure="0" userID="1001" />
+<Session id="sess-1" bandwidth="0" location="lan" />
+</Video>
+</MediaContainer>

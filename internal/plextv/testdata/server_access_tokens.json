@@ -1,0 +1,3374 @@
+{
+  "httpStatus": 200,
+  "contentType": "application/xml",
+  "response": {
+    "element": "tokens",
+    "attributes": {},
+    "text": null,
+    "children": [
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:5 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:6 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:6 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:9 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:12 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:23 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:8 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:11 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:15 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:8 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:6 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:15 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "device": "<REDACTED:5 chars>",
+          "owned": "1",
+          "token": "<TOKEN:20 chars>",
+          "tokenDisabled": "0",
+          "type": "device"
+        },
+        "text": null,
+        "children": []
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:4 chars>",
+                      "uid": "<REDACTED:36 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  },
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:22 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:9 chars>",
+              "username": "<REDACTED:9 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:9 chars>",
+              "username": "<REDACTED:9 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:10 chars>",
+              "username": "<REDACTED:10 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "0",
+                  "autoSelectSubtitle": "0",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "<REDACTED:2 chars>",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "<REDACTED:2 chars>",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:8 chars>",
+              "username": "<REDACTED:8 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:15 chars>",
+                      "uid": "<REDACTED:44 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:15 chars>",
+              "username": "<REDACTED:14 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:26 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:8 chars>",
+              "username": "<REDACTED:8 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:4 chars>",
+                      "uid": "<REDACTED:36 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:12 chars>",
+              "username": "<REDACTED:12 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:4 chars>",
+                      "uid": "<REDACTED:36 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:10 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "0",
+                  "autoSelectSubtitle": "0",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "<REDACTED:2 chars>",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "<REDACTED:2 chars>",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:35 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:22 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:8 chars>",
+              "username": "<REDACTED:8 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:22 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:18 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:13 chars>",
+              "username": "<REDACTED:15 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:22 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:10 chars>",
+              "username": "<REDACTED:10 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "0",
+                  "autoSelectSubtitle": "0",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "<REDACTED:2 chars>",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "<REDACTED:2 chars>",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:6 chars>",
+              "username": "<REDACTED:6 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:17 chars>",
+              "username": "<REDACTED:16 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:23 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:7 chars>",
+              "username": "<REDACTED:7 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:23 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  },
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:4 chars>",
+                      "uid": "<REDACTED:36 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:8 chars>",
+              "username": "<REDACTED:8 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:21 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:5 chars>",
+              "username": "<REDACTED:0 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "0",
+                  "autoSelectSubtitle": "0",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "<REDACTED:2 chars>",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "<REDACTED:2 chars>",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:14 chars>",
+              "username": "<REDACTED:0 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:13 chars>",
+              "username": "<REDACTED:0 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "0",
+                  "autoSelectSubtitle": "0",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "<REDACTED:2 chars>",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "<REDACTED:2 chars>",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:13 chars>",
+              "username": "<REDACTED:0 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "0",
+                  "autoSelectSubtitle": "0",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "<REDACTED:2 chars>",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "<REDACTED:2 chars>",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:9 chars>",
+              "username": "<REDACTED:0 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:8 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:12 chars>",
+              "username": "<REDACTED:0 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:9 chars>",
+              "username": "<REDACTED:9 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:15 chars>",
+                      "uid": "<REDACTED:44 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  },
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "email": "<EMAIL>",
+                      "id": "<ID:16 chars>",
+                      "uid": "<REDACTED:25 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:4 chars>",
+              "username": "<REDACTED:4 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:6 chars>",
+              "username": "<REDACTED:6 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "1",
+                  "autoSelectSubtitle": "1",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": [
+                  {
+                    "element": "scrobbling",
+                    "attributes": {
+                      "id": "<ID:4 chars>",
+                      "uid": "<REDACTED:36 chars>"
+                    },
+                    "text": null,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "token",
+        "attributes": {
+          "createdAt": "<TIMESTAMP>",
+          "owned": "0",
+          "token": "<TOKEN:20 chars>",
+          "type": "server"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "invited",
+            "attributes": {
+              "id": "<ID:9 chars>",
+              "scrobbleTypes": "",
+              "thumb": "<URL:58 chars>",
+              "title": "<REDACTED:9 chars>",
+              "username": "<REDACTED:9 chars>",
+              "uuid": "<HASH:16 chars>"
+            },
+            "text": null,
+            "children": [
+              {
+                "element": "profile",
+                "attributes": {
+                  "autoSelectAudio": "0",
+                  "autoSelectSubtitle": "0",
+                  "defaultAudioAccessibility": "0",
+                  "defaultAudioLanguage": "<REDACTED:2 chars>",
+                  "defaultAudioLanguages": "",
+                  "defaultSubtitleAccessibility": "0",
+                  "defaultSubtitleForced": "0",
+                  "defaultSubtitleLanguage": "<REDACTED:2 chars>",
+                  "defaultSubtitleLanguages": "",
+                  "mediaPostsVisibility": "1",
+                  "mediaReviewsLanguages": "",
+                  "mediaReviewsVisibility": "0",
+                  "watchedIndicator": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "scrobbling",
+                "attributes": {},
+                "text": null,
+                "children": []
+              }
+            ]
+          },
+          {
+            "element": "settings",
+            "attributes": {
+              "allowCameraUpload": "0",
+              "allowChannels": "0",
+              "allowSubtitleAdmin": "0",
+              "allowSync": "1",
+              "allowTuners": "0",
+              "filterAll": "",
+              "filterMovies": "",
+              "filterMusic": "",
+              "filterPhotos": "",
+              "filterTelevision": ""
+            },
+            "text": null,
+            "children": []
+          },
+          {
+            "element": "sections",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "1"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "section",
+                "attributes": {
+                  "createdAt": "<TIMESTAMP>",
+                  "key": "2"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

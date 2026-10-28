@@ -1,0 +1,467 @@
+{
+  "MediaContainer": {
+    "size": 2,
+    "totalSize": 2,
+    "offset": 0,
+    "allowSync": false,
+    "identifier": "com.plexapp.plugins.library",
+    "librarySectionID": 1,
+    "librarySectionTitle": "Movies",
+    "librarySectionUUID": "1dc336c6-64af-dcfe-d33e-ccd1243d2b6a",
+    "mediaTagPrefix": "/system/bundle/media/flags/",
+    "mediaTagVersion": 1720000000,
+    "title1": "Movies",
+    "title2": "All Movies",
+    "viewGroup": "movie",
+    "viewMode": 65592,
+    "Meta": {
+      "Type": [
+        {
+          "key": "/library/sections/1/all?type=1",
+          "type": "movie",
+          "title": "Movies",
+          "active": true,
+          "Filter": [
+            {
+              "filter": "genre",
+              "filterType": "string",
+              "key": "/library/sections/1/genre",
+              "title": "Genre",
+              "type": "filter"
+            },
+            {
+              "filter": "year",
+              "filterType": "integer",
+              "key": "/library/sections/1/year",
+              "title": "Year",
+              "type": "filter"
+            },
+            {
+              "filter": "decade",
+              "filterType": "integer",
+              "key": "/library/sections/1/decade",
+              "title": "Decade",
+              "type": "filter"
+            },
+            {
+              "filter": "contentRating",
+              "filterType": "string",
+              "key": "/library/sections/1/contentRating",
+              "title": "Content Rating",
+              "type": "filter"
+            },
+            {
+              "filter": "collection",
+              "filterType": "string",
+              "key": "/library/sections/1/collection",
+              "title": "Collection",
+              "type": "filter"
+            },
+            {
+              "filter": "country",
+              "filterType": "string",
+              "key": "/library/sections/1/country",
+              "title": "Country",
+              "type": "filter"
+            },
+            {
+              "filter": "studio",
+              "filterType": "string",
+              "key": "/library/sections/1/studio",
+              "title": "Studio",
+              "type": "filter"
+            },
+            {
+              "filter": "unwatched",
+              "filterType": "boolean",
+              "key": "/library/sections/1/unwatched",
+              "title": "Unwatched",
+              "type": "filter"
+            }
+          ],
+          "Sort": [
+            {
+              "active": true,
+              "activeDirection": "asc",
+              "default": "asc",
+              "defaultDirection": "asc",
+              "descKey": "titleSort:desc",
+              "firstCharacterKey": "/library/sections/1/firstCharacter",
+              "key": "titleSort",
+              "title": "Title"
+            },
+            {
+              "defaultDirection": "desc",
+              "descKey": "originallyAvailableAt:desc",
+              "key": "originallyAvailableAt",
+              "title": "Release Date"
+            },
+            {
+              "defaultDirection": "desc",
+              "descKey": "rating:desc",
+              "key": "rating",
+              "title": "Critic Rating"
+            },
+            {
+              "defaultDirection": "desc",
+              "descKey": "audienceRating:desc",
+              "key": "audienceRating",
+              "title": "Audience Rating"
+            },
+            {
+              "defaultDirection": "desc",
+              "descKey": "addedAt:desc",
+              "key": "addedAt",
+              "title": "Date Added"
+            },
+            {
+              "defaultDirection": "desc",
+              "descKey": "popularity:desc",
+              "key": "popularity",
+              "title": "Popularity"
+            }
+          ],
+          "Field": [
+            {
+              "key": "title",
+              "title": "Title",
+              "type": "string"
+            },
+            {
+              "key": "studio",
+              "title": "Studio",
+              "type": "string"
+            },
+            {
+              "key": "contentRating",
+              "title": "Content Rating",
+              "type": "tag"
+            },
+            {
+              "key": "year",
+              "title": "Year",
+              "type": "integer",
+              "subType": "year"
+            },
+            {
+              "key": "decade",
+              "title": "Decade",
+              "type": "integer",
+              "subType": "decade"
+            },
+            {
+              "key": "originallyAvailableAt",
+              "title": "Release Date",
+              "type": "date"
+            },
+            {
+              "key": "duration",
+              "title": "Duration",
+              "type": "integer",
+              "subType": "duration"
+            },
+            {
+              "key": "genre",
+              "title": "Genre",
+              "type": "tag"
+            },
+            {
+              "key": "collection",
+              "title": "Collection",
+              "type": "tag"
+            },
+            {
+              "key": "director",
+              "title": "Director",
+              "type": "tag"
+            },
+            {
+              "key": "writer",
+              "title": "Writer",
+              "type": "tag"
+            },
+            {
+              "key": "actor",
+              "title": "Actor",
+              "type": "tag"
+            },
+            {
+              "key": "country",
+              "title": "Country",
+              "type": "tag"
+            },
+            {
+              "key": "audienceRating",
+              "title": "Audience Rating",
+              "type": "integer",
+              "subType": "rating"
+            },
+            {
+              "key": "unwatched",
+              "title": "Unwatched",
+              "type": "boolean"
+            },
+            {
+              "key": "inProgress",
+              "title": "In Progress",
+              "type": "boolean"
+            }
+          ]
+        }
+      ],
+      "FieldType": [
+        {
+          "type": "tag",
+          "Operator": [
+            {
+              "key": "=",
+              "title": "is"
+            },
+            {
+              "key": "!=",
+              "title": "is not"
+            }
+          ]
+        },
+        {
+          "type": "integer",
+          "Operator": [
+            {
+              "key": "=",
+              "title": "is"
+            },
+            {
+              "key": "!=",
+              "title": "is not"
+            },
+            {
+              "key": ">>=",
+              "title": "is greater than"
+            },
+            {
+              "key": "<<=",
+              "title": "is less than"
+            }
+          ]
+        },
+        {
+          "type": "string",
+          "Operator": [
+            {
+              "key": "=",
+              "title": "contains"
+            },
+            {
+              "key": "!=",
+              "title": "does not contain"
+            },
+            {
+              "key": "==",
+              "title": "is"
+            },
+            {
+              "key": "!==",
+              "title": "is not"
+            },
+            {
+              "key": "<=",
+              "title": "begins with"
+            },
+            {
+              "key": ">=",
+              "title": "ends with"
+            }
+          ]
+        },
+        {
+          "type": "boolean",
+          "Operator": [
+            {
+              "key": "=",
+              "title": "is true"
+            },
+            {
+              "key": "!=",
+              "title": "is false"
+            }
+          ]
+        },
+        {
+          "type": "date",
+          "Operator": [
+            {
+              "key": "<<=",
+              "title": "is before"
+            },
+            {
+              "key": ">>=",
+              "title": "is after"
+            }
+          ]
+        }
+      ]
+    },
+    "Metadata": [
+      {
+        "ratingKey": "1000000000000348",
+        "key": "/library/metadata/1000000000000348",
+        "guid": "com.plexapp.agents.themoviedb://348?lang=en",
+        "slug": "alien",
+        "type": "movie",
+        "title": "Alien",
+        "summary": "",
+        "viewCount": 2,
+        "lastViewedAt": 1792321200,
+        "year": 1979,
+        "thumb": "/library/metadata/1000000000000348/thumb/1788220800",
+        "duration": 7020000,
+        "addedAt": 1788220800,
+        "updatedAt": 1788220800,
+        "Media": [
+          {
+            "id": 1000000000000348,
+            "duration": 8340000,
+            "bitrate": 7600,
+            "width": 1920,
+            "height": 1080,
+            "aspectRatio": 1.78,
+            "audioChannels": 6,
+            "audioCodec": "eac3",
+            "videoCodec": "h264",
+            "videoResolution": "1080",
+            "container": "mkv",
+            "videoFrameRate": "24p",
+            "videoProfile": "high",
+            "hasVoiceActivity": false,
+            "Part": [
+              {
+                "id": 1000000000000348,
+                "key": "/library/parts/1000000000000348/1788220800/file.mkv",
+                "duration": 8340000,
+                "file": "/ether/Alien (1979).mkv",
+                "size": 8000000000,
+                "container": "mkv",
+                "videoProfile": "high"
+              }
+            ]
+          }
+        ],
+        "Image": [
+          {
+            "alt": "Alien",
+            "type": "coverPoster",
+            "url": "/library/metadata/1000000000000348/thumb/1788220800"
+          }
+        ],
+        "Genre": [
+          {
+            "tag": "Horror"
+          },
+          {
+            "tag": "Science Fiction"
+          }
+        ]
+      },
+      {
+        "ratingKey": "1000000000000550",
+        "key": "/library/metadata/1000000000000550",
+        "guid": "com.plexapp.agents.themoviedb://550?lang=en",
+        "slug": "fjord-harbor",
+        "studio": "Northlight Pictures",
+        "type": "movie",
+        "title": "Fjord Harbor",
+        "contentRating": "R",
+        "summary": "An insomniac office worker...",
+        "audienceRating": 8.4,
+        "year": 1999,
+        "tagline": "Quiet waters run deep.",
+        "thumb": "/library/metadata/1000000000000550/thumb/1790812800",
+        "art": "/library/metadata/1000000000000550/art/1790812800",
+        "duration": 8340000,
+        "originallyAvailableAt": "1999-10-15",
+        "addedAt": 1790812800,
+        "updatedAt": 1790812800,
+        "audienceRatingImage": "themoviedb://image.rating",
+        "Media": [
+          {
+            "id": 1000000000000550,
+            "duration": 8340000,
+            "bitrate": 7600,
+            "width": 1920,
+            "height": 1080,
+            "aspectRatio": 1.78,
+            "audioChannels": 6,
+            "audioCodec": "eac3",
+            "videoCodec": "h264",
+            "videoResolution": "1080",
+            "container": "mkv",
+            "videoFrameRate": "24p",
+            "videoProfile": "high",
+            "hasVoiceActivity": false,
+            "Part": [
+              {
+                "id": 1000000000000550,
+                "key": "/library/parts/1000000000000550/1790812800/file.mkv",
+                "duration": 8340000,
+                "file": "/ether/Fjord Harbor (1999).mkv",
+                "size": 8000000000,
+                "container": "mkv",
+                "videoProfile": "high"
+              }
+            ]
+          }
+        ],
+        "Image": [
+          {
+            "alt": "Fjord Harbor",
+            "type": "coverPoster",
+            "url": "/library/metadata/1000000000000550/thumb/1790812800"
+          },
+          {
+            "alt": "Fjord Harbor",
+            "type": "background",
+            "url": "/library/metadata/1000000000000550/art/1790812800"
+          }
+        ],
+        "UltraBlurColors": {
+          "topLeft": "8c000c",
+          "topRight": "542400",
+          "bottomRight": "600007",
+          "bottomLeft": "538700"
+        },
+        "Genre": [
+          {
+            "tag": "Drama"
+          },
+          {
+            "tag": "Thriller"
+          }
+        ],
+        "Country": [
+          {
+            "tag": "United States of America"
+          }
+        ],
+        "Director": [
+          {
+            "tag": "Mara Ellison"
+          }
+        ],
+        "Writer": [
+          {
+            "tag": "Sasha Petrov"
+          }
+        ],
+        "Role": [
+          {
+            "tag": "Theo Varga"
+          },
+          {
+            "tag": "Lucas Brandt"
+          }
+        ]
+      }
+    ]
+  }
+}
+

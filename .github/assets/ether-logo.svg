@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 510 128" width="510" height="128" role="img" aria-label="Ether" class="ether-logo" data-motion="animated">
+<title>Ether</title><desc>Continuum: a continuous current folded into an e.</desc>
+<style>
+ :root,svg{--ink:#1c2927;--accent:#087f76}
+ @media(prefers-color-scheme:dark){:root,svg{--ink:#f0f0e9;--accent:#52dfc5}}
+ .ether-ink{stroke:var(--ink,#1c2927)}.ether-accent{stroke:var(--accent,#087f76)}
+ .ether-trace{stroke-dasharray:1;stroke-dashoffset:0}
+ [data-motion=animated] .ether-trace{animation:ether-draw .8s cubic-bezier(.22,.68,.16,1) var(--delay,0s) backwards}
+ [data-motion=animated] .ether-signal{animation:ether-draw .8s cubic-bezier(.22,.68,.16,1) var(--delay,0s) backwards,ether-breathe 5s ease-in-out 2s infinite}
+ @keyframes ether-draw{from{stroke-dashoffset:1}}
+ @keyframes ether-breathe{0%,20%,70%,100%{opacity:1}45%{opacity:.5}}
+ @media(prefers-reduced-motion:reduce){.ether-trace,.ether-signal{animation:none!important}}</style>
+
+<g transform="translate(16 16)" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M80 17H43C24 17 11 30 11 48S24 79 43 79H80" pathLength="1" stroke="#1c2927" stroke-width="9" class="ether-trace ether-ink" style="--delay:0.05s"/><path d="M78 32H43C33 32 27 38 27 48S33 64 43 64H78" pathLength="1" stroke="#087f76" stroke-width="8" class="ether-trace ether-accent" style="--delay:0.24s"/><path d="M45 48H80" pathLength="1" stroke="#087f76" stroke-width="8" class="ether-trace ether-accent ether-signal" style="--delay:0.52s"/></g>
+<g transform="translate(142 23) scale(1.32)" fill="none" stroke="#1c2927" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 31H47C47 17 38 8 26 8C13 8 4 18 4 31C4 45 13 54 27 54C35 54 42 51 47 46" transform="translate(0 0)" pathLength="1" class="ether-trace ether-ink" style="--delay:0.4s"/><path d="M14-7V39Q14 54 29 54H34M3 10H33" transform="translate(59 0)" pathLength="1" class="ether-trace ether-ink" style="--delay:0.505s"/><path d="M6-7V54M6 29C6 1 43 1 43 29V54" transform="translate(108 0)" pathLength="1" class="ether-trace ether-ink" style="--delay:0.61s"/><path d="M8 31H47C47 17 38 8 26 8C13 8 4 18 4 31C4 45 13 54 27 54C35 54 42 51 47 46" transform="translate(170 0)" pathLength="1" class="ether-trace ether-ink" style="--delay:0.715s"/><path d="M6 54V9M6 29C7 13 18 6 32 10" transform="translate(229 0)" pathLength="1" class="ether-trace ether-ink" style="--delay:0.82s"/></g>
+</svg>

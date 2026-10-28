@@ -1,0 +1,193 @@
+# GoReleaser v2 — Ether release builds.
+#   snapshot:  goreleaser release --snapshot --clean   (see `make release-snapshot`)
+#   real:      .github/workflows/release.yml on v* tags
+# The macOS Ether.app/DMG and the Windows installer are built by native
+# jobs in release.yml (CGO tray on macOS, NSIS on Windows); goreleaser
+# produces the cross-platform server binaries, tarballs, .deb/.rpm and the
+# Docker image here. ffmpeg must be staged first:
+#   scripts/fetch-ffmpeg.sh all
+version: 2
+
+project_name: ether
+
+# Keep the output directory separate from dist/ffmpeg staged by hooks.
+# GoReleaser requires its own dist to remain empty until hooks finish.
+dist: dist/release
+
+before:
+  hooks:
+    - go mod tidy
+    # --clean removes dist before hooks run; stage dependencies here.
+    - sh scripts/fetch-ffmpeg.sh all
+    # darwin-universal ffmpeg for the universal macOS tarball (needs the
+    # darwin builds staged; needs lipo or llvm-lipo on the runner).
+    - sh scripts/stage-universal-ffmpeg.sh
+
+builds:
+  - id: ether
+    main: ./cmd/ether
+    binary: ether
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/braedonsaunders/ether/internal/updater.Version={{ .Version }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Commit={{ .Commit }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Date={{ .Date }}
+      # Injected from CI secrets (see release.yml). Empty in dev/snapshot
+      # builds, which then refuse to self-update — by design.
+      - -X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64={{ envOrDefault "ETHER_UPDATE_PUBLIC_KEY" "" }}
+
+  # Tray for the platforms where fyne.io/systray is pure Go. The macOS
+  # tray needs CGO and is built natively by packaging/macos/build-app.sh.
+  - id: ether-tray
+    main: ./cmd/ether-tray
+    binary: ether-tray
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - '{{ if eq .Os "windows" }}-H=windowsgui{{ end }}'
+      - -s -w
+      - -X github.com/braedonsaunders/ether/internal/updater.Version={{ .Version }}
+      - -X github.com/braedonsaunders/ether/internal/updater.Commit={{ .Commit }}
+      - -X github.com/braedonsaunders/ether/internal/updater.PublicKeyB64={{ envOrDefault "ETHER_UPDATE_PUBLIC_KEY" "" }}
+
+universal_binaries:
+  - ids: [ether]
+    replace: true
+    name_template: ether
+
+archives:
+  - id: ether
+    ids: [ether, ether-tray]
+    # macOS ships its GUI companion in the DMG, not the server archive.
+    allow_different_binary_count: true
+    name_template: >-
+      ether_{{ .Version }}_{{ .Os }}_{{ if eq .Arch "all" }}universal{{ else }}{{ .Arch }}{{ end }}
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES.md
+      # Bundled ffmpeg, staged by scripts/fetch-ffmpeg.sh. tarballs ship it
+      # next to the binary, where internal/transcode looks first.
+      - src: dist/ffmpeg/{{ .Os }}-{{ .Arch }}/ffmpeg*
+        dst: .
+      - src: dist/ffmpeg/{{ .Os }}-{{ .Arch }}/ffprobe*
+        dst: .
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+nfpms:
+  - id: ether-linux
+    package_name: ether
+    ids: [ether, ether-tray]
+    homepage: https://github.com/braedonsaunders/ether
+    maintainer: Ether contributors
+    description: |
+      Ether media server — presents to Plex apps as a Plex Media Server,
+      backed by a TMDB catalogue and on-demand Usenet streaming.
+      Ships no content and no providers; owners supply every account.
+    license: GPL-3.0
+    formats: [deb, rpm]
+    bindir: /usr/lib/ether
+    contents:
+      - src: packaging/linux/ether.service
+        dst: /lib/systemd/system/ether.service
+      - src: dist/ffmpeg/linux-{{ .Arch }}/ffmpeg
+        dst: /usr/lib/ether/ffmpeg
+      - src: dist/ffmpeg/linux-{{ .Arch }}/ffprobe
+        dst: /usr/lib/ether/ffprobe
+      - src: LICENSE
+        dst: /usr/share/doc/ether/LICENSE
+      - src: THIRD_PARTY_NOTICES.md
+        dst: /usr/share/doc/ether/THIRD_PARTY_NOTICES.md
+      - dst: /var/lib/ether
+        type: dir
+        file_info:
+          mode: 0750
+      - dst: /var/cache/ether
+        type: dir
+        file_info:
+          mode: 0750
+    scripts:
+      postinstall: packaging/linux/postinstall.sh
+      preremove: packaging/linux/preremove.sh
+      postremove: packaging/linux/postremove.sh
+
+dockers:
+  - ids: [ether]
+    dockerfile: packaging/docker/Dockerfile.goreleaser.amd64
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-amd64
+      - ghcr.io/braedonsaunders/ether:latest-amd64
+    extra_files:
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
+      - dist/ffmpeg/linux-amd64/ffmpeg
+      - dist/ffmpeg/linux-amd64/ffprobe
+    build_flag_templates:
+      - --platform=linux/amd64
+      - --label=org.opencontainers.image.title=Ether
+      - --label=org.opencontainers.image.description=Ether media server (Plex-compatible front end, TMDB catalogue, Usenet streaming)
+      - --label=org.opencontainers.image.source=https://github.com/braedonsaunders/ether
+      - --label=org.opencontainers.image.version={{ .Version }}
+      - --label=org.opencontainers.image.licenses=GPL-3.0
+  - ids: [ether]
+    dockerfile: packaging/docker/Dockerfile.goreleaser.arm64
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-arm64
+      - ghcr.io/braedonsaunders/ether:latest-arm64
+    extra_files:
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
+      - dist/ffmpeg/linux-arm64/ffmpeg
+      - dist/ffmpeg/linux-arm64/ffprobe
+    build_flag_templates:
+      - --platform=linux/arm64
+      - --label=org.opencontainers.image.title=Ether
+      - --label=org.opencontainers.image.version={{ .Version }}
+      - --label=org.opencontainers.image.licenses=GPL-3.0
+
+docker_manifests:
+  - name_template: ghcr.io/braedonsaunders/ether:{{ .Version }}
+    image_templates:
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-amd64
+      - ghcr.io/braedonsaunders/ether:{{ .Version }}-arm64
+  - name_template: ghcr.io/braedonsaunders/ether:latest
+    image_templates:
+      - ghcr.io/braedonsaunders/ether:latest-amd64
+      - ghcr.io/braedonsaunders/ether:latest-arm64
+
+release:
+  github:
+    owner: braedonsaunders
+    name: ether
+  draft: true # the workflow attaches the DMG/installer/signed manifests, then publishes
+  name_template: "Ether {{ .Version }}"
+  header: |
+    Ether {{ .Version }} — see docs/install.md for per-platform install notes.
+    The signed update feed (stable.json / beta.json) is attached to this release.
+  footer: |
+    Ether ships no content, no Usenet providers and no indexers. Owners
+    supply every account and are responsible for what they access (LEGAL.md).
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]

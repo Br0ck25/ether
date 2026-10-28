@@ -1,0 +1,116 @@
+{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "hevc",
+            "codec_long_name": "H.265 / HEVC (High Efficiency Video Coding)",
+            "profile": "Main 10",
+            "codec_type": "video",
+            "codec_tag_string": "[0][0][0][0]",
+            "codec_tag": "0x0000",
+            "width": 3840,
+            "height": 2160,
+            "coded_width": 3840,
+            "coded_height": 2160,
+            "has_b_frames": 2,
+            "sample_aspect_ratio": "1:1",
+            "display_aspect_ratio": "16:9",
+            "pix_fmt": "yuv420p10le",
+            "level": 153,
+            "color_range": "tv",
+            "color_space": "bt2020nc",
+            "color_transfer": "smpte2084",
+            "color_primaries": "bt2020",
+            "chroma_location": "left",
+            "field_order": "progressive",
+            "refs": 1,
+            "r_frame_rate": "24000/1001",
+            "avg_frame_rate": "24000/1001",
+            "time_base": "1/1000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "extradata_size": 2460,
+            "disposition": {"default": 1, "dub": 0, "original": 0, "comment": 0, "forced": 0, "attached_pic": 0},
+            "tags": {
+                "BPS": "58312456",
+                "DURATION": "02:12:30.125000000",
+                "NUMBER_OF_FRAMES": "190659",
+                "_STATISTICS_TAGS": "BPS DURATION NUMBER_OF_FRAMES NUMBER_OF_BYTES"
+            },
+            "side_data_list": [
+                {
+                    "side_data_type": "Mastering display metadata",
+                    "red_x": "35400/50000", "red_y": "14600/50000",
+                    "green_x": "8500/50000", "green_y": "39850/50000",
+                    "blue_x": "6550/50000", "blue_y": "2300/50000",
+                    "white_point_x": "15635/50000", "white_point_y": "16450/50000",
+                    "min_luminance": "50/10000", "max_luminance": "40000000/10000"
+                },
+                {
+                    "side_data_type": "Content light level metadata",
+                    "max_content": 1000,
+                    "max_average": 400
+                }
+            ]
+        },
+        {
+            "index": 1,
+            "codec_name": "eac3",
+            "codec_long_name": "ATSC A/52B (AC-3, E-AC-3)",
+            "codec_type": "audio",
+            "sample_fmt": "fltp",
+            "sample_rate": "48000",
+            "channels": 6,
+            "channel_layout": "5.1(side)",
+            "bits_per_sample": 0,
+            "r_frame_rate": "0/0",
+            "avg_frame_rate": "0/0",
+            "time_base": "1/1000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "bit_rate": "768000",
+            "disposition": {"default": 1, "forced": 0},
+            "tags": {"language": "eng", "title": "English DD+ 5.1", "BPS": "768000"}
+        },
+        {
+            "index": 2,
+            "codec_name": "ac3",
+            "codec_type": "audio",
+            "sample_fmt": "fltp",
+            "sample_rate": "48000",
+            "channels": 6,
+            "channel_layout": "5.1(side)",
+            "bit_rate": "448000",
+            "disposition": {"default": 0, "forced": 0},
+            "tags": {"language": "fre", "title": "French AC3 5.1"}
+        },
+        {
+            "index": 3,
+            "codec_name": "subrip",
+            "codec_long_name": "SubRip subtitle",
+            "codec_type": "subtitle",
+            "disposition": {"default": 0, "forced": 1},
+            "tags": {"language": "eng", "title": "Forced"}
+        },
+        {
+            "index": 4,
+            "codec_name": "subrip",
+            "codec_type": "subtitle",
+            "disposition": {"default": 0, "forced": 0},
+            "tags": {"language": "eng", "title": "SDH"}
+        }
+    ],
+    "format": {
+        "filename": "http://127.0.0.1:32400/ether/source/abc",
+        "nb_streams": 5,
+        "nb_programs": 0,
+        "format_name": "matroska,webm",
+        "format_long_name": "Matroska / WebM",
+        "start_time": "0.000000",
+        "duration": "7950.125000",
+        "size": "59836712345",
+        "bit_rate": "60211234",
+        "probe_score": 100,
+        "tags": {"title": "Example.2023.2160p.UHD.BluRay.REMUX.HDR.HEVC", "ENCODER": "libebml v1.4.4 + libmatroska v1.7.1"}
+    }
+}

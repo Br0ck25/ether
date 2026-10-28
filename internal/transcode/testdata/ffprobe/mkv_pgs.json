@@ -1,0 +1,68 @@
+{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "h264",
+            "profile": "High",
+            "codec_type": "video",
+            "width": 1920,
+            "height": 800,
+            "pix_fmt": "yuv420p",
+            "r_frame_rate": "24000/1001",
+            "avg_frame_rate": "0/0",
+            "disposition": {"default": 1, "forced": 0}
+        },
+        {
+            "index": 1,
+            "codec_name": "aac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "disposition": {"default": 1, "forced": 0},
+            "tags": {"language": "jpn"}
+        },
+        {
+            "index": 2,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+            "codec_type": "subtitle",
+            "width": 1920,
+            "height": 1080,
+            "disposition": {"default": 1, "forced": 0},
+            "tags": {"language": "eng"}
+        },
+        {
+            "index": 3,
+            "codec_name": "hdmv_pgs_subtitle",
+            "codec_type": "subtitle",
+            "disposition": {"default": 0, "forced": 1},
+            "tags": {"language": "eng", "title": "Forced"}
+        },
+        {
+            "index": 4,
+            "codec_name": "dvd_subtitle",
+            "codec_type": "subtitle",
+            "disposition": {"default": 0, "forced": 0},
+            "tags": {"language": "fre"}
+        },
+        {
+            "index": 5,
+            "codec_name": "ass",
+            "codec_type": "subtitle",
+            "disposition": {"default": 0, "forced": 0},
+            "tags": {"language": "ger"}
+        },
+        {
+            "index": 6,
+            "codec_name": "ttf",
+            "codec_type": "attachment",
+            "tags": {"filename": "font.ttf", "mimetype": "application/x-truetype-font"}
+        }
+    ],
+    "format": {
+        "format_name": "matroska,webm",
+        "duration": "1440.000000",
+        "size": "1440000000"
+    }
+}

@@ -1,0 +1,217 @@
+/* The whole AppKit design system (Tailwind v4 + semantic tokens) in one import,
+ * plus the dependency-light dashboard primitives. Everything below uses
+ * semantic tokens only; light and dark come from the `.dark` class. */
+@import "@braedonsaunders/appkit-ui/styles.css";
+@import "@braedonsaunders/appkit-dashboard/primitives.css";
+
+@source "./";
+
+:root {
+  /* Drawers cover the full height (AppShell header included). */
+  --drawer-top: 0px;
+  /* Text and marks drawn over artwork scrims (which use the overlay token). */
+  --on-scrim: rgb(var(--ch-bg));
+  /* Network download/upload series, validated as a pair (dataviz
+   * validate_palette.js) on the light surface; tritan separation sits in the
+   * floor band, so the chart always direct-labels both. */
+  --series-down: #0d9488;
+  --series-up: #4f46e5;
+}
+.dark {
+  --on-scrim: rgb(var(--ch-fg));
+  --series-up: #6366f1;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --on-scrim: rgb(var(--ch-fg));
+    --series-up: #6366f1;
+  }
+}
+
+@theme inline {
+  --color-on-scrim: var(--on-scrim);
+  --color-series-down: var(--series-down);
+  --color-series-up: var(--series-up);
+}
+
+/* The Overview cockpit: one screen with no page scroll once the page is wide
+ * and the window tall enough to hold every panel; panels scroll inside.
+ * Narrower or shorter windows stack the panels and scroll the page. */
+@custom-variant cockpit {
+  @container (min-width: 64rem) {
+    @media (min-height: 600px) {
+      @slot;
+    }
+  }
+}
+
+/* The page scroller is the containing block for absolutely positioned content
+ * (sr-only file inputs, visually hidden labels). Without it they resolve
+ * against the document and stretch it past the shell into blank scroll. */
+.app-scroll {
+  position: relative;
+}
+
+@layer utilities {
+  /* Horizontal poster rows: scroll-snap like a TV shelf, no visible scrollbar. */
+  .shelf {
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  .shelf::-webkit-scrollbar {
+    display: none;
+  }
+  .shelf > * {
+    scroll-snap-align: start;
+  }
+
+  /* Image fade-in once decoded; never hides content that failed to load. */
+  .img-fade {
+    transition: opacity var(--duration-slow) var(--ease-out);
+  }
+  .img-fade[data-loaded="false"] {
+    opacity: 0;
+  }
+
+  /* Soft scrim over artwork so overlaid text stays legible in both themes. */
+  .scrim-bottom {
+    background: linear-gradient(
+      to top,
+      rgb(var(--ch-overlay) / 0.92),
+      rgb(var(--ch-overlay) / 0.35) 55%,
+      transparent
+    );
+  }
+  .scrim-left {
+    background: linear-gradient(
+      to right,
+      rgb(var(--ch-overlay) / 0.95),
+      rgb(var(--ch-overlay) / 0.55) 55%,
+      transparent
+    );
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .img-fade {
+      transition: none;
+    }
+  }
+}
+
+/* Continuum identity: static in the shell, drawn once for a document cold start. */
+.ether-logo {
+  --ether-ink: #1c2927;
+  --ether-accent: #087f76;
+}
+.dark .ether-logo {
+  --ether-ink: #f0f0e9;
+  --ether-accent: #52dfc5;
+}
+.ether-ink {
+  stroke: var(--ether-ink);
+}
+.ether-accent {
+  stroke: var(--ether-accent);
+}
+.ether-trace {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+.ether-logo[data-motion="intro"] .ether-trace {
+  animation: ether-draw 0.8s cubic-bezier(0.22, 0.68, 0.16, 1) var(--ether-delay, 0s) backwards;
+}
+.ether-logo[data-motion="intro"] .ether-signal {
+  animation:
+    ether-draw 0.8s cubic-bezier(0.22, 0.68, 0.16, 1) var(--ether-delay, 0s) backwards,
+    ether-breathe 5s ease-in-out 2s infinite;
+}
+.ether-logo[data-motion="loop"] .ether-signal {
+  animation: ether-breathe 3s ease-in-out infinite;
+}
+.ether-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+.ether-splash-fading {
+  opacity: 0;
+  pointer-events: none;
+}
+.ether-splash-center {
+  width: min(420px, 76vw);
+  text-align: center;
+}
+.ether-splash-center p {
+  margin-top: 28px;
+  color: var(--color-fg-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  animation: ether-caption 0.6s ease 1.15s backwards;
+}
+.ether-splash-progress {
+  height: 2px;
+  width: 90px;
+  background: var(--color-border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 32px auto 0;
+}
+.ether-splash-progress::after {
+  content: "";
+  display: block;
+  height: 100%;
+  background: #087f76;
+  transform-origin: left;
+  animation: ether-progress 2s ease-out both;
+}
+.dark .ether-splash-progress::after {
+  background: #52dfc5;
+}
+@keyframes ether-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+@keyframes ether-breathe {
+  0%,
+  20%,
+  70%,
+  100% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.5;
+  }
+}
+@keyframes ether-caption {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@keyframes ether-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ether-logo .ether-trace,
+  .ether-logo .ether-signal,
+  .ether-splash-center p,
+  .ether-splash-progress::after {
+    animation: none !important;
+  }
+  .ether-splash {
+    transition: none;
+  }
+}

@@ -1,0 +1,1210 @@
+import { Badge, Button, Input, Spinner, SubtabNav, cn, toast } from "@braedonsaunders/appkit-ui";
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  Network,
+  Check,
+  HardDrive,
+  Leaf,
+  Settings2,
+  Sparkles,
+  Zap,
+} from "lucide-react";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useRouteTab } from "../../components/layout";
+import { CacheOverview } from "./CacheOverview";
+import { CacheExplorer } from "./CacheExplorer";
+const CACHE_TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "explorer", label: "Explorer" },
+  { key: "preloading", label: "Preloading" },
+] as const;
+import { Drawer } from "../../components/Drawer";
+import { ErrorPanel } from "../../components/feedback";
+import { Field, NumberInput } from "../../components/fields";
+import { useDraft, useUnsavedGuard } from "../../components/SaveBar";
+import { Workspace } from "../../components/workspace";
+import { api, apiFetch } from "../../lib/api";
+import { formatBytes } from "../../lib/format";
+import { useAsync, useInterval } from "../../lib/hooks";
+import type { EtherConfig } from "../../lib/types";
+
+type Policy = EtherConfig["cache"];
+type Release = {
+  ReleaseID: string;
+  Title: string;
+  Bytes: number;
+  Size: number;
+  Segments: number;
+  Plays: number;
+  LastUsed: string;
+  LastPlayed: string;
+  Pins: string[] | null;
+};
+type PreloadStatus = {
+  state: string;
+  message: string;
+  title: string;
+  fetched: number;
+  size: number;
+  allocated: number;
+  ready: number;
+  failed: number;
+  paused: boolean;
+  viewers?: number;
+  selection?: {
+    key: number;
+    title: string;
+    type: string;
+    score: number;
+    catalogue: number;
+    household: number;
+    reason: string;
+  }[];
+  items: { key: number; title: string; releaseId: string; size: number; complete: boolean }[];
+};
+export type CacheSnapshot = {
+  policy?: Policy;
+  shared?: boolean;
+  clustered?: boolean;
+  restartRequired?: boolean;
+  storageError?: string;
+  preload: PreloadStatus;
+  used: number;
+  budget: number;
+  directory: string;
+  protectedBytes: number;
+  releases: Release[];
+  metrics: { hits: number; misses: number; servedBytes: number; evictedBytes: number };
+  prefetch: { queued: number; running: number; completed: number; failed: number; dropped: number };
+};
+const GiB = 1024 ** 3,
+  MiB = 1024 ** 2;
+export const PRESETS: {
+  name: string;
+  space: string;
+  description: string;
+  values: Partial<Policy>;
+}[] = [
+  {
+    name: "Feather",
+    space: "256 MiB",
+    description: "A small footprint. Just the useful moments.",
+    values: {
+      preloadEnabled: false,
+      preloadBudgetBytes: 0,
+      mode: "demand",
+      budgetBytes: 256 * MiB,
+      retentionDays: 1,
+      replayBoostHours: 0,
+      detailBytes: 2 * MiB,
+      detailWarmup: "on",
+      disableSpeculation: false,
+      prefetchNextEpisode: false,
+      keepInProgressWarm: false,
+      prefetchBytes: 16 * MiB,
+    },
+  },
+  {
+    name: "Everyday",
+    space: "32 GiB",
+    description: "Quick starts and room for recent watches.",
+    values: {
+      preloadEnabled: false,
+      preloadBudgetBytes: 0,
+      mode: "adaptive",
+      budgetBytes: 32 * GiB,
+      retentionDays: 7,
+      replayBoostHours: 12,
+      detailBytes: 8 * MiB,
+      detailWarmup: "on",
+      disableSpeculation: false,
+      prefetchNextEpisode: true,
+      keepInProgressWarm: false,
+      prefetchBytes: 32 * MiB,
+    },
+  },
+  {
+    name: "Encore",
+    space: "250 GiB",
+    description: "Give household favourites a longer stay.",
+    values: {
+      preloadEnabled: false,
+      preloadBudgetBytes: 0,
+      mode: "adaptive",
+      budgetBytes: 250 * GiB,
+      retentionDays: 30,
+      replayBoostHours: 48,
+      detailBytes: 16 * MiB,
+      detailWarmup: "on",
+      disableSpeculation: false,
+      prefetchNextEpisode: true,
+      keepInProgressWarm: true,
+      prefetchBytes: 64 * MiB,
+    },
+  },
+  {
+    name: "Deep shelf",
+    space: "750 GiB",
+    description: "Keep more of what everyone comes back to.",
+    values: {
+      preloadEnabled: false,
+      preloadBudgetBytes: 0,
+      mode: "adaptive",
+      budgetBytes: 750 * GiB,
+      retentionDays: 90,
+      replayBoostHours: 72,
+      detailBytes: 32 * MiB,
+      detailWarmup: "on",
+      disableSpeculation: false,
+      prefetchNextEpisode: true,
+      keepInProgressWarm: true,
+      prefetchBytes: 64 * MiB,
+    },
+  },
+  {
+    name: "Cinema node",
+    space: "2 TiB",
+    description: "A managed shelf of complete movies and TV episodes.",
+    values: {
+      mode: "adaptive",
+      budgetBytes: 2048 * GiB,
+      retentionDays: 90,
+      replayBoostHours: 72,
+      detailBytes: 32 * MiB,
+      detailWarmup: "on",
+      disableSpeculation: false,
+      prefetchNextEpisode: true,
+      keepInProgressWarm: true,
+      prefetchBytes: 64 * MiB,
+      preloadEnabled: true,
+      preloadBudgetBytes: 1536 * GiB,
+      preloadMaxTitles: 400,
+      preloadRateMiB: 20,
+      preloadSource: "smart",
+      preloadContent: "mixed",
+      preloadHouseholdWeight: 65,
+      preloadHouseholdScope: "home",
+      preloadEpisodesAhead: 3,
+      preloadHistoryDays: 90,
+    },
+  },
+  {
+    name: "Edge library",
+    space: "20 TiB",
+    description: "Thousands of films. A shelf that fills itself.",
+    values: {
+      mode: "adaptive",
+      budgetBytes: 20480 * GiB,
+      retentionDays: 180,
+      replayBoostHours: 96,
+      detailBytes: 32 * MiB,
+      detailWarmup: "on",
+      disableSpeculation: false,
+      prefetchNextEpisode: true,
+      keepInProgressWarm: true,
+      prefetchBytes: 64 * MiB,
+      preloadEnabled: true,
+      preloadBudgetBytes: 18432 * GiB,
+      preloadMaxTitles: 2500,
+      preloadRateMiB: 50,
+      preloadSource: "smart",
+      preloadContent: "mixed",
+      preloadHouseholdWeight: 65,
+      preloadHouseholdScope: "home",
+      preloadEpisodesAhead: 3,
+      preloadHistoryDays: 90,
+    },
+  },
+];
+
+function Toggle({
+  title,
+  description,
+  checked,
+  disabled,
+  onChange,
+}: {
+  title: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label
+      className={cn(
+        "flex cursor-pointer items-start justify-between gap-5 py-3",
+        disabled && "opacity-45",
+      )}
+    >
+      <span>
+        <span className="block text-sm font-medium text-fg">{title}</span>
+        <span className="mt-1 block text-xs leading-relaxed text-fg-muted">{description}</span>
+      </span>
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label={title}
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-1 h-4 w-4 shrink-0 accent-primary"
+      />
+    </label>
+  );
+}
+
+export default function Cache() {
+  const config = useAsync(() => api.getConfig(), []);
+  const live = useAsync((signal) => apiFetch<CacheSnapshot>("/cache/", { signal }), []);
+  useInterval(() => void live.reload(), 5000);
+  const { draft, setDraft, dirty, reset } = useDraft<Policy>(config.data?.cache);
+  useUnsavedGuard(dirty);
+  const [saving, setSaving] = useState(false),
+    [error, setError] = useState<unknown>(null);
+  const [advanced, setAdvanced] = useState(false);
+  const [editor, setEditor] = useState<"profiles" | "policy" | null>(null);
+  const [profileChoice, setProfileChoice] = useState<{
+    name: string;
+    values: Partial<Policy>;
+  } | null>(null);
+  const tab = useRouteTab(CACHE_TABS);
+  const navigate = useNavigate();
+  const [unit, setUnit] = useState<"GiB" | "TiB">("GiB");
+  const [busy, setBusy] = useState<string | null>(null);
+  const activeDirectory = live.data?.directory ?? config.data?.cache.dir ?? "";
+  const disk = useAsync(() => api.disk(activeDirectory), [activeDirectory]);
+  const patch = (v: Partial<Policy>) => setDraft((d) => (d ? { ...d, ...v } : d));
+  async function save() {
+    if (!draft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.putSection("cache", draft);
+      await config.reload();
+      await live.reload();
+      setEditor(null);
+      setProfileChoice(null);
+      toast.success("Cache policy saved");
+    } catch (e) {
+      setError(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function action(path: string, body?: unknown) {
+    setBusy(path);
+    setError(null);
+    try {
+      await apiFetch(`/cache/${path}`, {
+        method: "POST",
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      await live.reload();
+      if (path === "warm") toast.success("Resume warming requested");
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+  if (!draft)
+    return (
+      <Workspace title="Cache">
+        {config.error ? (
+          <ErrorPanel error={config.error} onRetry={() => void config.reload()} />
+        ) : (
+          <div className="grid flex-1 place-items-center">
+            <Spinner label="Loading cache" />
+          </div>
+        )}
+      </Workspace>
+    );
+  const snap = live.data;
+  const used = snap?.used ?? 0;
+  const saved = config.data!.cache;
+  const savedPreset = PRESETS.find((p) =>
+    Object.entries(p.values).every(([k, v]) => saved[k as keyof Policy] === v),
+  );
+  const policyName = saved.mode === "off" ? "Pass-through" : savedPreset?.name || "Custom policy";
+  const enabled = draft.mode !== "off",
+    speculate = enabled && !draft.disableSpeculation;
+  return (
+    <Workspace
+      title="Cache"
+      subtitle="Storage, playback readiness, and background activity."
+      actions={
+        <>
+          {dirty && <Badge variant="warning">Unsaved policy</Badge>}
+          <Badge variant="secondary">
+            {snap?.shared ? (snap.clustered ? "Shared cluster pool" : "NAS storage") : "This node"}
+          </Badge>
+          <Button size="sm" onClick={() => setEditor("policy")}>
+            <Settings2 size={14} /> {dirty ? "Resume editing" : "Edit policy"}
+          </Button>
+        </>
+      }
+    >
+      <div className="@container flex min-h-0 flex-1 flex-col">
+        {snap?.restartRequired && (
+          <div
+            role="status"
+            className="shrink-0 border-b border-warning/20 bg-warning/10 px-5 py-2 text-xs text-warning"
+          >
+            Storage change saved. Restart this node to use the new backend or folder. The overview
+            shows the currently active cache.
+          </div>
+        )}
+        {snap?.storageError && (
+          <div
+            role="alert"
+            className="shrink-0 border-b border-danger/20 bg-danger/10 px-5 py-2 text-xs text-danger"
+          >
+            {snap.storageError}. Cache writes are suspended until the mount and database are
+            available.
+          </div>
+        )}
+        <div className="shrink-0 border-b border-border bg-surface px-4 sm:px-6">
+          <SubtabNav
+            ariaLabel="Cache sections"
+            active={tab}
+            onSelect={(key) => navigate(`/cache/${key}`)}
+            tabs={CACHE_TABS.map((t) =>
+              t.key === "explorer" && snap?.releases.length
+                ? { ...t, count: snap.releases.length }
+                : t,
+            )}
+          />
+        </div>
+        <main
+          aria-label={`Cache ${tab}`}
+          className={cn(
+            "app-scroll flex min-h-0 flex-1 flex-col bg-bg",
+            tab === "overview" ? "overflow-y-auto cockpit:overflow-hidden" : "overflow-hidden",
+          )}
+        >
+          {error ? (
+            <div className="shrink-0 px-4 pt-3">
+              <ErrorPanel error={error} />
+            </div>
+          ) : null}
+          {live.error ? (
+            <div className="shrink-0 px-4 pt-3">
+              <ErrorPanel error={live.error} onRetry={() => void live.reload()} />
+            </div>
+          ) : null}
+          {tab === "overview" ? (
+            <div className="mx-auto w-full max-w-[1600px] p-4 sm:p-5 cockpit:min-h-0 cockpit:flex-1">
+              <CacheOverview
+                snapshot={snap}
+                policy={snap?.policy ?? saved}
+                name={
+                  snap?.policy
+                    ? snap.policy.mode === "off"
+                      ? "Pass-through"
+                      : (PRESETS.find((p) =>
+                          Object.entries(p.values).every(
+                            ([k, v]) => snap.policy?.[k as keyof Policy] === v,
+                          ),
+                        )?.name ?? "Custom policy")
+                    : policyName
+                }
+                freeBytes={disk.data?.freeBytes}
+                busy={busy !== null}
+                onProfile={() => {
+                  setProfileChoice(null);
+                  setEditor("profiles");
+                }}
+                onExplore={() => navigate("/cache/explorer")}
+                onPreloading={() => navigate("/cache/preloading")}
+                onWarm={() => void action("warm")}
+              />
+            </div>
+          ) : tab === "explorer" ? (
+            <div className="mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col p-4 sm:p-5">
+              <CacheExplorer
+                snapshot={snap}
+                busy={busy !== null}
+                onPin={(releaseId, pinned) => void action("pin", { releaseId, pinned })}
+              />
+            </div>
+          ) : (
+            <div className="app-scroll mx-auto grid min-h-0 w-full max-w-[1600px] flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 sm:p-5 lg:grid-cols-12 lg:overflow-hidden">
+              <section className="lg:col-span-5 min-h-0 overflow-y-auto rounded-xl border border-primary/20 bg-surface">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[.18em] text-primary">
+                      Managed local library
+                    </p>
+                    <h2 className="mt-1 text-lg font-semibold">Preload activity</h2>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={busy !== null || !config.data?.cache.preloadEnabled}
+                    onClick={() => void action("preload", { paused: !snap?.preload.paused })}
+                  >
+                    {snap?.preload.paused ? "Resume preloading" : "Pause preloading"}
+                  </Button>
+                </div>
+                <div className="space-y-4 p-4">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <p className="text-2xl font-semibold">{snap?.preload.ready ?? 0}</p>
+                      <p className="text-xs text-fg-muted">Sources preloaded</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold">
+                        {formatBytes(snap?.preload.allocated ?? 0)}
+                      </p>
+                      <p className="text-xs text-fg-muted">Reserved, including overhead</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold">
+                        {formatBytes(config.data?.cache.preloadBudgetBytes ?? 0)}
+                      </p>
+                      <p className="text-xs text-fg-muted">Preload allocation</p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-bg-subtle p-3">
+                    <p className="text-sm font-medium">
+                      {snap?.preload.paused
+                        ? "Paused"
+                        : snap?.preload.state === "filling"
+                          ? snap.preload.title
+                          : snap?.preload.state === "resolving"
+                            ? `Finding a source for ${snap.preload.title}`
+                            : !saved.preloadEnabled
+                              ? "Preloading disabled"
+                              : snap?.preload.state === "selecting"
+                                ? "Selecting titles"
+                                : snap?.preload.state === "ready"
+                                  ? "Selection pass complete"
+                                  : "Waiting for the next pass"}
+                    </p>
+                    <p className="mt-1 text-xs text-fg-muted">
+                      {snap?.preload.message ||
+                        "Enable movie and TV preloading to build a local shelf."}
+                    </p>
+                    {snap?.preload.state === "filling" && (
+                      <>
+                        <div
+                          role="progressbar"
+                          aria-label="Current preload"
+                          aria-valuenow={snap.preload.fetched}
+                          aria-valuemax={snap.preload.size}
+                          className="mt-3 h-1.5 overflow-hidden rounded bg-primary/10"
+                        >
+                          <div
+                            className="h-full bg-primary"
+                            style={{
+                              width: `${snap.preload.size ? Math.min(100, (snap.preload.fetched / snap.preload.size) * 100) : 0}%`,
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1 text-[10px] text-fg-subtle">
+                          {formatBytes(snap.preload.fetched)} / {formatBytes(snap.preload.size)}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                    <p className="text-xs text-fg-muted">
+                      {config.data?.cache.preloadDuringPlayback
+                        ? "May run during playback"
+                        : "Waits during playback"}{" "}
+                      ·{" "}
+                      {config.data?.cache.preloadRateMiB
+                        ? `${config.data.cache.preloadRateMiB} MiB/s limit`
+                        : "No bandwidth cap"}
+                    </p>
+                  </div>
+                  {(snap?.preload.failed ?? 0) > 0 && (
+                    <p className="text-xs text-fg-muted">
+                      {snap?.preload.failed} attempts skipped or interrupted this run. Unavailable
+                      or oversized titles do not stop the shelf.
+                    </p>
+                  )}
+                </div>
+              </section>
+              <section className="app-scroll lg:col-span-7 min-h-0 overflow-y-auto rounded-xl border border-border bg-surface">
+                <div className="flex items-start justify-between gap-3 border-b border-border p-4">
+                  <div>
+                    <h2 className="flex items-center gap-2 text-sm font-semibold">
+                      <Sparkles size={16} className="text-primary" /> Why these titles?
+                    </h2>
+                    <p className="mt-1 text-xs text-fg-muted">
+                      Highest-ranked selections from the last pass · {snap?.preload.viewers ?? 0}{" "}
+                      active viewers considered
+                    </p>
+                  </div>
+                  <Badge>Explainable selection</Badge>
+                </div>
+                {snap?.preload.selection?.length ? (
+                  <div className="divide-y divide-border">
+                    {snap.preload.selection.slice(0, 6).map((item, i) => (
+                      <div key={item.key} className="flex items-start gap-3 p-4">
+                        <span className="mt-0.5 w-5 shrink-0 font-mono text-xs text-fg-subtle">
+                          {String(i + 1).padStart(2, "0")}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-medium">{item.title}</span>
+                            <span className="shrink-0 text-[10px] uppercase text-fg-subtle">
+                              {item.type === "episode" ? "TV" : "Film"}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs text-fg-muted">{item.reason}</p>
+                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-fg-subtle">
+                            <span>Catalogue {Math.round(item.catalogue)}/100</span>
+                            <span>Household {Math.round(item.household)}/100</span>
+                          </div>
+                        </div>
+                        <span
+                          className="shrink-0 rounded-md bg-primary/10 px-2 py-1 font-mono text-xs text-primary"
+                          aria-label={`Selection score ${Math.round(item.score)} out of 100`}
+                        >
+                          {Math.round(item.score)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="p-4 text-sm leading-relaxed text-fg-muted">
+                    Enable preloading and save to build your first selection. Movies blend discovery
+                    with household favourites; TV keeps a rolling window of episodes ready. Scores
+                    appear after the next selection pass.
+                  </p>
+                )}
+                <p className="border-t border-border px-4 py-3 text-[10px] text-fg-subtle">
+                  Scores rank cache candidates, not predicted viewing probabilities. TV windows
+                  taper by episode distance. Selection does not guarantee source availability.
+                </p>
+              </section>
+            </div>
+          )}
+        </main>
+      </div>
+      <Drawer
+        open={editor !== null}
+        onClose={() => {
+          setEditor(null);
+          setAdvanced(false);
+        }}
+        title={
+          editor === "profiles"
+            ? "Choose a cache profile"
+            : profileChoice
+              ? "Review your cache profile"
+              : "Edit cache policy"
+        }
+        size="lg"
+        footer={
+          editor === "profiles" ? (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs text-fg-muted">1 / Choose a starting point</span>
+              <Button
+                disabled={!profileChoice}
+                onClick={() => {
+                  if (profileChoice) {
+                    patch(profileChoice.values);
+                    setEditor("policy");
+                  }
+                }}
+              >
+                Review profile <ArrowUpRight size={14} />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  reset();
+                  setEditor(null);
+                  setProfileChoice(null);
+                }}
+                disabled={saving}
+              >
+                Discard changes
+              </Button>
+              <Button onClick={() => void save()} disabled={!dirty || saving}>
+                {saving ? "Saving…" : "Save policy"}
+              </Button>
+            </div>
+          )
+        }
+      >
+        {editor === "profiles" ? (
+          <div className="space-y-4">
+            <p className="text-sm leading-relaxed text-fg-muted">
+              Pick a starting point, then review the budget and behavior. Nothing changes until you
+              save.
+            </p>
+            <p className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs text-fg-muted">
+              Cinema node and Edge library enable full movie and episode preloading. All sizes and
+              limits can be customized in the next step.
+            </p>
+            <button
+              type="button"
+              aria-pressed={profileChoice?.name === "Pass-through"}
+              onClick={() =>
+                setProfileChoice({
+                  name: "Pass-through",
+                  values: {
+                    mode: "off",
+                    budgetBytes: 0,
+                    preloadEnabled: false,
+                    preloadBudgetBytes: 0,
+                    disableSpeculation: true,
+                  },
+                })
+              }
+
+              className={cn(
+                "flex w-full items-center gap-3 rounded-xl border p-3 text-left transition hover:border-primary/60",
+                profileChoice?.name === "Pass-through"
+                  ? "border-primary bg-primary/10"
+                  : "border-border bg-surface",
+              )}
+            >
+              <Leaf size={18} className="text-primary" />
+              <span className="flex-1">
+                <span className="block text-sm font-semibold">Pass-through</span>
+                <span className="block text-xs text-fg-muted">
+                  No persistent media. Stream and move on.
+                </span>
+              </span>
+              <span className="text-xs text-primary">0 B</span>
+            </button>
+            <div className="grid grid-cols-2 gap-2">
+              {PRESETS.map((p, i) => (
+                <button
+                  key={p.name}
+                  type="button"
+                  aria-pressed={profileChoice?.name === p.name}
+                  onClick={() => setProfileChoice(p)}
+                  className={cn(
+                    "relative rounded-xl border p-3 text-left transition hover:border-primary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    profileChoice?.name === p.name
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-surface",
+                  )}
+                >
+                  <span className="flex items-center justify-between text-fg-muted">
+                    {i === 0 ? (
+                      <Leaf size={16} />
+                    ) : i === 1 ? (
+                      <Zap size={16} />
+                    ) : i === 2 ? (
+                      <Sparkles size={16} />
+                    ) : (
+                      <HardDrive size={16} />
+                    )}
+                    {profileChoice?.name === p.name && <Check size={14} className="text-primary" />}
+                  </span>
+                  <span className="mt-3 block text-sm font-semibold">{p.name}</span>
+                  <span className="block text-xs text-primary">{p.space}</span>
+                  <span className="mt-2 block text-[11px] leading-relaxed text-fg-muted">
+                    {p.description}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-primary">
+                    {profileChoice ? "Review your preset" : "Your starting point"}
+                  </p>
+                  <p className="mt-1 text-sm font-semibold">{profileChoice?.name ?? policyName}</p>
+                </div>
+                <Button variant="secondary" size="sm" onClick={() => setEditor("profiles")}>
+                  <ArrowLeft size={14} /> Back to presets
+                </Button>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-fg-muted">
+                Choose a different preset at any time, then customize it here. Your current policy
+                stays active until you save.
+              </p>
+            </div>
+            {error ? <ErrorPanel error={error} /> : null}
+            <section aria-label="Cache storage" className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Where your cache lives</h3>
+                <Badge variant="secondary">
+                  {draft.storage === "shared" && snap?.clustered
+                    ? "Cluster policy"
+                    : "Server policy"}
+                </Badge>
+              </div>
+              <div
+                className="grid grid-cols-2 gap-3"
+                role="radiogroup"
+                aria-label="Storage backend"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.storage !== "shared"}
+                  onClick={() => patch({ storage: "local" })}
+                  className={cn(
+                    "rounded-xl border p-3 text-left transition",
+                    draft.storage !== "shared"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40",
+                  )}
+                >
+                  <HardDrive size={18} className="mb-2 text-primary" />
+                  <span className="block text-sm font-medium">Local disk</span>
+                  <span className="mt-1 block text-xs text-fg-muted">
+                    An independent cache on this node.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={draft.storage === "shared"}
+                  onClick={() =>
+                    patch({ ...config.data?.sharedCache, storage: "shared", dir: draft.dir })
+                  }
+                  className={cn(
+                    "rounded-xl border p-3 text-left transition disabled:opacity-50",
+                    draft.storage === "shared"
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40",
+                  )}
+                >
+                  <Network size={18} className="mb-2 text-primary" />
+                  <span className="block text-sm font-medium">Shared NAS</span>
+                  <span className="mt-1 block text-xs text-fg-muted">
+                    {snap?.clustered
+                      ? "One library and budget across your cluster."
+                      : "Keep your cache on a mounted network share."}
+                  </span>
+                </button>
+              </div>
+              {draft.storage === "shared" && (
+                <p className="rounded-lg bg-primary/5 p-3 text-xs leading-relaxed text-fg-muted">
+                  {snap?.clustered
+                    ? "Mount the same NAS share on every participating node. Each node may use a different mount path. Budgets, retention, pins, and preloading are shared; saving this policy updates all members of the pool."
+                    : "Mount your NAS share on this server and choose a dedicated folder. Your media cache lives on the NAS; its database stays on this server. No cluster is required. To let multiple Ether servers use the same cache folder, connect them in a cluster first."}
+                </p>
+              )}
+              <Field
+                label={
+                  draft.storage === "shared" ? "NAS mount path on this node" : "Cache directory"
+                }
+                htmlFor="cache-dir"
+                hint="Changing storage or its folder requires a node restart. Existing cache bytes stay in their original folder."
+              >
+                <Input
+                  id="cache-dir"
+                  value={draft.dir}
+                  onChange={(e) => patch({ dir: e.target.value })}
+                  placeholder={draft.storage === "shared" ? "/mnt/media-cache" : undefined}
+                />
+              </Field>
+            </section>
+            <Field
+              label="Media disk budget"
+              hint="Zero means unlimited, not disabled. Choose No persistent media below to turn disk caching off."
+              htmlFor="cache-budget"
+            >
+              <div className="flex items-center gap-2">
+                <NumberInput
+                  id="cache-budget"
+                  min={0}
+                  step={0.25}
+                  value={draft.budgetBytes / (unit === "TiB" ? 1024 * GiB : GiB)}
+                  onChange={(n) =>
+                    patch({ budgetBytes: Math.round(n * (unit === "TiB" ? 1024 * GiB : GiB)) })
+                  }
+                />
+                <select
+                  aria-label="Budget unit"
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value as "GiB" | "TiB")}
+                  className="rounded border border-border bg-surface p-2 text-xs"
+                >
+                  <option>GiB</option>
+                  <option>TiB</option>
+                </select>
+              </div>
+            </Field>
+            {disk.data && draft.dir === activeDirectory && (
+              <p className="flex items-center gap-2 text-xs text-fg-muted">
+                <HardDrive size={13} />
+                {formatBytes(disk.data.freeBytes)} currently free
+              </p>
+            )}
+            {disk.data &&
+              draft.dir === activeDirectory &&
+              enabled &&
+              draft.budgetBytes > 0 &&
+              draft.budgetBytes - used > disk.data.freeBytes && (
+                <p className="rounded-lg bg-warning/10 p-3 text-xs text-warning">
+                  This budget needs more space than is currently free. Choose a smaller budget.
+                </p>
+              )}
+            <div className="border-t border-border pt-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
+                02 / What stays
+              </p>
+              <label className="mt-3 block text-sm font-medium" htmlFor="cache-mode">
+                Retention strategy
+              </label>
+              <select
+                id="cache-mode"
+                value={draft.mode || "demand"}
+                onChange={(e) =>
+                  patch({
+                    mode: e.target.value,
+                    ...(e.target.value === "off" ? { preloadEnabled: false } : {}),
+                  })
+                }
+                className="mt-2 w-full rounded-lg border border-border bg-surface p-2.5 text-sm"
+              >
+                <option value="off">No persistent media</option>
+                <option value="demand">Keep what is streamed</option>
+                <option value="adaptive">Favour repeat watches</option>
+              </select>
+              <p className="mt-2 text-xs leading-relaxed text-fg-muted">
+                {!enabled
+                  ? "New media bytes bypass disk. Unprotected existing bytes are released; playback and pinned bytes remain protected."
+                  : draft.mode === "adaptive"
+                    ? "Repeat plays earn extra time before eviction. Popularity is learned from playback, never from background reads."
+                    : "Keep recently used bytes. The oldest unprotected segments make room first."}
+              </p>
+            </div>
+            <Field
+              label="Expire after inactivity"
+              hint="Days since last cache use. Zero keeps bytes until space is needed."
+              htmlFor="cache-retention"
+            >
+              <NumberInput
+                id="cache-retention"
+                min={0}
+                max={3650}
+                value={draft.retentionDays ?? 0}
+                onChange={(n) => patch({ retentionDays: n })}
+              />
+            </Field>
+            <div className="border-t border-border pt-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
+                03 / Think ahead
+              </p>
+              <Toggle
+                title="Allow opening and resume warming"
+                description="Let Ether fetch small windows before Play. Turn off for strictly on-demand media."
+                checked={speculate}
+                disabled={!enabled}
+                onChange={(v) => patch({ disableSpeculation: !v })}
+              />
+              <Toggle
+                title="Warm detail pages"
+                description="Opening a movie or episode prepares its source and opening bytes. Shows warm their On Deck episode when supported."
+                checked={draft.detailWarmup !== "off"}
+                disabled={!speculate}
+                onChange={(v) => patch({ detailWarmup: v ? "on" : "off" })}
+              />
+              <Toggle
+                title="Prepare the next episode"
+                description="Warm the opening near the end of the current episode."
+                checked={draft.prefetchNextEpisode}
+                disabled={!speculate}
+                onChange={(v) => patch({ prefetchNextEpisode: v })}
+              />
+              <Toggle
+                title="Keep resume points warm"
+                description="Periodically refresh a small window around Continue Watching."
+                checked={draft.keepInProgressWarm}
+                disabled={!speculate}
+                onChange={(v) => patch({ keepInProgressWarm: v })}
+              />
+            </div>
+            <div className="border-t border-border pt-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[.2em] text-fg-subtle">
+                04 / Your local library
+              </p>
+              <Toggle
+                title="Preload movies & TV"
+                description="Proactively fill a dedicated part of your cache from the local catalogue using your sources and quality rules. This downloads complete movie and episode sources."
+                checked={draft.preloadEnabled ?? false}
+                disabled={!enabled}
+                onChange={(v) =>
+                  patch({
+                    preloadEnabled: v,
+                    ...(v && !draft.preloadBudgetBytes
+                      ? { preloadBudgetBytes: Math.min(draft.budgetBytes || 100 * GiB, 100 * GiB) }
+                      : {}),
+                  })
+                }
+              />
+              {draft.preloadEnabled && (
+                <div className="space-y-4 rounded-xl border border-primary/20 bg-primary/5 p-3">
+                  <Field
+                    label="Preload allocation (GiB)"
+                    hint="Part of the total budget, not additional storage."
+                    htmlFor="preload-budget"
+                  >
+                    <NumberInput
+                      id="preload-budget"
+                      min={1}
+                      value={(draft.preloadBudgetBytes ?? 0) / GiB}
+                      onChange={(n) => patch({ preloadBudgetBytes: Math.round(n * GiB) })}
+                    />
+                  </Field>
+                  <Field label="Include in your shelf" htmlFor="preload-content">
+                    <select
+                      id="preload-content"
+                      className="w-full rounded border border-border bg-surface p-2 text-sm"
+                      value={draft.preloadContent || "mixed"}
+                      onChange={(e) => patch({ preloadContent: e.target.value })}
+                    >
+                      <option value="mixed">Movies & TV episodes</option>
+                      <option value="movies">Movies only</option>
+                      <option value="tv">TV episodes only</option>
+                    </select>
+                  </Field>
+                  <Field label="Selection strategy" htmlFor="preload-source">
+                    <select
+                      id="preload-source"
+                      className="w-full rounded border border-border bg-surface p-2 text-sm"
+                      value={draft.preloadSource || "smart"}
+                      onChange={(e) => patch({ preloadSource: e.target.value })}
+                    >
+                      <option value="smart">Smart household blend</option>
+                      <option value="popular">Catalogue popularity</option>
+                      <option value="recent">Newest releases</option>
+                    </select>
+                  </Field>
+                  {(!draft.preloadSource || draft.preloadSource === "smart") && (
+                    <div className="space-y-3 rounded-lg border border-primary/20 bg-surface p-3">
+                      <div className="flex items-center justify-between gap-2 text-xs">
+                        <label htmlFor="household-weight" className="font-medium">
+                          Household influence
+                        </label>
+                        <span className="font-mono text-primary">
+                          {draft.preloadHouseholdWeight ?? 65}%
+                        </span>
+                      </div>
+                      <input
+                        id="household-weight"
+                        type="range"
+                        min={0}
+                        max={100}
+                        step={5}
+                        className="w-full accent-primary"
+                        value={draft.preloadHouseholdWeight ?? 65}
+                        onChange={(e) => patch({ preloadHouseholdWeight: Number(e.target.value) })}
+                      />
+                      <div className="flex justify-between text-[10px] text-fg-subtle">
+                        <span>Catalogue discovery</span>
+                        <span>Your household</span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed text-fg-muted">
+                        Recent repeat viewing, shared favourites and genre interests guide the
+                        shelf. Older viewing fades; no history falls back to catalogue popularity.
+                      </p>
+                    </div>
+                  )}
+                  <Field
+                    label="Learn from"
+                    htmlFor="household-scope"
+                    hint="Also determines whose TV progress guides episode selection."
+                  >
+                    <select
+                      id="household-scope"
+                      className="w-full rounded border border-border bg-surface p-2 text-sm"
+                      value={draft.preloadHouseholdScope || "home"}
+                      onChange={(e) => patch({ preloadHouseholdScope: e.target.value })}
+                    >
+                      <option value="home">Owner & Plex Home members</option>
+                      <option value="all">All active shared viewers</option>
+                    </select>
+                  </Field>
+                  {draft.preloadContent !== "movies" && (
+                    <Field
+                      label="Episode window per show"
+                      htmlFor="episode-window"
+                      hint="A rolling shelf around current viewing positions. New shows start at episode one; different viewers share this limit."
+                    >
+                      <NumberInput
+                        id="episode-window"
+                        min={1}
+                        max={24}
+                        value={draft.preloadEpisodesAhead || 3}
+                        onChange={(n) => patch({ preloadEpisodesAhead: n })}
+                      />
+                    </Field>
+                  )}
+                  <p className="text-[11px] text-fg-muted">
+                    Room for roughly {Math.floor((draft.preloadBudgetBytes ?? 0) / (8 * GiB))}{" "}
+                    movie-sized sources at 8 GiB each. Episode sizes vary; both share this
+                    allocation.
+                  </p>
+                </div>
+              )}
+            </div>
+            <Button variant="secondary" className="w-full" onClick={() => setAdvanced(true)}>
+              <Settings2 size={15} /> Fine tune policy <ArrowUpRight size={14} />
+            </Button>
+            <p className="text-[11px] leading-relaxed text-fg-subtle">
+              Live streams and pinned releases can exceed the budget. Expiry never removes protected
+              bytes. This budget covers media segments; artwork, metadata and transcode output use
+              separate storage.
+            </p>
+            <Drawer
+              open={advanced}
+              onClose={() => setAdvanced(false)}
+              title="Fine tune your cache"
+              size="lg"
+            >
+              <div className="space-y-6 p-1">
+                <p className="text-sm text-fg-muted">
+                  Changes join your draft. Save the policy when you’re ready.
+                </p>
+                <Field
+                  label="Household history window (days)"
+                  htmlFor="history-window"
+                  hint="Recent views count more; frequency is capped per viewer. Completed watches and reviewed imports contribute, never preload activity."
+                >
+                  <NumberInput
+                    id="history-window"
+                    min={1}
+                    max={730}
+                    value={draft.preloadHistoryDays || 90}
+                    onChange={(n) => patch({ preloadHistoryDays: n })}
+                  />
+                </Field>
+                <Field
+                  label="Maximum preloaded titles"
+                  hint="Up to 5,000. The allocation still limits how many fit."
+                  htmlFor="preload-count"
+                >
+                  <NumberInput
+                    id="preload-count"
+                    min={1}
+                    max={5000}
+                    value={draft.preloadMaxTitles || 200}
+                    onChange={(n) => patch({ preloadMaxTitles: n })}
+                  />
+                </Field>
+                <Field
+                  label="Preload speed (MiB/s)"
+                  hint="Average payload cap, with short bursts for each 16 MiB window. Zero removes the cap."
+                  htmlFor="preload-rate"
+                >
+                  <NumberInput
+                    id="preload-rate"
+                    min={0}
+                    max={10000}
+                    value={draft.preloadRateMiB ?? 0}
+                    onChange={(n) => patch({ preloadRateMiB: n })}
+                  />
+                </Field>
+                <Field
+                  label="Keep disk space free (GiB)"
+                  hint="Preloading waits below this reserve. Zero uses the 5 GiB default."
+                  htmlFor="preload-reserve"
+                >
+                  <NumberInput
+                    id="preload-reserve"
+                    min={0}
+                    value={(draft.preloadMinFreeBytes ?? 5 * GiB) / GiB}
+                    onChange={(n) => patch({ preloadMinFreeBytes: Math.round(n * GiB) })}
+                  />
+                </Field>
+                <Toggle
+                  title="Preload during playback"
+                  description="Otherwise, complete-title filling waits while viewers are streaming. Opening and next-episode warming use their separate controls."
+                  checked={draft.preloadDuringPlayback ?? false}
+                  onChange={(v) => patch({ preloadDuringPlayback: v })}
+                />
+                <Field
+                  label="Opening window (MiB)"
+                  hint="2–64 MiB for detail pages. Larger windows use more bandwidth; startup still depends on the source and client."
+                  htmlFor="cache-opening"
+                >
+                  <NumberInput
+                    id="cache-opening"
+                    min={2}
+                    max={64}
+                    value={(draft.detailBytes || 2 * MiB) / MiB}
+                    onChange={(n) => patch({ detailBytes: Math.round(n * MiB) })}
+                  />
+                </Field>
+                <Field label="Next episode / resume window (MiB)" htmlFor="cache-prefetch">
+                  <NumberInput
+                    id="cache-prefetch"
+                    min={1}
+                    value={draft.prefetchBytes / MiB}
+                    onChange={(n) => patch({ prefetchBytes: Math.round(n * MiB) })}
+                  />
+                </Field>
+                <Field label="Prepare next episode at (%)" htmlFor="cache-trigger">
+                  <NumberInput
+                    id="cache-trigger"
+                    min={1}
+                    max={99}
+                    value={Math.round(draft.nextEpisodeAt * 100)}
+                    onChange={(n) => patch({ nextEpisodeAt: n / 100 })}
+                  />
+                </Field>
+                <Field
+                  label="Replay credit (hours per repeat play)"
+                  hint="Adaptive mode gives up to eight repeat plays a recency credit. It never overrides expiry or pins. Credit fades out after 30 days without a play."
+                  htmlFor="cache-boost"
+                >
+                  <NumberInput
+                    id="cache-boost"
+                    min={0}
+                    max={720}
+                    value={draft.replayBoostHours ?? 0}
+                    onChange={(n) => patch({ replayBoostHours: n })}
+                  />
+                </Field>
+                <Field
+                  label="Resume protection share (%)"
+                  hint="Maximum share of the budget assigned to in-progress releases. The most recently watched are considered first."
+                  htmlFor="cache-share"
+                >
+                  <NumberInput
+                    id="cache-share"
+                    min={1}
+                    max={100}
+                    value={draft.inProgressPinPercent || 50}
+                    onChange={(n) => patch({ inProgressPinPercent: n })}
+                  />
+                </Field>
+                <Field
+                  label="Resume protection age"
+                  hint="A duration such as 720h (30 days). Abandoned titles lose their resume pin after this interval."
+                  htmlFor="cache-age"
+                >
+                  <Input
+                    id="cache-age"
+                    value={draft.inProgressPinMaxAge || "720h"}
+                    onChange={(e) => patch({ inProgressPinMaxAge: e.target.value })}
+                  />
+                </Field>
+                <p className="text-xs leading-relaxed text-fg-muted">
+                  Detail warming is rate limited and pauses during active playback. Trailer and
+                  post-play warming also require background warming here and their own feature
+                  settings.
+                </p>
+                <Button onClick={() => setAdvanced(false)}>Done</Button>
+              </div>
+            </Drawer>
+          </div>
+        )}
+      </Drawer>
+    </Workspace>
+  );
+}

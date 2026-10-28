@@ -1,0 +1,72 @@
+---
+# Synthetic definition for tests: a private tracker with a login form.
+id: fakeprivate
+name: Fake Private
+language: en-US
+type: private
+links:
+  - https://fakeprivate.invalid/
+followredirect: false
+
+caps:
+  categorymappings:
+    - {id: 10, cat: Movies/HD, desc: Movies}
+    - {id: 20, cat: TV/HD, desc: TV}
+  modes:
+    search: [q]
+    tv-search: [q, season, ep]
+
+settings:
+  - name: username
+    type: text
+    label: Username
+  - name: password
+    type: password
+    label: Password
+
+login:
+  path: login.php
+  method: form
+  form: form#loginform
+  inputs:
+    username: "{{ .Config.username }}"
+    password: "{{ .Config.password }}"
+  selectorinputs:
+    csrf:
+      selector: meta[name="csrf"]
+      attribute: content
+  error:
+    - selector: div.login-error
+  test:
+    path: index.php
+    selector: a[href="logout.php"]
+
+search:
+  paths:
+    - path: torrents.php
+  inputs:
+    searchstr: "{{ .Keywords }}"
+  rows:
+    selector: div.torrent
+  fields:
+    category:
+      selector: span.cat
+    title:
+      selector: h3
+    details:
+      selector: a.details
+      attribute: href
+    download:
+      selector: a.details
+      attribute: href
+    size:
+      selector: span.size
+    seeders:
+      selector: span.seed
+
+download:
+  selectors:
+    - selector: a.dl-magnet
+      attribute: href
+    - selector: a.dl-torrent
+      attribute: href

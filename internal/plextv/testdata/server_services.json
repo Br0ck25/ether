@@ -1,0 +1,1028 @@
+{
+  "httpStatus": 200,
+  "contentType": "application/xml",
+  "response": {
+    "element": "users",
+    "attributes": {},
+    "text": null,
+    "children": [
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:9 chars>",
+          "username": "<REDACTED:9 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:9 chars>",
+          "username": "<REDACTED:9 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:10 chars>",
+          "username": "<REDACTED:10 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:8 chars>",
+          "username": "<REDACTED:8 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:15 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:15 chars>",
+          "username": "<REDACTED:14 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:8 chars>",
+          "username": "<REDACTED:8 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:12 chars>",
+          "username": "<REDACTED:12 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:10 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:10 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:8 chars>",
+          "username": "<REDACTED:8 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:13 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:13 chars>",
+          "username": "<REDACTED:15 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:10 chars>",
+          "username": "<REDACTED:10 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:6 chars>",
+          "username": "<REDACTED:6 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:17 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:17 chars>",
+          "username": "<REDACTED:16 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:7 chars>",
+          "username": "<REDACTED:7 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:8 chars>",
+          "username": "<REDACTED:8 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:5 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:5 chars>",
+          "username": "<REDACTED:0 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:14 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:14 chars>",
+          "username": "<REDACTED:0 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:13 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:13 chars>",
+          "username": "<REDACTED:0 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:13 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:13 chars>",
+          "username": "<REDACTED:0 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:9 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:9 chars>",
+          "username": "<REDACTED:0 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:12 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:12 chars>",
+          "username": "<REDACTED:0 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:9 chars>",
+          "username": "<REDACTED:9 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:4 chars>",
+          "username": "<REDACTED:4 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:6 chars>",
+          "username": "<REDACTED:6 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:0 chars>",
+          "id": "<ID:9 chars>",
+          "title": "<REDACTED:9 chars>",
+          "username": "<REDACTED:9 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": []
+          }
+        ]
+      },
+      {
+        "element": "user",
+        "attributes": {
+          "email": "<EMAIL>",
+          "friendlyName": "<REDACTED:16 chars>",
+          "id": "<ID:8 chars>",
+          "title": "<REDACTED:16 chars>",
+          "username": "<REDACTED:15 chars>",
+          "uuid": "<HASH:16 chars>"
+        },
+        "text": null,
+        "children": [
+          {
+            "element": "services",
+            "attributes": {},
+            "text": null,
+            "children": [
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:28 chars>",
+                  "identifier": "<REDACTED:3 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:36 chars>",
+                  "identifier": "<REDACTED:11 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:32 chars>",
+                  "identifier": "<REDACTED:7 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:50 chars>",
+                  "identifier": "<REDACTED:4 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:64 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:43 chars>",
+                  "identifier": "<REDACTED:18 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:0 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:29 chars>",
+                  "identifier": "<REDACTED:9 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:0 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:33 chars>",
+                  "identifier": "<REDACTED:13 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:0 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:29 chars>",
+                  "identifier": "<REDACTED:13 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:0 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:33 chars>",
+                  "identifier": "<REDACTED:17 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:0 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:9 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:0 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:33 chars>",
+                  "identifier": "<REDACTED:8 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:10 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:620 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:37 chars>",
+                  "identifier": "<REDACTED:12 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:20 chars>",
+                  "identifier": "<REDACTED:17 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:0 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:28 chars>",
+                  "identifier": "<REDACTED:6 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:57 chars>",
+                  "identifier": "<REDACTED:16 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:8 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:24 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:26 chars>",
+                  "identifier": "<REDACTED:9 chars>",
+                  "secret": "<REDACTED:64 chars>",
+                  "status": "online",
+                  "token": "<TOKEN:64 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:26 chars>",
+                  "identifier": "<REDACTED:16 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:64 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:25 chars>",
+                  "identifier": "<REDACTED:4 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:64 chars>"
+                },
+                "text": null,
+                "children": []
+              },
+              {
+                "element": "service",
+                "attributes": {
+                  "endpoint": "<REDACTED:32 chars>",
+                  "identifier": "<REDACTED:8 chars>",
+                  "secret": "",
+                  "status": "online",
+                  "token": "<TOKEN:44 chars>"
+                },
+                "text": null,
+                "children": []
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

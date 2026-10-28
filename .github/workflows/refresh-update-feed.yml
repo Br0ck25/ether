@@ -1,0 +1,55 @@
+name: Refresh signed update feeds
+
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ether-update-feed
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Authenticate and renew published feeds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ETHER_UPDATE_PRIVATE_KEY: ${{ secrets.ETHER_UPDATE_PRIVATE_KEY }}
+          ETHER_UPDATE_PUBLIC_KEY: ${{ secrets.ETHER_UPDATE_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$ETHER_UPDATE_PRIVATE_KEY"
+          test -n "$ETHER_UPDATE_PUBLIC_KEY"
+          for channel in stable beta; do
+            assets=$(gh release view channels --json assets --jq '.assets[].name')
+            if ! grep -qx "$channel.json" <<< "$assets"; then
+              echo "No $channel feed published yet"
+              continue
+            fi
+            mkdir -p "current/$channel" "renewed/$channel"
+            gh release download channels --pattern "$channel.json*" --dir "current/$channel"
+            # Renew only the latest published release, never an older replay.
+            if [ "$channel" = stable ]; then
+              tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')
+            else
+              tag=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq '[.[] | select(.prerelease and (.draft | not) and (.tag_name | startswith("v")))][0].tag_name // empty')
+            fi
+            test -n "$tag"
+            version=${tag#v}
+            go run ./cmd/ether-release-sign renew \
+              -in "current/$channel/$channel.json" -out "renewed/$channel/$channel.json" \
+              -version "$version" -channel "$channel"
+            go run ./cmd/ether-release-sign verify \
+              -in "renewed/$channel/$channel.json" -sig "renewed/$channel/$channel.json.sig"
+            gh release upload "$tag" "renewed/$channel/$channel.json" "renewed/$channel/$channel.json.sig" --clobber
+            gh release upload channels "renewed/$channel/$channel.json" "renewed/$channel/$channel.json.sig" --clobber
+          done

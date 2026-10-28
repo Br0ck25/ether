@@ -1,0 +1,167 @@
+package plex
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+func (s *Server) routes() chi.Router {
+	r := chi.NewRouter()
+	r.Use(s.recoverer, s.commonHeaders, s.parse, s.requestLog, s.authenticate)
+	r.NotFound(s.handleUnknown)
+	r.MethodNotAllowed(s.handleUnknown)
+
+	// get registers GET and HEAD.
+	get := func(pattern string, h http.HandlerFunc) {
+		r.Get(pattern, h)
+		r.Head(pattern, h)
+	}
+	any := func(pattern string, h http.HandlerFunc) { r.HandleFunc(pattern, h) }
+	empty := func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) }
+
+	// Server
+	get("/", s.handleRoot)
+	get("/identity", s.handleIdentity)
+	get("/media/providers", s.handleProviders)
+	get("/myplex/account", s.handleMyPlexAccount)
+	get("/servers", s.handleServers)
+	get("/clients", func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) })
+	get("/devices", func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) })
+	get("/accounts", s.ownerOnly(s.handleAccounts))
+	get("/:/prefs", s.ownerOnly(s.handlePrefs))
+	r.Put("/:/prefs", s.ownerOnly(s.handlePrefsSet))
+	get("/system/agents", s.handleAgents)
+	get("/activities", func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) })
+	r.Delete("/activities/{id}", s.ownerOnly(s.handleOK))
+	any("/butler", s.ownerOnly(func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) }))
+	any("/butler/{task}", s.ownerOnly(s.handleOK))
+	get("/security/resources", func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) })
+	get("/security/token", s.handleSecurityToken)
+	get("/updater/status", s.handleUpdaterStatus)
+	any("/updater/check", s.ownerOnly(s.handleOK))
+	any("/updater/apply", s.ownerOnly(s.handleOK))
+	get("/:/resources/*", func(w http.ResponseWriter, r *http.Request) { writeHTTPError(w, http.StatusNotFound) })
+	get("/:/eventsource/notifications", s.handleEventSource)
+	get("/:/websockets/notifications", s.handleWebsocket)
+	get("/:/websocket/notifications", s.handleWebsocket)
+
+	// Library
+	get("/library", s.handleLibraryRoot)
+	get("/library/sections", s.handleSections)
+	get("/library/sections/all", s.handleSections)
+	get("/library/sections/{section}", s.handleSection)
+	get("/library/sections/{section}/{sub}", s.handleSectionSub)
+	any("/library/sections/{section}/refresh", s.ownerOnly(s.handleOK))
+	get("/library/onDeck", s.handleOnDeck)
+	get("/library/recentlyAdded", s.handleRecentlyAdded)
+	get("/library/all", s.handleLibraryAll)
+	get("/library/search", s.handleLibrarySearch)
+	get("/search", s.handleSearch)
+	get("/library/metadata/{key}", s.handleMetadata)
+	get("/library/metadata/{key}/children", s.handleChildren)
+	get("/library/metadata/{key}/allLeaves", s.handleAllLeaves)
+	get("/library/metadata/{key}/grandchildren", s.handleAllLeaves)
+	get("/library/metadata/{key}/related", s.handleMetadataHubs)
+	get("/library/metadata/{key}/similar", s.handleSimilar)
+	get("/library/metadata/{key}/onDeck", s.handleItemOnDeck)
+	get("/library/metadata/{key}/parent", s.handleParent)
+	get("/library/metadata/{key}/grandparent", s.handleParent)
+	get("/library/metadata/{key}/extras", s.handleExtras)
+	get("/library/metadata/{key}/{element}", s.handleImage)
+	get("/library/metadata/{key}/{element}/{ts}", s.handleImage)
+	get("/library/collections", s.handleCollections)
+	get("/library/collections/{key}", s.handleCollection)
+	get("/library/collections/{key}/children", s.handleCollectionItems)
+	get("/library/collections/{key}/items", s.handleCollectionItems)
+	get("/library/collections/{key}/{element}/{ts}", s.handleImage)
+	get("/photo/:/transcode", s.handlePhotoTranscode)
+
+	// Hubs and search
+	get("/hubs", s.handleHubs)
+	get("/hubs/promoted", s.handlePromotedHubs)
+	get("/hubs/continueWatching", s.handleContinueWatching)
+	get("/hubs/continueWatching/items", s.handleContinueWatchingItems)
+	get("/hubs/home/continueWatching", s.handleContinueWatchingItems)
+	get("/hubs/home/onDeck", s.handleOnDeck)
+	get("/hubs/home/recentlyAdded", s.handleRecentlyAdded)
+	get("/hubs/items", s.handleHubItems)
+	get("/hubs/items/{identifier}", s.handleHubItems)
+	get("/hubs/search", s.handleHubSearch)
+	get("/hubs/search/voice", s.handleHubSearch)
+	get("/hubs/sections/{section}", s.handleSectionHubs)
+	get("/hubs/sections/{section}/continueWatching/items", s.handleContinueWatchingItems)
+	get("/hubs/metadata/{key}", s.handleMetadataHubs)
+	get("/hubs/metadata/{key}/related", s.handleMetadataHubs)
+	get("/hubs/metadata/{key}/postplay", s.handlePostplay)
+
+	// Playlists
+	get("/playlists", s.handlePlaylists)
+	get("/playlists/all", s.handlePlaylists)
+	r.Post("/playlists", s.handlePlaylistCreate)
+	get("/playlists/{key}", s.handlePlaylist)
+	r.Put("/playlists/{key}", s.handlePlaylistEdit)
+	r.Delete("/playlists/{key}", s.handlePlaylistDelete)
+	get("/playlists/{key}/items", s.handlePlaylistItems)
+	r.Put("/playlists/{key}/items", s.handlePlaylistAdd)
+	r.Delete("/playlists/{key}/items", s.handlePlaylistClear)
+	r.Delete("/playlists/{key}/items/{item}", s.handlePlaylistRemove)
+	r.Put("/playlists/{key}/items/{item}/move", s.handlePlaylistMove)
+	get("/playlists/{key}/{element}/{ts}", s.handleImage)
+
+	// Play queues
+	r.Post("/playQueues", s.handlePlayQueueCreate)
+	get("/playQueues/{pq}", s.handlePlayQueue)
+	r.Put("/playQueues/{pq}", s.handlePlayQueueMutate("add"))
+	r.Put("/playQueues/{pq}/shuffle", s.handlePlayQueueMutate("shuffle"))
+	r.Put("/playQueues/{pq}/unshuffle", s.handlePlayQueueMutate("unshuffle"))
+	r.Put("/playQueues/{pq}/reset", s.handlePlayQueueMutate("reset"))
+	r.Delete("/playQueues/{pq}/items", s.handlePlayQueueMutate("clear"))
+	r.Delete("/playQueues/{pq}/items/{item}", s.handlePlayQueueMutate("remove"))
+	r.Put("/playQueues/{pq}/items/{item}/move", s.handlePlayQueueMutate("move"))
+
+	// Watch state
+	any("/:/timeline", s.handleTimeline)
+	any("/:/progress", s.handleProgress)
+	any("/:/scrobble", s.handleScrobble)
+	any("/:/unscrobble", s.handleUnscrobble)
+	any("/:/rate", s.handleRate)
+	any("/actions/removeFromContinueWatching", s.handleRemoveFromContinueWatching)
+	get("/status/sessions", s.handleSessions)
+	get("/status/sessions/history/all", s.handleHistory)
+	any("/status/sessions/terminate", s.ownerOnly(s.handleTerminate))
+	any("/status/sessions/terminate/player", s.ownerOnly(s.handleTerminate))
+
+	// Playback
+	get("/{ttype}/:/transcode/universal/decision", s.handleDecision)
+	get("/video/:/transcode/universal/start.m3u8", s.handleStartHLS)
+	get("/video/:/transcode/universal/start.mpd", s.handleStartDASH)
+	get("/video/:/transcode/universal/session/{session}/{stream:[0-9]+}/header", s.handleDASHInit)
+	get("/video/:/transcode/universal/session/{session}/{stream:[0-9]+}/{segment}", s.handleDASHSegment)
+	get("/video/:/transcode/universal/session/{session}/*", s.handleTranscodeSession)
+	any("/video/:/transcode/universal/ping", s.handleTranscodePing)
+	any("/video/:/transcode/universal/stop", s.handleTranscodeStop)
+	get("/video/:/transcode/universal/subtitles", empty)
+	get("/transcode/sessions", s.handleTranscodeSessions)
+	get("/library/parts/{part}/indexes/{index}/{offset}", s.handleIndexFrame)
+	get("/library/parts/{part}/indexes/{index}", s.handleIndexBIF)
+	get("/library/parts/{part}/{changestamp}/{file}", s.handlePart)
+	get("/library/parts/{part}/{file}", s.handlePart)
+	r.Put("/library/parts/{part}", s.handlePartSelect)
+	get("/library/streams/{stream}", s.handleStream)
+
+	// Downloads (Download Queue API)
+	r.Post("/downloadQueue", s.handleDownloadQueueCreate)
+	get("/downloadQueue/{queue}", s.handleDownloadQueue)
+	r.Post("/downloadQueue/{queue}/add", s.handleDownloadQueueAdd)
+	get("/downloadQueue/{queue}/items", s.handleDownloadQueueItems)
+	get("/downloadQueue/{queue}/items/{item}", s.handleDownloadQueueItem)
+	r.Delete("/downloadQueue/{queue}/items/{item}", s.handleDownloadQueueItemDelete)
+	r.Post("/downloadQueue/{queue}/items/{item}/restart", s.handleDownloadQueueItemRestart)
+	get("/downloadQueue/{queue}/item/{item}/decision", s.handleDownloadItemDecision)
+	get("/downloadQueue/{queue}/item/{item}/media", s.handleDownloadItemMedia)
+
+	get("/library/metadata/{id}/discoveryPoster/{version}", s.handleDiscoveryPoster)
+	s.registerLiveTVRoutes(r)
+	return r
+}

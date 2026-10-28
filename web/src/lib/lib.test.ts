@@ -1,0 +1,464 @@
+import { describe, expect, it } from "vitest";
+import type { HomeLayout, Rule } from "./contract";
+import { formatBytes, formatNanos, relativeTime } from "./format";
+import {
+  cacheHealth,
+  catalogHealth,
+  computeHealth,
+  indexersHealth,
+  normalizeSessions,
+  plexDirectHealth,
+  remoteHealth,
+  usenetHealth,
+  worstLevel,
+} from "./health";
+import { COALESCE_MS, historyReducer, initHistory } from "./history";
+import {
+  anchorsOf,
+  atFor,
+  describeWhen,
+  effectiveLength,
+  effectivePolicy,
+  freeSlot,
+  matchRank,
+  overrideCount,
+  policyChips,
+  policyIn,
+  removePolicy,
+  reorderAnchors,
+  sameLayout,
+  setPageLength,
+  setPolicy,
+  viewersOverriding,
+  whenMatches,
+} from "./layout";
+import {
+  blankSpec,
+  describeRule,
+  isRuleComplete,
+  newRule,
+  normalizeSpec,
+  previewableSpec,
+  specProblems,
+  valueFor,
+  withOp,
+  FIELD_BY_NAME,
+} from "./rules";
+
+describe("rules", () => {
+  it("creates field-appropriate defaults", () => {
+    expect(newRule("genre")).toEqual({ field: "genre", op: "in", value: [] });
+    expect(newRule("rating")).toEqual({ field: "rating", op: "gte", value: 7 });
+    expect(newRule("released")).toEqual({ field: "released", op: "within", value: "30d" });
+    expect(newRule("watched")).toEqual({ field: "watched", op: "is", value: true });
+  });
+
+  it("converts values when the operator changes", () => {
+    const year: Rule = { field: "year", op: "gte", value: 1990 };
+    const between = withOp(year, "between");
+    expect(between.value).toEqual([1990, new Date().getFullYear()]);
+    expect(withOp(between, "lte").value).toBe(1990);
+    const genre: Rule = { field: "genre", op: "in", value: ["Horror", "Thriller"] };
+    expect(withOp(genre, "notIn").value).toEqual(["Horror", "Thriller"]);
+    expect(valueFor(FIELD_BY_NAME.released, "between", "2020-01-01")).toEqual([
+      "2020-01-01",
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    ]);
+  });
+
+  it("knows when a rule is complete", () => {
+    expect(isRuleComplete({ field: "genre", op: "in", value: [] })).toBe(false);
+    expect(isRuleComplete({ field: "genre", op: "in", value: ["Drama"] })).toBe(true);
+    expect(isRuleComplete({ field: "rating", op: "between", value: [6, ""] })).toBe(false);
+    expect(isRuleComplete({ field: "person", op: "is", value: "" })).toBe(false);
+    expect(isRuleComplete({ field: "watched", op: "is", value: false })).toBe(true);
+  });
+
+  it("describes rules in plain language using labels for ids", () => {
+    expect(describeRule({ field: "genre", op: "in", value: ["Horror", "Thriller"] })).toBe(
+      "Genre is any of Horror, Thriller",
+    );
+    expect(
+      describeRule({ field: "person", op: "in", value: [1, 2, 3, 4], label: "A, B, C, D" }),
+    ).toBe("Person is any of A, B and 2 more");
+    expect(describeRule({ field: "runtime", op: "lte", value: 90 })).toBe(
+      "Runtime is at most 90 min",
+    );
+    expect(describeRule({ field: "released", op: "within", value: "6m" })).toBe(
+      "Released in the last 6 months",
+    );
+    expect(describeRule({ field: "watched", op: "is", value: false })).toBe(
+      "Not watched by the viewer",
+    );
+  });
+
+  it("previews only the complete parts of a spec", () => {
+    const spec = {
+      ...blankSpec(),
+      sources: [{ kind: "tmdbPerson" as const, id: 0 }],
+      rules: [newRule("genre"), newRule("rating")],
+    };
+    const p = previewableSpec(spec);
+    expect(p.sources).toEqual([{ kind: "catalog" }]);
+    expect(p.rules).toEqual([{ field: "rating", op: "gte", value: 7 }]);
+  });
+
+  it("lists problems that block saving", () => {
+    expect(specProblems(blankSpec())).toEqual(["Give the collection a name."]);
+    const bad = {
+      ...blankSpec(),
+      name: "X",
+      rules: [newRule("genre")],
+      artwork: { mode: "custom" as const },
+    };
+    expect(specProblems(bad)).toEqual([
+      "Finish or remove the incomplete rule.",
+      "Add an image URL for custom artwork.",
+    ]);
+  });
+
+  it("normalizes partial specs from the server", () => {
+    const s = normalizeSpec({ name: "N", targets: { homeRow: true } as never });
+    expect(s.targets).toMatchObject({ homeRow: true, collectionsTab: true, users: "all" });
+    expect(s.rules).toEqual([]);
+    expect(s.sources).toEqual([{ kind: "catalog" }]);
+  });
+});
+
+describe("undo history", () => {
+  it("records steps, coalesces rapid edits to the same field, and undoes/redoes", () => {
+    let h = initHistory("a");
+    h = historyReducer(h, { type: "set", value: "ab", key: "name", at: 1000 });
+    h = historyReducer(h, { type: "set", value: "abc", key: "name", at: 1000 + COALESCE_MS / 2 });
+    expect(h.past).toEqual(["a"]);
+    h = historyReducer(h, { type: "set", value: "abcd", key: "name", at: 1000 + COALESCE_MS * 3 });
+    expect(h.past).toEqual(["a", "abc"]);
+    h = historyReducer(h, { type: "undo" });
+    expect(h.present).toBe("abc");
+    h = historyReducer(h, { type: "redo" });
+    expect(h.present).toBe("abcd");
+    h = historyReducer(h, { type: "undo" });
+    h = historyReducer(h, { type: "set", value: "x", at: 99999 });
+    expect(h.future).toEqual([]);
+  });
+  it("ignores undo with nothing to undo and identical sets", () => {
+    const h = initHistory(1);
+    expect(historyReducer(h, { type: "undo" })).toBe(h);
+    expect(historyReducer(h, { type: "set", value: 1, at: 0 })).toBe(h);
+  });
+});
+
+describe("layout", () => {
+  const empty = (): HomeLayout => ({ global: [], viewers: [] });
+
+  it("finds the next moment for a weekday and hour", () => {
+    const wed = new Date(2026, 9, 21, 10, 0, 0); // Wednesday 10:00
+    expect(atFor(5, 20, wed)).toEqual(new Date(2026, 9, 23, 20, 0, 0));
+    expect(atFor(3, 22, wed)).toEqual(new Date(2026, 9, 21, 22, 0, 0));
+    expect(atFor(3, 7, wed)).toEqual(new Date(2026, 9, 28, 7, 0, 0));
+  });
+
+  it("edits a layer's policies and prunes what becomes empty", () => {
+    let doc = setPolicy(empty(), "global", "home", { row: "short-on-time", status: "off" });
+    expect(doc.global).toEqual([
+      { section: "home", rows: [{ row: "short-on-time", status: "off" }] },
+    ]);
+    doc = setPolicy(doc, 2, "home", {
+      row: "short-on-time",
+      status: "always",
+      priority: 1,
+      maxDaysPerWeek: 7,
+    });
+    expect(doc.viewers).toEqual([
+      {
+        userId: 2,
+        pages: [{ section: "home", rows: [{ row: "short-on-time", status: "always" }] }],
+      },
+    ]);
+    expect(overrideCount(doc, 2)).toBe(1);
+    expect(viewersOverriding(doc, "home", "short-on-time")).toEqual([2]);
+    // Reset to global drops the override and the now-empty layer.
+    doc = removePolicy(doc, 2, "home", "short-on-time");
+    expect(doc.viewers).toEqual([]);
+    doc = removePolicy(doc, "global", "home", "short-on-time");
+    expect(doc.global).toEqual([]);
+  });
+
+  it("anchors keep one row per slot and reorder by swapping slots", () => {
+    let doc = setPolicy(empty(), "global", "home", {
+      row: "continue-watching",
+      status: "eligible",
+      slot: 1,
+    });
+    expect(policyIn(doc, "global", "home", "continue-watching")).toEqual({
+      row: "continue-watching",
+      status: "always",
+      slot: 1,
+    });
+    doc = setPolicy(doc, "global", "home", {
+      row: "top-10",
+      status: "always",
+      slot: 3,
+      minSlot: 2,
+    });
+    expect(policyIn(doc, "global", "home", "top-10")).toEqual({
+      row: "top-10",
+      status: "always",
+      slot: 3,
+    });
+    expect(freeSlot(doc, "global", "home")).toBe(2);
+    doc = reorderAnchors(doc, "global", "home", ["top-10", "continue-watching"]);
+    expect(anchorsOf(doc, "global", "home").map((a) => [a.row, a.slot])).toEqual([
+      ["top-10", 1],
+      ["continue-watching", 3],
+    ]);
+    // Anchoring another row to a held slot frees it.
+    doc = setPolicy(doc, "global", "home", { row: "trending", status: "always", slot: 1 });
+    expect(policyIn(doc, "global", "home", "top-10")?.slot).toBeUndefined();
+  });
+
+  it("resolves overrides over Global and specific matches over globs", () => {
+    const doc: HomeLayout = {
+      global: [
+        {
+          section: "home",
+          rows: [
+            { row: "because.*", status: "off" },
+            { row: "because-you-watched", status: "eligible", maxPerPage: 2 },
+            { row: "because.42", status: "always" },
+          ],
+        },
+      ],
+      viewers: [
+        { userId: 5, pages: [{ section: "home", rows: [{ row: "because.*", status: "always" }] }] },
+      ],
+    };
+    expect(
+      effectivePolicy(doc, null, "home", "home.because.42", "because-you-watched")?.policy.row,
+    ).toBe("because.42");
+    expect(
+      effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched")?.policy.row,
+    ).toBe("because-you-watched");
+    expect(
+      effectivePolicy(doc, null, "home", "home.because.7", "because-you-watched.x")?.policy.row,
+    ).toBe("because.*");
+    expect(effectivePolicy(doc, 5, "home", "home.because.42", "because-you-watched")).toMatchObject(
+      { layer: "override", policy: { row: "because.*" } },
+    );
+    expect(effectivePolicy(doc, 5, "movies", "movie.because.42", "because-you-watched")).toBeNull();
+    expect(matchRank("collection:*", "collection.7", "collection:7")).toBe(1);
+  });
+
+  it("resolves page lengths: viewer device, viewer page, Global device, Global page, default", () => {
+    let doc = setPageLength(empty(), "global", "home", null, 12);
+    doc = setPageLength(doc, "global", "home", "mobile", 8);
+    doc = setPageLength(doc, 3, "home", "tv", 6);
+    expect(effectiveLength(doc, 3, "home", "tv", 14)).toEqual({ n: 6, layer: "override" });
+    expect(effectiveLength(doc, 3, "home", "mobile", 14)).toEqual({ n: 8, layer: "global" });
+    expect(effectiveLength(doc, null, "home", "web", 14)).toEqual({ n: 12, layer: "global" });
+    expect(effectiveLength(doc, null, "shows", "web", 10)).toEqual({ n: 10, layer: "default" });
+    doc = setPageLength(doc, 3, "home", "tv", undefined);
+    expect(doc.viewers).toEqual([]);
+  });
+
+  it("compares layouts ignoring server stamps and empty pages", () => {
+    const a: HomeLayout = {
+      global: [{ section: "home", rows: [] }],
+      viewers: [],
+      updatedAt: "2026-10-19T00:00:00Z",
+    };
+    expect(sameLayout(a, empty())).toBe(true);
+    expect(
+      sameLayout(setPolicy(a, "global", "home", { row: "top-10", status: "off" }), empty()),
+    ).toBe(false);
+  });
+
+  it("matches schedules including windows that wrap midnight, months and dates", () => {
+    expect(whenMatches({ days: [1, 2] }, { day: 6, hour: 20, device: "tv" })).toBe(false);
+    expect(whenMatches({ fromHour: 22, toHour: 2 }, { day: 6, hour: 1, device: "tv" })).toBe(true);
+    expect(whenMatches({ fromHour: 22, toHour: 2 }, { day: 6, hour: 12, device: "tv" })).toBe(
+      false,
+    );
+    expect(whenMatches({ devices: ["mobile"] }, { day: 6, hour: 12, device: "tv" })).toBe(false);
+    expect(whenMatches({ dayparts: ["morning"] }, { day: 6, hour: 9, device: "tv" })).toBe(true);
+    const dec = new Date(2026, 11, 20, 20);
+    expect(whenMatches({ months: [12] }, { day: 0, hour: 20, device: "tv", date: dec })).toBe(true);
+    expect(
+      whenMatches(
+        { months: [12] },
+        { day: 0, hour: 20, device: "tv", date: new Date(2026, 9, 20) },
+      ),
+    ).toBe(false);
+    expect(
+      whenMatches({ startDate: "2026-12-21" }, { day: 0, hour: 20, device: "tv", date: dec }),
+    ).toBe(false);
+    expect(
+      describeWhen({ days: [1, 2, 3, 4, 5], months: [12], devices: ["tv"] }, [
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+      ]),
+    ).toBe("Weekdays · TV · Dec");
+    expect(
+      policyChips(
+        { row: "x", status: "always", slot: 2, maxSlot: 4, priority: 1.5, maxDaysPerWeek: 3 },
+        ["Sun"],
+      ),
+    ).toEqual(["Slot 2", "Not below 4", "Higher", "3 days a week"]);
+  });
+});
+
+const LIVE = {
+  cache: { budget: 21474836480, used: 970344835 },
+  catalog: {
+    movies: 24929,
+    shows: 24298,
+    browsableMovies: 24928,
+    browsableShows: 24298,
+    lastSync: "2026-10-19T13:16:36Z",
+    sync: { running: false },
+  },
+  indexers: [
+    {
+      indexer: "NZBgeek",
+      hitsUsed: 6,
+      hitsLimit: 200,
+      hitsRemaining: 194,
+      grabsUsed: 10,
+      grabsLimit: 50,
+      grabsRemaining: 40,
+    },
+    {
+      indexer: "DOGnzb",
+      hitsUsed: 20,
+      hitsLimit: 20,
+      hitsRemaining: 0,
+      grabsUsed: 0,
+      grabsLimit: 10,
+      grabsRemaining: 10,
+    },
+  ],
+  providers: [
+    {
+      id: "p1",
+      name: "Giganews",
+      backfill: false,
+      state: "ok",
+      configuredConnections: 16,
+      activeConnections: 4,
+    },
+    {
+      id: "p2",
+      name: "Frugal",
+      backfill: false,
+      state: "backoff",
+      configuredConnections: 16,
+      activeConnections: 0,
+    },
+  ],
+  remote: {
+    claimed: true,
+    ownerUsername: "o",
+    remoteAccess: false,
+    listed: true,
+    presence: { connected: true },
+    cert: { present: true, subject: "*.x.plex.direct", notAfter: "2027-01-17T04:36:33Z" },
+  },
+};
+
+describe("health", () => {
+  const now = new Date("2026-10-19T14:00:00Z");
+  it("summarises the live dashboard shapes", () => {
+    const h = computeHealth(LIVE, now);
+    expect(h.map((x) => [x.id, x.level])).toEqual([
+      ["usenet", "warn"],
+      ["indexers", "warn"],
+      ["cache", "ok"],
+      ["catalog", "ok"],
+      ["remote", "off"],
+      ["plexdirect", "ok"],
+    ]);
+    expect(usenetHealth(LIVE.providers).fill).toBeCloseTo(4 / 32);
+    expect(indexersHealth(LIVE.indexers).summary).toBe("1 of 2 indexers out of searches today");
+    expect(cacheHealth(LIVE.cache).summary).toBe("925.4 MiB of 20.0 GiB");
+    expect(worstLevel(h.map((x) => x.level))).toBe("warn");
+  });
+  it("accepts debrid in place of Usenet", () => {
+    expect(usenetHealth([], { enabled: true }).level).toBe("off");
+    expect(usenetHealth([], { enabled: false }).level).toBe("error");
+  });
+  it("flags real problems", () => {
+    expect(usenetHealth([]).level).toBe("error");
+    expect(usenetHealth({ error: "boom" }).summary).toBe("boom");
+    expect(catalogHealth({ lastSync: "2026-10-01T00:00:00Z" }, now).level).toBe("warn");
+    expect(remoteHealth({ claimed: false }).level).toBe("error");
+    expect(
+      remoteHealth({ claimed: true, remoteAccess: true, presence: { connected: false } }).level,
+    ).toBe("warn");
+    expect(
+      plexDirectHealth({ cert: { present: true, notAfter: "2026-10-25T00:00:00Z" } }, now).level,
+    ).toBe("warn");
+    expect(plexDirectHealth({ cert: { present: false } }, now).level).toBe("warn");
+    expect(
+      computeHealth(undefined, now).every((x) => x.level === "unknown" || x.level === "warn"),
+    ).toBe(true);
+  });
+  it("uses the reported playhead, including zero, independently of transferred bytes", () => {
+    const base = { BytesServed: 33, Info: { size: 100, duration: 60e9 } };
+    const sessions = normalizeSessions([
+      base,
+      { ...base, viewOffset: 55000 },
+      { ...base, viewOffset: 10000 },
+      { ...base, viewOffset: 0 },
+      { ...base, viewOffset: -1000 },
+      { ...base, viewOffset: 90000 },
+      { ...base, viewOffset: null },
+      { ...base, viewOffset: NaN },
+    ]);
+    expect(sessions.map((s) => s.progress)).toEqual([null, 55 / 60, 1 / 6, 0, 0, 1, null, null]);
+  });
+  it("normalizes now-playing sessions from Go field names", () => {
+    const [s] = normalizeSessions([
+      {
+        ID: "s1",
+        Key: 123,
+        TitleName: "Dune (2021)",
+        Username: "Sam",
+        Client: { product: "Plex Web", deviceName: "Chrome", remote: true },
+        Decision: "transcode",
+        BytesServed: 50,
+        Info: { size: 100, duration: 7.2e12 },
+        viewOffset: 3.6e6,
+        Resolution: { release: { name: "Dune.2021.1080p" } },
+      },
+    ]);
+    expect(s).toMatchObject({
+      id: "s1",
+      key: "123",
+      title: "Dune (2021)",
+      user: "Sam",
+      device: "Chrome",
+      decision: "transcode",
+      remote: true,
+      size: 100,
+      release: "Dune.2021.1080p",
+    });
+    expect(s!.progress).toBeCloseTo(0.5);
+    expect(normalizeSessions(null)).toEqual([]);
+  });
+});
+
+describe("format", () => {
+  it("formats bytes, durations and relative times", () => {
+    expect(formatBytes(1536)).toBe("1.5 KiB");
+    expect(formatBytes(-1)).toBe("—");
+    expect(formatNanos(1.8e9)).toBe("1.8 s");
+    expect(formatNanos(3.1e8)).toBe("310 ms");
+    expect(relativeTime("0001-01-01T00:00:00Z")).toBe("never");
+    expect(relativeTime(new Date(Date.now() - 3 * 3600_000))).toMatch(/3 hours ago/);
+  });
+});
