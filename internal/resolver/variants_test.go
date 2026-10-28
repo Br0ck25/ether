@@ -245,7 +245,7 @@ func TestResolvePreferFallsBackWhenUnhealthyOrMissing(t *testing.T) {
 func TestResolvePreferAlternatesPreferSameEdition(t *testing.T) {
 	idx := &fakeIndexer{releases: []core.Release{
 		rel("uhd", "The.Signal.1999.2160p.UHD.BluRay.REMUX.DV.HEVC.TrueHD.7.1-GRP", 50000),
-		rel("dc720", "The.Signal.1999.Directors.Cut.720p.BluRay.x264-GRP", 5000),
+		rel("dc1080web", "The.Signal.1999.Directors.Cut.1080p.WEB-DL.x264-GRP", 5000),
 		rel("dc", "The.Signal.1999.Directors.Cut.1080p.BluRay.x264-GRP", 9000),
 		rel("hd", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000),
 	}}
@@ -254,7 +254,7 @@ func TestResolvePreferAlternatesPreferSameEdition(t *testing.T) {
 	if err != nil || res.Release.ID != "dc" {
 		t.Fatalf("res=%+v err=%v", res, err)
 	}
-	if len(res.Alternates) == 0 || res.Alternates[0].ID != "dc720" {
+	if len(res.Alternates) == 0 || res.Alternates[0].ID != "dc1080web" {
 		t.Fatalf("alternates should fail over within the cut first: %+v", res.Alternates)
 	}
 }

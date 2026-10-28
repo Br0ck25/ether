@@ -96,14 +96,17 @@ func TestObscureTitlesResolveAgainstAllOddsInMilliseconds(t *testing.T) {
 		t.Fatalf("expected sub-25ms resolution, took %s", elapsed)
 	}
 
-	// 2. Classic 1990s sitcom on Apple TV (4K profile, MinSizeMBPerMin=15):
+	// 2. Classic sitcom on Apple TV (480p floor, MinSizeMBPerMin=15):
 	// only a 140 MB 480p PDTV.XviD.AC3 episode exists, plus a conflicting UK
 	// show release and a miniseries Part release.
 	tvIdx := &fakeIndexer{releases: []core.Release{
 		rel("uk-wrong", "The.Office.UK.S01E02.Diversity.Day.480p.DVDRip.XviD.AC3-GRP", 140),
 		rel("us-pdtv", "The.Office.US.S01.E02.Diversity.Day.480p.PDTV.XviD.AC3-FOV", 140),
 	}}
-	svcTV := New(tvIdx, fakeHealth{}, nil, testCfg(), Options{})
+	tvCfg := testCfg()
+	// Allow SD explicitly; legacy size estimates must still permit small episodes.
+	tvCfg.Quality.Profiles[0].MinHeight = 480
+	svcTV := New(tvIdx, fakeHealth{}, nil, tvCfg, Options{})
 	t.Cleanup(func() { _ = svcTV.Close() })
 	officeEp := &core.Title{
 		Key: core.EpisodeKey(2316, 1, 2), Type: core.TypeEpisode,
@@ -113,7 +116,7 @@ func TestObscureTitlesResolveAgainstAllOddsInMilliseconds(t *testing.T) {
 	}
 	resTV, err := svcTV.Resolve(ctx, core.ResolveRequest{Title: officeEp, Client: appleTVCaps()})
 	if err != nil || resTV.Release.ID != "us-pdtv" {
-		t.Fatalf("legacy 480p PDTV on 4K profile failed: res=%+v err=%v traces=%+v", resTV, err, svcTV.Traces())
+		t.Fatalf("legacy 480p PDTV within the profile floor failed: res=%+v err=%v traces=%+v", resTV, err, svcTV.Traces())
 	}
 
 	// 3. Miniseries named "Part 3" instead of S01E03.

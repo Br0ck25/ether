@@ -882,7 +882,7 @@ func (s *Service) rankCandidates(ctx context.Context, req core.ResolveRequest, s
 		if reason != "" {
 			ct.Rejected = true
 			switch reason {
-			case "above profile max height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later",
+			case "above profile max height", "below profile min height", "dolby vision not allowed for client", "video codec unsupported by client", "quality excluded by imported profile", "source recently failed health check; retrying later",
 				// Size ranges are per profile: a remux too large for a
 				// download or mobile profile still plays for others.
 				"size too small for runtime", "size too large for runtime":
@@ -1007,7 +1007,7 @@ func minFormatScore(rcfg config.Resolver, profile core.QualityProfile) *int {
 
 // rejectReason returns "" to accept, or the reason to drop a release.
 // preferred (the viewer's explicit Play Version pick) bypasses the
-// profile-policy gates — max height, DV policy, imported quality gates,
+// profile-policy gates — resolution bounds, DV policy, imported quality gates,
 // per-profile size range — but never the hard client gates or the
 // identity/absolute-size sanity checks.
 func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.SearchRequest,
@@ -1128,6 +1128,9 @@ func (s *Service) rejectReason(rel core.Release, t *core.Title, sreq core.Search
 	}
 	if !preferred && profile.MaxHeight > 0 && rel.Info.Height > profile.MaxHeight {
 		return "above profile max height"
+	}
+	if !preferred && profile.MinHeight > 0 && rel.Info.Height > 0 && rel.Info.Height < profile.MinHeight {
+		return "below profile min height"
 	}
 	if !preferred && rel.Info.DolbyVision && !profile.AllowDolbyVision && !(rel.Info.HDR10 && profile.AllowHDR) {
 		return "dolby vision not allowed for client"

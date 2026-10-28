@@ -94,7 +94,7 @@ func TestSearchPreparationOverlapsAndReusesHealth(t *testing.T) {
 }
 
 func TestEarlyHealthDoesNotPromoteLowerQuality(t *testing.T) {
-	lo := rel("lo", "The.Signal.1999.720p.BluRay.x264-GROUP", 4000)
+	lo := rel("lo", "The.Signal.1999.1080p.BluRay.x264-GROUP", 4000)
 	hi := rel("hi", "The.Signal.1999.2160p.UHD.BluRay.HEVC-GROUP", 20000)
 	checked := make(chan struct{})
 	idx := &pipelinedIndexer{first: []core.Release{lo}, final: []core.Release{lo, hi}, checked: checked}
