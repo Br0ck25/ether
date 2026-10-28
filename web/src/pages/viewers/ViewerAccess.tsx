@@ -15,6 +15,7 @@ import { viewerName } from "../../components/pickers";
 import { api, apiFetch, errorMessage } from "../../lib/api";
 import type { Viewer } from "../../lib/contract";
 import { useAsync } from "../../lib/hooks";
+import { ViewerJellyfinSignIn } from "./sections/ViewerJellyfin";
 import { ViewerLiveTVAccess } from "./sections/ViewerLiveTV";
 import { KID_PRESETS, ListText, normalizePolicy, type SafetyPolicy } from "./shared";
 
@@ -294,6 +295,7 @@ export function ViewerAccess({ viewer }: { viewer: Viewer }) {
         </>
       )}
 
+      <ViewerJellyfinSignIn viewerId={id} />
       <ViewerLiveTVAccess viewerId={id} />
 
       <SaveBar

@@ -65,7 +65,7 @@ ENV ETHER_DATA_DIR=/config \
 
 # Plex API + web UI. GDM discovery (32410-32414/udp) and DLNA-ish ports only
 # work with host networking; EXPOSE is documentation here.
-EXPOSE 32400/tcp 32410-32414/udp
+EXPOSE 32400/tcp 32410-32414/udp 8096/tcp 7359/udp
 VOLUME ["/config", "/cache"]
 
 USER ether

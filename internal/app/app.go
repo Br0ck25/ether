@@ -165,6 +165,7 @@ type App struct {
 	safety            *safety.Service
 	updates           *updateState
 	plexServer        *plex.Server
+	jellyfin          *jellyfinFront
 	handler           http.Handler
 	closers           []func()
 	closeOnce         sync.Once
@@ -391,6 +392,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err := a.gdm.Start(ctx); err != nil {
 		a.log.Warn("GDM discovery responder", "err", err)
 	}
+	background.start(func() { a.jellyfin.run(ctx, cfg) })
 	background.start(func() { a.housekeeping(ctx) })
 	background.start(func() { a.cluster.RunAsLeader(ctx, "database maintenance", a.maintainDB) })
 	background.start(func() { a.stats.Run(ctx) })

@@ -163,6 +163,11 @@ export const PAGES: PageDef[] = [
         keywords: "post-play up next match finish time clock",
       },
       { key: "extras", title: "Trailers & extras", keywords: "cinema trailers yt-dlp resolver" },
+      {
+        key: "jellyfin",
+        title: "Jellyfin & Emby",
+        keywords: "emby jellyfin apps infuse streamyfin findroid swiftfin 8096 access code sign in",
+      },
     ],
     keywords: "settings",
   },

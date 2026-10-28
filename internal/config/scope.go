@@ -67,6 +67,11 @@ var mixedSections = map[string]map[string]Scope{
 		// This node's part of account-wide budgets in a cluster.
 		"clusterWeight": Local,
 	},
+	"jellyfin": {
+		"enabled":   Shared,
+		"port":      Local, // this node's listener
+		"discovery": Local,
+	},
 	"plex": {
 		"compatibilityVersion":       Shared,
 		"latestCompatibilityVersion": Shared,

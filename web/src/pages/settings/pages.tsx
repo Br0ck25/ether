@@ -39,6 +39,7 @@ const KNOWN_KEYS = new Set([
   "updates",
   "spike",
   "markers",
+  "jellyfin",
   "downloads",
   "personalize",
   "extras",
@@ -69,6 +70,7 @@ const GENERAL_SECTIONS = [
   { key: "downloads", label: "Downloads", groups: S.DOWNLOADS },
   { key: "personalize", label: "Personalization", groups: S.PERSONALIZE },
   { key: "extras", label: "Trailers & extras", groups: S.EXTRAS },
+  { key: "jellyfin", label: "Jellyfin & Emby", groups: S.JELLYFIN },
 ] as const;
 
 /**
@@ -95,7 +97,7 @@ export function GeneralPage() {
   return (
     <DomainPage
       title="General"
-      description="Server name, port and limits, downloads, personalization and trailers."
+      description="Server name, port and limits, downloads, personalization, trailers and Jellyfin & Emby apps."
       base="/server"
       tabs={tabs}
       active={tab}

@@ -147,6 +147,39 @@ in Ether's **Viewers** page after signing in. Open a viewer to see their taste,
 activity and Home, or set content and playback limits. Each viewer keeps their
 own history and recommendations.
 
+## Jellyfin and Emby apps
+
+Ether can serve the **Jellyfin** and **Emby** apps (Infuse, Streamyfin,
+Findroid, Swiftfin, the official Jellyfin and Emby apps and others) as well as
+Plex, from the same server. All three share one catalogue, one set of sources,
+one watch history per viewer and the same limits (content rating, sections,
+stream and bitrate limits), so something watched in Plex is marked watched in
+Jellyfin.
+
+1. In **General › Jellyfin & Emby**, turn on **Allow Jellyfin and Emby apps**.
+   The apps expect port **8096**; it must differ from the Plex port.
+   Leave **Show up in the apps' server list** on to appear in their LAN
+   discovery.
+2. Open a viewer, then **Access**, and under **Jellyfin & Emby sign-in** click
+   **Generate a code** (or choose your own). Plex accounts have no password
+   Ether can check, so each viewer signs in to these apps with their Plex user
+   name and this code. The code is shown once and only a scrambled copy is
+   kept. Setting a new code, or removing it, signs that viewer out everywhere.
+3. In the app, add the server `http://<ether address>:8096` and sign in.
+
+What works: Movies, TV Shows and Collections libraries, search, genres, seasons
+and episodes, Continue Watching, Next Up, Latest, artwork, favourites (kept in
+a "Favorites" playlist that also shows in Plex), played marks, ratings, resume,
+intro and credits Skip buttons, sidecar subtitles, direct play, and HLS
+transcoding with the same transcoder, HDR tone mapping and failover as Plex.
+Five wrong sign-ins from one address lock it for ten minutes.
+
+What does not: Live TV, music and books, SyncPlay, remote control of an app
+from another, Quick Connect, and the Jellyfin web client (Ether serves the
+API only). Text subtitles stored inside a video play on direct play, but are
+not available while transcoding, because extracting them would mean reading
+the whole remote file. Picture subtitles (PGS, VobSub) are burned in.
+
 ## Organise your Home
 
 Movies, TV and Home put populated **Continue Watching** first, followed by

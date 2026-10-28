@@ -29,3 +29,5 @@ services:
     # ports:                      # bridge-mode only; drop network_mode above
     #   - "32400:32400/tcp"
     #   - "32410-32414:32410-32414/udp"
+    #   - "8096:8096/tcp"         # Jellyfin / Emby apps (General > Jellyfin & Emby)
+    #   - "7359:7359/udp"         # their LAN discovery

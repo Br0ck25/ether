@@ -22,6 +22,7 @@ func Defaults(dataDir string) Config {
 		Usenet:       Usenet{MinIdle: 2, Repair: Repair{AdaptiveSummaries: true, SummaryRows: 4, MaxDownloadBytes: 512 << 20, LiveWait: Duration(2 * time.Second), AheadWait: Duration(90 * time.Second)}},
 		Debrid:       Debrid{CachedOnly: true, RemoveUncached: true},
 		Markers:      Markers{TheIntroDB: true},
+		Jellyfin:     Jellyfin{Port: DefaultJellyfinPort, Discovery: true},
 		Database:     Database{Driver: DatabaseSQLite},
 		Personalize: Personalize{
 			PostPlay: true, PostPlayPrebuffer: true, MicroReasons: true, SessionIntent: true,

@@ -789,3 +789,34 @@ export const EXTRAS: FieldGroup[] = [
     ],
   },
 ];
+
+export const JELLYFIN: FieldGroup[] = [
+  {
+    title: "Jellyfin & Emby apps",
+    description:
+      "Lets the Jellyfin and Emby apps browse and play from Ether, alongside Plex. Everyone shares the same catalogue, watch history and sources.",
+    fields: [
+      {
+        key: "enabled",
+        label: "Allow Jellyfin and Emby apps",
+        kind: "bool",
+        help: "Viewers sign in with their Plex user name and an access code you give them on their Access tab.",
+      },
+      {
+        key: "port",
+        label: "Port",
+        kind: "number",
+        min: 1,
+        max: 65535,
+        step: 1,
+        help: "Jellyfin and Emby apps expect 8096. It must differ from the Plex port.",
+      },
+      {
+        key: "discovery",
+        label: "Show up in the apps' server list",
+        kind: "bool",
+        help: "Answers the apps' broadcast on your home network (UDP 7359), so Ether appears without typing an address.",
+      },
+    ],
+  },
+];

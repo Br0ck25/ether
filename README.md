@@ -227,6 +227,12 @@ Open **`http://localhost:32400/ether/`** and finish the 4-step wizard:
 ## Questions you're about to ask
 
 <details>
+<summary><b>Can I use Jellyfin or Emby apps?</b></summary>
+
+Yes, alongside Plex. Turn on **General › Jellyfin & Emby** and Ether also speaks the Jellyfin/Emby API on port 8096, so Infuse, Streamyfin, Findroid, Swiftfin and the official Jellyfin and Emby apps browse the same catalogue and play through the same sources and transcoder. Watch history, limits and favourites are shared with Plex. Viewers sign in with their Plex user name and an access code you generate for them. See the [user guide](docs/user-guide.md#jellyfin-and-emby-apps) for what is and isn't supported (no Live TV, music, SyncPlay or Quick Connect).
+</details>
+
+<details>
 <summary><b>Do I need Plex Pass?</b></summary>
 
 At home on your local network, no. **To stream outside your home, yes.** Ether follows Plex's rules just like a standard Plex Media Server: remote playback requires Plex Pass on the server owner's account or a Remote Watch Pass on the viewer's account.

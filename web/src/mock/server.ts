@@ -325,6 +325,7 @@ function defaultConfig(): EtherConfig {
       expiry: "24h0m0s",
       maxHeight: 1080,
     },
+    jellyfin: { enabled: false, port: 8096, discovery: true },
     personalize: {
       postPlay: true,
       postPlayPrebuffer: true,
@@ -406,6 +407,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
   const sites = createSitesMock();
   const cacheMock = createCacheMock();
   const liveTV = createLiveTVMock(catalog);
+  const jellyfinCodes = new Set<number>();
   const state = {
     boot: {
       ok: true,
@@ -695,7 +697,11 @@ export function createFakeServer(opts: FakeOptions = {}) {
     };
     const sorter = sorters[spec.sort];
     if (sorter) items.sort(sorter);
-    if (spec.sources.some((s) => ["traktList", "letterboxdList", "mdblist", "stremioCatalog"].includes(s.kind)))
+    if (
+      spec.sources.some((s) =>
+        ["traktList", "letterboxdList", "mdblist", "stremioCatalog"].includes(s.kind),
+      )
+    )
       warnings.push(
         "External lists are refreshed on the schedule; the preview shows the last fetched copy.",
       );
@@ -1778,6 +1784,29 @@ export function createFakeServer(opts: FakeOptions = {}) {
 
     const site = sites.handle(method, seg, body, state.config);
     if (site) return json(site.body, site.status);
+
+    if (seg[0] === "jellyfin" && seg[1] === "viewers") {
+      const codes = jellyfinCodes;
+      if (method === "GET" && !seg[2])
+        return json({
+          viewers: state.users.map((u) => ({
+            id: u.id,
+            username: u.username,
+            title: u.title,
+            isOwner: u.isOwner,
+            hasCode: codes.has(u.id),
+            devices: codes.has(u.id) ? 1 : 0,
+          })),
+        });
+      const id = Number(seg[2]);
+      if (method === "PUT" && seg[3] === "code") {
+        codes.add(id);
+        const given = (body as { code?: string } | undefined)?.code;
+        return json({ code: given || "K7M3Q9XW2P" });
+      }
+      if (method === "DELETE" && seg[3] === "code") codes.delete(id);
+      return new Response(null, { status: 204 });
+    }
 
     const tvr = liveTV.handle(method, seg, q, body);
     if (tvr) return json(tvr.body, tvr.status);

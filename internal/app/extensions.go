@@ -27,6 +27,7 @@ func (a *App) extensionHandlers() map[string]http.Handler {
 	})
 	m["stream-preferences"] = a.trackprefs.Handler()
 	m["markers"] = a.markers.Handler()
+	m["jellyfin"] = a.jellyfin.srv.AdminHandler()
 	m["subtitle-sync"] = a.subtitles.SyncHandler()
 	m["metadata"] = a.episodeorder.Router()
 	m["updates"] = a.updatesHandler()

@@ -213,6 +213,7 @@ export interface EtherConfig {
     /** Node-local share weight for account-wide budgets in a cluster; 0/absent = 1. */
     clusterWeight?: number;
   };
+  jellyfin?: { enabled: boolean; port: number; discovery: boolean };
   plex: {
     token: string;
     clientIdentifier: string;

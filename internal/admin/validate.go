@@ -126,6 +126,12 @@ func ValidateConfig(cfg config.Config) []FieldError {
 		v.add("server.clusterWeight", "must be between 0 and 100")
 	}
 
+	if cfg.Jellyfin.Enabled {
+		v.port("jellyfin.port", cfg.Jellyfin.Port, false)
+		if cfg.Jellyfin.Port == cfg.Server.Port {
+			v.add("jellyfin.port", "must differ from the Plex port (%d)", cfg.Server.Port)
+		}
+	}
 	v.port("plex.publicPort", cfg.Plex.PublicPort, true)
 	if cfg.Plex.SecureConnections != "" {
 		v.oneOf("plex.secureConnections", cfg.Plex.SecureConnections, "required", "preferred", "disabled")
