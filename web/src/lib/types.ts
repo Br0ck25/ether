@@ -222,6 +222,7 @@ export interface EtherConfig {
     ownerUsername: string;
     claimed: boolean;
     remoteAccess: boolean;
+    emulatePlexPass?: boolean;
     useUpnp: boolean;
     publicPort: number;
     publicHost: string;

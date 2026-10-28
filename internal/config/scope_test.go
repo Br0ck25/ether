@@ -71,6 +71,7 @@ func TestScopeOf(t *testing.T) {
 		"server.bindAddress":         Local,
 		"server.machineIdentifier":   Shared,
 		"plex.token":                 Shared,
+		"plex.emulatePlexPass":       Shared,
 		"plex.publicPort":            Local,
 		"cache.dir":                  Local,
 		"cache.budgetBytes":          Local,

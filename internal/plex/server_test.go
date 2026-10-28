@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/plex/model"
 )
@@ -853,5 +854,46 @@ func TestAcceptsGzipQuality(t *testing.T) {
 		if got := acceptsGzip(r); got != want {
 			t.Errorf("acceptsGzip(%q) = %v", v, got)
 		}
+	}
+}
+
+func TestEmulatePlexPassSetting(t *testing.T) {
+	emulate := false
+	f := newFixture(func(d *Deps) {
+		baseCfg := d.Config
+		d.Config = func() config.Config {
+			c := baseCfg()
+			c.Plex.EmulatePlexPass = emulate
+			return c
+		}
+	})
+	defer f.srv.Close()
+
+	// Off by default: myPlexSubscription is false and ownerFeatures is empty.
+	rec := f.get(t, "/media/providers", jsonAccept...)
+	mc := decodeJSON(t, rec)
+	if mc["myPlexSubscription"] != false || mc["ownerFeatures"] != "" {
+		t.Fatalf("expected unsubscribed state when emulatePlexPass=false, got myPlexSubscription=%v ownerFeatures=%q", mc["myPlexSubscription"], mc["ownerFeatures"])
+	}
+
+	// Enabled via config: /media/providers, / and /myplex/account report active Plex Pass and features.
+	emulate = true
+	rec = f.get(t, "/media/providers", jsonAccept...)
+	mc = decodeJSON(t, rec)
+	if mc["myPlexSubscription"] != true {
+		t.Fatalf("expected myPlexSubscription=true when emulatePlexPass=true, got %v", mc["myPlexSubscription"])
+	}
+	features, _ := mc["ownerFeatures"].(string)
+	for _, want := range []string{"pass", "adaptive_bitrate", "hardware_transcoding", "hwtranscode", "dvr", "livetv", "sync"} {
+		if !strings.Contains(","+features+",", ","+want+",") {
+			t.Fatalf("ownerFeatures missing %q: %s", want, features)
+		}
+	}
+
+	acctRec := f.get(t, "/myplex/account")
+	if !strings.Contains(acctRec.Body.String(), `subscriptionActive="1"`) ||
+		!strings.Contains(acctRec.Body.String(), `subscriptionState="Active"`) ||
+		!strings.Contains(acctRec.Body.String(), `,pass,`) {
+		t.Fatalf("myplex/account did not report active subscription: %s", acctRec.Body.String())
 	}
 }

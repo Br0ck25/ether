@@ -271,6 +271,9 @@ describe("Settings", () => {
     expect(screen.queryByLabelText("Allow remote access")).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: "Remote access" }));
     expect(await screen.findByLabelText("Allow remote access", {}, WAIT)).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Emulate Plex Pass for remote streaming"),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Connection checks" })).toBeNull();
     expect(screen.queryByText("Owner token")).toBeNull();
   });

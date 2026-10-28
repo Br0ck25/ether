@@ -114,6 +114,12 @@ export const PLEX: FieldGroup[] = [
         help: "Publishes your public address to plex.tv.",
       },
       {
+        key: "emulatePlexPass",
+        label: "Emulate Plex Pass for remote streaming",
+        kind: "bool",
+        help: "Reports an active Plex Pass subscription and owner features to connected Plex apps so remote streaming and Live TV work without a paid pass.",
+      },
+      {
         key: "useUpnp",
         label: "Map the port automatically (UPnP)",
         kind: "bool",

@@ -83,6 +83,7 @@ var mixedSections = map[string]map[string]Scope{
 		"ownerUsername":              Shared,
 		"claimed":                    Shared,
 		"remoteAccess":               Shared,
+		"emulatePlexPass":            Shared,
 		"customUrls":                 Shared,
 		"certHash":                   Shared,
 		"secureConnections":          Shared,

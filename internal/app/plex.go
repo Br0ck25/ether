@@ -164,3 +164,10 @@ func plexPlatform() string {
 		return "Linux"
 	}
 }
+
+func (a *App) hasPlexPass() bool {
+	if a.cfg != nil && a.cfg.Get().Plex.EmulatePlexPass {
+		return true
+	}
+	return a.registrar != nil && a.registrar.Status().PlexPass
+}
