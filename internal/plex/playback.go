@@ -111,6 +111,9 @@ type playRequest struct {
 	audioSel  int // stream position, -1 = default
 	subSel    int // stream position, -1 = none/default
 	subSet    bool
+	// subStream is the subtitle picked by id (request or stored), to be
+	// found again in the session's MediaInfo (resolvePlaySubtitle).
+	subStream *core.StreamInfo
 	// mediaIndex is the "Play Version" position the viewer picked
 	// (0 = Auto / not sent); partReleaseID names the release directly
 	// when the request addressed a variant's Part key.
@@ -199,7 +202,7 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 		p.audioSel = sel.audio
 	}
 	if sel.subtitleSet {
-		p.subSel, p.subSet = sel.subtitle, true
+		p.subSel, p.subSet, p.subStream = sel.subtitle, true, sel.subtitleStream
 	}
 	if id, err := strconv.ParseInt(q.Get("audioStreamID"), 10, 64); err == nil {
 		if ref, ok := s.streams.lookup(id); ok && ref.key == key {
@@ -209,9 +212,10 @@ func (s *Server) parsePlayRequest(r *http.Request) (playRequest, error) {
 	if v := q.Get("subtitleStreamID"); v != "" {
 		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
 			if id == 0 {
-				p.subSel, p.subSet = -1, true
-			} else if ref, ok := s.streams.lookup(id); ok && ref.key == key {
-				p.subSel, p.subSet = ref.index, true
+				p.subSel, p.subSet, p.subStream = -1, true, nil
+			} else if ref, ok := s.streams.lookup(id); ok && ref.key == key && ref.info.Type == "subtitle" {
+				info := ref.info
+				p.subSel, p.subSet, p.subStream = ref.index, true, &info
 			}
 		}
 	}
@@ -301,6 +305,15 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if err != nil {
 		return t, nil, core.Decision{}, err
 	}
+	// Tracks cached or picked since the session's media was enriched (a
+	// subtitle search pick mid-playback) join its streams for this
+	// decision; text sidecars never enter the transcoder's input.
+	if info := s.withCachedSidecars(ctx, pr.User, t, ps.Info); len(info.Streams) != len(ps.Info.Streams) {
+		cp := *ps
+		cp.Info = info
+		ps = &cp
+	}
+	resolvePlaySubtitle(p, ps.Info)
 	s.applyStreamPreferences(ctx, pr, p, t, ps.Info)
 	applySelections(p, ps.Info, s.audioLanguages(pr.User))
 	dec := core.Decision{Kind: core.DecisionDirectPlay, VideoCopy: true, AudioCopy: true, Container: ps.Info.Container, AudioStream: p.opts.AudioStream, SubtitleStream: p.opts.SubtitleStream}
@@ -348,10 +361,14 @@ func (s *Server) prepare(ctx context.Context, pr *Request, p *playRequest) (*cor
 	if v := ps.Info.Video(); v != nil {
 		s.log.Debug("playback media decision", "key", p.key, "client", pr.ClientID, "device", pr.Device, "model", pr.Model, "platformVersion", pr.PlatformVersion, "video", v.Codec, "videoProfile", v.Profile, "height", v.Height, "bitDepth", v.BitDepth, "transfer", v.ColorTransfer, "dvProfile", v.DolbyVisionProfile, "dvLevel", v.DolbyVisionLevel, "dvCompatibility", v.DolbyVisionCompatibilityID, "kind", dec.Kind, "outputContainer", dec.Container, "videoCopy", dec.VideoCopy, "audioCopy", dec.AudioCopy, "hdrCap", p.caps.HDR10, "dvCap", p.caps.DolbyVision, "profileExtra", pr.ProfileExtra)
 	}
+	subtitle := -1
+	if p.subSet && p.subSel >= 0 && p.subSel < len(ps.Info.Streams) && ps.Info.Streams[p.subSel].Type == "subtitle" {
+		subtitle = p.subSel
+	}
 	s.transcodes.put(&transcodeEntry{
 		id: p.sessionID, playID: ps.ID, userID: pr.User.ID, clientID: pr.ClientID, key: p.key,
 		requested: requested,
-		decision:  dec, info: ps.Info, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
+		decision:  dec, info: ps.Info, subtitle: subtitle, caps: p.caps, opts: p.opts, offset: p.offset, updatedAt: s.now(),
 	})
 	return t, ps, dec, nil
 }
@@ -726,6 +743,7 @@ func (s *Server) handleStartHLS(w http.ResponseWriter, r *http.Request) {
 		// An MDE client got "direct play OK" from the decision, judged the
 		// media unplayable itself and now asks for a stream: decide again
 		// without direct play so a needed transcode isn't a plain remux.
+		resolvePlaySubtitle(&p, ps.Info)
 		applySelections(&p, ps.Info, s.audioLanguages(pr.User))
 		dec = s.d.Transcoder.Decide(ps.Info, p.caps, p.opts)
 	}
@@ -1088,9 +1106,10 @@ func (s *Server) handlePartSelect(w http.ResponseWriter, r *http.Request) {
 		if v := q.Get("subtitleStreamID"); v != "" {
 			if sid, err := strconv.ParseInt(v, 10, 64); err == nil {
 				if sid == 0 {
-					sel.subtitle, sel.subtitleSet = -1, true
+					sel.subtitle, sel.subtitleSet, sel.subtitleStream = -1, true, nil
 				} else if ref, ok := s.streams.lookup(sid); ok && int64(ref.key) == id && ref.info.Type == "subtitle" {
-					sel.subtitle, sel.subtitleSet = ref.index, true
+					info := ref.info
+					sel.subtitle, sel.subtitleSet, sel.subtitleStream = ref.index, true, &info
 				}
 			}
 		}
@@ -1107,7 +1126,9 @@ var subtitleContentTypes = map[string]string{
 }
 
 // handleStream serves external (sidecar) subtitle streams:
-// /library/streams/{id}[.ext].
+// /library/streams/{id}[.ext][?format=srt|vtt|webvtt]. Cached OpenSubtitles
+// tracks are UTF-8 (any encoding= parameter is satisfied) and served in
+// either format; other sidecars are served as stored.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	raw := chi.URLParam(r, "stream")
 	raw, _, _ = strings.Cut(raw, ".")
@@ -1136,9 +1157,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			writeHTTPError(w, http.StatusNotFound)
 			return
 		}
-		format := "srt"
-		if strings.HasSuffix(chi.URLParam(r, "stream"), ".vtt") {
-			format = "vtt"
+		format := subtitleFormat(r.URL.Query().Get("format"))
+		if _, ext, ok := strings.Cut(chi.URLParam(r, "stream"), "."); ok {
+			format = subtitleFormat(ext)
 		}
 		reader, actual, err := s.d.Subtitles.OpenFormat(src, format)
 		if err != nil {

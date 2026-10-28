@@ -193,6 +193,25 @@ file under these names:
 Preview thumbnails appear while a title plays and fill in as playback
 progresses.
 
+## Subtitles from OpenSubtitles
+
+With OpenSubtitles enabled, Ether adds subtitles in each viewer's preferred
+languages (**Audio & subtitles**) when a release doesn't include them. They
+appear in the Plex app's subtitle menu as external tracks, such as "English (SRT
+External)", and subtitle mode **Always** selects them.
+
+- Ether downloads them while a title's page is open and when playback starts.
+  The first time a title is opened they can take a few seconds to appear; reopen
+  the page or start playback to see them.
+- **Search** in the Plex subtitle menu lists OpenSubtitles results for a
+  language. Choosing one downloads it, adds it to the title for every viewer and
+  selects it for you.
+- Every download counts against the OpenSubtitles daily quota. Signing in with
+  an OpenSubtitles account raises it. Ether limits background downloads so
+  browsing doesn't use it up.
+- When a stream is converted, text subtitles are sent alongside the video
+  rather than burned into it.
+
 ## Choose and fix releases
 
 **Releases** explains and overrides which release plays for each title.

@@ -506,11 +506,15 @@ func (s *Server) mediaFor(ctx context.Context, pr *Request, t *core.Title, withS
 		m.Part[0].Indexes = "sd"
 	}
 	if withStreams {
+		// Before a session the info is an estimate without subtitle
+		// tracks: list the viewer's cached sidecars (OpenSubtitles) so
+		// detail pages and play queues offer them.
+		info = s.withCachedSidecars(ctx, pr.User, t, info)
 		var userID int64
 		if pr.User != nil {
 			userID = pr.User.ID
 		}
-		sel := s.selections.get(userID, int64(t.Key))
+		sel := resolveSelection(s.selections.get(userID, int64(t.Key)), info)
 		sel = s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
 		m.Part[0].Stream = s.buildStreams(t.Key, info, sel, pr.User)
 	}

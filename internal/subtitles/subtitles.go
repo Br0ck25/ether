@@ -90,6 +90,16 @@ type Service struct {
 	alignLanguages []string
 	aligner        *Aligner
 	alignOnce      sync.Once
+
+	// Viewer-driven search results awaiting a pick (see ondemand.go).
+	offersMu sync.Mutex
+	offers   map[offerKey]offer
+
+	// Detail-page prefetch budget (see ondemand.go).
+	prefetchMu   sync.Mutex
+	prefetching  map[core.RatingKey]bool
+	prefetchRuns []time.Time
+	prefetchWG   sync.WaitGroup
 }
 
 // New builds a Service. A disabled service returns no sidecars.
@@ -197,7 +207,10 @@ type Candidate struct {
 	HearingImp    bool
 	AITranslated  bool
 	HashMatch     bool
-	Score         float64 // filled by Rank
+	// Forced marks a foreign-parts-only track (OpenSubtitles'
+	// foreign_parts_only), which Plex calls forced.
+	Forced bool
+	Score  float64 // filled by Rank
 }
 
 type searchResponse struct {
@@ -210,6 +223,7 @@ type searchResponse struct {
 			Release       string  `json:"release"`
 			HearingImp    bool    `json:"hearing_impaired"`
 			AITranslated  bool    `json:"ai_translated"`
+			ForeignOnly   bool    `json:"foreign_parts_only"`
 			Uploader      struct {
 				Name string `json:"name"`
 				Rank string `json:"rank"`
@@ -338,7 +352,7 @@ func (s *Service) SearchWithHash(ctx context.Context, title *core.Title, lang, r
 			HashMatch: a.HashMatch, FileID: a.Files[0].FileID, FileName: a.Files[0].FileName, Language: a.Language,
 			Release: a.Release, DownloadCount: a.DownloadCount, Ratings: a.Ratings,
 			Uploader: a.Uploader.Name, UploaderRank: a.Uploader.Rank,
-			HearingImp: a.HearingImp, AITranslated: a.AITranslated,
+			HearingImp: a.HearingImp, AITranslated: a.AITranslated, Forced: a.ForeignOnly,
 		})
 	}
 	Rank(out, releaseName)
@@ -745,6 +759,8 @@ type selection struct {
 	Language string    `json:"language"`
 	Release  string    `json:"release"`
 	At       time.Time `json:"at"`
+	// Forced is set for a viewer-picked foreign-parts-only track.
+	Forced bool `json:"forced,omitempty"`
 }
 
 func releaseSig(release string) string {
@@ -853,8 +869,12 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 	if !s.Enabled() {
 		return nil, nil
 	}
+	// Tracks a viewer picked through Plex's subtitle search win over
+	// automatic choices, and are listed even when the release embeds
+	// that language (the viewer asked for this file).
+	manual := s.manualSelections(title.Key)
 	missing := MissingLanguages(user, embedded)
-	if len(missing) == 0 {
+	if len(missing) == 0 && len(manual) == 0 {
 		return nil, nil
 	}
 	nextIndex := 0
@@ -864,11 +884,8 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 		}
 	}
 	var out []core.StreamInfo
-	add := func(lang, id, release string) {
-		out = append(out, core.StreamInfo{
-			Index: nextIndex, Type: "subtitle", Codec: "srt", Language: lang,
-			Title: sidecarTitle(lang, release), External: true, ExternalURL: URLPrefix + id,
-		})
+	add := func(lang string, sel selection) {
+		out = append(out, sidecarStream(nextIndex, lang, sel))
 		nextIndex++
 	}
 	quotaHit := false
@@ -876,8 +893,13 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 		if ctx.Err() != nil {
 			return out, ctx.Err()
 		}
+		if sel, ok := manual[lang]; ok {
+			add(lang, sel)
+			delete(manual, lang)
+			continue
+		}
 		if sel, ok := s.loadSelection(title, lang, cacheRelease); ok {
-			add(lang, sel.ID, sel.Release)
+			add(lang, sel)
 			continue
 		}
 		if quotaHit {
@@ -915,7 +937,7 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 				release = c.FileName
 			}
 			s.saveSelection(title, lang, cacheRelease, selection{ID: id, FileID: c.FileID, Language: lang, Release: release, At: s.now().UTC()})
-			add(lang, id, release)
+			add(lang, selection{ID: id, Release: release})
 			found = true
 			break
 		}
@@ -931,6 +953,9 @@ func (s *Service) SidecarsWithHash(ctx context.Context, title *core.Title, user 
 			}
 			s.mu.Unlock()
 		}
+	}
+	for _, lang := range sortedLanguages(manual) {
+		add(lang, manual[lang])
 	}
 	return out, nil
 }

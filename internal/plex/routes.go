@@ -18,7 +18,6 @@ func (s *Server) routes() chi.Router {
 		r.Head(pattern, h)
 	}
 	any := func(pattern string, h http.HandlerFunc) { r.HandleFunc(pattern, h) }
-	empty := func(w http.ResponseWriter, r *http.Request) { s.writeEmpty(w, r) }
 
 	// Server
 	get("/", s.handleRoot)
@@ -68,6 +67,8 @@ func (s *Server) routes() chi.Router {
 	get("/library/metadata/{key}/parent", s.handleParent)
 	get("/library/metadata/{key}/grandparent", s.handleParent)
 	get("/library/metadata/{key}/extras", s.handleExtras)
+	get("/library/metadata/{key}/subtitles", s.handleSubtitleSearch)
+	r.Put("/library/metadata/{key}/subtitles", s.handleSubtitlePick)
 	get("/library/metadata/{key}/{element}", s.handleImage)
 	get("/library/metadata/{key}/{element}/{ts}", s.handleImage)
 	get("/library/collections", s.handleCollections)
@@ -141,7 +142,7 @@ func (s *Server) routes() chi.Router {
 	get("/video/:/transcode/universal/session/{session}/*", s.handleTranscodeSession)
 	any("/video/:/transcode/universal/ping", s.handleTranscodePing)
 	any("/video/:/transcode/universal/stop", s.handleTranscodeStop)
-	get("/video/:/transcode/universal/subtitles", empty)
+	get("/video/:/transcode/universal/subtitles", s.handleTranscodeSubtitles)
 	get("/transcode/sessions", s.handleTranscodeSessions)
 	get("/library/parts/{part}/indexes/{index}/{offset}", s.handleIndexFrame)
 	get("/library/parts/{part}/indexes/{index}", s.handleIndexBIF)

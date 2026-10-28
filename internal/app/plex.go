@@ -93,7 +93,7 @@ func (a *App) buildPlex(cfg config.Config) (http.Handler, error) {
 	deps.EpisodeOrder = a.episodeorder
 	deps.Discovery = a.plexDiscovery
 	deps.LiveTV = a.livetv
-	deps.Subtitles = a.subtitles
+	deps.Subtitles = plexSubtitles{a}
 	deps.TrackPreferences = a.trackprefs
 	deps.Markers = a.markers
 	if a.transcoder != nil && !cfg.Spike.Enabled {

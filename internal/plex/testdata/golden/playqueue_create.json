@@ -133,11 +133,11 @@
                     "extendedDisplayTitle": "English (SRT)"
                   },
                   {
-                    "id": 1793284944,
+                    "id": 1527190746,
                     "streamType": 3,
                     "canAutoSync": false,
                     "codec": "srt",
-                    "key": "/library/streams/1793284944",
+                    "key": "/library/streams/1527190746",
                     "language": "Spanish",
                     "languageTag": "es",
                     "languageCode": "spa",
@@ -287,11 +287,11 @@
                     "extendedDisplayTitle": "English (SRT)"
                   },
                   {
-                    "id": 1555158487,
+                    "id": 123233147,
                     "streamType": 3,
                     "canAutoSync": false,
                     "codec": "srt",
-                    "key": "/library/streams/1555158487",
+                    "key": "/library/streams/123233147",
                     "language": "Spanish",
                     "languageTag": "es",
                     "languageCode": "spa",

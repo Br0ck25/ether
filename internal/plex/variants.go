@@ -257,8 +257,6 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *core.Titl
 	}
 	s.renderedVariants.put(renderedVariantKey{userID: pr.User.ID, clientID: pr.ClientID, key: t.Key}, ids, s.now())
 
-	sel := s.selections.get(pr.User.ID, int64(t.Key))
-	sel = s.preferredSelection(ctx, pr.User, t.Key, vs[0].Info, t.Language, sel)
 	out := make([]model.Media, 0, len(vs))
 	for _, v := range vs {
 		m := buildMediaVariant(t, v, stamp, s.variantIDs)
@@ -268,8 +266,12 @@ func (s *Server) mediaForVariants(ctx context.Context, pr *Request, t *core.Titl
 		if v.Auto {
 			// Only the default version carries the stream list on a
 			// detail page (audio/subtitle pickers operate on it); the
-			// other versions' streams are still estimates.
-			m.Part[0].Stream = s.buildStreams(t.Key, v.Info, sel, pr.User)
+			// other versions' streams are still estimates. Cached
+			// sidecars join it as in mediaFor.
+			info := s.withCachedSidecars(ctx, pr.User, t, v.Info)
+			sel := resolveSelection(s.selections.get(pr.User.ID, int64(t.Key)), info)
+			sel = s.preferredSelection(ctx, pr.User, t.Key, info, t.Language, sel)
+			m.Part[0].Stream = s.buildStreams(t.Key, info, sel, pr.User)
 		}
 		out = append(out, m)
 	}

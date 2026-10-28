@@ -128,8 +128,15 @@ func (s *Server) handleMetadata(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if len(keys) == 1 && isPlayable(t.Type) {
+				warmed := false
 				if warm, ok := s.d.Playback.(core.PlaybackPreparer); ok {
-					warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+					warmed = warm.PreResolve(ctx, pr.User, t.Key, pr.ClientCaps(s.cfg().Transcode.RemoteMaxBitrateKbps))
+				}
+				// The warm-up fetches subtitle sidecars for the release it
+				// resolves; without it, fetch them on their own so the play
+				// queue can list them (cached ones are listed already).
+				if !warmed {
+					s.prefetchSidecars(ctx, pr, t)
 				}
 			}
 			if len(keys) == 1 {
