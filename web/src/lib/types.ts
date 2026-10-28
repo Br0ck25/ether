@@ -392,6 +392,7 @@ export interface SetupStatus {
   setupComplete: boolean;
   requiredComplete: boolean;
   steps: SetupStep[];
+  cacheRestartRequired?: boolean;
 }
 export interface Bootstrap {
   ok: boolean;

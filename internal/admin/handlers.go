@@ -85,8 +85,10 @@ func (h *Handler) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 			requiredDone = false
 		}
 	}
+	cacheRestartRequired := h.deps.CacheRestartRequired != nil && h.deps.CacheRestartRequired()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"setupComplete": complete, "requiredComplete": requiredDone, "steps": steps,
+		"cacheRestartRequired": cacheRestartRequired,
 	})
 }
 

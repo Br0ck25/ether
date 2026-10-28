@@ -2,7 +2,12 @@
 
 Ether ships no accounts, providers, indexers, or media. Open `http://SERVER:32400/ether/`
 and finish setup. Select `/cache` for the segment cache (otherwise it defaults to
-`/config/cache`, inside the configuration volume). Image tags are produced
+`/config/cache`, inside the configuration volume). After changing this folder,
+restart the container to activate it. The Cache page shows the active directory;
+downloaded media segments go under its `data` subfolder. Artwork remains under
+`/config/cache/images`, `/config/cache/posters` and `/config/cache/overlays`, so
+those directories can still grow when the media cache is set to `/cache`.
+Existing cached media is not moved automatically. Image tags are produced
 by the existing release workflow; pin a published version or digest for repeatable
 upgrades. These templates are installable examples, not submissions to the
 platforms' public marketplaces.

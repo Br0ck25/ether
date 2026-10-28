@@ -167,6 +167,37 @@ function renderWizard(configure?: (fake: ReturnType<typeof createFakeServer>) =>
 }
 
 describe("setup wizard", () => {
+  it("keeps the required cache restart visible after finishing setup", async () => {
+    const fake = renderWizard();
+    vi.spyOn(api, "setupComplete").mockResolvedValue({
+      setupComplete: true,
+      requiredComplete: true,
+      steps: [],
+      cacheRestartRequired: true,
+    });
+    await screen.findByText(/Signed in as alice/);
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    for (const heading of ["Usenet providers", "Indexers and addons"]) {
+      await screen.findByRole("heading", { name: heading });
+      fireEvent.click(screen.getByLabelText(/Skip test for this step/));
+      fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    }
+    await screen.findByRole("heading", { name: "Cache folder and disk budget" });
+    fireEvent.change(screen.getByDisplayValue(fake.state.config.cache.dir), {
+      target: { value: "/cache" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    await screen.findByRole("button", { name: "Finish setup" });
+    fireEvent.click(screen.getByLabelText(/Skip test for this step/));
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
+    expect(
+      await screen.findByRole("heading", { name: "Restart Ether to use your cache folder" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("/cache")).toBeInTheDocument();
+    expect(screen.getByText(/Docker container/)).toBeInTheDocument();
+    expect(fake.state.config.cache.dir).toBe("/cache");
+  });
+
   it("saves a fresh Plex step and a provider without submitting blank future sources", async () => {
     const fake = renderWizard((f) => {
       f.state.config.usenet.providers = [];

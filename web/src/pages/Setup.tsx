@@ -178,6 +178,7 @@ export default function Setup() {
   const [step, setStep] = useState(0);
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
+  const [cacheRestartRequired, setCacheRestartRequired] = useState(false);
   const [skipped, setSkipped] = useState<Record<number, boolean>>({});
   const [providerTests, setProviderTests] = useState<Record<string, TestState>>({});
   const [indexerTests, setIndexerTests] = useState<Record<string, TestState>>({});
@@ -190,6 +191,7 @@ export default function Setup() {
       .then((s) => {
         const catalog = s.steps.find((x) => x.id === "catalog");
         setTmdbBundled(Boolean(catalog?.complete));
+        if (s.setupComplete && s.cacheRestartRequired) setCacheRestartRequired(true);
       })
       .catch(() => {});
   }, []);
@@ -332,6 +334,25 @@ export default function Setup() {
       </div>
     );
 
+  if (cacheRestartRequired)
+    return (
+      <div className="mx-auto w-full max-w-2xl space-y-4 p-6">
+        <EtherMark size={40} />
+        <h1 className="text-xl font-semibold">Restart Ether to use your cache folder</h1>
+        <p>Setup is saved. Restart Ether, or restart its Docker container, before playing media.</p>
+        <p className="text-sm text-fg-muted">
+          Your selected media cache folder is <code>{cfg.cache.dir}</code>. The running server keeps
+          using its previous folder until it restarts. Existing cached media stays in its original
+          folder; it is not moved automatically.
+        </p>
+        <p className="text-sm text-fg-muted">
+          Posters and other artwork remain in the configuration folder's cache. They are separate
+          from the media cache.
+        </p>
+        <Button onClick={() => navigate("/cache")}>Open cache settings</Button>
+      </div>
+    );
+
   const providers = cfg.usenet.providers ?? [];
   const indexers = cfg.indexers ?? [];
   const setProviders = (list: UsenetProvider[]) =>
@@ -366,9 +387,10 @@ export default function Setup() {
       setCfg(await api.putConfig(savedDraft(cfg)));
       if (step < STEPS.length - 1) setStep(step + 1);
       else {
-        await api.setupComplete(Object.values(skipped).some(Boolean));
+        const status = await api.setupComplete(Object.values(skipped).some(Boolean));
         await app?.reloadBoot();
-        navigate("/");
+        if (status.cacheRestartRequired) setCacheRestartRequired(true);
+        else navigate("/");
       }
     } catch (e) {
       setError(e);
@@ -810,7 +832,10 @@ export default function Setup() {
 
       {step === 3 ? (
         <div className="space-y-5 rounded-xl border border-border bg-surface p-4">
-          <Field label="Cache folder">
+          <Field
+            label="Cache folder"
+            hint="Changing this folder requires restarting Ether after setup. Posters and artwork stay in the configuration folder's cache."
+          >
             <div className="flex gap-2">
               <Input
                 value={cfg.cache.dir}

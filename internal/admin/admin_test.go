@@ -255,6 +255,49 @@ func TestSetupStatusAndGating(t *testing.T) {
 	}
 }
 
+func TestSetupReportsCacheRestartUntilSavedDirectoryIsActive(t *testing.T) {
+	store := newStore(t, seededConfig)
+	activeDir := store.Get().Cache.Dir
+	h := admin.New(admin.Deps{
+		Config: store, IsOwnerToken: storedOwner(store),
+		CacheRestartRequired: func() bool { return store.Get().Cache.Dir != activeDir },
+	})
+	selectedDir := t.TempDir()
+	if err := store.Update(func(c *config.Config) error {
+		c.Cache.Dir = selectedDir
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec := serve(h, req(http.MethodPost, "/ether/api/setup/complete", `{}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complete setup: %d %s", rec.Code, rec.Body)
+	}
+	var status struct {
+		SetupComplete        bool `json:"setupComplete"`
+		CacheRestartRequired bool `json:"cacheRestartRequired"`
+	}
+	decode(t, rec, &status)
+	if !status.SetupComplete || !status.CacheRestartRequired {
+		t.Fatalf("setup must preserve the pending restart: %+v", status)
+	}
+	for _, restarted := range []bool{false, true} {
+		if restarted {
+			activeDir = selectedDir
+		}
+		r := req(http.MethodGet, "/ether/api/setup/status", "")
+		r.Header.Set("X-Plex-Token", ownerToken)
+		rec = serve(h, r)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup status: %d %s", rec.Code, rec.Body)
+		}
+		decode(t, rec, &status)
+		if !status.SetupComplete || status.CacheRestartRequired == restarted {
+			t.Fatalf("restarted=%v: unexpected setup status %+v", restarted, status)
+		}
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	store := newStore(t, nil)
 	h := admin.New(admin.Deps{Config: store, IsOwnerToken: storedOwner(store)})
