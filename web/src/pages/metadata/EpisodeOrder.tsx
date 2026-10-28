@@ -292,9 +292,13 @@ function OrderEditor({
   const [pref, setPref] = useState<Preference>({ groupId: "", specials: "last" });
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (saved.data) setPref(saved.data);
-  }, [saved.data]);
+  // Adopt the stored preference in the render that delivers it; an effect
+  // could replace a choice made before it ran.
+  const [adopted, setAdopted] = useState<typeof saved.data>(undefined);
+  if (saved.data && saved.data !== adopted) {
+    setAdopted(saved.data);
+    setPref(saved.data);
+  }
   const perform = async (fn: () => Promise<void>) => {
     setBusy(true);
     try {

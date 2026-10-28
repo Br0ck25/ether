@@ -18,12 +18,17 @@ import { MutationError } from "./feedback";
  * so typing a field back to its saved value clears the save bar.
  */
 export function useDraft<T>(saved: T | null | undefined) {
-  const [draft, setDraft] = useState<T | null>(saved ?? null);
   const savedKey = useMemo(() => JSON.stringify(saved ?? null), [saved]);
-  useEffect(() => {
+  const [draft, setDraft] = useState<T | null>(() =>
+    saved == null ? null : structuredClone(saved),
+  );
+  // Adopt a new saved value in the render that delivers it. An effect would
+  // run after that render is shown and could discard an edit made meanwhile.
+  const [adopted, setAdopted] = useState(savedKey);
+  if (adopted !== savedKey) {
+    setAdopted(savedKey);
     setDraft(saved == null ? null : structuredClone(saved));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [savedKey]);
+  }
   const dirty = draft !== null && JSON.stringify(draft) !== savedKey;
   const reset = useCallback(
     () => setDraft(saved == null ? null : structuredClone(saved)),

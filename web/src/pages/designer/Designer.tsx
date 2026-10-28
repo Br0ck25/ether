@@ -1,6 +1,6 @@
 import { Badge, Button, EmptyState, SubtabNav, Spinner, toast } from "@braedonsaunders/appkit-ui";
 import { RefreshCw, Save, Undo2, Users } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { ErrorPanel } from "../../components/feedback";
 import { useViewers, viewerName } from "../../components/pickers";
 import { api, errorMessage } from "../../lib/api";
@@ -40,9 +40,13 @@ export default function Designer() {
   const [focusRow, setFocusRow] = useState<string | null>(null);
 
   const saved = doc.data?.layout ?? EMPTY_LAYOUT;
-  useEffect(() => {
-    if (doc.data) setDraft(prune(doc.data.layout));
-  }, [doc.data]);
+  // Adopt the stored layout in the render that delivers it; an effect could
+  // replace an edit made before it ran.
+  const [adopted, setAdopted] = useState<typeof doc.data>(undefined);
+  if (doc.data && doc.data !== adopted) {
+    setAdopted(doc.data);
+    setDraft(prune(doc.data.layout));
+  }
   const dirty = Boolean(doc.data) && !sameLayout(draft, saved);
   const available = doc.data?.availableRows ?? [];
   const defaults = doc.data?.defaults.maxRows ?? { home: 14, movies: 10, shows: 10 };
