@@ -9,14 +9,15 @@ services:
     environment:
       ETHER_DATA_DIR: /config
       TZ: ${TZ:-Etc/UTC}
+      # Owner of /config and /cache; the container hands both to this user.
+      PUID: ${PUID:-999}
+      PGID: ${PGID:-999}
     volumes:
       - ${ETHER_CONFIG:-/var/lib/ether}:/config
       - ${ETHER_CACHE:-/var/cache/ether}:/cache
       # Optional hybrid library; add /media in Libraries. Keep media read-only.
       # - /mnt/media:/media:ro
-    # Intel/AMD VAAPI: uncomment and grant the image user the host render GID.
+    # Intel/AMD VAAPI: the render node's group is added automatically.
     # devices:
     #   - /dev/dri:/dev/dri
-    # group_add:
-    #   - "${RENDER_GID}"
     stop_grace_period: 30s

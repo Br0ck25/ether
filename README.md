@@ -212,7 +212,6 @@ services:
       - ./config:/config
       - ./cache:/cache            # select /cache during the setup wizard
     # devices: ["/dev/dri:/dev/dri"]   # optional: Intel QuickSync / VAAPI hardware transcoding
-    # group_add: ["993"]                # with it: the render node's group, `stat -c %g /dev/dri/renderD128`
 ```
 
 Open **`http://localhost:32400/ether/`** and finish the 4-step wizard:

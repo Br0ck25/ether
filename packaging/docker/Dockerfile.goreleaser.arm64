@@ -7,7 +7,7 @@ FROM debian:bookworm-slim
 # Hardware transcoding userspace, loaded by the bundled ffmpeg at runtime:
 # libva + libva-drm (VAAPI on /dev/dri), Mesa VA drivers (AMD), OpenCL loader.
 #
-# ether runs as fixed UID/GID 999: what --system allocation gave every
+# The ether account (the default PUID/PGID) is fixed at 999: what --system allocation gave every
 # earlier image on this base, pinned so a future image can still read an
 # existing 0700 /config volume. Keep in sync with the repo-root Dockerfile.
 RUN apt-get update \
@@ -22,6 +22,7 @@ RUN apt-get update \
 COPY ether /usr/lib/ether/ether
 COPY dist/ffmpeg/linux-arm64/ffmpeg dist/ffmpeg/linux-arm64/ffprobe /usr/lib/ether/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/ether/
+COPY packaging/docker/entrypoint.sh /usr/lib/ether/entrypoint
 
 RUN /usr/lib/ether/ether -h \
  && /usr/lib/ether/ffmpeg -version \
@@ -30,6 +31,7 @@ RUN /usr/lib/ether/ether -h \
 ENV ETHER_DATA_DIR=/config XDG_CACHE_HOME=/cache
 EXPOSE 32400/tcp 32410-32414/udp
 VOLUME ["/config", "/cache"]
-USER ether
+# Starts as root only to hand the volumes to PUID:PGID (default 999, the
+# ether account) and drop privileges; see packaging/docker/entrypoint.sh.
 WORKDIR /config
-ENTRYPOINT ["/usr/lib/ether/ether"]
+ENTRYPOINT ["/usr/lib/ether/entrypoint"]

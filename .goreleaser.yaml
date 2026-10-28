@@ -137,6 +137,7 @@ dockers:
     extra_files:
       - LICENSE
       - THIRD_PARTY_NOTICES.md
+      - packaging/docker/entrypoint.sh
       - dist/ffmpeg/linux-amd64/ffmpeg
       - dist/ffmpeg/linux-amd64/ffprobe
     build_flag_templates:
@@ -156,6 +157,7 @@ dockers:
     extra_files:
       - LICENSE
       - THIRD_PARTY_NOTICES.md
+      - packaging/docker/entrypoint.sh
       - dist/ffmpeg/linux-arm64/ffmpeg
       - dist/ffmpeg/linux-arm64/ffprobe
     build_flag_templates:

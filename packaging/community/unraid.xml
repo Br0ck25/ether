@@ -15,5 +15,7 @@
   <Config Name="Segment cache" Target="/cache" Default="/mnt/cache/ether-cache" Mode="rw" Description="Segment cache; set the cache directory to /cache in setup." Type="Path" Display="always" Required="true" Mask="false"/>
   <Config Name="Local media" Target="/media" Default="/mnt/user/media" Mode="ro" Description="Optional read-only hybrid library. Add /media in Libraries." Type="Path" Display="always" Required="false" Mask="false"/>
   <Config Name="Data directory" Target="ETHER_DATA_DIR" Default="/config" Type="Variable" Display="advanced" Required="true" Mask="false"/>
+  <Config Name="PUID" Target="PUID" Default="99" Description="User Ether runs as; /config and /cache are handed to it." Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="PGID" Target="PGID" Default="100" Description="Group Ether runs as." Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="Timezone" Target="TZ" Default="Etc/UTC" Type="Variable" Display="always" Required="true" Mask="false"/>
 </Container>

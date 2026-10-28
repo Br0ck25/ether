@@ -104,15 +104,22 @@ connections, but LAN auto-discovery will not find the server.
 Volumes: `/config` (config, database, identity — back this up) and
 `/cache` for the segment cache. The cache defaults to `/config/cache`
 until you select `/cache` as the cache directory in the setup wizard (or
-later on the Cache page), where its budget is set too. The container
-runs as user `ether` with UID/GID 999; both volumes must be writable by
-it.
+later on the Cache page), where its budget is set too.
+
+User and permissions: Ether runs as `PUID`:`PGID` (default 999:999, the
+image's `ether` account). Set them to the user that owns your folders, as
+for other NAS containers (e.g. `PUID=1026 PGID=100` on Synology, `PUID=99
+PGID=100` on Unraid). On start the container gives `/config` and `/cache`
+to that user when they belong to someone else (a one-time walk of their
+contents), adds the groups owning any passed-through `/dev/dri` nodes, and
+drops root before Ether starts. `UMASK` (e.g. `002`) is honoured too.
+`--user`/`user:` still works and runs Ether exactly as that user, in which
+case both volumes must already be writable by it.
 
 Hardware transcoding: for Intel QuickSync/VAAPI or AMD VAAPI pass
-`--device /dev/dri:/dev/dri` and add the container to the host's group that
-owns the render node, e.g.
-`--group-add "$(stat -c %g /dev/dri/renderD128)"` (the node is usually
-`0660 root:render`, and UID 999 is not in that group). The image ships the
+`--device /dev/dri:/dev/dri`. The entrypoint adds the group that owns the
+render node (usually `0660 root:render`) automatically; with `--user` you
+add it yourself: `--group-add "$(stat -c %g /dev/dri/renderD128)"`. The image ships the
 VA-API loader, Mesa (AMD) and, on amd64, Intel's iHD/i965 drivers and the
 QuickSync runtime. The Transcoding page shows what the startup probe found.
 NVENC: use the NVIDIA container toolkit flags shown in

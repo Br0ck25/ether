@@ -67,6 +67,7 @@ COPY --from=build /out/ether /usr/lib/ether/ether
 # loudly otherwise — never ship an image that cannot transcode silently).
 COPY dist/ffmpeg/linux-${TARGETARCH}/ /usr/lib/ether/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/ether/
+COPY packaging/docker/entrypoint.sh /usr/lib/ether/entrypoint
 
 ENV ETHER_DATA_DIR=/config \
     XDG_CACHE_HOME=/cache
@@ -76,6 +77,7 @@ ENV ETHER_DATA_DIR=/config \
 EXPOSE 32400/tcp 32410-32414/udp
 VOLUME ["/config", "/cache"]
 
-USER ether
+# Starts as root only to hand the volumes to PUID:PGID (default 999, the
+# ether account) and drop privileges; see packaging/docker/entrypoint.sh.
 WORKDIR /config
-ENTRYPOINT ["/usr/lib/ether/ether"]
+ENTRYPOINT ["/usr/lib/ether/entrypoint"]

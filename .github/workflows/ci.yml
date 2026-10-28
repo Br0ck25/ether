@@ -196,7 +196,7 @@ jobs:
       - name: Shellcheck scripts
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck scripts/*.sh packaging/linux/*.sh packaging/macos/*.sh
+          shellcheck scripts/*.sh packaging/linux/*.sh packaging/macos/*.sh packaging/docker/*.sh
       - name: Goreleaser config check
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
