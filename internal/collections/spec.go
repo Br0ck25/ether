@@ -30,7 +30,7 @@ var (
 	sourceKinds = map[string]bool{
 		"catalog": true, "tmdbList": true, "tmdbCollection": true, "tmdbDiscover": true,
 		"tmdbKeyword": true, "tmdbCompany": true, "tmdbNetwork": true, "tmdbPerson": true,
-		"watchProvider": true, "traktList": true, "letterboxdList": true, "mdblist": true, "titles": true,
+		"watchProvider": true, "traktList": true, "letterboxdList": true, "mdblist": true, "stremioCatalog": true, "titles": true,
 	}
 	tmdbLists = map[string]bool{
 		"trending_day": true, "trending_week": true, "popular": true, "top_rated": true,
@@ -333,6 +333,10 @@ func validateSource(ve *ValidationError, path string, src core.CollectionSource)
 		}
 	case "mdblist":
 		if _, err := parseMDBListURL(src.URL); err != nil {
+			ve.add(path+".url", err.Error())
+		}
+	case "stremioCatalog":
+		if _, err := parseStremioCatalog(src.URL, src.Params); err != nil {
 			ve.add(path+".url", err.Error())
 		}
 	case "titles":

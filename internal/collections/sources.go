@@ -298,7 +298,7 @@ func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.
 			}
 			s.discoverInto(ctx, sp, kind, q, rules, want, &res, "discover")
 		}
-	case "traktList", "letterboxdList", "mdblist":
+	case "traktList", "letterboxdList", "mdblist", "stremioCatalog":
 		var refs []extRef
 		var err error
 		switch src.Kind {
@@ -306,6 +306,8 @@ func (s *Service) gather(ctx context.Context, sp *core.CollectionSpec, src core.
 			refs, err = s.fetchTrakt(ctx, src.URL)
 		case "letterboxdList":
 			refs, err = s.fetchLetterboxd(ctx, src.URL)
+		case "stremioCatalog":
+			refs, err = s.fetchStremioCatalog(ctx, src)
 		default:
 			refs, err = s.fetchMDBList(ctx, src.URL)
 		}
@@ -337,6 +339,8 @@ func sourceName(src core.CollectionSource) string {
 		return "the Letterboxd list"
 	case "mdblist":
 		return "the MDBList list"
+	case "stremioCatalog":
+		return "the addon catalog"
 	case "tmdbDiscover":
 		return "TMDB discover"
 	case "watchProvider":

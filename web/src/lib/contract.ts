@@ -85,6 +85,7 @@ export type Source =
   | { kind: "traktList"; url: string }
   | { kind: "letterboxdList"; url: string }
   | { kind: "mdblist"; url: string }
+  | { kind: "stremioCatalog"; url: string; params?: { catalog?: string; type?: string } }
   | { kind: "titles"; keys: string[] };
 
 export type SourceKind = Source["kind"];

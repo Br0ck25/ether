@@ -37,6 +37,17 @@ never downloads a whole file.
 Torrents whose video is inside RAR archives are skipped. A result that only
 offers a `.torrent` link costs one indexer download to read its hash.
 
+### Lists from a Stremio addon (My Lists Addon)
+
+A collection source of kind **Addon catalog** turns one catalog of a Stremio
+addon into a collection, so lists you built in My Lists Addon (or any addon
+that serves catalogs) appear as Plex collections. Paste the addon's install
+link (`https://…/manifest.json` or `stremio://…`) and the catalog id. With no
+catalog id, the preview warning lists the catalogs the addon offers. A link
+to one catalog (`…/catalog/movie/<id>.json`) works without an id. Titles are
+matched by IMDb or TMDB id and refresh on the collection's schedule. Errors
+name only the addon's host, because the install link carries your settings.
+
 ### Stremio addons as sources
 
 Under **Sources › Indexers**, **Add indexer › Stremio addon URL…** takes any

@@ -170,6 +170,41 @@ function SourceBody({
         </div>
       );
     }
+    case "stremioCatalog": {
+      const bad = source.url.trim() !== "" && !isSourceComplete(source);
+      return (
+        <div className="space-y-2">
+          <Input
+            type="url"
+            value={source.url}
+            placeholder="https://mylistsaddon.com/…/manifest.json"
+            aria-label={`${label} install link`}
+            aria-invalid={bad || undefined}
+            onChange={(e) => onChange({ ...source, url: e.currentTarget.value })}
+          />
+          <Input
+            value={source.params?.catalog ?? ""}
+            placeholder="Catalog id (leave empty if the link names one)"
+            aria-label={`${label} catalog id`}
+            onChange={(e) =>
+              onChange({
+                ...source,
+                params: { ...source.params, catalog: e.currentTarget.value.trim() },
+              })
+            }
+          />
+          {bad ? (
+            <p className="text-xs text-danger">
+              Enter the addon&apos;s https:// or stremio:// install link.
+            </p>
+          ) : (
+            <p className="text-xs text-fg-muted">
+              Preview lists the catalogs the addon offers when none is chosen.
+            </p>
+          )}
+        </div>
+      );
+    }
     case "tmdbDiscover":
       return (
         <DiscoverParams

@@ -695,7 +695,7 @@ export function createFakeServer(opts: FakeOptions = {}) {
     };
     const sorter = sorters[spec.sort];
     if (sorter) items.sort(sorter);
-    if (spec.sources.some((s) => ["traktList", "letterboxdList", "mdblist"].includes(s.kind)))
+    if (spec.sources.some((s) => ["traktList", "letterboxdList", "mdblist", "stremioCatalog"].includes(s.kind)))
       warnings.push(
         "External lists are refreshed on the schedule; the preview shows the last fetched copy.",
       );

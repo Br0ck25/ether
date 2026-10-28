@@ -53,6 +53,7 @@ type CollectionSpec struct {
 //	tmdbKeyword | tmdbCompany | tmdbNetwork | tmdbPerson   ID, Label (Role for people)
 //	watchProvider   ID, Region, Label         what's streaming on a service
 //	traktList | letterboxdList | mdblist      URL
+//	stremioCatalog  URL, Params(catalog, type) a Stremio addon's catalog, e.g. My Lists Addon
 //	titles          Keys                      hand-picked rating keys
 //
 // When ID is 0 the Label is resolved to a TMDB id by name.

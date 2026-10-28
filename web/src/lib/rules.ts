@@ -469,6 +469,11 @@ export const SOURCE_KINDS: SourceMeta[] = [
   { kind: "traktList", label: "Trakt list", description: "A public Trakt list URL" },
   { kind: "letterboxdList", label: "Letterboxd list", description: "A public Letterboxd list URL" },
   { kind: "mdblist", label: "MDBList", description: "A public MDBList URL" },
+  {
+    kind: "stremioCatalog",
+    label: "Addon catalog",
+    description: "A list from a Stremio addon such as My Lists Addon",
+  },
 ];
 
 export function sourceMeta(kind: string): SourceMeta | undefined {
@@ -511,6 +516,8 @@ export function newSource(
     case "letterboxdList":
     case "mdblist":
       return { kind, url: "" };
+    case "stremioCatalog":
+      return { kind, url: "", params: {} };
     case "titles":
       return { kind, keys: [] };
   }
@@ -529,6 +536,8 @@ export function isSourceComplete(s: Source): boolean {
     case "letterboxdList":
     case "mdblist":
       return /^https?:\/\/\S+$/.test(s.url.trim());
+    case "stremioCatalog":
+      return /^(https?|stremio):\/\/\S+$/.test(s.url.trim());
     case "titles":
       return s.keys.length > 0;
     case "tmdbDiscover":
@@ -556,6 +565,8 @@ export function describeSource(s: Source): string {
     case "letterboxdList":
     case "mdblist":
       return `${sourceMeta(s.kind)?.label}: ${s.url || "no URL"}`;
+    case "stremioCatalog":
+      return `Addon catalog: ${s.params?.catalog || "no catalog chosen"}`;
     case "watchProvider":
       return `${s.label || "Streaming service"} (${s.region})`;
     default:
