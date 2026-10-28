@@ -286,6 +286,323 @@ func TestUnavailableCooloff(t *testing.T) {
 	}
 }
 
+func TestUnavailableCooloffRechecksWhenCachedOnlyOff(t *testing.T) {
+	ctx := context.Background()
+	// Empty results are search-cached only for freshReleaseCooloff (3m), so
+	// a fresh Resolve after the 5m recheck window reaches the indexer again.
+	run := func(cachedOnly bool) (*fakeIndexer, *fakeClock, *Service, *core.Title) {
+		clock := &fakeClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+		idx := &fakeIndexer{}
+		cfg := testCfg()
+		cfg.Debrid.CachedOnly = cachedOnly
+		svc := New(idx, fakeHealth{}, nil, cfg, Options{Now: clock.now})
+		return idx, clock, svc, matrixTitle()
+	}
+
+	t.Run("cached only off rechecks after window", func(t *testing.T) {
+		idx, clock, svc, title := run(false)
+		if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+			t.Fatalf("first resolve err=%v want ErrNotAvailable", err)
+		}
+		if idx.searches.Load() != 1 {
+			t.Fatalf("searches=%d want 1 after first resolve", idx.searches.Load())
+		}
+		// Within the recheck window: the remembered answer still serves.
+		if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+			t.Fatalf("second resolve err=%v want ErrNotAvailable", err)
+		}
+		if idx.searches.Load() != 1 {
+			t.Fatalf("searches=%d want 1 within recheck window", idx.searches.Load())
+		}
+		// Past the window: one fresh search instead of the 24h-style cooloff.
+		clock.add(6 * time.Minute)
+		if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+			t.Fatalf("third resolve err=%v want ErrNotAvailable", err)
+		}
+		if idx.searches.Load() != 2 {
+			t.Fatalf("searches=%d want 2 after recheck window with cached-only off", idx.searches.Load())
+		}
+	})
+
+	t.Run("cached only on keeps long cooloff", func(t *testing.T) {
+		idx, clock, svc, title := run(true)
+		if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+			t.Fatalf("first resolve err=%v want ErrNotAvailable", err)
+		}
+		clock.add(6 * time.Minute)
+		if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+			t.Fatalf("second resolve err=%v want ErrNotAvailable", err)
+		}
+		if idx.searches.Load() != 1 {
+			t.Fatalf("searches=%d want 1 after recheck window with cached-only on", idx.searches.Load())
+		}
+	})
+}
+
+func TestUnavailableRecheckRefreshesNonemptyRejectedSearchCache(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+	// A non-empty result of only unrelated releases is ranked away, so the
+	// title is remembered unavailable and the result is search-cached for
+	// the full SearchCacheTTL (30m in testCfg) — unlike an empty result,
+	// which expires after freshReleaseCooloff.
+	idx := &fakeIndexer{releases: []core.Release{rel("x", "Other.Movie.2020.1080p.BluRay.x264-GRP", 8000)}}
+	cfg := testCfg()
+	cfg.Debrid.CachedOnly = false
+	svc := New(idx, fakeHealth{}, nil, cfg, Options{Now: clock.now})
+	title := matrixTitle()
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("first resolve err=%v want ErrNotAvailable", err)
+	}
+	if idx.searches.Load() != 1 {
+		t.Fatalf("searches=%d want 1 after first resolve", idx.searches.Load())
+	}
+	// Within the recheck window the remembered answer still serves, with
+	// no new search even though the search cache is non-empty.
+	clock.add(4 * time.Minute)
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("within-window resolve err=%v want ErrNotAvailable", err)
+	}
+	if idx.searches.Load() != 1 {
+		t.Fatalf("searches=%d want 1 within recheck window", idx.searches.Load())
+	}
+	// A matching release appears, then the clock moves past the 5m
+	// recheck window (6m total) but well inside the 30m search-cache TTL
+	// and the 1h unavailable cooloff.
+	idx.mu.Lock()
+	idx.releases = []core.Release{rel("good", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)}
+	idx.mu.Unlock()
+	clock.add(2 * time.Minute)
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()})
+	if err != nil || res == nil || res.Release.ID != "good" {
+		t.Fatalf("recheck resolve res=%+v err=%v want release good", res, err)
+	}
+	if idx.searches.Load() != 2 {
+		t.Fatalf("searches=%d want 2 (fresh search on recheck)", idx.searches.Load())
+	}
+}
+
+func TestUnavailableRecheckAfterHealthFailureWhenCachedOnlyOff(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+	// The only release fails its health check, so Resolve remembers the
+	// title unavailable via the "no healthy candidates" path. Its result
+	// stays in the 30m search cache, like the rejected-search-cache case.
+	idx := &fakeIndexer{releases: []core.Release{rel("bad", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)}}
+	cfg := testCfg()
+	cfg.Debrid.CachedOnly = false
+	// The health-check counter is the path discriminant: a ranked-away
+	// title never reaches health checks, this one must (exactly the one
+	// failing check on "bad").
+	healthChecks := &atomic.Int64{}
+	svc := New(idx, fakeHealth{unhealthy: map[string]bool{"bad": true}, checks: healthChecks}, nil, cfg, Options{Now: clock.now})
+	title := matrixTitle()
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("first resolve err=%v want ErrNotAvailable", err)
+	}
+	if idx.searches.Load() != 1 {
+		t.Fatalf("searches=%d want 1 after first resolve", idx.searches.Load())
+	}
+	if healthChecks.Load() != 1 {
+		t.Fatalf("health checks=%d want 1 (health-failed path, not ranked-away)", healthChecks.Load())
+	}
+	// Within the recheck window: remembered answer, no new search and no
+	// new health check, even though the 2m failed-health TTL has expired.
+	clock.add(4 * time.Minute)
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("within-window resolve err=%v want ErrNotAvailable", err)
+	}
+	if idx.searches.Load() != 1 {
+		t.Fatalf("searches=%d want 1 within recheck window", idx.searches.Load())
+	}
+	if healthChecks.Load() != 1 {
+		t.Fatalf("health checks=%d want 1 within recheck window", healthChecks.Load())
+	}
+	// A healthy release appears; past the 5m window (6m total, beyond the
+	// 2m failed-health availability TTL) Resolve must fresh-search rather
+	// than serve the non-empty 30m search cache of the failed release.
+	idx.mu.Lock()
+	idx.releases = []core.Release{rel("good", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)}
+	idx.mu.Unlock()
+	clock.add(2 * time.Minute)
+	// Maintainer's probe: a Prune just before the final Resolve must not
+	// drop the unavailable marker while the 30m search cache of the
+	// failed release can still suppress the fresh recheck.
+	if _, err := svc.Prune(ctx); err != nil {
+		t.Fatal(err)
+	}
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()})
+	if err != nil || res == nil || res.Release.ID != "good" {
+		t.Fatalf("recheck resolve res=%+v err=%v want release good", res, err)
+	}
+	if idx.searches.Load() != 2 {
+		t.Fatalf("searches=%d want 2 (fresh search on recheck)", idx.searches.Load())
+	}
+}
+
+// Same probe as TestUnavailableRecheckAfterHealthFailureWhenCachedOnlyOff
+// but over a persisted service: Prune's DB delete must also retain the
+// marker (checked via a fresh service's peek over the same DB, the
+// prune_test idiom) until the stale search cache can no longer suppress
+// recovery.
+func TestUnavailableRecheckAfterHealthFailurePrunePersisted(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	clock := &fakeClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+	idx := &fakeIndexer{releases: []core.Release{rel("bad", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)}}
+	cfg := testCfg()
+	cfg.Debrid.CachedOnly = false
+	healthChecks := &atomic.Int64{}
+	svc := New(idx, fakeHealth{unhealthy: map[string]bool{"bad": true}, checks: healthChecks}, db, cfg, Options{Now: clock.now})
+	title := matrixTitle()
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("first resolve err=%v want ErrNotAvailable", err)
+	}
+	if idx.searches.Load() != 1 || healthChecks.Load() != 1 {
+		t.Fatalf("searches=%d health checks=%d want 1 and 1 (health-failed path)", idx.searches.Load(), healthChecks.Load())
+	}
+	idx.mu.Lock()
+	idx.releases = []core.Release{rel("good", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)}
+	idx.mu.Unlock()
+	clock.add(6 * time.Minute)
+	if _, err := svc.Prune(ctx); err != nil {
+		t.Fatal(err)
+	}
+	freshSvc := New(idx, fakeHealth{}, db, cfg, Options{Now: clock.now})
+	if _, ok := freshSvc.lastUnavailableChecked(ctx, int64(title.Key)); !ok {
+		t.Fatal("peek after prune (DB) lost the unavailable marker at 6m")
+	}
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()})
+	if err != nil || res == nil || res.Release.ID != "good" {
+		t.Fatalf("recheck resolve after prune res=%+v err=%v want release good", res, err)
+	}
+	if idx.searches.Load() != 2 {
+		t.Fatalf("searches=%d want 2 (fresh search on recheck after prune)", idx.searches.Load())
+	}
+}
+
+func TestUnavailableRecheckFreshRankedAwayWhenCachedOnlyOff(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2026, 10, 21, 20, 30, 0, 0, time.UTC)}
+	// Fresh title (released an hour ago, inside freshReleaseWindow): its
+	// ranked-away write uses cooloffFor = freshReleaseCooloff (3m), so by
+	// +6m the entry has expired but the last unavailable check is past
+	// unavailableRecheck and must force a fresh search.
+	idx := &fakeIndexer{releases: []core.Release{rel("x", "Other.Movie.2020.1080p.BluRay.x264-GRP", 8000)}}
+	cfg := testCfg()
+	cfg.Debrid.CachedOnly = false
+	svc := New(idx, fakeHealth{}, nil, cfg, Options{Now: clock.now})
+	title := &core.Title{
+		Key: core.MovieKey(999), Type: core.TypeMovie,
+		IDs:   core.IDs{TMDB: 999},
+		Title: "The Signal", Year: 2026, Runtime: 136 * time.Minute,
+		Released: clock.now().Add(-time.Hour),
+	}
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("first resolve err=%v want ErrNotAvailable", err)
+	}
+	if idx.searches.Load() != 1 {
+		t.Fatalf("searches=%d want 1 after first resolve", idx.searches.Load())
+	}
+	idx.mu.Lock()
+	idx.releases = []core.Release{rel("good", "The.Signal.2026.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)}
+	idx.mu.Unlock()
+	// Within the recheck window the remembered answer still serves, even
+	// though the 3m fresh entry has already expired.
+	clock.add(4 * time.Minute)
+	if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+		t.Fatalf("within-window resolve err=%v want ErrNotAvailable", err)
+	}
+	if idx.searches.Load() != 1 {
+		t.Fatalf("searches=%d want 1 within recheck window", idx.searches.Load())
+	}
+	clock.add(2 * time.Minute)
+	res, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()})
+	if err != nil || res == nil || res.Release.ID != "good" {
+		t.Fatalf("recheck resolve res=%+v err=%v want release good", res, err)
+	}
+	if idx.searches.Load() != 2 {
+		t.Fatalf("searches=%d want 2 (fresh search on recheck)", idx.searches.Load())
+	}
+}
+
+func TestHealthFailedAvailabilityExpiresAtShortTTL(t *testing.T) {
+	ctx := context.Background()
+	// Regression for the reverted TTL: Available must stop knowing the
+	// health-failed title once failedHealthTTL (2m) passes, whatever the
+	// cached-only mode — it must not stay hidden for the full cooloff.
+	for _, cachedOnly := range []bool{false, true} {
+		clock := &fakeClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+		idx := &fakeIndexer{releases: []core.Release{rel("bad", "The.Signal.1999.1080p.WEB-DL.DDP5.1.H.264-GRP", 8000)}}
+		cfg := testCfg()
+		cfg.Debrid.CachedOnly = cachedOnly
+		svc := New(idx, fakeHealth{unhealthy: map[string]bool{"bad": true}}, nil, cfg, Options{Now: clock.now})
+		title := matrixTitle()
+		if _, err := svc.Resolve(ctx, core.ResolveRequest{Title: title, Client: webCaps()}); !errors.Is(err, core.ErrNotAvailable) {
+			t.Fatalf("cachedOnly=%v first resolve err=%v want ErrNotAvailable", cachedOnly, err)
+		}
+		if known, avail := svc.Available(ctx, title.Key); !known || avail {
+			t.Fatalf("cachedOnly=%v Available known=%v avail=%v want known unavailable", cachedOnly, known, avail)
+		}
+		clock.add(3 * time.Minute)
+		if known, _ := svc.Available(ctx, title.Key); known {
+			t.Fatalf("cachedOnly=%v availability still known after 3m, want expired at failedHealthTTL", cachedOnly)
+		}
+	}
+}
+
+func TestLastUnavailableCheckedPeeksExpiredEntry(t *testing.T) {
+	ctx := context.Background()
+	clock := &fakeClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+	t0 := clock.now()
+	svc := New(&fakeIndexer{}, fakeHealth{}, nil, testCfg(), Options{Now: clock.now})
+	if _, ok := svc.lastUnavailableChecked(ctx, 99); ok {
+		t.Fatal("peek without entry returned ok")
+	}
+	svc.setAvailability(ctx, 42, false, time.Minute)
+	svc.setAvailability(ctx, 43, true, time.Minute)
+	clock.add(2 * time.Minute)
+	if _, ok := svc.getAvailability(ctx, 42); ok {
+		t.Fatal("entry should be expired for getAvailability")
+	}
+	checked, ok := svc.lastUnavailableChecked(ctx, 42)
+	if !ok || !checked.Equal(t0) {
+		t.Fatalf("peek expired entry checked=%v ok=%v want %v,true", checked, ok, t0)
+	}
+	if _, ok := svc.lastUnavailableChecked(ctx, 43); ok {
+		t.Fatal("peek of available=true entry returned ok")
+	}
+
+	// DB path: a fresh service over the same DB has an empty memory map,
+	// so the peek must come from resolver_availability without the
+	// expires_at filter.
+	db, err := store.OpenMemory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	dbSvc := New(&fakeIndexer{}, fakeHealth{}, db, testCfg(), Options{Now: clock.now})
+	dbChecked := clock.now()
+	dbSvc.setAvailability(ctx, 44, false, time.Minute)
+	clock.add(2 * time.Minute)
+	freshSvc := New(&fakeIndexer{}, fakeHealth{}, db, testCfg(), Options{Now: clock.now})
+	checked, ok = freshSvc.lastUnavailableChecked(ctx, 44)
+	if !ok || !checked.Equal(dbChecked) {
+		t.Fatalf("DB peek expired entry checked=%v ok=%v want %v,true", checked, ok, dbChecked)
+	}
+	// Clearing the entry (Forget/forgetAvailability) clears the peek.
+	if err := freshSvc.forgetAvailability(ctx, 44); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := freshSvc.lastUnavailableChecked(ctx, 44); ok {
+		t.Fatal("peek still ok after forgetAvailability")
+	}
+}
+
 func TestFreshEpisodeShortCooloffAndReResolveWhenUploaded(t *testing.T) {
 	ctx := context.Background()
 	airDay := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)

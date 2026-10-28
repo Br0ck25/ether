@@ -596,7 +596,7 @@ export function IndexerList({ version = 0 }: { version?: number }) {
                   type="url"
                   value={draft.url}
                   placeholder="https://addon.example/manifest.json"
-                  help="Paste the addon's install link. Ether reads its torrent results and streams them through your debrid accounts."
+                  help="Paste the addon's install link. Choose an addon that exposes torrent results; direct or proxied playback links alone are not supported. Ether streams through your configured debrid accounts."
                   error={errors.url}
                   onChange={(v) => set({ url: v })}
                 />
