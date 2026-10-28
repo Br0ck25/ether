@@ -291,7 +291,7 @@ export function DebridSources() {
         <AlertDescription>
           Ether ships no debrid providers: bring your own Real-Debrid, TorBox, AllDebrid or
           Premiumize account and its API key. Debrid streams torrent releases, so it also needs at
-          least one torrent (Torznab) indexer under{" "}
+          least one torrent source (a Torznab indexer, built-in site or Stremio addon) under{" "}
           <Link to="/sources/indexers" className="font-medium underline underline-offset-2">
             Indexers
           </Link>
