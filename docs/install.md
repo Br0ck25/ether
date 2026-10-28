@@ -32,6 +32,10 @@ folder). Ether ships no content, providers or indexers; see
    The folder holds credentials, so it is readable only by SYSTEM and
    Administrators. Uninstalling keeps this data; delete the folder to
    purge.
+4. To upgrade, run a newer `EtherSetup-<version>.exe`. It waits for the
+   service to stop, replaces the program files and updates the existing
+   service in place, keeping its data directory (including one you set
+   with `ether service install --data-dir`).
 
 Manage the service with `ether.exe service start|stop|restart|status`
 from an elevated prompt, or from the tray menu.
@@ -46,6 +50,10 @@ from an elevated prompt, or from the tray menu.
    server (`Ether.app/Contents/Resources/ether`) while you are logged in.
 3. Data lives in `~/Library/Application Support/Ether`, logs in
    `~/Library/Application Support/Ether/logs`.
+4. To upgrade, quit the tray, replace **Ether** in Applications with the
+   new version and launch it. When the tray finds the server still
+   running the previous release, it restarts the server once onto the
+   new one.
 
 Requires macOS 13+. Signing and notarisation depend on the published package;
 check its release notes before installing.
@@ -59,7 +67,10 @@ sudo dnf install ./ether_<version>_linux_amd64.rpm    # Fedora/RHEL
 
 The package creates a dedicated `ether` system user, installs to
 `/usr/lib/ether`, enables and starts `ether.service` (systemd), and
-keeps data in `/var/lib/ether` and cache in `/var/cache/ether`.
+keeps data in `/var/lib/ether`. The segment cache defaults to
+`/var/lib/ether/cache`; the package also creates `/var/cache/ether`
+(writable by the service), which you can pick as the cache directory in
+the setup wizard or on the Cache page.
 `systemctl status ether` shows state; `journalctl -u ether` shows logs.
 Upgrades are just installing the new package (or a new Docker image) —
 Linux packages do not self-update.
@@ -91,7 +102,11 @@ with `-p 32400:32400` works for Plex Web and for claimed/remote
 connections, but LAN auto-discovery will not find the server.
 
 Volumes: `/config` (config, database, identity — back this up) and
-`/cache` (segment cache; budget is set in the web UI). VAAPI/QSV: pass
+`/cache` for the segment cache. The cache defaults to `/config/cache`
+until you select `/cache` as the cache directory in the setup wizard (or
+later on the Cache page), where its budget is set too. The container
+runs as user `ether` with UID/GID 999; both volumes must be writable by
+it. VAAPI/QSV: pass
 `--device /dev/dri:/dev/dri`. NVENC: use the NVIDIA container toolkit
 flags shown in `docker-compose.example.yml`.
 
