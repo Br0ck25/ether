@@ -30,6 +30,26 @@ const (
 	// upload drops never blocks playback at 10 PM.
 	freshReleaseWindow  = 72 * time.Hour
 	freshReleaseCooloff = 3 * time.Minute
+	// unavailableRecheck bounds how long a remembered "unavailable" answer
+	// is trusted when debrid cached-only is off: an uncached torrent sent
+	// to download may become ready after the remembered failure. The
+	// decision is based on lastUnavailableChecked, which peeks at the
+	// checked time of the most recent unavailable entry even after that
+	// entry has expired: within this window the remembered answer still
+	// serves in the fast-path shape (no Exclude, Prefer, pin or
+	// discovered releases), and past it that shape does one fresh search,
+	// bypassing the search cache — which may queue the download or serve
+	// it ready. Availability entries keep their own TTLs (the
+	// health-failed write is capped at failedHealthTTL, fresh releases
+	// use freshReleaseCooloff), so Available/KnownUnavailableSince stop
+	// hiding a title when the entry expires, without losing the recheck
+	// timestamp. With cached-only on, or in the other request shapes, the
+	// remembered answer stands until its entry expires. The resolver
+	// itself never polls: the recheck runs only when a caller invokes
+	// Resolve, which includes user-initiated playback as well as
+	// PreResolve and the watchlist Check, each bounded by that caller's
+	// own budgets and gates.
+	unavailableRecheck = 5 * time.Minute
 )
 
 // Options tunes a Service. Zero values get sensible defaults.
@@ -121,12 +141,13 @@ type Service struct {
 	log            *slog.Logger
 	now            func() time.Time
 
-	cfgMu     sync.RWMutex
-	rcfg      config.Resolver
-	quality   config.Quality
-	scorer    *FormatScorer
-	scorerErr error
-	sources   string // sourcesKey of the applied config
+	cfgMu            sync.RWMutex
+	rcfg             config.Resolver
+	quality          config.Quality
+	debridCachedOnly bool
+	scorer           *FormatScorer
+	scorerErr        error
+	sources          string // sourcesKey of the applied config
 
 	mu            sync.RWMutex
 	bad           map[string]badMark // release id -> blocklist mark
@@ -207,6 +228,7 @@ func (s *Service) UpdateConfig(cfg config.Config) {
 	s.cfgMu.Lock()
 	s.rcfg = cfg.Resolver
 	s.quality = cfg.Quality
+	s.debridCachedOnly = cfg.Debrid.CachedOnly
 	s.scorer, s.scorerErr = NewFormatScorer(cfg.Resolver.CustomFormats, cfg.Resolver.CustomFormatScores)
 	changed := s.sources != "" && s.sources != key
 	s.sources = key
@@ -264,6 +286,12 @@ func (s *Service) qualityCfg() config.Quality {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.quality
+}
+
+func (s *Service) cachedOnly() bool {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.debridCachedOnly
 }
 
 func (s *Service) searchTTL() time.Duration {
@@ -543,15 +571,40 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	// Fast path: cached unavailable answer, unless this is a failover
 	// request that already knows about specific releases, the viewer
 	// picked a specific version, or the owner pinned a release.
+	forceFresh := false
 	if len(req.Exclude) == 0 && req.Prefer == "" && pin == nil && len(discovered) == 0 {
 		if e, ok := s.getAvailability(ctx, int64(t.Key)); ok && !e.available {
-			trace.Err = "cached unavailable (cooloff)"
-			return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
+			// With cached-only off, a remembered unavailable answer older
+			// than unavailableRecheck may predate a download that has since
+			// become ready: skip the fast path and fall through to a fresh
+			// search. With cached-only on, the long cooloff stands.
+			if s.cachedOnly() || s.now().Sub(e.checked) <= unavailableRecheck {
+				trace.Err = "cached unavailable (cooloff)"
+				return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
+			}
+			// The ordinary search cache may still hold a long-lived
+			// non-empty result whose releases were all rejected; serving
+			// it would never re-ask the indexer. Bypass it too.
+			forceFresh = true
+		} else if !s.cachedOnly() {
+			// The entry may already have expired under its own short TTL
+			// (health-failed or fresh-release writes) while the search
+			// cache still holds its rejected results. Peek at the last
+			// unavailable check instead: within the window the remembered
+			// answer still serves (without refreshing its checked time),
+			// past it this Resolve rechecks with a fresh search.
+			if checked, ok := s.lastUnavailableChecked(ctx, int64(t.Key)); ok {
+				if s.now().Sub(checked) <= unavailableRecheck {
+					trace.Err = "cached unavailable (cooloff)"
+					return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
+				}
+				forceFresh = true
+			}
 		}
 	}
 
 	searchStart := time.Now()
-	results, searchErr := s.search(ctx, sreq)
+	results, _, searchErr := s.searchCached(ctx, sreq, forceFresh)
 	trace.SearchDuration = time.Since(searchStart)
 	if searchErr != nil {
 		if pin == nil && len(discovered) == 0 {

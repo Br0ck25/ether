@@ -163,6 +163,44 @@ func (s *Service) setAvailability(ctx context.Context, key int64, available bool
 	}
 }
 
+// lastUnavailableChecked peeks at the checked time of the most recent
+// unavailable entry for key, even after that entry has expired for
+// getAvailability/Available/KnownUnavailableSince. The in-memory map keeps
+// expired entries until Prune or Forget/forgetAvailability drops them; a
+// cluster hint evicts only the in-memory copy — the DB row remains and the
+// peek re-reads it — and the DB query deliberately has no expires_at
+// filter, so the recheck decision in Resolve does not depend on the entry
+// still being live. An entry recording availability
+// (available=true), or no entry at all, reports false. Clearing the entry
+// (Forget, forgetAvailability) clears this peek too, since both read the
+// same map row and DB row.
+func (s *Service) lastUnavailableChecked(ctx context.Context, key int64) (time.Time, bool) {
+	s.mu.RLock()
+	e, ok := s.avail[key]
+	s.mu.RUnlock()
+	if ok {
+		if e.available {
+			return time.Time{}, false
+		}
+		return e.checked, true
+	}
+	if s.db != nil {
+		var v int
+		var checked int64
+		err := s.db.QueryRowContext(ctx,
+			`SELECT available, checked_at FROM resolver_availability WHERE rating_key=?`, key).Scan(&v, &checked)
+		if err == nil {
+			if v == 1 {
+				return time.Time{}, false
+			}
+			return time.Unix(checked, 0), true
+		} else if err != sql.ErrNoRows {
+			s.log.Debug("resolver last unavailable lookup failed", "err", err)
+		}
+	}
+	return time.Time{}, false
+}
+
 func (s *Service) getAvailability(ctx context.Context, key int64) (availEntry, bool) {
 	s.mu.RLock()
 	e, ok := s.avail[key]
