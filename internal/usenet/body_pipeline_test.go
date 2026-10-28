@@ -1022,3 +1022,77 @@ func TestActiveJoinedStallBackfillsBothCallers(t *testing.T) {
 	}
 	waitServerActive(t, primary, 0)
 }
+
+// A worker that dequeues a flight and gets a socket must not pipeline queued
+// flights that sibling workers (started for them, not yet running) will take
+// to free connections: that stalls them behind this socket's earlier replies.
+// Pipelining resumes once no free slot is left for those siblings. The worker
+// that has not dequeued yet is held still by accounting for it without
+// starting it, which pins the interleaving that made bursts flaky.
+func TestBodyWorkerLeavesQueuedFlightsForPendingSiblings(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		holdSlot      bool
+		wantBatches   int64
+		wantPipelined int64
+	}{
+		{"free slot", false, 2, 0},
+		{"no free slot", true, 1, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := nntptest.Start(t, nntptest.Options{})
+			addSeg(t, s, "a@test", []byte("a"))
+			addSeg(t, s, "b@test", []byte("b"))
+			f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 3)}, Options{KeepAlive: -1, BodyPipelineDepth: 4})
+			p := f.pools[0]
+			if tc.holdSlot {
+				// Connections 3 with two held leaves exactly the slot the
+				// worker itself takes.
+				c, err := p.get(context.Background(), core.PriorityLive)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer p.put(c, core.PriorityLive)
+				c2, err := p.get(context.Background(), core.PriorityLive)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer p.put(c2, core.PriorityLive)
+			}
+			var flights []*bodyFlight
+			p.bodyMu.Lock()
+			for _, id := range []string{"a@test", "b@test"} {
+				if !p.bodyAdmission.TryAcquire(core.PriorityLive) {
+					t.Fatal("admission")
+				}
+				key := bodyKey{id: id, prio: core.PriorityLive}
+				fctx, cancel := context.WithCancel(context.Background())
+				fl := &bodyFlight{key: key, ctx: fctx, cancel: cancel, done: make(chan struct{}), waiters: 1}
+				p.bodyFlights[key] = fl
+				p.bodyQueue[core.PriorityLive] = append(p.bodyQueue[core.PriorityLive], fl)
+				flights = append(flights, fl)
+			}
+			p.bodyWorkers[core.PriorityLive] = 2 // one running, one pending
+			p.bodyWG.Add(1)
+			go p.bodyWorker(core.PriorityLive)
+			p.bodyMu.Unlock()
+			for _, fl := range flights {
+				select {
+				case <-fl.done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("flight did not complete")
+				}
+				if fl.err != nil {
+					t.Fatal(fl.err)
+				}
+			}
+			p.bodyWG.Wait()
+			p.bodyMu.Lock()
+			p.bodyWorkers[core.PriorityLive]-- // retire the pending sibling
+			p.bodyMu.Unlock()
+			if st := p.stats(); st.BODYBatches != tc.wantBatches || st.BODYPipelined != tc.wantPipelined {
+				t.Fatalf("batches %d pipelined %d, want %d and %d", st.BODYBatches, st.BODYPipelined, tc.wantBatches, tc.wantPipelined)
+			}
+		})
+	}
+}

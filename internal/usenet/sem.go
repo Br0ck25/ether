@@ -92,6 +92,36 @@ func (s *prioSem) mustQueueLocked(prio core.Priority) bool {
 	return false
 }
 
+// available reports how many more requests of prio (bursting until until)
+// could take a slot right now without waiting.
+func (s *prioSem) available(prio core.Priority, until time.Time) int {
+	prio = clampPriority(prio)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.mustQueueLocked(prio) {
+		return 0
+	}
+	n := 0
+	for s.grantableBurstLocked(prio, until) {
+		s.takeLocked(prio)
+		n++
+	}
+	for range n {
+		s.untakeLocked(prio)
+	}
+	return n
+}
+
+func (s *prioSem) untakeLocked(prio core.Priority) {
+	s.inUse--
+	if prio != core.PriorityLive {
+		s.nonLive--
+	}
+	if prio == core.PriorityPrefetch {
+		s.prefetching--
+	}
+}
+
 func (s *prioSem) takeLocked(prio core.Priority) {
 	s.inUse++
 	if prio != core.PriorityLive {
@@ -187,13 +217,7 @@ func (s *prioSem) Acquire(ctx context.Context, prio core.Priority) error {
 func (s *prioSem) Release(prio core.Priority) {
 	prio = clampPriority(prio)
 	s.mu.Lock()
-	s.inUse--
-	if prio != core.PriorityLive {
-		s.nonLive--
-	}
-	if prio == core.PriorityPrefetch {
-		s.prefetching--
-	}
+	s.untakeLocked(prio)
 	if s.inUse < 0 || s.prefetching < 0 || s.nonLive < 0 {
 		s.mu.Unlock()
 		panic("usenet: semaphore released more than acquired")
