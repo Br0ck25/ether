@@ -8,7 +8,8 @@
 ;     restart-forever recovery) via `ether service install --data-dir`,
 ;     which bakes the data dir into the service as ETHER_DATA_DIR,
 ;   * puts the tray in the current user's Run key (launch at login),
-;   * opens TCP 32400 in Windows Firewall (private + public profiles),
+;   * allows ether.exe through Windows Firewall on its port (32400, or the
+;     fallback it moves to when Plex Media Server already uses 32400),
 ;   * registers an uninstaller that stops/removes the service and the rule.
 ;
 ; Usage (release workflow, windows runner):
@@ -60,14 +61,21 @@ VIAddVersionKey "LegalCopyright" "Ether contributors (GPLv3)"
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\ether-tray.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch Ether"
-!define MUI_FINISHPAGE_LINK "Open the setup wizard"
-!define MUI_FINISHPAGE_LINK_LOCATION "http://localhost:32400/ether/"
+; The wizard's port is the server's choice (32400, or a fallback when Plex
+; Media Server holds it), so open it through the tray, which reads it.
+!define MUI_FINISHPAGE_SHOWREADME ""
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "Open the setup wizard"
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION OpenSetupWizard
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
+
+Function OpenSetupWizard
+  Exec '"$INSTDIR\ether-tray.exe" --open'
+FunctionEnd
 
 Section "Ether" SecEther
   SetOutPath "$INSTDIR"
@@ -117,9 +125,11 @@ Section "Ether" SecEther
   nsExec::ExecToLog 'sc failureflag ether 1'
   nsExec::ExecToLog 'sc config ether start= delayed-auto'
 
-  ; Firewall: Plex port in, GDM discovery UDP in.
+  ; Firewall: ether.exe's TCP port in (whichever port it uses), GDM
+  ; discovery UDP in. "Ether (32400)" is the rule earlier versions added.
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether (32400)"'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Ether (32400)" dir=in action=allow protocol=TCP localport=32400 program="$INSTDIR\ether.exe"'
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether"'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Ether" dir=in action=allow protocol=TCP program="$INSTDIR\ether.exe"'
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether GDM discovery"'
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Ether GDM discovery" dir=in action=allow protocol=UDP localport=32410-32414 program="$INSTDIR\ether.exe"'
 
@@ -130,7 +140,7 @@ Section "Ether" SecEther
   ; Shortcuts.
   CreateDirectory "$SMPROGRAMS\Ether"
   CreateShortcut "$SMPROGRAMS\Ether\Ether.lnk" "$INSTDIR\ether-tray.exe"
-  CreateShortcut "$SMPROGRAMS\Ether\Open Ether setup.lnk" "http://localhost:32400/ether/"
+  CreateShortcut "$SMPROGRAMS\Ether\Open Ether setup.lnk" "$INSTDIR\ether-tray.exe" "--open"
 
   WriteRegStr HKLM "Software\Ether" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "Software\Ether" "Version" "${VERSION}"
@@ -153,6 +163,7 @@ Section "Uninstall"
   nsExec::ExecToLog 'taskkill /IM ether-tray.exe /F'
 
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether (32400)"'
+  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether"'
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Ether GDM discovery"'
 
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "EtherTray"

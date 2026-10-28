@@ -28,7 +28,7 @@ func Defaults(dataDir string) Config {
 		},
 		Extras: Extras{PrewarmBytes: 48 << 20, ResolverTimeout: Duration(20 * time.Second)},
 		Server: Server{
-			Port:               32400,
+			Port:               DefaultPort,
 			BindAddress:        "0.0.0.0",
 			FriendlyName:       "Ether",
 			MachineIdentifier:  randomID(20),
@@ -91,6 +91,10 @@ func Defaults(dataDir string) Config {
 		Updates: Updates{Channel: "stable", AutoUpdate: false, MaintenanceStart: "03:00", MaintenanceEnd: "06:00"},
 	}
 }
+
+// DefaultPort is the HTTP port of a fresh install: Plex Media Server's. When
+// it is taken, the server moves to a fallback port and saves it.
+const DefaultPort = 32400
 
 func DefaultQuality() Quality {
 	return Quality{

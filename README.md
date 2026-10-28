@@ -207,6 +207,7 @@ services:
     network_mode: host            # enables LAN GDM auto-discovery in Plex apps
     environment:
       TZ: Etc/UTC
+      # ETHER_PORT: "32450"       # already running Plex on 32400 with host networking? pick another port
     volumes:
       - ./config:/config
       - ./cache:/cache            # select /cache during the setup wizard
@@ -273,7 +274,7 @@ Real-Debrid no longer reports which torrents it holds, so Ether adds only the to
 <details>
 <summary><b>Can I run Ether alongside my existing Plex Media Server?</b></summary>
 
-Yes—and if you have local media files on disk, that's the recommended setup. Run them on separate machines or put Ether on a different port, and both servers appear side-by-side in your Plex app. You can also import your existing PMS watch history, ratings, collections, and playlists into Ether in read-only mode.
+Yes—and if you have local media files on disk, that's the recommended setup. On the same machine, Ether notices Plex Media Server already holds port 32400 and moves itself to **32450** (the installers' shortcuts follow it), so open `http://localhost:32450/ether/`. In Docker with `network_mode: host`, set `ETHER_PORT` to the port you want. Both servers then appear side-by-side in your Plex apps. You can also import your existing PMS watch history, ratings, collections, and playlists into Ether in read-only mode.
 </details>
 
 <details>

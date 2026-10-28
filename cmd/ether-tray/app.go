@@ -173,6 +173,17 @@ func serverExecutable() string {
 
 func (a *app) webUIURL() string { return a.baseURL + "/ether/" }
 
+// openUI opens the web UI at the server's configured port and returns the
+// process exit code (`ether-tray --open`, used by installer shortcuts so
+// they follow the port the server actually chose).
+func (a *app) openUI() int {
+	if err := OpenBrowser(a.webUIURL()); err != nil {
+		a.log.Error("ether-tray: open web UI", "url", a.webUIURL(), "err", err)
+		return 1
+	}
+	return 0
+}
+
 func (a *app) openEther() {
 	if err := a.openURL(a.webUIURL()); err != nil {
 		a.log.Warn("tray: open Ether UI", "err", err)
