@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/braedonsaunders/ether/internal/config"
@@ -63,6 +64,10 @@ type app struct {
 	autostart *Autostart
 	openURL   func(string) error
 	log       *slog.Logger
+	version   string // empty: updater.Version (tests override)
+	// staleChecked is set once the restart-after-upgrade decision has been
+	// made for this tray start (see restartStaleServer).
+	staleChecked atomic.Bool
 }
 
 func newApp(log *slog.Logger) *app {
@@ -197,8 +202,15 @@ func (a *app) openPlex() {
 }
 
 // pollOnce fetches status, tolerating an absent server (Running=false).
+// The first status that names the server's release also settles whether
+// the server must be restarted onto the binary this install ships.
 func (a *app) pollOnce(ctx context.Context) Status {
 	st, _ := a.status.Poll(ctx)
+	if restarted, err := a.restartStaleServer(st); err != nil && a.log != nil {
+		a.log.Warn("tray: restart server after upgrade", "err", err)
+	} else if restarted {
+		st, _ = a.status.Poll(ctx)
+	}
 	return st
 }
 

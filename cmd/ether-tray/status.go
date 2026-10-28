@@ -90,6 +90,23 @@ func (c *StatusClient) Poll(ctx context.Context) (Status, error) {
 			case api.Streams != nil:
 				st.Streams = *api.Streams
 			}
+			return st, nil
+		}
+	}
+	// Once setup is complete the status API needs an owner token, which
+	// the tray does not hold. The public bootstrap endpoint still names
+	// the running Ether release (the restart-after-upgrade check needs it).
+	if body, err := c.get(ctx, "/ether/api/bootstrap"); err == nil {
+		var boot struct {
+			Version       string `json:"version"`
+			SetupComplete *bool  `json:"setupComplete"`
+		}
+		if json.Unmarshal(body, &boot) == nil {
+			if boot.Version != "" {
+				st.Version = strings.TrimPrefix(boot.Version, "v")
+				st.VersionIsPMS = false
+			}
+			st.SetupComplete = boot.SetupComplete
 		}
 	}
 	return st, nil
