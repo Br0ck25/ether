@@ -6,13 +6,14 @@ import {
   SettingsSection,
   confirmDialog,
 } from "@braedonsaunders/appkit-ui";
-import { Plus, SlidersHorizontal } from "lucide-react";
+import { Download, Plus, SlidersHorizontal } from "lucide-react";
 import { useMemo, useState } from "react";
 import { ErrorPanel, LoadingRows } from "../../components/feedback";
 import { ChipGroup, ListInput, NumberInput } from "../../components/fields";
 import { Section } from "../../components/layout";
 import { SaveBar, useDraft } from "../../components/SaveBar";
 import { SettingsRow } from "../../components/SettingsRow";
+import { qualityGateLabel } from "../../lib/releases";
 import type { QualityProfile } from "../../lib/types";
 import { QUALITY_AUDIO, QUALITY_CODECS, QUALITY_SOURCES } from "../settings/schema";
 import {
@@ -23,6 +24,7 @@ import {
   recordErrors,
   type Errors,
 } from "../sources/form";
+import { TrashImport } from "./TrashImport";
 import { useQuality, type Quality } from "./useQuality";
 
 function blankProfile(n: number): QualityProfile {
@@ -100,15 +102,69 @@ function PreferenceList({
   );
 }
 
+/** Rules an imported (TRaSH) profile carries beyond the ones above. */
+function ImportedRules({
+  draft,
+  patch,
+}: {
+  draft: QualityProfile;
+  patch: (p: Partial<QualityProfile>) => void;
+}) {
+  const gates = draft.allowedQualities ?? [];
+  const scored = Object.keys(draft.customFormatScores ?? {}).length;
+  if (!gates.length && !scored && draft.minCustomFormatScore == null) return null;
+  return (
+    <SettingsSection
+      title="Imported rules"
+      description="Carried over from a Radarr or Sonarr profile."
+    >
+      {gates.length ? (
+        <SettingsRow
+          stacked
+          title="Allowed qualities"
+          description="Other source and resolution pairs are never played with this profile."
+        >
+          <span className="flex flex-wrap items-center gap-1.5">
+            {gates.map((q) => (
+              <Badge key={q} variant="outline">
+                {qualityGateLabel(q)}
+              </Badge>
+            ))}
+            <Button variant="ghost" size="sm" onClick={() => patch({ allowedQualities: null })}>
+              Allow all
+            </Button>
+          </span>
+        </SettingsRow>
+      ) : null}
+      <SettingsRow
+        title="Minimum format score"
+        description={
+          scored
+            ? `Releases whose custom formats score lower aren't played. This profile sets its own scores for ${scored} ${scored === 1 ? "format" : "formats"}.`
+            : "Releases whose custom formats score lower aren't played."
+        }
+        control={
+          <NumberInput
+            aria-label="Minimum format score"
+            value={draft.minCustomFormatScore ?? 0}
+            className="w-24"
+            onChange={(n) => patch({ minCustomFormatScore: n })}
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 /** Quality tab: the default profiles edited in place, and the profile list. */
 export function QualityTab() {
-  const { config, quality, commit } = useQuality();
+  const { config, quality, commit, refresh } = useQuality();
   if (config.error) return <ErrorPanel error={config.error} onRetry={() => void config.reload()} />;
   if (!quality) return <LoadingRows rows={4} />;
   return (
     <>
       <QualityDefaults quality={quality} commit={commit} />
-      <ProfileList quality={quality} commit={commit} />
+      <ProfileList quality={quality} commit={commit} refresh={refresh} />
     </>
   );
 }
@@ -206,8 +262,17 @@ function QualityDefaults({ quality, commit }: { quality: Quality; commit: Commit
   );
 }
 
-function ProfileList({ quality, commit }: { quality: Quality; commit: Commit }) {
+function ProfileList({
+  quality,
+  commit,
+  refresh,
+}: {
+  quality: Quality;
+  commit: Commit;
+  refresh: () => Promise<void>;
+}) {
   const profiles = quality.profiles ?? [];
+  const [importing, setImporting] = useState(false);
   const rules = quality.rules ?? [];
   const [editing, setEditing] = useState<{ index: number; draft: QualityProfile } | null>(null);
   const [errors, setErrors] = useState<Errors>({});
@@ -311,12 +376,17 @@ function ProfileList({ quality, commit }: { quality: Quality; commit: Commit }) 
         title="Profiles"
         description="Resolution, HDR, source and language preferences used to rank releases."
         actions={
-          <Button
-            size="sm"
-            onClick={() => open(profiles.length, blankProfile(profiles.length + 1))}
-          >
-            <Plus size={14} /> Add profile
-          </Button>
+          <>
+            <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
+              <Download size={14} /> Import from TRaSH Guides
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => open(profiles.length, blankProfile(profiles.length + 1))}
+            >
+              <Plus size={14} /> Add profile
+            </Button>
+          </>
         }
         bodyClassName=""
       >
@@ -356,6 +426,8 @@ function ProfileList({ quality, commit }: { quality: Quality; commit: Commit }) 
           </ul>
         )}
       </Section>
+
+      <TrashImport open={importing} onClose={() => setImporting(false)} onImported={refresh} />
 
       <RecordDrawer
         open={editing !== null}
@@ -476,7 +548,7 @@ function ProfileList({ quality, commit }: { quality: Quality; commit: Commit }) 
                       {errors.minSizeMbPerMin || errors.maxSizeMbPerMin}
                     </span>
                   ) : (
-                    "MB per minute of runtime. Filters out fakes and bloated files."
+                    "MB per minute of runtime. Filters out fakes and bloated files. 0 means no limit."
                   )
                 }
                 control={
@@ -501,6 +573,7 @@ function ProfileList({ quality, commit }: { quality: Quality; commit: Commit }) 
                 }
               />
             </SettingsSection>
+            <ImportedRules draft={draft} patch={patch} />
           </>
         ) : null}
       </RecordDrawer>

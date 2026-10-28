@@ -21,5 +21,10 @@ export function useQuality() {
     },
     [config, refreshDashboard],
   );
-  return { config, quality, commit };
+  /** Reload after a change saved elsewhere, such as a profile import. */
+  const refresh = useCallback(async () => {
+    await config.reload();
+    void refreshDashboard();
+  }, [config, refreshDashboard]);
+  return { config, quality, commit, refresh };
 }
