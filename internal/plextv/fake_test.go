@@ -55,6 +55,8 @@ type fakePlexTV struct {
 	sharedXML    string
 	usersXML     string
 	userXML      string
+	features     []Feature
+	featuresErr  int
 	requests     []string
 	headers      map[string]http.Header // path -> last headers
 	resources    map[string][]Resource  // token -> extra resources
@@ -78,6 +80,7 @@ func newFakePlexTV(t *testing.T, machineID string) *fakePlexTV {
 		certTTL:   90 * 24 * time.Hour,
 		headers:   map[string]http.Header{},
 		resources: map[string][]Resource{},
+		features:  []Feature{},
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -187,6 +190,16 @@ func (f *fakePlexTV) handle(w http.ResponseWriter, r *http.Request) {
 			tok = strconv.Quote(p.AuthToken)
 		}
 		fmt.Fprintf(w, `{"id":%d,"code":%q,"clientIdentifier":%q,"expiresIn":1700,"authToken":%s}`, p.ID, p.Code, p.ClientIdentifier, tok)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v2/features":
+		if !authed {
+			f.jsonErr(w, 401, 1001, "User could not be authenticated")
+			return
+		}
+		if f.featuresErr != 0 {
+			f.jsonErr(w, f.featuresErr, 1000, "Feature lookup unavailable")
+			return
+		}
+		json.NewEncoder(w).Encode(f.features)
 	case r.URL.Path == "/api/v2/user":
 		if !authed {
 			f.jsonErr(w, 401, 1001, "User could not be authenticated")

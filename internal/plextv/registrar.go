@@ -1019,11 +1019,19 @@ func (r *Registrar) Claim(ctx context.Context, userToken string) (*ClaimResult, 
 			return nil, fmt.Errorf("plextv: set owner: %w", err)
 		}
 	}
+	featureCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	features, featureErr := r.client.Features(featureCtx, res.ServerToken)
+	cancel()
+	if featureErr != nil {
+		// Claim succeeded. Keep the legacy names and let the immediate owner
+		// refresh retry this auxiliary request instead of undoing the claim.
+		r.log.Warn("plex.tv owner features unavailable after claim", "err", featureErr)
+	}
 	r.mu.Lock()
 	r.claimedToken = res.ServerToken
 	r.st.TokenRejected = false
 	r.st.PlexPass = res.Owner.Subscription.Active
-	r.st.OwnerFeatures = slices.Clone(res.Owner.Subscription.Features)
+	r.st.OwnerFeatures = ownerFeatures(features, res.Owner.Subscription.Features)
 	r.next[taskFriends] = time.Time{}
 	r.next[taskCert] = time.Time{}
 	// The claim reads the account's subscription flag; the owner refresh
@@ -1124,6 +1132,12 @@ func (r *Registrar) RefreshOwner(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	features, err := r.client.Features(ctx, cfg.Plex.Token)
+	if err != nil {
+		// An incomplete refresh must not erase a previously verified UUID
+		// snapshot. runDue retries in ten minutes instead of six hours.
+		return err
+	}
 	pass := acct.Subscription.Active
 	if subs, serr := r.client.UserSubscriptions(ctx, cfg.Plex.Token); serr == nil {
 		for _, s := range subs {
@@ -1136,8 +1150,12 @@ func (r *Registrar) RefreshOwner(ctx context.Context) error {
 		}
 	}
 	r.mu.Lock()
+	if r.claimedToken != cfg.Plex.Token {
+		r.mu.Unlock()
+		return errors.New("plextv: owner changed during refresh")
+	}
 	r.st.PlexPass = pass
-	r.st.OwnerFeatures = slices.Clone(acct.Subscription.Features)
+	r.st.OwnerFeatures = ownerFeatures(features, acct.Subscription.Features)
 	r.next[taskOwner] = r.o.Now().Add(r.o.OwnerInterval)
 	r.mu.Unlock()
 	if r.o.Users != nil {

@@ -4,14 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestRegistrarPublishesOwnerFeatures(t *testing.T) {
 	f := newFakePlexTV(t, testMachineID)
+	f.features = []Feature{
+		{ID: "remote-watch-pass", UUID: "76ddd91e-8321-4916-94b6-ded8e3727a64"},
+		{ID: "pass", UUID: "82999dd3-a2be-482e-9f44-357879b4f603"},
+	}
 	account := owner()
 	account.Subscription.Features = []string{"pass", "remote-watch-pass"}
 	f.addUser("user-token", account)
@@ -39,14 +45,31 @@ func TestRegistrarPublishesOwnerFeatures(t *testing.T) {
 	if _, err := r.Claim(ctx, "user-token"); err != nil {
 		t.Fatal(err)
 	}
-	check(account.Subscription.Features)
+	want := []string{f.features[0].UUID, f.features[1].UUID, "pass", "remote-watch-pass"}
+	check(want)
+	h := f.header("/api/v2/features")
+	if h.Get("X-Plex-Token") != "server-token-42" || h.Get("X-Plex-Product") != ServerProduct || h.Get("X-Plex-Provides") != "server" || h.Get("X-Plex-Client-Identifier") != testMachineID {
+		t.Fatal("feature lookup did not use the claimed server identity and token")
+	}
+	// A temporary API failure must not remove verified UUIDs from native clients.
+	f.mu.Lock()
+	f.featuresErr = http.StatusServiceUnavailable
+	f.mu.Unlock()
+	if err := r.RefreshOwner(ctx); err == nil {
+		t.Fatal("feature lookup failure was hidden")
+	}
+	check(want)
 	// Changes must replace the previous snapshot, including revoked features.
 	account.Subscription.Features = []string{"pass"}
 	f.addUser("server-token-42", account)
+	f.mu.Lock()
+	f.featuresErr = 0
+	f.features = []Feature{f.features[1]}
+	f.mu.Unlock()
 	if err := r.RefreshOwner(ctx); err != nil {
 		t.Fatal(err)
 	}
-	check(account.Subscription.Features)
+	check([]string{f.features[0].UUID, "pass"})
 	if err := r.Unclaim(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +106,9 @@ func TestRegistrarRefreshesOwnerSubscription(t *testing.T) {
 	// not only after a restart.
 	account.Subscription = owner().Subscription
 	f.addUser("server-token-42", account)
+	f.mu.Lock()
+	f.features = []Feature{{ID: "pass", UUID: "82999dd3-a2be-482e-9f44-357879b4f603"}}
+	f.mu.Unlock()
 	r.runDue(ctx)
 	if r.Status().PlexPass {
 		t.Fatal("owner re-checked before its interval")
@@ -93,5 +119,89 @@ func TestRegistrarRefreshesOwnerSubscription(t *testing.T) {
 	r.runDue(ctx)
 	if !r.Status().PlexPass {
 		t.Fatal("Plex Pass bought while running was not picked up")
+	}
+	if !slices.Contains(r.Status().OwnerFeatures, "82999dd3-a2be-482e-9f44-357879b4f603") {
+		t.Fatal("six-hour refresh did not update feature UUIDs")
+	}
+}
+
+func TestRegistrarFeatureLookupFailureDoesNotUndoClaim(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	account := owner()
+	account.Subscription.Features = []string{"pass"}
+	f.addUser("user-token", account)
+	f.featuresErr = http.StatusServiceUnavailable
+	cfg := &memConfig{cfg: testConfig()}
+	r, err := NewRegistrar(RegistrarOptions{Config: cfg, Client: newServerClient(t, f)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Claim(t.Context(), "user-token"); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Get().Plex.Claimed || !slices.Equal(r.Status().OwnerFeatures, []string{"pass"}) {
+		t.Fatal("feature outage undid the claim or lost legacy features")
+	}
+	// Existing installations fetch UUIDs at startup without requiring a re-claim.
+	f.mu.Lock()
+	f.featuresErr = 0
+	f.features = []Feature{{ID: "pass", UUID: "82999dd3-a2be-482e-9f44-357879b4f603"}}
+	f.mu.Unlock()
+	restarted, err := NewRegistrar(RegistrarOptions{Config: cfg, Client: newServerClient(t, f)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.RefreshOwner(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(restarted.Status().OwnerFeatures, []string{f.features[0].UUID, "pass"}) {
+		t.Fatalf("startup features: %v", restarted.Status().OwnerFeatures)
+	}
+}
+
+func TestOwnerFeatureRefreshDoesNotRestoreUnclaimedEntitlements(t *testing.T) {
+	f := newFakePlexTV(t, testMachineID)
+	f.addUser("user-token", owner())
+	f.features = []Feature{{ID: "pass", UUID: "82999dd3-a2be-482e-9f44-357879b4f603"}}
+	var block atomic.Bool
+	started, release := make(chan struct{}), make(chan struct{})
+	f.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/api/v2/features" && block.Load() {
+			close(started)
+			select {
+			case <-release:
+			case <-req.Context().Done():
+				return
+			}
+		}
+		f.handle(w, req)
+	})
+	r, err := NewRegistrar(RegistrarOptions{Config: &memConfig{cfg: testConfig()}, Client: newServerClient(t, f)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := r.Claim(ctx, "user-token"); err != nil {
+		t.Fatal(err)
+	}
+	block.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- r.RefreshOwner(ctx) }()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := r.Unclaim(ctx); err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("stale refresh succeeded after unclaim")
+	}
+	if st := r.Status(); st.PlexPass || len(st.OwnerFeatures) != 0 {
+		t.Fatal("old owner entitlements survived unclaim")
 	}
 }
