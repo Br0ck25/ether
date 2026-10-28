@@ -18,7 +18,9 @@ describe("Settings", () => {
       ...before,
       hideFranchiseCollections: true,
     });
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Unsaved changes" })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Unsaved changes" })).toBeNull(),
+    );
     fireEvent.click(screen.getByLabelText("Hide automatic franchise collections"));
     fireEvent.click(screen.getByRole("button", { name: /Save changes/ }));
     await waitFor(() => expect(calls(fake, "PUT", "/config/catalog")).toHaveLength(2), WAIT);
