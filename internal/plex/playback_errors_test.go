@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,8 +87,10 @@ func TestPlayAttemptStillEnforcesPolicy(t *testing.T) {
 func TestFailedDecisionAnswersFollowingStart(t *testing.T) {
 	f := newFixture()
 	defer f.srv.Close()
-	now := fixedNow
-	f.srv.d.Now = func() time.Time { return now }
+	// Background work (artwork) reads the clock too: advance it atomically.
+	var clock atomic.Int64
+	clock.Store(fixedNow.UnixNano())
+	f.srv.d.Now = func() time.Time { return time.Unix(0, clock.Load()) }
 	const decision = "/video/:/transcode/universal/decision?path=%2Flibrary%2Fmetadata%2F1000000000000550&session=s1"
 	const start = "/video/:/transcode/universal/start.m3u8?path=%2Flibrary%2Fmetadata%2F1000000000000550&session=s1&protocol=hls"
 
@@ -112,7 +115,7 @@ func TestFailedDecisionAnswersFollowingStart(t *testing.T) {
 	f.playback.failures[fightClub.Key] = core.ErrNotAvailable
 	f.get(t, strings.Replace(decision, "s1", "s2", 1))
 	delete(f.playback.failures, fightClub.Key)
-	now = now.Add(decisionFailureTTL + time.Second)
+	clock.Add(int64(decisionFailureTTL + time.Second))
 	if rec := f.get(t, strings.Replace(start, "s1", "s2", 1)); rec.Code != http.StatusOK {
 		t.Fatalf("start after the remembered failure expired: %d", rec.Code)
 	}
