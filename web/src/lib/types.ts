@@ -117,7 +117,8 @@ export interface SiteUpdateReport {
   failed: { id: string; error: string }[];
 }
 
-export type DebridKind = "realdebrid" | "torbox" | "alldebrid" | "premiumize";
+export type DebridKind =
+  "realdebrid" | "torbox" | "alldebrid" | "premiumize" | "debridlink" | "offcloud";
 
 /** One owner-supplied debrid account. `apiKey` is redacted to "••••" when set. */
 export interface DebridProvider {

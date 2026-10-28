@@ -1,8 +1,8 @@
 // Package debrid streams torrent releases through owner-configured debrid
-// services (Real-Debrid, TorBox, AllDebrid, Premiumize). A torrent the
-// service already holds ("cached") is added to the owner's account and its
-// main video file is read over HTTPS range requests; nothing is downloaded
-// in full and Ether never seeds.
+// services (Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link,
+// Offcloud). A torrent the service already holds ("cached") is added to the
+// owner's account and its main video file is read over HTTPS range
+// requests; nothing is downloaded in full and Ether never seeds.
 //
 // The rest of Ether treats a release payload as opaque bytes (normally an
 // NZB). A debrid release's payload is a small descriptor (see Payload), and
@@ -35,7 +35,7 @@ type Payload struct {
 	Key       string              `json:"key,omitempty"`       // payload cache key (release + target)
 	ReleaseID string              `json:"releaseId,omitempty"` // core.Release.ID (segment cache key)
 	Provider  string              `json:"provider"`            // config.DebridProvider.ID
-	Kind      string              `json:"kind"`                // realdebrid, torbox, alldebrid, premiumize
+	Kind      string              `json:"kind"`                // config.DebridKinds
 	InfoHash  string              `json:"infoHash"`            // lower-case hex v1 info hash
 	Magnet    string              `json:"magnet,omitempty"`    // magnet URI used to (re)add the torrent
 	TorrentID string              `json:"torrentId,omitempty"` // provider torrent / magnet id

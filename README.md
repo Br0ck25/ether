@@ -60,7 +60,7 @@ The table maps familiar workflows to Ether’s on-demand features. It does not c
 | **Sonarr & Radarr** | Resolution happens at **Play** time (or during detail-page warmup) using your quality profiles, custom formats, edition rules, and release pins. |
 | **Prowlarr & Jackett** | Native Newznab and Torznab manager with daily quota tracking, Retry-After backoff, result caching, 1-click Prowlarr import, a built-in **Cardigann YAML** engine, and **Stremio stream addons** as torrent sources (paste an install link). |
 | **SABnzbd, NZBGet, NzbDAV, AltMount** | Native NNTP connection pools, wire-pipelined `BODY` fetching, SWAR yEnc decoding, and direct byte-range seeking inside store-mode RAR4, RAR5, and 7z sets (including password-protected stored archives). |
-| **zurg, rclone, Riven, plex_debrid** | Native HTTPS range streaming for **Real-Debrid, TorBox, AllDebrid, and Premiumize**—including single-episode extraction from torrent season packs without mounts. |
+| **zurg, rclone, Riven, plex_debrid** | Native HTTPS range streaming for **Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link, and Offcloud**—including single-episode extraction from torrent season packs without mounts. |
 | **Overseerr & Jellyseerr** | Released titles need no requests. Viewers' Plex and Trakt Watchlists sync automatically; newly playable titles appear in a *Now available* row on that viewer's Home, and the owner can be alerted. |
 | **Kometa (Plex Meta Manager)** | Live visual poster studio and rule-based collection builder in the browser. Renders `4K / DV / Atmos` and rating badges in pure Go on demand, configured in the browser. |
 | **Bazarr** | Automatic OpenSubtitles matching plus **piecewise dialogue-timing alignment** that syncs subtitles and skip markers across different cuts without downloading video. |
@@ -217,7 +217,7 @@ services:
 Open **`http://localhost:32400/ether/`** and finish the 4-step wizard:
 
 1. **Sign in with Plex** and claim the server. It appears in every Plex app on your account immediately.
-2. **Add a source:** a Usenet provider + Newznab indexer, *or* a debrid account (**Real-Debrid, TorBox, AllDebrid, Premiumize**) + torrent indexer, Cardigann site or Stremio addon, *or* both.
+2. **Add a source:** a Usenet provider + Newznab indexer, *or* a debrid account (**Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link, Offcloud**) + torrent indexer, Cardigann site or Stremio addon, *or* both.
 3. **Choose a cache preset** (an SSD with 32–50 GiB is plenty to start).
 4. **Paste a free [TMDB API key](https://www.themoviedb.org/settings/api)** and optional integrations (Trakt, OpenSubtitles, local Ollama/LM Studio).
 
@@ -295,6 +295,7 @@ Ether is backed by 2,600+ offline unit, fault-injection and fuzz tests, recorded
 | **Personalization Engine, Taste Models & Home Designer** | Working |
 | **Usenet Streaming Engine, PAR2 Oracle, Health Checks & Failover** | Working |
 | **Debrid Streaming (Real-Debrid, TorBox, AllDebrid, Premiumize)** | Working |
+| **Debrid Streaming (Debrid-Link, Offcloud)** | New: built from the published APIs, awaiting reports from live accounts |
 | **Official Plex Apps (TV, Mobile, Desktop, Web)** | Working |
 | **Pure-Go Poster Overlays, Skip Markers & Subtitle Alignment** | Working |
 | **Hardware Transcoding & Optional Windows NVIDIA RTX Video VSR** | Working |

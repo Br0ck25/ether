@@ -67,7 +67,8 @@ type File struct {
 	Path string
 	Size int64
 	// Link is the provider-side link for the file (Real-Debrid hoster
-	// link, AllDebrid file link, Premiumize direct link).
+	// link, AllDebrid file link, Premiumize, Debrid-Link and Offcloud
+	// direct link).
 	Link     string
 	selected bool // Real-Debrid: already selected in a reused torrent
 }
@@ -187,6 +188,10 @@ func NewProvider(cfg config.DebridProvider, opts ProviderOptions) (Provider, err
 		return newAllDebrid(cfg.APIKey, opts), nil
 	case config.DebridPremiumize:
 		return newPremiumize(cfg.APIKey, opts), nil
+	case config.DebridDebridLink:
+		return newDebridLink(cfg.APIKey, opts), nil
+	case config.DebridOffcloud:
+		return newOffcloud(cfg.APIKey, opts), nil
 	}
 	return nil, fmt.Errorf("debrid: unknown provider kind %q", cfg.Kind)
 }
@@ -369,6 +374,66 @@ func (c *listCache) forget(id string) {
 		}
 	}
 	c.mu.Unlock()
+}
+
+// recentLinks holds the direct URL a provider listed while acquiring a
+// torrent, so the Link call that immediately follows needs no second
+// listing. Providers whose listed URL is already the direct link (and that
+// document no expiry for it) must not trust a stored URL later: a removed
+// torrent would hand out a dead link on every refresh. An entry is used
+// once, within recentLinkTTL.
+type recentLinks struct {
+	mu sync.Mutex
+	m  map[string]recentLink
+}
+
+type recentLink struct {
+	url string
+	at  time.Time
+}
+
+const recentLinkTTL = time.Minute
+
+func (r *recentLinks) put(torrentID, fileID, u string, now time.Time) {
+	if u == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m == nil {
+		r.m = map[string]recentLink{}
+	}
+	for k, v := range r.m {
+		if now.Sub(v.at) > recentLinkTTL {
+			delete(r.m, k)
+		}
+	}
+	r.m[torrentID+"\x00"+fileID] = recentLink{url: u, at: now}
+}
+
+func (r *recentLinks) take(torrentID, fileID string, now time.Time) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := torrentID + "\x00" + fileID
+	v, ok := r.m[k]
+	if !ok {
+		return ""
+	}
+	delete(r.m, k)
+	if now.Sub(v.at) > recentLinkTTL {
+		return ""
+	}
+	return v.url
+}
+
+func (r *recentLinks) forget(torrentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.m {
+		if strings.HasPrefix(k, torrentID+"\x00") {
+			delete(r.m, k)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

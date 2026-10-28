@@ -516,22 +516,29 @@ func firstNonEmpty(vs ...string) string {
 }
 
 // hintRe matches a debrid service tag with its availability marker:
-// "[RD+]" and "[RD download]", "[TB⚡]" and "[TB⬇️]", "RD ⏳".
-var hintRe = regexp.MustCompile(`(?i)\b(RD|TB|AD|PM)\s*(\+|⚡|download|⬇|⏳)`)
+// "[RD+]" and "[RD download]", "[TB⚡]" and "[TB⬇️]", "RD ⏳". Torrentio and
+// Comet tag Debrid-Link as DL and Offcloud as OC.
+var hintRe = regexp.MustCompile(`(?i)\b(RD|TB|AD|PM|DL|OC)\s*(\+|⚡|download|⬇|⏳)`)
 
 var hintKinds = map[string]string{
 	"RD": config.DebridRealDebrid,
 	"TB": config.DebridTorBox,
 	"AD": config.DebridAllDebrid,
 	"PM": config.DebridPremiumize,
+	"DL": config.DebridDebridLink,
+	"OC": config.DebridOffcloud,
 }
 
 // debridHints reads the cached markers an addon configured with a debrid
 // key puts in a stream's name.
 func debridHints(text string) (cached, uncached []string) {
-	for _, m := range hintRe.FindAllStringSubmatch(text, -1) {
-		kind := hintKinds[strings.ToUpper(m[1])]
-		switch m[2] {
+	for _, idx := range hintRe.FindAllStringSubmatchIndex(text, -1) {
+		tag, marker := strings.ToUpper(text[idx[2]:idx[3]]), text[idx[4]:idx[5]]
+		if tag == "DL" && idx[2] > 0 && (text[idx[2]-1] == '-' || text[idx[2]-1] == '.') {
+			continue // "WEB-DL+", "WEB.DL ⬇": a source tag, not Debrid-Link
+		}
+		kind := hintKinds[tag]
+		switch marker {
 		case "+", "⚡":
 			if !contains(cached, kind) {
 				cached = append(cached, kind)

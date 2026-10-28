@@ -6,8 +6,8 @@ normal Plex apps to browse and watch.
 ## Set up
 
 The setup wizard signs you in to Plex, then asks where Ether streams from: a
-debrid account (Real-Debrid, TorBox, AllDebrid or Premiumize), a Usenet
-provider, or both, each tested before you continue. Next add at least one
+debrid account (Real-Debrid, TorBox, AllDebrid, Premiumize, Debrid-Link or
+Offcloud), a Usenet provider, or both, each tested before you continue. Next add at least one
 indexer: a Stremio stream addon's install link or a Torznab URL for debrid,
 and a Newznab URL for Usenet. Finally choose a cache folder and budget.
 Configure quality profiles for your network and remote connections afterwards.
