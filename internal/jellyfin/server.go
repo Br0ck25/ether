@@ -173,7 +173,7 @@ func (s *Server) routes() chi.Router {
 		s.protected(r)
 	})
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		s.log.Debug("jellyfin: unhandled request", "method", r.Method, "path", r.URL.Path)
+		s.log.Info("jellyfin: unhandled request", "method", r.Method, "path", r.URL.Path, "agent", r.UserAgent())
 		http.NotFound(w, r)
 	})
 	return r
