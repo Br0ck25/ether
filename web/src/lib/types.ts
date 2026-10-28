@@ -283,6 +283,7 @@ export interface EtherConfig {
     minPopularity: number;
     minVotes: number;
     includeAdult: boolean;
+    hideFranchiseCollections?: boolean;
     refreshInterval: string;
   };
   resolver: {

@@ -236,14 +236,17 @@ type Cache struct {
 }
 
 type Catalog struct {
-	Exclusions      []core.LibraryExclusion `json:"exclusions,omitempty"`
-	TMDBKey         string                  `json:"tmdbKey"`  // owner override; empty uses the bundled key
-	Language        string                  `json:"language"` // TMDB language, e.g. "en-US"
-	Region          string                  `json:"region"`
-	MinPopularity   float64                 `json:"minPopularity"`
-	MinVotes        int                     `json:"minVotes"`
-	IncludeAdult    bool                    `json:"includeAdult"`
-	RefreshInterval Duration                `json:"refreshInterval"`
+	// HideFranchiseCollections hides automatic TMDB groups from Plex's
+	// Collections tab. The zero value preserves existing libraries.
+	HideFranchiseCollections bool                    `json:"hideFranchiseCollections"`
+	Exclusions               []core.LibraryExclusion `json:"exclusions,omitempty"`
+	TMDBKey                  string                  `json:"tmdbKey"`  // owner override; empty uses the bundled key
+	Language                 string                  `json:"language"` // TMDB language, e.g. "en-US"
+	Region                   string                  `json:"region"`
+	MinPopularity            float64                 `json:"minPopularity"`
+	MinVotes                 int                     `json:"minVotes"`
+	IncludeAdult             bool                    `json:"includeAdult"`
+	RefreshInterval          Duration                `json:"refreshInterval"`
 }
 
 type Resolver struct {

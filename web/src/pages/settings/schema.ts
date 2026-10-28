@@ -300,6 +300,12 @@ export const CATALOG: FieldGroup[] = [
       { key: "minPopularity", label: "Minimum popularity", kind: "number", min: 0, step: 1 },
       { key: "minVotes", label: "Minimum votes", kind: "number", min: 0, step: 10 },
       { key: "includeAdult", label: "Include adult titles", kind: "bool" },
+      {
+        key: "hideFranchiseCollections",
+        label: "Hide automatic franchise collections",
+        kind: "bool",
+        help: "Hide TMDB franchise groups such as Zootopia from Plex's Collections tab. Your curated collections and Home rows stay available. Applies after saving; refresh the Collections tab in Plex.",
+      },
     ],
   },
 ];
