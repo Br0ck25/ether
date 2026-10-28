@@ -65,6 +65,27 @@ describe("canAdvance gating", () => {
     expect(canAdvance(0, { ...base, skipped: { 0: true } })).toBe(true);
     expect(canAdvance(1, { ...base, skipped: { 1: true } })).toBe(true);
   });
+  it("accepts debrid instead of Usenet, but every enabled source must be tested", () => {
+    const rd = {
+      id: "d1",
+      name: "",
+      kind: "realdebrid" as const,
+      apiKey: "tok",
+      priority: 0,
+      enabled: true,
+    };
+    const none = { ...base, providers: [], debrid: [] };
+    expect(canAdvance(1, none)).toBe(false);
+    expect(canAdvance(1, { ...none, debrid: [rd] })).toBe(false);
+    expect(canAdvance(1, { ...none, debrid: [rd], debridTests: { d1: { status: "ok" } } })).toBe(
+      true,
+    );
+    // With both kinds, an untested Usenet provider still blocks.
+    expect(canAdvance(1, { ...base, debrid: [rd], debridTests: { d1: { status: "ok" } } })).toBe(
+      false,
+    );
+    expect(canAdvance(1, { ...none, debrid: [{ ...rd, enabled: false }] })).toBe(false);
+  });
   it("cache and optional steps never block", () => {
     expect(canAdvance(3, base)).toBe(true);
     expect(canAdvance(4, base)).toBe(true);
@@ -75,6 +96,8 @@ function renderWizard(configure?: (fake: ReturnType<typeof createFakeServer>) =>
   const fake = createFakeServer();
   fake.state.config.setupComplete = false;
   fake.state.config.plex.ownerUsername = "alice";
+  // A fresh install has no debrid accounts (the shared fixture has two).
+  if (fake.state.config.debrid) fake.state.config.debrid.providers = [];
   configure?.(fake);
   vi.stubGlobal(
     "fetch",
@@ -130,9 +153,53 @@ describe("setup wizard", () => {
       expect(screen.getByRole("button", { name: "Save and continue" })).toBeEnabled(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
-    await screen.findByRole("heading", { name: "Newznab indexers" });
+    await screen.findByRole("heading", { name: "Indexers and addons" });
     expect(fake.state.config.usenet.providers?.[0]?.host).toBe(provider.host);
     expect(fake.state.config.indexers).toEqual([]);
+  });
+
+  it("sets up a debrid-only server with a Stremio addon, without Usenet", async () => {
+    const fake = renderWizard((f) => {
+      f.state.config.usenet.providers = [];
+      f.state.config.indexers = [];
+    });
+    await screen.findByText(/Signed in as alice/);
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    await screen.findByRole("heading", { name: "Debrid accounts" });
+    fireEvent.click(screen.getByRole("button", { name: "Add debrid account" }));
+    fireEvent.change(screen.getByLabelText("API token"), { target: { value: "rd-token" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Test$/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save and continue" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    await screen.findByRole("heading", { name: "Indexers and addons" });
+    expect(fake.state.config.debrid?.providers).toMatchObject([
+      { kind: "realdebrid", enabled: true },
+    ]);
+    expect(fake.state.config.usenet.providers).toEqual([]);
+
+    // A debrid-only server starts its first indexer as a Stremio addon.
+    fireEvent.click(screen.getByRole("button", { name: "Add indexer" }));
+    expect(screen.queryByLabelText("API key")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("https://addon.example/manifest.json"), {
+      target: { value: " stremio://addon.example/manifest.json " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Test$/ }));
+    await waitFor(() => expect(calls(fake, "POST", "/test/indexer")).toHaveLength(1));
+    expect(calls(fake, "POST", "/test/indexer")[0]?.body).toMatchObject({
+      kind: "stremio",
+      protocol: "torrent",
+      url: "https://addon.example/manifest.json",
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save and continue" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
+    await screen.findByRole("heading", { name: "Cache folder and disk budget" });
+    expect(fake.state.config.indexers).toMatchObject([
+      { kind: "stremio", protocol: "torrent", url: "https://addon.example/manifest.json" },
+    ]);
   });
 
   it("can explicitly skip unused sources without creating invalid rows", async () => {
@@ -142,7 +209,7 @@ describe("setup wizard", () => {
     });
     await screen.findByText(/Signed in as alice/);
     fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
-    for (const heading of ["Usenet providers", "Newznab indexers"]) {
+    for (const heading of ["Usenet providers", "Indexers and addons"]) {
       await screen.findByRole("heading", { name: heading });
       fireEvent.click(screen.getByLabelText(/Skip test for this step/));
       fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
@@ -165,7 +232,7 @@ describe("setup wizard", () => {
       if (kind === "indexer") {
         fireEvent.click(screen.getByLabelText(/Skip test for this step/));
         fireEvent.click(screen.getByRole("button", { name: "Save and continue" }));
-        await screen.findByRole("heading", { name: "Newznab indexers" });
+        await screen.findByRole("heading", { name: "Indexers and addons" });
       }
       fireEvent.click(screen.getByRole("button", { name: `Add ${kind}` }));
       fireEvent.change(screen.getAllByRole("textbox")[0]!, { target: { value: "Keep my draft" } });

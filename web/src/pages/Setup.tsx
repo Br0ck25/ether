@@ -27,12 +27,14 @@ import {
 } from "../components/llm";
 import { api, newId } from "../lib/api";
 import { formatBytes } from "../lib/format";
-import type { DiskInfo, EtherConfig, Indexer, UsenetProvider } from "../lib/types";
+import type { DebridProvider, DiskInfo, EtherConfig, Indexer, UsenetProvider } from "../lib/types";
+import { DEBRID_KINDS } from "./sources/Debrid";
+import { addonUrlHasDebridKey, isStremio, normalizeAddonUrl } from "./sources/Indexers";
 
 const STEPS = [
   { title: "Plex", heading: "Sign in to plex.tv and claim this server" },
-  { title: "Usenet", heading: "Usenet providers" },
-  { title: "Indexers", heading: "Newznab indexers" },
+  { title: "Sources", heading: "Where Ether streams from" },
+  { title: "Indexers", heading: "Indexers and addons" },
   { title: "Cache", heading: "Cache folder and disk budget" },
   { title: "Extras", heading: "Optional integrations" },
 ];
@@ -53,19 +55,47 @@ function blankProvider(): UsenetProvider {
     enabled: true,
   };
 }
-function blankIndexer(): Indexer {
-  return {
-    id: newId("idx"),
-    name: "",
-    url: "",
-    apiKey: "",
-    dailyLimit: 0,
-    dailyGrabs: 0,
-    priority: 0,
-    enabled: true,
-    movieCategories: null,
-    tvCategories: null,
-  };
+function blankDebrid(): DebridProvider {
+  return { id: newId("deb"), name: "", kind: "realdebrid", apiKey: "", priority: 0, enabled: true };
+}
+
+/** How an indexer row is searched; maps onto Indexer.kind and protocol. */
+type IndexerType = "newznab" | "torznab" | "stremio";
+const INDEXER_TYPES: { value: IndexerType; label: string }[] = [
+  { value: "stremio", label: "Stremio addon (torrents)" },
+  { value: "torznab", label: "Torznab (torrents)" },
+  { value: "newznab", label: "Newznab (Usenet)" },
+];
+function indexerType(ix: Indexer): IndexerType {
+  if (isStremio(ix)) return "stremio";
+  return ix.protocol === "torrent" ? "torznab" : "newznab";
+}
+function withIndexerType(ix: Indexer, t: IndexerType): Indexer {
+  if (t === "stremio") return { ...ix, kind: "stremio", protocol: "torrent", apiKey: "" };
+  return { ...ix, kind: "", protocol: t === "torznab" ? "torrent" : "usenet" };
+}
+
+function blankIndexer(type: IndexerType = "newznab"): Indexer {
+  return withIndexerType(
+    {
+      id: newId("idx"),
+      name: "",
+      url: "",
+      apiKey: "",
+      dailyLimit: 0,
+      dailyGrabs: 0,
+      priority: 0,
+      enabled: true,
+      movieCategories: null,
+      tvCategories: null,
+    },
+    type,
+  );
+}
+
+/** An indexer as saved and tested: addon links are read as https. */
+function normalizedIndexer(ix: Indexer): Indexer {
+  return isStremio(ix) ? { ...ix, url: normalizeAddonUrl(ix.url), protocol: "torrent" } : ix;
 }
 
 /** Whether a wizard step may be left: required steps must be complete and tested (or explicitly skipped). */
@@ -77,6 +107,9 @@ export function canAdvance(
     indexers: Indexer[];
     providerTests: Record<string, TestState>;
     indexerTests: Record<string, TestState>;
+    /** Debrid accounts and their tests (absent on servers without debrid). */
+    debrid?: DebridProvider[];
+    debridTests?: Record<string, TestState>;
     skipped: Record<number, boolean>;
   },
 ): boolean {
@@ -85,10 +118,13 @@ export function canAdvance(
     case 0:
       return opts.plexDone;
     case 1: {
-      const enabled = opts.providers.filter((p) => p.enabled);
+      // A debrid account, a Usenet provider, or both; every enabled one tested.
+      const usenet = opts.providers.filter((p) => p.enabled);
+      const debrid = (opts.debrid ?? []).filter((d) => d.enabled);
       return (
-        enabled.length > 0 &&
-        enabled.every((p) => p.host.trim() && opts.providerTests[p.id]?.status === "ok")
+        usenet.length + debrid.length > 0 &&
+        usenet.every((p) => p.host.trim() && opts.providerTests[p.id]?.status === "ok") &&
+        debrid.every((d) => d.apiKey.trim() && opts.debridTests?.[d.id]?.status === "ok")
       );
     }
     case 2: {
@@ -114,6 +150,7 @@ export default function Setup() {
   const [skipped, setSkipped] = useState<Record<number, boolean>>({});
   const [providerTests, setProviderTests] = useState<Record<string, TestState>>({});
   const [indexerTests, setIndexerTests] = useState<Record<string, TestState>>({});
+  const [debridTests, setDebridTests] = useState<Record<string, TestState>>({});
   const [optTests, setOptTests] = useState<Record<string, TestState>>({});
   const [pin, setPin] = useState<{ id: string; code: string; authUrl: string } | null>(null);
   const [pinDone, setPinDone] = useState(false);
@@ -195,12 +232,18 @@ export default function Setup() {
   };
 
   const runTest = async (
-    kind: "provider" | "indexer" | "opt",
+    kind: "provider" | "indexer" | "debrid" | "opt",
     key: string,
     fn: () => Promise<{ ok: boolean; error?: string; durationMs: number }>,
   ) => {
     const setMap =
-      kind === "provider" ? setProviderTests : kind === "indexer" ? setIndexerTests : setOptTests;
+      kind === "provider"
+        ? setProviderTests
+        : kind === "indexer"
+          ? setIndexerTests
+          : kind === "debrid"
+            ? setDebridTests
+            : setOptTests;
     setMap((m) => ({ ...m, [key]: { status: "running" } }));
     try {
       const r = await fn();
@@ -224,10 +267,12 @@ export default function Setup() {
             indexers: cfg.indexers ?? [],
             providerTests,
             indexerTests,
+            debrid: cfg.debrid?.providers ?? [],
+            debridTests,
             skipped,
           })
         : false,
-    [cfg, step, providerTests, indexerTests, skipped],
+    [cfg, step, providerTests, indexerTests, debridTests, skipped],
   );
 
   if (loadError && !cfg)
@@ -253,12 +298,28 @@ export default function Setup() {
     setProviders(providers.map((x, j) => (j === i ? { ...x, ...p } : x)));
   const patchIndexer = (i: number, p: Partial<Indexer>) =>
     setIndexers(indexers.map((x, j) => (j === i ? { ...x, ...p } : x)));
+  const debridSupported = cfg.debrid !== undefined;
+  const debrid = cfg.debrid?.providers ?? [];
+  const setDebrid = (list: DebridProvider[]) =>
+    setCfg({
+      ...cfg,
+      debrid: {
+        ...(cfg.debrid ?? { cachedOnly: true, removeUncached: true, providers: [] }),
+        providers: list.map((d, i) => ({ ...d, priority: i })),
+      },
+    });
+  const patchDebrid = (i: number, d: Partial<DebridProvider>) =>
+    setDebrid(debrid.map((x, j) => (j === i ? { ...x, ...d } : x)));
+  // Debrid streams torrents, Usenet providers stream Newznab results.
+  const hasDebrid = debrid.some((d) => d.enabled);
+  const hasUsenet = providers.some((p) => p.enabled);
+  const newIndexerType: IndexerType = hasDebrid && !hasUsenet ? "stremio" : "newznab";
 
   const next = async () => {
     setSaving(true);
     setError(null);
     try {
-      setCfg(await api.putConfig(cfg));
+      setCfg(await api.putConfig({ ...cfg, indexers: indexers.map(normalizedIndexer) }));
       if (step < STEPS.length - 1) setStep(step + 1);
       else {
         await api.setupComplete(Object.values(skipped).some(Boolean));
@@ -408,163 +469,287 @@ export default function Setup() {
       ) : null}
 
       {step === 1 ? (
-        <div className="space-y-4">
+        <div className="space-y-6">
           <p className="text-sm text-fg-muted">
-            Add at least one provider and test it. Block accounts can be marked as backfill.
+            Add a debrid account, a Usenet provider, or both, and test each one. Ether streams from
+            your own accounts; it ships none.
           </p>
-          {providers.map((p, i) => (
-            <fieldset key={p.id || i} className="rounded-xl border border-border bg-surface p-4">
-              <legend className="px-1 text-sm font-medium text-fg">
-                {p.name || `Provider ${i + 1}`}
-              </legend>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Name">
-                  <Input
-                    value={p.name}
-                    onChange={(e) => patchProvider(i, { name: e.currentTarget.value })}
-                  />
-                </Field>
-                <Field label="Host">
-                  <Input
-                    value={p.host}
-                    placeholder="news.example.com"
-                    onChange={(e) => patchProvider(i, { host: e.currentTarget.value })}
-                  />
-                </Field>
-                <Field label="Port">
-                  <NumberInput
-                    aria-label="Port"
-                    value={p.port}
-                    min={1}
-                    max={65535}
-                    onChange={(n) => patchProvider(i, { port: n })}
-                  />
-                </Field>
-                <Field label="Connections">
-                  <NumberInput
-                    aria-label="Connections"
-                    value={p.connections}
-                    min={0}
-                    max={500}
-                    onChange={(n) => patchProvider(i, { connections: n })}
-                  />
-                </Field>
-                <Field label="Username">
-                  <Input
-                    value={p.username}
-                    autoComplete="username"
-                    onChange={(e) => patchProvider(i, { username: e.currentTarget.value })}
-                  />
-                </Field>
-                <Field label="Password">
-                  <SecretInput
-                    ariaLabel="Password"
-                    value={p.password}
-                    onChange={(v) => patchProvider(i, { password: v })}
-                  />
-                </Field>
+          {debridSupported ? (
+            <section className="space-y-4" aria-labelledby="setup-debrid">
+              <div>
+                <h3 id="setup-debrid" className="text-sm font-semibold text-fg">
+                  Debrid accounts
+                </h3>
+                <p className="text-sm text-fg-muted">
+                  Torrents your service already holds stream over HTTPS. Use your account&apos;s API
+                  token.
+                </p>
               </div>
-              <div className="mt-3 flex flex-wrap gap-5 text-sm text-fg">
-                <label className="flex items-center gap-2">
-                  <Switch
-                    checked={p.tls}
-                    onChange={(e) => patchProvider(i, { tls: e.currentTarget.checked })}
-                  />{" "}
-                  SSL / TLS
-                </label>
-                <label className="flex items-center gap-2">
-                  <Switch
-                    checked={p.backfill}
-                    onChange={(e) => patchProvider(i, { backfill: e.currentTarget.checked })}
-                  />{" "}
-                  Backfill only
-                </label>
-                <label className="flex items-center gap-2">
-                  <Switch
-                    checked={p.enabled}
-                    onChange={(e) => patchProvider(i, { enabled: e.currentTarget.checked })}
-                  />{" "}
-                  Enabled
-                </label>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                <TestButton
-                  state={providerTests[p.id] ?? { status: "idle" }}
-                  onTest={() => void runTest("provider", p.id, () => api.testUsenet(p))}
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setProviders(providers.filter((_, j) => j !== i))}
+              {debrid.map((d, i) => (
+                <fieldset
+                  key={d.id || i}
+                  className="rounded-xl border border-border bg-surface p-4"
                 >
-                  <Trash2 size={14} /> Remove
-                </Button>
-              </div>
-            </fieldset>
-          ))}
-          <Button variant="outline" onClick={() => setProviders([...providers, blankProvider()])}>
-            <Plus size={15} /> Add provider
-          </Button>
+                  <legend className="px-1 text-sm font-medium text-fg">
+                    {DEBRID_KINDS.find((k) => k.value === d.kind)?.label ?? d.kind}
+                  </legend>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Service">
+                      <SearchSelect
+                        aria-label="Debrid service"
+                        value={d.kind}
+                        options={DEBRID_KINDS}
+                        onChange={(v) => patchDebrid(i, { kind: v as DebridProvider["kind"] })}
+                      />
+                    </Field>
+                    <Field label="API token">
+                      <SecretInput
+                        ariaLabel="API token"
+                        value={d.apiKey}
+                        onChange={(v) => patchDebrid(i, { apiKey: v })}
+                      />
+                    </Field>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                    <label className="flex items-center gap-2 text-sm text-fg">
+                      <Switch
+                        checked={d.enabled}
+                        onChange={(e) => patchDebrid(i, { enabled: e.currentTarget.checked })}
+                      />{" "}
+                      Enabled
+                    </label>
+                    <span className="flex items-center gap-2">
+                      <TestButton
+                        state={debridTests[d.id] ?? { status: "idle" }}
+                        onTest={() => void runTest("debrid", d.id, () => api.testDebrid(d))}
+                      />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setDebrid(debrid.filter((_, j) => j !== i))}
+                      >
+                        <Trash2 size={14} /> Remove
+                      </Button>
+                    </span>
+                  </div>
+                </fieldset>
+              ))}
+              <Button variant="outline" onClick={() => setDebrid([...debrid, blankDebrid()])}>
+                <Plus size={15} /> Add debrid account
+              </Button>
+            </section>
+          ) : null}
+          <section className="space-y-4" aria-labelledby="setup-usenet">
+            <div>
+              <h3 id="setup-usenet" className="text-sm font-semibold text-fg">
+                Usenet providers
+              </h3>
+              <p className="text-sm text-fg-muted">Block accounts can be marked as backfill.</p>
+            </div>
+            {providers.map((p, i) => (
+              <fieldset key={p.id || i} className="rounded-xl border border-border bg-surface p-4">
+                <legend className="px-1 text-sm font-medium text-fg">
+                  {p.name || `Provider ${i + 1}`}
+                </legend>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Name">
+                    <Input
+                      value={p.name}
+                      onChange={(e) => patchProvider(i, { name: e.currentTarget.value })}
+                    />
+                  </Field>
+                  <Field label="Host">
+                    <Input
+                      value={p.host}
+                      placeholder="news.example.com"
+                      onChange={(e) => patchProvider(i, { host: e.currentTarget.value })}
+                    />
+                  </Field>
+                  <Field label="Port">
+                    <NumberInput
+                      aria-label="Port"
+                      value={p.port}
+                      min={1}
+                      max={65535}
+                      onChange={(n) => patchProvider(i, { port: n })}
+                    />
+                  </Field>
+                  <Field label="Connections">
+                    <NumberInput
+                      aria-label="Connections"
+                      value={p.connections}
+                      min={0}
+                      max={500}
+                      onChange={(n) => patchProvider(i, { connections: n })}
+                    />
+                  </Field>
+                  <Field label="Username">
+                    <Input
+                      value={p.username}
+                      autoComplete="username"
+                      onChange={(e) => patchProvider(i, { username: e.currentTarget.value })}
+                    />
+                  </Field>
+                  <Field label="Password">
+                    <SecretInput
+                      ariaLabel="Password"
+                      value={p.password}
+                      onChange={(v) => patchProvider(i, { password: v })}
+                    />
+                  </Field>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-5 text-sm text-fg">
+                  <label className="flex items-center gap-2">
+                    <Switch
+                      checked={p.tls}
+                      onChange={(e) => patchProvider(i, { tls: e.currentTarget.checked })}
+                    />{" "}
+                    SSL / TLS
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <Switch
+                      checked={p.backfill}
+                      onChange={(e) => patchProvider(i, { backfill: e.currentTarget.checked })}
+                    />{" "}
+                    Backfill only
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <Switch
+                      checked={p.enabled}
+                      onChange={(e) => patchProvider(i, { enabled: e.currentTarget.checked })}
+                    />{" "}
+                    Enabled
+                  </label>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <TestButton
+                    state={providerTests[p.id] ?? { status: "idle" }}
+                    onTest={() => void runTest("provider", p.id, () => api.testUsenet(p))}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setProviders(providers.filter((_, j) => j !== i))}
+                  >
+                    <Trash2 size={14} /> Remove
+                  </Button>
+                </div>
+              </fieldset>
+            ))}
+            <Button variant="outline" onClick={() => setProviders([...providers, blankProvider()])}>
+              <Plus size={15} /> Add provider
+            </Button>
+          </section>
         </div>
       ) : null}
 
       {step === 2 ? (
         <div className="space-y-4">
           <p className="text-sm text-fg-muted">
-            Add at least one indexer. Ether handles service limits automatically.
+            {hasDebrid
+              ? "Add at least one torrent source for your debrid account: a Stremio stream addon's install link, or a Torznab URL from Prowlarr, Jackett or Zilean."
+              : "Add at least one indexer."}{" "}
+            {hasUsenet && hasDebrid ? "Add a Newznab indexer for Usenet too. " : ""}
+            Ether handles service limits automatically.
           </p>
-          {indexers.map((ix, i) => (
-            <fieldset key={ix.id || i} className="rounded-xl border border-border bg-surface p-4">
-              <legend className="px-1 text-sm font-medium text-fg">
-                {ix.name || `Indexer ${i + 1}`}
-              </legend>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Name">
-                  <Input
-                    value={ix.name}
-                    onChange={(e) => patchIndexer(i, { name: e.currentTarget.value })}
-                  />
-                </Field>
-                <Field label="Base URL" hint="/api is added automatically.">
-                  <Input
-                    value={ix.url}
-                    placeholder="https://indexer.example.com"
-                    onChange={(e) => patchIndexer(i, { url: e.currentTarget.value })}
-                  />
-                </Field>
-                <Field label="API key">
-                  <SecretInput
-                    ariaLabel="API key"
-                    value={ix.apiKey}
-                    onChange={(v) => patchIndexer(i, { apiKey: v })}
-                  />
-                </Field>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-sm text-fg">
-                  <Switch
-                    checked={ix.enabled}
-                    onChange={(e) => patchIndexer(i, { enabled: e.currentTarget.checked })}
-                  />{" "}
-                  Enabled
-                </label>
-                <span className="flex items-center gap-2">
-                  <TestButton
-                    state={indexerTests[ix.id] ?? { status: "idle" }}
-                    onTest={() => void runTest("indexer", ix.id, () => api.testIndexer(ix))}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setIndexers(indexers.filter((_, j) => j !== i))}
-                  >
-                    <Trash2 size={14} /> Remove
-                  </Button>
-                </span>
-              </div>
-            </fieldset>
-          ))}
-          <Button variant="outline" onClick={() => setIndexers([...indexers, blankIndexer()])}>
+          {indexers.map((ix, i) => {
+            const type = indexerType(ix);
+            const addon = type === "stremio";
+            return (
+              <fieldset key={ix.id || i} className="rounded-xl border border-border bg-surface p-4">
+                <legend className="px-1 text-sm font-medium text-fg">
+                  {ix.name || `Indexer ${i + 1}`}
+                </legend>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Type">
+                    <SearchSelect
+                      aria-label="Indexer type"
+                      value={type}
+                      options={INDEXER_TYPES}
+                      onChange={(v) => {
+                        setIndexers(
+                          indexers.map((x, j) =>
+                            j === i ? withIndexerType(x, v as IndexerType) : x,
+                          ),
+                        );
+                      }}
+                    />
+                  </Field>
+                  <Field label="Name">
+                    <Input
+                      value={ix.name}
+                      onChange={(e) => patchIndexer(i, { name: e.currentTarget.value })}
+                    />
+                  </Field>
+                  {addon ? (
+                    <Field
+                      label="Addon link"
+                      hint="The addon's install link (https:// or stremio://). Ether checks your debrid accounts itself, so the link needs no debrid key."
+                    >
+                      <Input
+                        value={ix.url}
+                        placeholder="https://addon.example/manifest.json"
+                        onChange={(e) => patchIndexer(i, { url: e.currentTarget.value })}
+                      />
+                    </Field>
+                  ) : (
+                    <>
+                      <Field label="Base URL" hint="/api is added automatically.">
+                        <Input
+                          value={ix.url}
+                          placeholder="https://indexer.example.com"
+                          onChange={(e) => patchIndexer(i, { url: e.currentTarget.value })}
+                        />
+                      </Field>
+                      <Field label="API key">
+                        <SecretInput
+                          ariaLabel="API key"
+                          value={ix.apiKey}
+                          onChange={(v) => patchIndexer(i, { apiKey: v })}
+                        />
+                      </Field>
+                    </>
+                  )}
+                </div>
+                {addon && addonUrlHasDebridKey(ix.url) ? (
+                  <Alert variant="warning" role="status" className="mt-3">
+                    <AlertDescription>
+                      This link includes a debrid API key. Ether checks your debrid accounts itself,
+                      so the addon doesn&apos;t need it; a key only adds cached hints.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex items-center gap-2 text-sm text-fg">
+                    <Switch
+                      checked={ix.enabled}
+                      onChange={(e) => patchIndexer(i, { enabled: e.currentTarget.checked })}
+                    />{" "}
+                    Enabled
+                  </label>
+                  <span className="flex items-center gap-2">
+                    <TestButton
+                      state={indexerTests[ix.id] ?? { status: "idle" }}
+                      onTest={() =>
+                        void runTest("indexer", ix.id, () => api.testIndexer(normalizedIndexer(ix)))
+                      }
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setIndexers(indexers.filter((_, j) => j !== i))}
+                    >
+                      <Trash2 size={14} /> Remove
+                    </Button>
+                  </span>
+                </div>
+              </fieldset>
+            );
+          })}
+          <Button
+            variant="outline"
+            onClick={() => setIndexers([...indexers, blankIndexer(newIndexerType)])}
+          >
             <Plus size={15} /> Add indexer
           </Button>
         </div>
