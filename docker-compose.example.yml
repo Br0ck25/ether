@@ -15,9 +15,12 @@ services:
     volumes:
       - ./config:/config          # config.json, database, identity
       - ./cache:/cache            # segment cache: select /cache in setup (default is /config/cache)
-    # Intel/AMD VAAPI or QuickSync transcoding (optional):
+    # Intel/AMD VAAPI or QuickSync transcoding (optional). group_add is the
+    # host group that owns the render node: stat -c %g /dev/dri/renderD128
     # devices:
     #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - "993"
     # NVIDIA NVENC (optional, needs nvidia-container-toolkit):
     # deploy:
     #   resources:

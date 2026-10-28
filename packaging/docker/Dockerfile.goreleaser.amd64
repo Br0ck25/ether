@@ -4,12 +4,18 @@
 # .goreleaser.yaml. For from-source builds use the repo-root Dockerfile.
 FROM debian:bookworm-slim
 
+# Hardware transcoding userspace, loaded by the bundled ffmpeg at runtime:
+# libva + libva-drm (VAAPI on /dev/dri), Mesa VA drivers (AMD), Intel's
+# iHD (Gen8+) and i965 (older) VA drivers and the oneVPL QuickSync runtime
+# (Debian ships the Intel packages for amd64 only), OpenCL loader.
+#
 # ether runs as fixed UID/GID 999: what --system allocation gave every
 # earlier image on this base, pinned so a future image can still read an
 # existing 0700 /config volume. Keep in sync with the repo-root Dockerfile.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates tzdata libva2 mesa-va-drivers ocl-icd-libopencl1 \
+      ca-certificates tzdata libva2 libva-drm2 mesa-va-drivers ocl-icd-libopencl1 \
+      intel-media-va-driver i965-va-driver libmfx-gen1.2 \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 999 ether \
  && useradd --system --uid 999 --gid ether --home-dir /config --shell /usr/sbin/nologin ether \

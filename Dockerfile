@@ -37,15 +37,19 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
 FROM debian:bookworm-slim AS runtime
 ARG TARGETARCH
 
-# Optional hardware-transcode userspace. Intel QSV needs intel-media-va-driver
-# from non-free; the open iHD-free fallback + Mesa VAAPI cover most iGPU/NVIDIA
-# (via nvidia-container-toolkit) cases. Install is best-effort-small: comment
-# out this block for a CPU-only image (~120 MB smaller).
+# Hardware-transcode userspace, loaded by the bundled ffmpeg at runtime:
+# libva + libva-drm (VAAPI on /dev/dri), Mesa VA drivers (AMD), and on amd64
+# Intel's iHD (Gen8+) and i965 (older) VA drivers plus the oneVPL QuickSync
+# runtime (Debian ships those for amd64 only). Keep in sync with
+# packaging/docker/Dockerfile.goreleaser.*.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates tzdata \
-      libva2 vainfo mesa-va-drivers \
+      libva2 libva-drm2 vainfo mesa-va-drivers \
       ocl-icd-libopencl1 \
+ && if [ "$TARGETARCH" = amd64 ]; then \
+      apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver libmfx-gen1.2; \
+    fi \
  && rm -rf /var/lib/apt/lists/*
 
 # Fixed UID/GID 999: what --system allocation gave every earlier image on

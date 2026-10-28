@@ -106,9 +106,17 @@ Volumes: `/config` (config, database, identity — back this up) and
 until you select `/cache` as the cache directory in the setup wizard (or
 later on the Cache page), where its budget is set too. The container
 runs as user `ether` with UID/GID 999; both volumes must be writable by
-it. VAAPI/QSV: pass
-`--device /dev/dri:/dev/dri`. NVENC: use the NVIDIA container toolkit
-flags shown in `docker-compose.example.yml`.
+it.
+
+Hardware transcoding: for Intel QuickSync/VAAPI or AMD VAAPI pass
+`--device /dev/dri:/dev/dri` and add the container to the host's group that
+owns the render node, e.g.
+`--group-add "$(stat -c %g /dev/dri/renderD128)"` (the node is usually
+`0660 root:render`, and UID 999 is not in that group). The image ships the
+VA-API loader, Mesa (AMD) and, on amd64, Intel's iHD/i965 drivers and the
+QuickSync runtime. The Transcoding page shows what the startup probe found.
+NVENC: use the NVIDIA container toolkit flags shown in
+`docker-compose.example.yml`.
 
 ## From a tarball/zip (any OS)
 
