@@ -93,7 +93,7 @@ function addonHost(url: string): string {
 }
 
 const DEBRID_KEY_PARAM =
-  /(?:^|[/|&?,;])(?:realdebrid|torbox|alldebrid|premiumize|debridlink|putio)=/i;
+  /(?:^|[/|&?,;])(?:realdebrid|torbox|alldebrid|premiumize|debridlink|offcloud|putio)=/i;
 const DEBRID_KEY_FIELD = /"(?:debridApiKey|apiKey|debridService)"\s*:\s*"[^"]+"/i;
 
 /** A base64 or base64url path segment decoded, when it is a JSON object. */

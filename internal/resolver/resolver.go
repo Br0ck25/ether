@@ -482,6 +482,16 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 		}
 	}
 
+	// Nothing to search at all (no enabled indexer, or debrid as the only
+	// source without a torrent indexer) is a setup problem: say so instead
+	// of "not available", and record nothing about the title.
+	if pin == nil && len(discovered) == 0 {
+		if err := s.missingSources(); err != nil {
+			trace.Err = err.Error()
+			return nil, err
+		}
+	}
+
 	// Fast path: cached unavailable answer, unless this is a failover
 	// request that already knows about specific releases, the viewer
 	// picked a specific version, or the owner pinned a release.
@@ -646,6 +656,21 @@ func (s *Service) resolve(ctx context.Context, req core.ResolveRequest, profile 
 	}
 	trace.Err = "no healthy candidates"
 	return nil, fmt.Errorf("%q: %w", t.Title, core.ErrNotAvailable)
+}
+
+// sourceInventory is implemented by indexers that know whether anything is
+// configured to search (debrid.Indexer, newznab.Manager).
+type sourceInventory interface {
+	MissingSources() error
+}
+
+// missingSources reports core.ErrNoSources (or core.ErrNoTorrentSources)
+// when the indexer can tell there is nothing to search.
+func (s *Service) missingSources() error {
+	if inv, ok := s.indexer.(sourceInventory); ok {
+		return inv.MissingSources()
+	}
+	return nil
 }
 
 func searchCacheKey(req core.SearchRequest) string {

@@ -33,10 +33,15 @@ func HandleCommand(args []string, svc *Service, out io.Writer) (handled bool, er
 	cmd := args[1]
 	switch cmd {
 	case "install":
-		if err := svc.Install(); err != nil {
+		updated, err := svc.InstallOrUpdate()
+		if err != nil {
 			return true, err
 		}
-		fmt.Fprintf(out, "service %q installed (%s)\n", svc.cfg.Name, svc.Platform())
+		if updated {
+			fmt.Fprintf(out, "service %q updated in place (%s); restart it to run this binary\n", svc.cfg.Name, svc.Platform())
+		} else {
+			fmt.Fprintf(out, "service %q installed (%s)\n", svc.cfg.Name, svc.Platform())
+		}
 	case "uninstall":
 		// Best effort stop first so uninstalling a running service works.
 		_ = svc.Stop()

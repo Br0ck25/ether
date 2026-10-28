@@ -48,8 +48,12 @@ RUN apt-get update \
       ocl-icd-libopencl1 \
  && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd --system ether \
- && useradd --system --gid ether --home-dir /config --shell /usr/sbin/nologin ether \
+# Fixed UID/GID 999: what --system allocation gave every earlier image on
+# this base (the highest free system id), pinned so a future image can
+# still read an existing 0700 /config volume. Keep in sync with
+# packaging/docker/Dockerfile.goreleaser.*.
+RUN groupadd --system --gid 999 ether \
+ && useradd --system --uid 999 --gid ether --home-dir /config --shell /usr/sbin/nologin ether \
  && mkdir -p /config /cache /usr/lib/ether \
  && chown -R ether:ether /config /cache
 

@@ -1,7 +1,8 @@
 # NAS and homelab installation
 
 Ether ships no accounts, providers, indexers, or media. Open `http://SERVER:32400/ether/`
-and finish setup. Select `/cache` for the segment cache. Image tags are produced
+and finish setup. Select `/cache` for the segment cache (otherwise it defaults to
+`/config/cache`, inside the configuration volume). Image tags are produced
 by the existing release workflow; pin a published version or digest for repeatable
 upgrades. These templates are installable examples, not submissions to the
 platforms' public marketplaces.
@@ -12,8 +13,9 @@ Use [compose.yaml](compose.yaml) on Linux. Host networking permits Plex GDM
 UDP discovery; reserve TCP 32400 and UDP 32410–32414 on the host. Bridge mode
 requires publishing TCP 32400 and manually adding the server in clients.
 
-Before starting, create the two writable bind mounts. To initialize ownership
-without guessing the image UID:
+Before starting, create the two writable bind mounts. The image runs as user
+`ether` with a fixed UID/GID of 999. To initialize ownership from the image
+itself:
 
 ```sh
 mkdir -p /var/lib/ether /var/cache/ether

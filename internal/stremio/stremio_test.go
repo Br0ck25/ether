@@ -334,6 +334,10 @@ func TestDebridHints(t *testing.T) {
 		"[AD⬇️] Comet":                  "[] [alldebrid]",
 		"MediaFusion PM ⏳ 1080p":        "[] [premiumize]",
 		"[TB+] [PM+] Multi":             "[torbox premiumize] []",
+		"[DL+] Torrentio\n1080p":        "[debridlink] []",
+		"[OC download] Torrentio":       "[] [offcloud]",
+		"[DL⚡] [OC⬇️] Comet":            "[debridlink] [offcloud]",
+		"Torrentio 1080p WEB-DL+ x264":  "[] []",
 		"Torrentio\n4k HDR":             "[] []",
 		"BRAD+ADVENTURE no service tag": "[] []",
 	} {

@@ -14,7 +14,7 @@ services:
       # ETHER_DATA_DIR: /config   # default in the image
     volumes:
       - ./config:/config          # config.json, database, identity
-      - ./cache:/cache            # segment cache (size it via the web UI)
+      - ./cache:/cache            # segment cache: select /cache in setup (default is /config/cache)
     # Intel/AMD VAAPI or QuickSync transcoding (optional):
     # devices:
     #   - /dev/dri:/dev/dri
