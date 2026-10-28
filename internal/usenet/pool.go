@@ -26,6 +26,7 @@ type pool struct {
 	bodyWG        sync.WaitGroup
 	bodyQueue     [numPriorities][]*bodyFlight
 	bodyWorkers   [numPriorities]int
+	bodyClaimed   [numPriorities]int // workers holding a dequeued flight
 	bodyFlights   map[bodyKey]*bodyFlight
 	bodyAdmission *prioSem
 	bodyBatches   atomic.Int64
