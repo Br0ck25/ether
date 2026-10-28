@@ -474,16 +474,16 @@ func TestLiveReadsSpillToCache(t *testing.T) {
 	e := newTestEngine(t, f, cache, Options{})
 	src := openSource(t, e, "spill", doc)
 	_ = readAll(t, src, 100_000)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if used, _ := cache.Usage(); used >= int64(len(data)) {
-			break
-		}
-		if time.Now().After(deadline) {
-			used, _ := cache.Usage()
-			t.Fatalf("cache holds %d bytes", used)
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Live reads publish bytes before persisting them. Join the engine's
+	// pending writes instead of imposing a disk-speed deadline on CI.
+	if err := src.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := cache.Usage(); used < int64(len(data)) {
+		t.Fatalf("cache holds %d bytes", used)
 	}
 }
 
