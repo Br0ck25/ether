@@ -48,7 +48,14 @@ func parseStremioCatalog(raw string, params map[string]string) (stremioCat, erro
 	}
 	u.RawQuery, u.Fragment, u.User = "", "", nil
 	p := strings.TrimRight(u.EscapedPath(), "/")
-	c := stremioCat{kind: params["type"], id: params["catalog"]}
+	c := stremioCat{kind: params["type"], id: strings.TrimSpace(params["catalog"])}
+	// The preview lists choices as "type/id"; accept one pasted whole.
+	if t, id, ok := strings.Cut(c.id, "/"); ok && (t == "movie" || t == "series") {
+		if c.kind == "" {
+			c.kind = t
+		}
+		c.id = strings.TrimSpace(id)
+	}
 	if m := stremioCatalogPath.FindStringSubmatch(p); m != nil {
 		p = m[1]
 		if c.kind == "" {
@@ -156,7 +163,7 @@ func (s *Service) fetchStremioCatalog(ctx context.Context, src core.CollectionSo
 			return nil, fmt.Errorf("stremio catalog: %s did not answer with an addon manifest", c.base.Host)
 		}
 		if c.id == "" {
-			return nil, fmt.Errorf("choose a catalog (params.catalog) from %s: %s", firstNonEmpty(m.Name, c.base.Host), strings.Join(m.browsable(), ", "))
+			return nil, fmt.Errorf("this link offers several catalogs; copy one (before its bracketed name) into the Catalog id box. %s has: %s", firstNonEmpty(m.Name, c.base.Host), strings.Join(m.browsable(), ", "))
 		}
 		for _, mc := range m.Catalogs {
 			if mc.ID == c.id && (mc.Type == "movie" || mc.Type == "series") {
