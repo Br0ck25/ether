@@ -227,10 +227,19 @@ func openSQLite(ctx context.Context, path string) (*sql.DB, error) {
 	}
 	if path == ":memory:" {
 		db.SetMaxOpenConns(1)
+	} else if ok, err := snapshotBeforeMigrate(ctx, db, path, registered()); err != nil {
+		// Best effort: a full disk or read-only directory must not stop
+		// the server from starting.
+		slog.Warn("store: could not snapshot the database before migrating", "path", path+PreMigrateSuffix, "err", err)
+	} else if ok {
+		slog.Info("store: snapshot taken before applying database migrations", "path", path+PreMigrateSuffix)
 	}
 	if err := Migrate(ctx, db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if path != ":memory:" {
+		finishPreMigrate(path)
 	}
 	// Recommended at open by the SQLite docs: analyse tables whose stats are
 	// missing or stale, bounded by the 0x10000 analysis limit so it is cheap.
