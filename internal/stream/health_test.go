@@ -224,6 +224,11 @@ func TestCheckBodyPartTakedownBehindStat223(t *testing.T) {
 	if tr.BodyProbes != 2 || tr.BodyOK != 0 || !strings.Contains(tr.FailReason, "BODY") {
 		t.Fatalf("trace = %+v", tr)
 	}
+	// The reason must keep the underlying reply code (here the fake's
+	// 451): "missing" alone cannot tell a takedown from a plain 430.
+	if !strings.Contains(tr.FailReason, "451") {
+		t.Fatalf("fail reason %q lost the NNTP code", tr.FailReason)
+	}
 	bf.mu.Lock()
 	defer bf.mu.Unlock()
 	seenMid := false

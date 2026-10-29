@@ -393,7 +393,11 @@ func TestBodyPipelineTruncatedPredecessorsDoNotExhaustTailRetries(t *testing.T) 
 		mu.Unlock()
 		return nntptest.Fault{Truncate: first && index%7 == 0}
 	})
-	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 4)}, Options{BodyPipelineDepth: 4})
+	// FailThreshold high keeps the production circuit breaker out of this
+	// test: the injected truncations are the fixture, not the subject, and
+	// tripping it (2 consecutive failures, 1s backoff) would abort tail
+	// articles with ErrProviderBackoff instead of exercising their retries.
+	f := newFetcher(t, []config.UsenetProvider{s.Provider("p", 4)}, Options{BodyPipelineDepth: 4, FailThreshold: 100})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var next atomic.Int64
