@@ -148,20 +148,20 @@ in Ether's **Viewers** page after signing in. Open a viewer to see their taste,
 activity and Home, or set content and playback limits. Each viewer keeps their
 own history and recommendations.
 
-## Jellyfin and Emby apps
+## Jellyfin apps
 
-Ether can serve the **Jellyfin** and **Emby** apps (Infuse, Streamyfin,
-Findroid, Swiftfin, the official Jellyfin and Emby apps and others) as well as
-Plex, from the same server. All three share one catalogue, one set of sources,
+Ether can serve the **Jellyfin** apps (Infuse, Streamyfin, Findroid,
+Swiftfin, the official Jellyfin apps and others) as well as Plex, from the
+same server. Both share one catalogue, one set of sources,
 one watch history per viewer and the same limits (content rating, sections,
 stream and bitrate limits), so something watched in Plex is marked watched in
 Jellyfin.
 
-1. In **General › Jellyfin & Emby**, turn on **Allow Jellyfin and Emby apps**.
+1. In **General › Jellyfin**, turn on **Allow Jellyfin apps**.
    The apps expect port **8096**; it must differ from the Plex port.
    Leave **Show up in the apps' server list** on to appear in their LAN
    discovery.
-2. Open a viewer, then **Access**, and under **Jellyfin & Emby sign-in** click
+2. Open a viewer, then **Access**, and under **Jellyfin sign-in** click
    **Generate a code** (or choose your own). Plex accounts have no password
    Ether can check, so each viewer signs in to these apps with their Plex user
    name and this code. The code is shown once and only a scrambled copy is
@@ -170,7 +170,9 @@ Jellyfin.
    official Jellyfin mobile apps load Jellyfin's web client from the server, so
    the Docker image bundles it and serves it at `/web`; opening
    `http://<ether address>:8096` in a browser works too. Outside Docker, set
-   `ETHER_JELLYFIN_WEB_DIR` to a folder holding the client.
+   `ETHER_JELLYFIN_WEB_DIR` to a folder holding the client. Ether's own Home rows
+   (collections, trending, "because you watched" and so on) appear below the
+   standard sections on the web client's home screen.
 
 What works: Movies, TV Shows and Collections libraries, search, genres, seasons
 and episodes, Continue Watching, Next Up, Latest, artwork, favourites (kept in
@@ -189,10 +191,10 @@ Ether from its own admin UI). Text subtitles stored inside a video play on direc
 not available while transcoding, because extracting them would mean reading
 the whole remote file. Picture subtitles (PGS, VobSub) are burned in.
 
-### Remote access for Jellyfin and Emby
+### Remote access for Jellyfin
 
-Jellyfin and Emby apps need no paid pass to stream from outside your home. The
-Jellyfin/Emby port speaks plain HTTP, so a sign-in code and the token an app
+Jellyfin apps need no paid pass to stream from outside your home. The
+Jellyfin port speaks plain HTTP, so a sign-in code and the token an app
 receives would cross the internet unencrypted if you simply forward port 8096.
 Use one of the two setups below instead. Both keep every access code and token
 inside an encrypted connection.

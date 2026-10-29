@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -64,17 +63,13 @@ func TestDirectPlay(t *testing.T) {
 
 	// The stream URL serves the bytes with range support, with only the
 	// token in the URL (players follow it without our headers).
-	// Jellyfin apps build the stream URL themselves; Emby's read DirectStreamUrl.
+	// Jellyfin apps build the stream URL themselves.
 	if src.DirectStreamURL != "" {
-		t.Fatalf("Jellyfin source carries Emby's DirectStreamUrl: %q", src.DirectStreamURL)
+		t.Fatalf("source carries a DirectStreamUrl: %q", src.DirectStreamURL)
 	}
-	w0 := f.call("POST", "/emby/Items/"+itemID(fightClub.Key)+"/PlaybackInfo", tok, map[string]any{"DeviceProfile": webProfile()})
-	embySrc := decode[playbackInfo](t, w0).MediaSources[0]
-	u, err := url.Parse(embySrc.DirectStreamURL)
-	if err != nil || u.Query().Get("api_key") != tok {
-		t.Fatalf("emby direct stream url: %q", embySrc.DirectStreamURL)
-	}
-	r := httptest.NewRequest("GET", embySrc.DirectStreamURL, nil)
+	streamURL := fmt.Sprintf("/videos/%s/stream?static=true&mediaSourceId=%s&playSessionId=%s&api_key=%s",
+		itemID(fightClub.Key), itemID(fightClub.Key), pi.PlaySessionID, tok)
+	r := httptest.NewRequest("GET", streamURL, nil)
 	r.Header.Set("Range", "bytes=10-19")
 	r.RemoteAddr = "192.168.1.20:5555"
 	w := httptest.NewRecorder()
@@ -82,11 +77,11 @@ func TestDirectPlay(t *testing.T) {
 	if w.Code != http.StatusPartialContent || w.Body.String() != "0123456789" {
 		t.Fatalf("range read: %d %q", w.Code, w.Body)
 	}
-	if f.playback.prepared != 2 { // one per PlaybackInfo; streaming reuses the session
+	if f.playback.prepared != 1 { // one per PlaybackInfo; streaming reuses the session
 		t.Fatalf("the stream request re-resolved the title (%d prepares)", f.playback.prepared)
 	}
-	// Apps also ask for stream.mkv, Emby's original.mkv and the download link.
-	for _, p := range []string{"/Videos/%s/stream.mkv", "/emby/Videos/%s/original.mkv", "/Items/%s/Download"} {
+	// Apps also ask for stream.mkv and the download link.
+	for _, p := range []string{"/Videos/%s/stream.mkv", "/Items/%s/Download"} {
 		w := f.call("GET", fmt.Sprintf(p, itemID(fightClub.Key))+"?api_key="+tok, "", nil)
 		if w.Code != 200 || w.Body.Len() != 10000 {
 			t.Errorf("%s: %d (%d bytes)", p, w.Code, w.Body.Len())

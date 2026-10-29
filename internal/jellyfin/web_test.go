@@ -23,14 +23,14 @@ func TestWebClient(t *testing.T) {
 		}
 	}
 	must(os.MkdirAll(filepath.Join(dir, "strings"), 0o755))
-	must(os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>jf</html>"), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>jf</body></html>"), 0o644))
 	must(os.WriteFile(filepath.Join(dir, "strings", "en-US.json"), []byte(`{"a":1}`), 0o644))
 	f.srv.d.WebDir = dir
 
 	if rr := f.call("GET", "/", "", nil); rr.Code != http.StatusFound || rr.Header().Get("Location") != "/web/" {
 		t.Fatalf("root redirect: %d %q", rr.Code, rr.Header().Get("Location"))
 	}
-	if rr := f.call("GET", "/web/", "", nil); rr.Code != http.StatusOK || rr.Body.String() != "<html>jf</html>" {
+	if rr := f.call("GET", "/web/", "", nil); rr.Code != http.StatusOK || rr.Body.String() != `<html>jf<script src="/ether/home.js" defer></script></body></html>` {
 		t.Fatalf("web index: %d %q", rr.Code, rr.Body.String())
 	}
 	if rr := f.call("GET", "/web/index.html", "", nil); rr.Code != http.StatusMovedPermanently && rr.Code != http.StatusOK {
@@ -45,5 +45,19 @@ func TestWebClient(t *testing.T) {
 	}
 	if rr := f.call("GET", "/System/Info/Public", "", nil); rr.Code != http.StatusOK {
 		t.Fatalf("api still served: %d", rr.Code)
+	}
+}
+
+// The Jellyfin web client hides Play on items whose LocationType is Virtual
+// (Jellyfin's marker for missing episodes), so catalogue titles must not be.
+func TestTitlesAreNotVirtual(t *testing.T) {
+	f := newFixture(t)
+	tok := f.login(ownerUser)
+	w := f.call("GET", "/Items/"+itemID(fightClub.Key)+"?userId="+userID(ownerUser.ID), tok, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("item: %d %s", w.Code, w.Body)
+	}
+	if got := decode[map[string]any](t, w)["LocationType"]; got != "FileSystem" {
+		t.Fatalf("LocationType = %v", got)
 	}
 }

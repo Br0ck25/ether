@@ -10,20 +10,20 @@ import (
 	"time"
 )
 
-// DiscoveryPort is where Jellyfin and Emby apps broadcast "who is
-// JellyfinServer?" / "who is EmbyServer?" to find servers on the LAN.
+// DiscoveryPort is where Jellyfin apps broadcast "who is JellyfinServer?"
+// to find servers on the LAN.
 const DiscoveryPort = 7359
 
 // ServeDiscovery answers LAN discovery broadcasts until ctx ends, so the
 // apps' "add server" screens list Ether without typing an address. It
-// replies only to the two documented probes and tells the asker an address
+// replies only to the documented probe and tells the asker an address
 // on the network it asked from.
 func ServeDiscovery(ctx context.Context, bind string, httpPort int, id, name string) error {
 	pc, err := net.ListenPacket("udp4", net.JoinHostPort(bind, strconv.Itoa(DiscoveryPort)))
 	if err != nil {
 		return err
 	}
-	slog.Info("Jellyfin and Emby LAN discovery listening", "addr", pc.LocalAddr().String())
+	slog.Info("Jellyfin LAN discovery listening", "addr", pc.LocalAddr().String())
 	go func() { <-ctx.Done(); _ = pc.Close() }()
 	buf := make([]byte, 512)
 	for {
@@ -35,7 +35,7 @@ func ServeDiscovery(ctx context.Context, bind string, httpPort int, id, name str
 			return err
 		}
 		probe := strings.ToLower(strings.TrimSpace(string(buf[:n])))
-		if probe != "who is jellyfinserver?" && probe != "who is embyserver?" {
+		if probe != "who is jellyfinserver?" {
 			continue
 		}
 		udp, ok := from.(*net.UDPAddr)
@@ -52,7 +52,7 @@ func ServeDiscovery(ctx context.Context, bind string, httpPort int, id, name str
 		})
 		_ = pc.SetWriteDeadline(time.Now().Add(time.Second))
 		_, _ = pc.WriteTo(reply, from)
-		slog.Info("answered a Jellyfin or Emby app's server search", "from", from.String(), "address", host)
+		slog.Info("answered a Jellyfin app's server search", "from", from.String(), "address", host)
 	}
 }
 

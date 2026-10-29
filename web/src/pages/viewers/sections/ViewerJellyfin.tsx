@@ -23,7 +23,7 @@ function copy(text: string, what: string) {
 }
 
 /**
- * How one viewer signs in from a Jellyfin or Emby app: their Plex user name
+ * How one viewer signs in from a Jellyfin app: their Plex user name
  * and an access code set here (viewer profile › Access).
  */
 export function ViewerJellyfinSignIn({ viewerId }: { viewerId: number }) {
@@ -42,7 +42,7 @@ export function ViewerJellyfinSignIn({ viewerId }: { viewerId: number }) {
   if (!viewers.data)
     return (
       <div className="py-6 text-center">
-        <Spinner size={18} label="Loading Jellyfin & Emby access" />
+        <Spinner size={18} label="Loading Jellyfin access" />
       </div>
     );
   const me = viewers.data.find((v) => v.id === viewerId);
@@ -74,20 +74,20 @@ export function ViewerJellyfinSignIn({ viewerId }: { viewerId: number }) {
 
   return (
     <SettingsSection
-      title="Jellyfin & Emby sign-in"
-      description="Lets this viewer use the Jellyfin and Emby apps with their own watch history and limits."
+      title="Jellyfin sign-in"
+      description="Lets this viewer use the Jellyfin apps with their own watch history and limits."
     >
       <SettingsRow
         title="How to connect"
         description={
           enabled ? (
             <>
-              In a Jellyfin or Emby app, add the server <code>{address}</code> and sign in as{" "}
+              In a Jellyfin app, add the server <code>{address}</code> and sign in as{" "}
               <strong>{me.username || me.title}</strong> with the access code below.
             </>
           ) : (
             <>
-              Jellyfin and Emby apps are switched off.{" "}
+              Jellyfin apps are switched off.{" "}
               <Link to="/server/jellyfin" className="font-medium text-primary hover:underline">
                 Turn them on in General
               </Link>
@@ -165,7 +165,7 @@ export function ViewerJellyfinSignIn({ viewerId }: { viewerId: number }) {
       {me.devices > 0 ? (
         <SettingsRow
           title="Signed-in devices"
-          description="Sign this viewer out of every Jellyfin and Emby app."
+          description="Sign this viewer out of every Jellyfin app."
           control={
             <Button
               variant="outline"
