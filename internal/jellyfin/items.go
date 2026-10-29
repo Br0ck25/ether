@@ -472,6 +472,10 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	if it, ok := s.liveItem(ctx, sess, chi.URLParam(r, "id")); ok {
+		writeJSON(w, http.StatusOK, it)
+		return
+	}
 	key, ok := parseItemID(chi.URLParam(r, "id"))
 	if !ok {
 		http.NotFound(w, r)

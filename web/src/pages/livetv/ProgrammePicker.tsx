@@ -2,6 +2,7 @@ import { Button } from "@braedonsaunders/appkit-ui";
 import { ArrowDown, ArrowUp, Shuffle, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { Artwork } from "../../components/Artwork";
+import { Segmented } from "../../components/fields";
 import { TitleSearch } from "../../components/pickers";
 import { DragHandle, SortableList } from "../../components/Sortable";
 import { api, errorMessage } from "../../lib/api";
@@ -9,7 +10,17 @@ import type { TitleCard } from "../../lib/contract";
 import { plural } from "../../lib/format";
 import { duration, loopLength, type Item } from "./model";
 
-/** A hand-built running order: search to add, drag (or arrows) to reorder. */
+type Include = "all" | "movie" | "show";
+
+// A show's catalogue key sits in [2e15, 3e15) (internal/core/ratingkey.go).
+const SHOW_KEY_MIN = 2e15;
+const SHOW_KEY_MAX = 3e15;
+
+/**
+ * A hand-built running order of movies and TV shows: search to add, drag (or
+ * arrows) to reorder. A show is added whole and the server replaces it with
+ * its episodes, in order, when the channel is saved.
+ */
 export function ProgrammePicker({
   items,
   onChange,
@@ -20,12 +31,28 @@ export function ProgrammePicker({
   label: string;
 }) {
   const [notice, setNotice] = useState("");
+  const [include, setInclude] = useState<Include>("all");
   const pending = useRef(false);
   async function pick(card: TitleCard) {
     if (pending.current) return;
     pending.current = true;
     setNotice("");
     try {
+      if (card.type === "show") {
+        // A placeholder: the server expands the show into its episodes on save.
+        onChange([
+          ...items,
+          {
+            key: Number(card.key),
+            title: card.title,
+            durationMs: 60000,
+            summary: card.summary,
+            rating: card.contentRating,
+            thumb: card.poster,
+          },
+        ]);
+        return;
+      }
       const title = card.runtimeMinutes ? card : await api.title(card.key);
       if (!title.runtimeMinutes || title.runtimeMinutes <= 0)
         throw new Error(
@@ -60,9 +87,26 @@ export function ProgrammePicker({
   const ids = items.map((item, i) => `${item.key}-${i}`);
   return (
     <div className="space-y-3" role="group" aria-label={label}>
+      <Segmented
+        ariaLabel="Add"
+        size="sm"
+        value={include}
+        onChange={(v) => setInclude(v as Include)}
+        options={[
+          { value: "all", label: "Movies and shows" },
+          { value: "movie", label: "Movies" },
+          { value: "show", label: "TV shows" },
+        ]}
+      />
       <TitleSearch
-        type="movie"
-        placeholder="Find a movie to add…"
+        type={include === "all" ? undefined : include}
+        placeholder={
+          include === "movie"
+            ? "Find a movie to add…"
+            : include === "show"
+              ? "Find a TV show to add…"
+              : "Find a movie or TV show to add…"
+        }
         excludeKeys={new Set(items.map((i) => String(i.key)))}
         onPick={(title) => void pick(title)}
       />
@@ -108,7 +152,9 @@ export function ProgrammePicker({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-fg">{item.title}</p>
                   <p className="text-xs text-fg-muted">
-                    {Math.round(item.durationMs / 60000)} min
+                    {item.durationMs <= 60000 && item.key >= SHOW_KEY_MIN && item.key < SHOW_KEY_MAX
+                      ? "All episodes (listed after saving)"
+                      : `${Math.round(item.durationMs / 60000)} min`}
                     {item.rating ? ` · ${item.rating}` : ""}
                   </p>
                 </div>
@@ -149,8 +195,8 @@ export function ProgrammePicker({
         </>
       ) : (
         <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-fg-muted">
-          Search for movies to build the running order. Use a collection or genres to include TV
-          episodes.
+          Search to build the running order. A TV show plays all its episodes in order; save the
+          channel to see them listed.
         </p>
       )}
     </div>

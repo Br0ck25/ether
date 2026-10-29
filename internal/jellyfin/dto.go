@@ -167,7 +167,7 @@ type item struct {
 	LocationType            string            `json:"LocationType,omitempty"`
 	VideoType               string            `json:"VideoType,omitempty"`
 	CollectionType          string            `json:"CollectionType,omitempty"`
-	ImageTags               map[string]string `json:"ImageTags,omitempty"`
+	ImageTags               map[string]string `json:"ImageTags"`
 	BackdropImageTags       []string          `json:"BackdropImageTags,omitempty"`
 	ParentBackdropImageTags []string          `json:"ParentBackdropImageTags,omitempty"`
 	ParentBackdropItemID    string            `json:"ParentBackdropItemId,omitempty"`
@@ -180,6 +180,16 @@ type item struct {
 	LocalTrailerCount       int               `json:"LocalTrailerCount"`
 	SpecialFeatureCount     int               `json:"SpecialFeatureCount"`
 	PartCount               int               `json:"PartCount,omitempty"`
+	// Live TV channels ("TvChannel") and their programmes ("Program").
+	ChannelID      string     `json:"ChannelId,omitempty"`
+	ChannelName    string     `json:"ChannelName,omitempty"`
+	ChannelNumber  string     `json:"ChannelNumber,omitempty"`
+	StartDate      *time.Time `json:"StartDate,omitempty"`
+	EndDate        *time.Time `json:"EndDate,omitempty"`
+	IsLive         bool       `json:"IsLive,omitempty"`
+	IsMovie        bool       `json:"IsMovie,omitempty"`
+	IsSeries       bool       `json:"IsSeries,omitempty"`
+	CurrentProgram *item      `json:"CurrentProgram,omitempty"`
 }
 
 type itemsResult struct {

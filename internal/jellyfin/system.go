@@ -93,10 +93,6 @@ func (s *Server) handleQuickConnectEnabled(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, false)
 }
 
-func (s *Server) handleLiveTVInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"Services": []any{}, "IsEnabled": false, "EnabledUsers": []string{}})
-}
-
 // A bitrate test is a run of bytes the app times; apps size it with ?Size=.
 func (s *Server) handleBitrateTest(w http.ResponseWriter, r *http.Request) {
 	size := queryParams(r).int("size", 500_000)
@@ -135,7 +131,7 @@ func (s *Server) userDTO(u *core.User) map[string]any {
 	policy := map[string]any{
 		"IsAdministrator": u.IsOwner, "IsHidden": false, "IsDisabled": false, "EnableUserPreferenceAccess": true,
 		"EnableRemoteControlOfOtherUsers": false, "EnableSharedDeviceControl": false, "EnableRemoteAccess": true,
-		"EnableLiveTvManagement": false, "EnableLiveTvAccess": false, "EnableMediaPlayback": true,
+		"EnableLiveTvManagement": false, "EnableLiveTvAccess": s.d.LiveTV != nil, "EnableMediaPlayback": true,
 		"EnableAudioPlaybackTranscoding": true, "EnableVideoPlaybackTranscoding": true, "EnablePlaybackRemuxing": true,
 		"EnableContentDeletion": false, "EnableContentDownloading": true, "EnableSyncTranscoding": false,
 		"EnableMediaConversion": false, "EnableAllDevices": true, "EnableAllChannels": true, "EnableAllFolders": true,

@@ -179,7 +179,11 @@ intro and credits Skip buttons, sidecar subtitles, direct play, and HLS
 transcoding with the same transcoder, HDR tone mapping and failover as Plex.
 Five wrong sign-ins from one address lock it for ten minutes.
 
-What does not: Live TV, music and books, SyncPlay, remote control of an app
+Virtual Live TV channels also appear in the app's Live TV tab (guide and
+channel list, playing the current programme). IPTV channels do not, and there
+are no recordings or timers.
+
+What does not: music and books, SyncPlay, remote control of an app
 from another, Quick Connect, and Jellyfin's administration pages (manage
 Ether from its own admin UI). Text subtitles stored inside a video play on direct play, but are
 not available while transcoding, because extracting them would mean reading
@@ -460,6 +464,14 @@ Open **Live TV & IPTV** to create a virtual channel or import an M3U source.
 Supply a matching XMLTV guide for programme schedules. Search the channel list
 or filter to favourites; select a channel to change its settings.
 Ether includes no channel sources by default.
+
+A hand-picked virtual channel can mix movies and TV shows: search with **Movies
+and shows**, **Movies** or **TV shows** and add titles in the order they should
+play. A show is added whole; when the channel is saved it is replaced by its
+episodes in order. Genre channels can draw on movies, TV shows or **Both**
+(alternating movies and shows), so you can build movie-only, show-only and mixed
+channels. Virtual channels can also be watched from Jellyfin apps (see
+[Jellyfin apps](#jellyfin-apps)).
 
 A channel can have several stream sources in priority order. Enable the inputs
 you want and put the preferred one first. If it fails during tuning, Ether tries

@@ -54,6 +54,8 @@ type Deps struct {
 	Markers      MarkerProvider
 	Subtitles    SubtitleSource
 	AccessPolicy AccessPolicy
+	// LiveTV lists the owner's virtual channels as Live TV. Optional.
+	LiveTV LiveTV
 	// FilterAvailable drops titles the viewer cannot play yet.
 	FilterAvailable func(context.Context, []core.Title) []core.Title
 	// OnTimeline is told of every playback progress report, as the Plex
@@ -84,6 +86,8 @@ type Server struct {
 	name     string
 	router   chi.Router
 	throttle *throttle
+
+	live liveState
 
 	mu        sync.Mutex
 	plays     map[string]*play // by play session id
@@ -243,8 +247,20 @@ func (s *Server) protected(r chi.Router) {
 	r.Get("/musicgenres", s.handleEmptyItems)
 	r.Get("/artists", s.handleEmptyItems)
 	r.Get("/channels", s.handleEmptyItems)
-	r.Get("/livetv/programs/recommended", s.handleEmptyItems)
+	r.Get("/livetv/programs/recommended", s.handleRecommendedPrograms)
 	r.Get("/livetv/info", s.handleLiveTVInfo)
+	r.Get("/livetv/guideinfo", s.handleGuideInfo)
+	r.Get("/livetv/channels", s.handleLiveChannels)
+	r.Get("/livetv/channels/{id}", s.handleLiveChannel)
+	r.Get("/livetv/channels/{id}/master.m3u8", s.handleLiveMaster)
+	r.Get("/livetv/channels/{id}/main.m3u8", s.handleLiveMaster)
+	r.Get("/livetv/channels/{id}/program/{start}/{seg}", s.handleLiveSegment)
+	r.Get("/livetv/programs", s.handlePrograms)
+	r.Post("/livetv/programs", s.handlePrograms)
+	r.Get("/livetv/programs/{id}", s.handleProgram)
+	for _, p := range []string{"/livetv/recordings", "/livetv/recordings/folders", "/livetv/recordings/groups", "/livetv/timers", "/livetv/seriestimers"} {
+		r.Get(p, s.handleEmptyLive)
+	}
 	r.Get("/collections", s.handleEmptyItems)
 	r.Get("/playlists", s.handleEmptyItems)
 	r.Get("/sync/items/ready", s.handleEmptyArray)
