@@ -56,6 +56,9 @@ type Deps struct {
 	AccessPolicy AccessPolicy
 	// LiveTV lists the owner's virtual channels as Live TV. Optional.
 	LiveTV LiveTV
+	// Recommender supplies Ether's Home rows, shown on the web client's home
+	// screen under the standard sections. Optional.
+	Recommender core.Recommender
 	// FilterAvailable drops titles the viewer cannot play yet.
 	FilterAvailable func(context.Context, []core.Title) []core.Title
 	// OnTimeline is told of every playback progress report, as the Plex
@@ -169,6 +172,7 @@ func (s *Server) routes() chi.Router {
 	open("/system/info/public", s.handlePublicInfo, both...)
 	open("/", s.handleLanding, both...)
 	open("/web", s.handleLanding, both...)
+	open("/ether/home.js", s.handleHomeScript, both...)
 	open("/health", s.handleHealth, both...)
 	open("/system/ping", s.handlePing, http.MethodGet, http.MethodPost, http.MethodHead)
 	open("/users/public", s.handleUsersPublic, both...)
@@ -182,6 +186,7 @@ func (s *Server) routes() chi.Router {
 	open("/users/{uid}/images/{type}", s.handleNoImage, both...)
 	r.Group(func(r chi.Router) {
 		r.Use(s.authenticate)
+		r.Get("/ether/homerows", s.handleHomeRows)
 		s.protected(r)
 	})
 	r.NotFound(http.NotFound)

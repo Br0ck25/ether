@@ -269,7 +269,7 @@ func (s *Server) itemFor(t *core.Title, st core.WatchStatus, fav, detail bool) i
 		PremiereDate: dateOrNil(t.Released), DateCreated: dateOrNil(firstTime(t.UpdatedAt, t.Released)),
 		OfficialRating: t.ContentRating, Overview: t.Summary, CommunityRating: round1(t.Rating),
 		RunTimeTicks: ticks(t.Runtime), ProductionYear: t.Year, Genres: t.Genres,
-		LocationType: "Virtual", LockData: false,
+		LocationType: "FileSystem", LockData: false,
 		ImageTags: map[string]string{}, ProviderIDs: map[string]string{},
 	}
 	out.Etag = itemID(t.Key)[16:] + imageTag(t.UpdatedAt.String())[:4]

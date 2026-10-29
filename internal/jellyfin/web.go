@@ -41,6 +41,10 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 		if base := filepath.Base(p); base == "index.html" || base == "serviceworker.js" || p == "/web/" {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
+		if p == "/web/" || strings.EqualFold(p, "/web/index.html") {
+			s.serveIndex(w, r)
+			return true
+		}
 		http.FileServer(http.Dir(s.d.WebDir)).ServeHTTP(w, r2)
 		return true
 	}
@@ -72,3 +76,24 @@ func (w *statusLogger) Flush() {
 
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (w *statusLogger) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// serveIndex serves the web client's page with Ether's Home rows script added.
+func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
+	page, err := os.ReadFile(filepath.Join(s.d.WebDir, "index.html"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	html := string(page)
+	const tag = `<script src="/ether/home.js" defer></script>`
+	if i := strings.LastIndex(html, "</body>"); i >= 0 {
+		html = html[:i] + tag + html[i:]
+	} else {
+		html += tag
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	if r.Method != http.MethodHead {
+		_, _ = w.Write([]byte(html))
+	}
+}

@@ -170,7 +170,9 @@ Jellyfin.
    official Jellyfin mobile apps load Jellyfin's web client from the server, so
    the Docker image bundles it and serves it at `/web`; opening
    `http://<ether address>:8096` in a browser works too. Outside Docker, set
-   `ETHER_JELLYFIN_WEB_DIR` to a folder holding the client.
+   `ETHER_JELLYFIN_WEB_DIR` to a folder holding the client. Ether's own Home rows
+   (collections, trending, "because you watched" and so on) appear below the
+   standard sections on the web client's home screen.
 
 What works: Movies, TV Shows and Collections libraries, search, genres, seasons
 and episodes, Continue Watching, Next Up, Latest, artwork, favourites (kept in
