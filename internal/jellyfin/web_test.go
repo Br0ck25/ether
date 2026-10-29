@@ -23,14 +23,14 @@ func TestWebClient(t *testing.T) {
 		}
 	}
 	must(os.MkdirAll(filepath.Join(dir, "strings"), 0o755))
-	must(os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>jf</html>"), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html>jf</body></html>"), 0o644))
 	must(os.WriteFile(filepath.Join(dir, "strings", "en-US.json"), []byte(`{"a":1}`), 0o644))
 	f.srv.d.WebDir = dir
 
 	if rr := f.call("GET", "/", "", nil); rr.Code != http.StatusFound || rr.Header().Get("Location") != "/web/" {
 		t.Fatalf("root redirect: %d %q", rr.Code, rr.Header().Get("Location"))
 	}
-	if rr := f.call("GET", "/web/", "", nil); rr.Code != http.StatusOK || rr.Body.String() != "<html>jf</html>" {
+	if rr := f.call("GET", "/web/", "", nil); rr.Code != http.StatusOK || rr.Body.String() != `<html>jf<script src="/ether/home.js" defer></script></body></html>` {
 		t.Fatalf("web index: %d %q", rr.Code, rr.Body.String())
 	}
 	if rr := f.call("GET", "/web/index.html", "", nil); rr.Code != http.StatusMovedPermanently && rr.Code != http.StatusOK {

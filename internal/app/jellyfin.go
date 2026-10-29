@@ -67,6 +67,7 @@ func (a *App) buildJellyfin(cfg config.Config) {
 		ServerID:     cfg.Server.MachineIdentifier,
 		ServerName:   cfg.Server.FriendlyName,
 		WebDir:       jellyfinWebDir(),
+		Recommender:  a.personalize,
 		OnTimeline: func(u *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
 			if u != nil && state == "playing" {
 				a.personalize.NotePlayback(u, key)
