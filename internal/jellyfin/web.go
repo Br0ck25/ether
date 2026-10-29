@@ -54,7 +54,7 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 }
 
 // playbackPath reports requests that start, feed or end a playback.
-var playbackPath = regexp.MustCompile(`(?i)/(playbackinfo|videos/|livetv/channels/|sessions/playing|livestreams/)`)
+var playbackPath = regexp.MustCompile(`(?i)/(playbackinfo|videos/|livetv/channels/|sessions/playing|livestreams/|users/authenticate|sessions/logout|quickconnect)`)
 
 // statusLogger logs every 404 an app gets, with the app's user agent, so an
 // app that cannot connect shows exactly what it asked for. Playback requests

@@ -79,7 +79,7 @@ func TestPlaybackRequestsAreLogged(t *testing.T) {
 	if !strings.Contains(out, "jellyfin: playback request") || !strings.Contains(out, "status=200") || !strings.Contains(out, "PlaybackInfo") {
 		t.Fatalf("playback request not logged: %q", out)
 	}
-	if strings.Contains(out, tok) || strings.Count(out, "playback request") != 1 {
+	if strings.Contains(out, tok) || strings.Count(out, "PlaybackInfo") != 1 {
 		t.Fatalf("token leaked or extra lines: %q", out)
 	}
 }
