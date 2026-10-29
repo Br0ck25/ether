@@ -1,6 +1,7 @@
 package transcode
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -720,6 +721,55 @@ func TestNewStaleCleanupAndNoFFmpeg(t *testing.T) {
 	_, err := New(config.Transcode{FFmpegPath: dir + "/missing"}, nil, WithRunner(fr))
 	if !errors.Is(err, ErrFFmpegNotFound) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// Wiring: a real session (fake runner) whose runs fall back HEVC->libx264
+// must warn at most once per session, however many runs startRunLocked
+// starts (StartHLS's first run plus a seek restart here). Removing the
+// call site in startRunLocked makes the count 0 and fails this test.
+func TestSessionHEVCEncoderFallbackWarnsOncePerSession(t *testing.T) {
+	fr := newFakeRunner()
+	m := newTestManager(t, fr, config.Transcode{})
+	var buf lockedBuffer
+	m.log = slog.New(slog.NewTextHandler(&buf, nil))
+	// No HW HEVC and no libx265: HEVC encodes fall back to libx264.
+	m.hw = core.HWAccel{Name: AccelNone}
+	m.feat = features{encoders: map[string]bool{"libx264": true}}
+
+	req := transcodeRequest(t, "hevc-fallback-once")
+	req.Decision.VideoCodec = "hevc"
+	req.Decision.VideoCopy = false
+	s := startSession(t, m, req) // first run: warns
+
+	s.mu.Lock()
+	err := s.startRunLocked(5, false) // seek restart: must not warn again
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatalf("second startRunLocked: %v", err)
+	}
+	if n := fr.startCount(); n != 2 {
+		t.Fatalf("ffmpeg starts = %d, want 2 (two runs went through startRunLocked)", n)
+	}
+	if n := strings.Count(buf.String(), "falling back to libx264"); n != 1 {
+		t.Errorf("HEVC fallback warnings = %d, want exactly 1 per session; log:\n%s", n, buf.String())
 	}
 }
 
