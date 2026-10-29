@@ -140,6 +140,7 @@ func (s *Server) Sweep() {
 	for _, p := range stale {
 		s.endPlay(p)
 	}
+	s.sweepLive()
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +291,10 @@ func boolOr(b *bool, def bool) bool {
 func (s *Server) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	sess := sessionFrom(r.Context())
 	ctx := r.Context()
+	if c, ok := s.liveChannelFor(ctx, sess, chi.URLParam(r, "id")); ok {
+		s.livePlaybackInfo(w, r, c)
+		return
+	}
 	key, ok := parseItemID(chi.URLParam(r, "id"))
 	if !ok {
 		http.NotFound(w, r)

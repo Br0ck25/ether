@@ -172,7 +172,7 @@ describe("Live TV studio", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Schedule/ }));
     fireEvent.click(screen.getByRole("button", { name: /Add time block/ }));
     expect(
-      await screen.findByText(/Add at least one movie to each time block/),
+      await screen.findByText(/Add at least one movie or show to each time block/),
     ).toBeInTheDocument();
     const block = screen.getByRole("group", { name: "Time block 1 programming" });
     fireEvent.change(within(block).getByLabelText("Search titles"), {

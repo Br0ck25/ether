@@ -236,7 +236,111 @@ func (s *Service) Channel(ctx context.Context, id string) (Channel, error) {
 func itemFromTitle(t core.Title) Item {
 	return Item{Key: t.Key, Title: t.Title, DurationMS: t.Runtime.Milliseconds(), Summary: t.Summary, Rating: t.ContentRating, Thumb: t.PosterPath}
 }
+
+// MixedType is the filter type of a channel that draws on movies and TV shows
+// together.
+const MixedType core.MediaType = "mixed"
+
+// browseAll pages through the catalogue for filter, up to limit titles; the
+// catalogue caps one Browse page well below that.
+func (s *Service) browseAll(ctx context.Context, f core.Filter, limit int) ([]core.Title, error) {
+	var out []core.Title
+	for len(out) < limit {
+		p, err := s.o.Catalog.Browse(ctx, core.BrowseQuery{Filter: f, Sort: core.SortTitle, Offset: len(out), Limit: limit - len(out)})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p.Items...)
+		if len(p.Items) == 0 || len(out) >= p.Total {
+			break
+		}
+	}
+	return out, nil
+}
+
+// interleave alternates a and b, so a mixed channel does not play every movie
+// before its first show.
+func interleave(a, b []core.Title) []core.Title {
+	out := make([]core.Title, 0, len(a)+len(b))
+	for i := 0; i < len(a) || i < len(b); i++ {
+		if i < len(a) {
+			out = append(out, a[i])
+		}
+		if i < len(b) {
+			out = append(out, b[i])
+		}
+	}
+	return out
+}
+
+// playable turns catalogue titles into programmes, replacing each show with
+// its episodes in order.
+func (s *Service) playable(ctx context.Context, titles []core.Title, items []Item) ([]Item, error) {
+	for _, t := range titles {
+		ts := []core.Title{t}
+		if t.Type == core.TypeShow {
+			if s.o.Catalog == nil {
+				return nil, fmt.Errorf("catalogue unavailable")
+			}
+			var err error
+			if ts, err = s.o.Catalog.Grandchildren(ctx, t.Key); err != nil {
+				return nil, err
+			}
+		}
+		for _, t := range ts {
+			if !t.Adult && t.Runtime > 0 && (t.Type == core.TypeMovie || t.Type == core.TypeEpisode) {
+				items = append(items, itemFromTitle(t))
+			}
+			if len(items) >= 10000 {
+				return nil, fmt.Errorf("channel exceeds 10000 programmes")
+			}
+		}
+	}
+	return items, nil
+}
+
+// expandPicks replaces any TV show in a hand-picked running order with its
+// episodes, keeping its place in the order.
+func (s *Service) expandPicks(ctx context.Context, items []Item) ([]Item, error) {
+	has := false
+	for _, it := range items {
+		has = has || it.Key.Kind() == core.KindShow
+	}
+	if !has {
+		return items, nil
+	}
+	if s.o.Catalog == nil {
+		return nil, fmt.Errorf("catalogue unavailable")
+	}
+	out := make([]Item, 0, len(items))
+	for _, it := range items {
+		if it.Key.Kind() != core.KindShow {
+			out = append(out, it)
+			continue
+		}
+		eps, err := s.o.Catalog.Grandchildren(ctx, it.Key)
+		if err != nil {
+			return nil, err
+		}
+		if out, err = s.playable(ctx, eps, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) expand(ctx context.Context, c *Channel) error {
+	if c.Kind == "virtual" {
+		var err error
+		if c.Items, err = s.expandPicks(ctx, c.Items); err != nil {
+			return err
+		}
+		for i := range c.Blocks {
+			if c.Blocks[i].Items, err = s.expandPicks(ctx, c.Blocks[i].Items); err != nil {
+				return err
+			}
+		}
+	}
 	if c.Collection == 0 && c.Filter == nil {
 		return nil
 	}
@@ -251,44 +355,24 @@ func (s *Service) expand(ctx context.Context, c *Channel) error {
 		if s.o.Catalog == nil {
 			return fmt.Errorf("catalogue unavailable")
 		}
-		// The catalogue caps one Browse page well below 2000; page through.
-		for len(page.Items) < 2000 {
-			var p core.Page
-			if p, err = s.o.Catalog.Browse(ctx, core.BrowseQuery{Filter: *c.Filter, Sort: core.SortTitle, Offset: len(page.Items), Limit: 2000 - len(page.Items)}); err != nil {
-				break
+		if c.Filter.Type == MixedType {
+			f := *c.Filter
+			f.Type = core.TypeMovie
+			movies, e1 := s.browseAll(ctx, f, 1000)
+			f.Type = core.TypeShow
+			shows, e2 := s.browseAll(ctx, f, 1000)
+			if err = errors.Join(e1, e2); err == nil {
+				page.Items = interleave(movies, shows)
 			}
-			page.Total = p.Total
-			page.Items = append(page.Items, p.Items...)
-			if len(p.Items) == 0 || len(page.Items) >= p.Total {
-				break
-			}
+		} else {
+			page.Items, err = s.browseAll(ctx, *c.Filter, 2000)
 		}
 	}
 	if err != nil {
 		return err
 	}
-	c.Items = nil
-	for _, t := range page.Items {
-		ts := []core.Title{t}
-		if t.Type == core.TypeShow {
-			if s.o.Catalog == nil {
-				return fmt.Errorf("catalogue unavailable")
-			}
-			ts, err = s.o.Catalog.Grandchildren(ctx, t.Key)
-			if err != nil {
-				return err
-			}
-		}
-		for _, t := range ts {
-			if !t.Adult && t.Runtime > 0 && (t.Type == core.TypeMovie || t.Type == core.TypeEpisode) {
-				c.Items = append(c.Items, itemFromTitle(t))
-			}
-			if len(c.Items) >= 10000 {
-				return fmt.Errorf("channel exceeds 10000 programmes")
-			}
-		}
-	}
-	return nil
+	c.Items, err = s.playable(ctx, page.Items, nil)
+	return err
 }
 func validateChannel(c *Channel) error {
 	c.Name = strings.TrimSpace(c.Name)

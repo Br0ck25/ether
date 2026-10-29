@@ -14,6 +14,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/config"
 	"github.com/braedonsaunders/ether/internal/core"
 	"github.com/braedonsaunders/ether/internal/jellyfin"
+	"github.com/braedonsaunders/ether/internal/livetv"
 )
 
 // jellyfinFront runs the Jellyfin and Emby API on its own port beside the
@@ -67,6 +68,7 @@ func (a *App) buildJellyfin(cfg config.Config) {
 		ServerID:     cfg.Server.MachineIdentifier,
 		ServerName:   cfg.Server.FriendlyName,
 		WebDir:       jellyfinWebDir(),
+		LiveTV:       liveTVFor(a.livetv),
 		OnTimeline: func(u *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
 			if u != nil && state == "playing" {
 				a.personalize.NotePlayback(u, key)
@@ -194,4 +196,12 @@ func (j *jellyfinFront) stop() {
 func (j *jellyfinFront) close() {
 	j.stop()
 	j.srv.Close()
+}
+
+// liveTVFor is nil, not a typed nil, when Live TV is not running.
+func liveTVFor(s *livetv.Service) jellyfin.LiveTV {
+	if s == nil {
+		return nil
+	}
+	return s
 }

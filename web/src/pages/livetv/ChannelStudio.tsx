@@ -86,7 +86,7 @@ export function compose(d: StudioDraft): Channel {
     )
       throw new Error("Enter at least one genre for this channel.");
     if (d.mode === "movies" && !c.items.length)
-      throw new Error("Add at least one movie to this channel.");
+      throw new Error("Add at least one movie or show to this channel.");
     let end = 0;
     for (const block of [...(c.blocks ?? [])].sort((a, b) => a.start - b.start)) {
       if (
@@ -99,7 +99,9 @@ export function compose(d: StudioDraft): Channel {
       )
         throw new Error("Time blocks must have valid start and end times without overlapping.");
       if (!block.items.length)
-        throw new Error("Add at least one movie to each time block, or remove the empty block.");
+        throw new Error(
+          "Add at least one movie or show to each time block, or remove the empty block.",
+        );
       end = block.end;
     }
     return {
@@ -111,7 +113,8 @@ export function compose(d: StudioDraft): Channel {
         d.mode === "genre"
           ? {
               ...c.filter,
-              type: c.filter?.type === "show" ? "show" : "movie",
+              type:
+                c.filter?.type === "show" || c.filter?.type === "mixed" ? c.filter.type : "movie",
               genres: d.genre
                 .split(",")
                 .map((s) => s.trim())
@@ -750,7 +753,7 @@ function Programming({
     {
       value: "movies",
       label: "Hand-picked",
-      hint: "Choose the movies and their order",
+      hint: "Choose the movies and shows, and their order",
       icon: <Film size={18} />,
     },
     {
@@ -837,11 +840,14 @@ function Programming({
           <Field label="Catalogue">
             <Segmented
               ariaLabel="Catalogue type"
-              value={c.filter?.type === "show" ? "show" : "movie"}
+              value={
+                c.filter?.type === "show" || c.filter?.type === "mixed" ? c.filter.type : "movie"
+              }
               onChange={(v) => set({ filter: { ...c.filter, type: v } })}
               options={[
                 { value: "movie", label: "Movies", icon: <Clapperboard size={13} /> },
                 { value: "show", label: "TV shows" },
+                { value: "mixed", label: "Both" },
               ]}
             />
           </Field>
