@@ -65,6 +65,7 @@ func segmentLength(i, n int, span, segDur time.Duration) time.Duration {
 func mediaPlaylist(span, segDur time.Duration, container string, name func(n int) string) []byte {
 	var b bytes.Buffer
 	n := segmentCount(span, segDur)
+	b.Grow(n * 48)
 	version := 3
 	if hasInitSegment(container) {
 		version = 7
@@ -96,6 +97,7 @@ func mediaPlaylist(span, segDur time.Duration, container string, name func(n int
 // with unknown duration. ended adds ENDLIST.
 func eventPlaylist(done []int, segDur time.Duration, container string, ended bool, name func(n int) string) []byte {
 	var b bytes.Buffer
+	b.Grow(len(done) * 48)
 	version := 3
 	if hasInitSegment(container) {
 		version = 7
