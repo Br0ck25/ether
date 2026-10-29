@@ -47,3 +47,17 @@ func TestWebClient(t *testing.T) {
 		t.Fatalf("api still served: %d", rr.Code)
 	}
 }
+
+// The Jellyfin web client hides Play on items whose LocationType is Virtual
+// (Jellyfin's marker for missing episodes), so catalogue titles must not be.
+func TestTitlesAreNotVirtual(t *testing.T) {
+	f := newFixture(t)
+	tok := f.login(ownerUser)
+	w := f.call("GET", "/Items/"+itemID(fightClub.Key)+"?userId="+userID(ownerUser.ID), tok, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("item: %d %s", w.Code, w.Body)
+	}
+	if got := decode[map[string]any](t, w)["LocationType"]; got != "FileSystem" {
+		t.Fatalf("LocationType = %v", got)
+	}
+}
