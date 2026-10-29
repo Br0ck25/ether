@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // hasWeb reports whether a Jellyfin web client is installed in WebDir.
@@ -51,21 +53,56 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// playbackPath reports requests that start, feed or end a playback.
+var playbackPath = regexp.MustCompile(`(?i)/(playbackinfo|videos/|livetv/channels/|sessions/playing|livestreams/)`)
+
 // statusLogger logs every 404 an app gets, with the app's user agent, so an
-// app that cannot connect shows exactly what it asked for.
+// app that cannot connect shows exactly what it asked for. Playback requests
+// are logged with their outcome whatever it is, since an app that fails to
+// play often gives no other sign.
 type statusLogger struct {
 	http.ResponseWriter
 	r      *http.Request
 	log    *slog.Logger
+	start  time.Time
+	status int
+	bytes  int64
 	logged bool
 }
 
 func (w *statusLogger) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
 	if code == http.StatusNotFound && !w.logged {
 		w.logged = true
 		w.log.Info("jellyfin: not found", "method", w.r.Method, "path", w.r.URL.Path, "agent", w.r.UserAgent())
 	}
 	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusLogger) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(b)
+	w.bytes += int64(n)
+	return n, err
+}
+
+// finish logs a playback request once it has been served.
+func (w *statusLogger) finish() {
+	if w.status == http.StatusNotFound || !playbackPath.MatchString(w.r.URL.Path) {
+		return
+	}
+	// Segments arrive by the hundred; log the playlists and everything else.
+	if p := strings.ToLower(w.r.URL.Path); strings.HasSuffix(p, ".ts") || strings.HasSuffix(p, ".m4s") || strings.HasSuffix(p, ".mp4") && strings.Contains(p, "/hls/") {
+		if w.status < 400 {
+			return
+		}
+	}
+	w.log.Info("jellyfin: playback request", "method", w.r.Method, "path", w.r.URL.Path, "status", w.status,
+		"bytes", w.bytes, "took", time.Since(w.start).Round(time.Millisecond), "range", w.r.Header.Get("Range"), "agent", w.r.UserAgent())
 }
 
 func (w *statusLogger) Flush() {
