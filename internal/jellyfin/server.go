@@ -23,7 +23,6 @@ import (
 // look like current releases of the server each app expects.
 const (
 	jellyfinVersion = "10.10.7"
-	embyVersion     = "4.8.10.0"
 )
 
 // AccessPolicy adds owner-defined restrictions to the mandatory title guard.
@@ -80,7 +79,7 @@ type Deps struct {
 	WebDir string
 }
 
-// Server is the Jellyfin/Emby API handler.
+// Server is the Jellyfin API handler.
 type Server struct {
 	d        Deps
 	log      *slog.Logger
@@ -123,14 +122,9 @@ func NewServer(d Deps) *Server {
 	return s
 }
 
-type dialectKey struct{}
-
-func isEmby(ctx context.Context) bool { v, _ := ctx.Value(dialectKey{}).(bool); return v }
-
-// ServeHTTP normalizes the request the way Jellyfin does: an Emby app's
-// /emby prefix is dropped (and remembered, for the links in responses),
-// and paths match case-insensitively. Item ids, which are the only
-// case-sensitive part, are lower-case hex or decimal.
+// ServeHTTP normalizes the request the way Jellyfin does: paths match
+// case-insensitively. Item ids, which are the only case-sensitive part, are
+// lower-case hex or decimal.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w = &statusLogger{ResponseWriter: w, r: r, log: s.log}
 	h := w.Header()
@@ -146,16 +140,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.ToLower(r.URL.Path)
-	emby := false
-	if rest, ok := strings.CutPrefix(path, "/emby/"); ok {
-		path, emby = "/"+rest, true
-	} else if path == "/emby" {
-		path, emby = "/", true
-	}
 	if path != "/" {
 		path = strings.TrimRight(path, "/")
 	}
-	r2 := r.Clone(context.WithValue(r.Context(), dialectKey{}, emby))
+	r2 := r.Clone(r.Context())
 	r2.URL.Path, r2.URL.RawPath = path, ""
 	s.router.ServeHTTP(w, r2)
 }

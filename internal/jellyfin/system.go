@@ -15,9 +15,6 @@ import (
 )
 
 func (s *Server) version(r *http.Request) string {
-	if isEmby(r.Context()) {
-		return embyVersion
-	}
 	return jellyfinVersion
 }
 
@@ -34,20 +31,18 @@ func (s *Server) handlePublicInfo(w http.ResponseWriter, r *http.Request) {
 		"LocalAddress": s.localAddress(r), "ServerName": s.name, "Version": s.version(r), "Id": s.serverID,
 		"StartupWizardCompleted": true,
 	}
-	if !isEmby(r.Context()) {
-		info["ProductName"] = "Jellyfin Server"
-		info["OperatingSystem"] = ""
-	}
+	info["ProductName"] = "Jellyfin Server"
+	info["OperatingSystem"] = ""
 	writeJSON(w, http.StatusOK, info)
 }
 
 // handleLanding is what a browser sees when no Jellyfin web client is
-// installed (see Deps.WebDir): only the API the Jellyfin and Emby apps use.
+// installed (see Deps.WebDir): only the API the Jellyfin apps use.
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>%[1]s</title><body style="font:16px system-ui;max-width:34rem;margin:15vh auto;padding:0 1rem;line-height:1.5">
-<h1>%[1]s</h1><p>This is a Jellyfin and Emby compatible server. Open a Jellyfin or Emby app, add this address
+<h1>%[1]s</h1><p>This is a Jellyfin compatible server. Open a Jellyfin app, add this address
 (<code>%[2]s</code>) as a server, and sign in with your Plex user name and the access code the server owner gave you.</p>`,
 		html.EscapeString(s.name), html.EscapeString(s.localAddress(r)))
 }
@@ -63,13 +58,9 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
-	product := "Jellyfin Server"
-	if isEmby(r.Context()) {
-		product = "Emby Server"
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"LocalAddress": s.localAddress(r), "ServerName": s.name, "Version": s.version(r), "Id": s.serverID,
-		"ProductName": product, "OperatingSystem": "", "StartupWizardCompleted": true,
+		"ProductName": "Jellyfin Server", "OperatingSystem": "", "StartupWizardCompleted": true,
 		"CanSelfRestart": false, "CanLaunchWebBrowser": false, "HasPendingRestart": false, "IsShuttingDown": false,
 		"SupportsLibraryMonitor": false, "WebSocketPortNumber": 0, "TranscodingTempPath": "", "HasUpdateAvailable": false,
 	})

@@ -804,13 +804,13 @@ export const EXTRAS: FieldGroup[] = [
 
 export const JELLYFIN: FieldGroup[] = [
   {
-    title: "Jellyfin & Emby apps",
+    title: "Jellyfin apps",
     description:
-      "Lets the Jellyfin and Emby apps browse and play from Ether, alongside Plex. Everyone shares the same catalogue, watch history and sources.",
+      "Lets the Jellyfin apps browse and play from Ether, alongside Plex. Everyone shares the same catalogue, watch history and sources.",
     fields: [
       {
         key: "enabled",
-        label: "Allow Jellyfin and Emby apps",
+        label: "Allow Jellyfin apps",
         kind: "bool",
         help: "Viewers sign in with their Plex user name and an access code you give them on their Access tab.",
       },
@@ -821,7 +821,7 @@ export const JELLYFIN: FieldGroup[] = [
         min: 1,
         max: 65535,
         step: 1,
-        help: "Jellyfin and Emby apps expect 8096. It must differ from the Plex port.",
+        help: "Jellyfin apps expect 8096. It must differ from the Plex port.",
       },
       {
         key: "discovery",

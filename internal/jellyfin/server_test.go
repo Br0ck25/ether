@@ -22,7 +22,7 @@ func TestItemIDRoundTrip(t *testing.T) {
 			t.Errorf("round trip of %d via %q gave %d, %v", k, id, got, ok)
 		}
 	}
-	// Apps send ids with dashes (Jellyfin GUID form) and Emby apps decimals.
+	// Apps send ids with dashes (Jellyfin GUID form) and some apps decimals.
 	if got, ok := parseItemID("00000000-0000-0000-0003-8d7ea4c68000"); !ok || got == 0 {
 		t.Errorf("dashed id not accepted: %d %v", got, ok)
 	}
@@ -62,10 +62,10 @@ func TestSignIn(t *testing.T) {
 	if got := login("friend", "sesame-1"); got != http.StatusUnauthorized {
 		t.Fatalf("another viewer's code worked for friend: %d", got)
 	}
-	// Emby apps use the /emby prefix and any letter case.
-	w := f.call("POST", "/emby/users/authenticatebyname", "", map[string]string{"Username": "owner", "Pw": "sesame-1"})
+	// Paths match in any letter case.
+	w := f.call("POST", "/users/authenticatebyname", "", map[string]string{"Username": "owner", "Pw": "sesame-1"})
 	if w.Code != http.StatusOK {
-		t.Fatalf("emby sign-in: %d %s", w.Code, w.Body)
+		t.Fatalf("sign-in: %d %s", w.Code, w.Body)
 	}
 	resp := decode[map[string]any](t, w)
 	if resp["ServerId"] != "0123456789abcdef" || resp["AccessToken"] == "" {
@@ -175,10 +175,10 @@ func TestLibraryBrowsing(t *testing.T) {
 	if movies.Items[0].Type != "Movie" || movies.Items[0].MediaType != "Video" {
 		t.Fatalf("movie shape: %+v", movies.Items[0])
 	}
-	// Lower-case parameters and Emby's prefix are the same query.
-	same := decode[itemsResult](t, f.call("GET", "/emby/items?parentid="+itemID(viewMovies), tok, nil))
+	// Lower-case parameters are the same query.
+	same := decode[itemsResult](t, f.call("GET", "/items?parentid="+itemID(viewMovies), tok, nil))
 	if len(same.Items) != 2 {
-		t.Fatalf("emby/lower-case query: %v", names(same))
+		t.Fatalf("lower-case query: %v", names(same))
 	}
 
 	shows := decode[itemsResult](t, f.call("GET", "/Items?IncludeItemTypes=Series&Recursive=true", tok, nil))
@@ -418,7 +418,7 @@ func TestSignInAcceptsFormEncodedBody(t *testing.T) {
 	if err := f.store.SetAccessCode(context.Background(), ownerUser.ID, "sesame-1"); err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest("POST", "/emby/Users/AuthenticateByName", strings.NewReader("Username=owner&Pw=sesame-1"))
+	r := httptest.NewRequest("POST", "/Users/AuthenticateByName", strings.NewReader("Username=owner&Pw=sesame-1"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.RemoteAddr = "192.168.1.20:5555"
 	w := httptest.NewRecorder()
@@ -448,7 +448,7 @@ func TestAppsWithoutADeviceIdStayApart(t *testing.T) {
 
 func TestLandingPageAndHealth(t *testing.T) {
 	f := newFixture(t)
-	if w := f.call("GET", "/", "", nil); w.Code != 200 || !strings.Contains(w.Body.String(), "Jellyfin and Emby compatible") {
+	if w := f.call("GET", "/", "", nil); w.Code != 200 || !strings.Contains(w.Body.String(), "Jellyfin compatible") {
 		t.Fatalf("landing: %d %s", w.Code, w.Body)
 	}
 	if w := f.call("GET", "/health", "", nil); w.Body.String() != "Healthy" {

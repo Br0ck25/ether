@@ -147,7 +147,7 @@ and fatal crash traces to `<data dir>/logs/crash.log`.
 
 ## Remote access / port forwarding
 
-Ether uses **TCP 32400** for playback (and **TCP 8096** for Jellyfin and Emby apps once you turn them on, with **UDP 7359** for their LAN discovery). For remote access
+Ether uses **TCP 32400** for playback (and **TCP 8096** for Jellyfin apps once you turn them on, with **UDP 7359** for their LAN discovery). For remote access
 outside your LAN:
 
 - Easiest: enable *Remote access* in the web UI — Ether asks your router
