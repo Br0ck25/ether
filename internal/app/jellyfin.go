@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -34,6 +35,15 @@ type jellyfinFront struct {
 
 // buildJellyfin assembles the front end from the same components the Plex
 // one uses. It does not listen until run.
+// jellyfinWebDir is where the Jellyfin web client is installed; the Docker
+// image puts it in the default place.
+func jellyfinWebDir() string {
+	if d := os.Getenv("ETHER_JELLYFIN_WEB_DIR"); d != "" {
+		return d
+	}
+	return "/usr/share/ether/jellyfin-web"
+}
+
 func (a *App) buildJellyfin(cfg config.Config) {
 	var tc core.Transcoder
 	if a.transcoder != nil {
@@ -56,6 +66,7 @@ func (a *App) buildJellyfin(cfg config.Config) {
 		Logger:       a.log.With("component", "jellyfin"),
 		ServerID:     cfg.Server.MachineIdentifier,
 		ServerName:   cfg.Server.FriendlyName,
+		WebDir:       jellyfinWebDir(),
 		OnTimeline: func(u *core.User, key core.RatingKey, offset, duration time.Duration, state string) {
 			if u != nil && state == "playing" {
 				a.personalize.NotePlayback(u, key)

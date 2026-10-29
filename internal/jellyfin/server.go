@@ -69,6 +69,10 @@ type Deps struct {
 	ServerID   string
 	ServerName string
 	Now        func() time.Time
+	// WebDir holds the Jellyfin web client (index.html and its assets). The
+	// official Jellyfin mobile apps load it from the server, so when it is
+	// present it is served under /web and the root redirects there.
+	WebDir string
 }
 
 // Server is the Jellyfin/Emby API handler.
@@ -121,6 +125,7 @@ func isEmby(ctx context.Context) bool { v, _ := ctx.Value(dialectKey{}).(bool); 
 // and paths match case-insensitively. Item ids, which are the only
 // case-sensitive part, are lower-case hex or decimal.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w = &statusLogger{ResponseWriter: w, r: r, log: s.log}
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", "*")
 	h.Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Emby-Authorization, X-Emby-Token, X-MediaBrowser-Token")
@@ -128,6 +133,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("Access-Control-Expose-Headers", "*")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if s.serveWeb(w, r) {
 		return
 	}
 	path := strings.ToLower(r.URL.Path)
@@ -172,10 +180,7 @@ func (s *Server) routes() chi.Router {
 		r.Use(s.authenticate)
 		s.protected(r)
 	})
-	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		s.log.Info("jellyfin: unhandled request", "method", r.Method, "path", r.URL.Path, "agent", r.UserAgent())
-		http.NotFound(w, r)
-	})
+	r.NotFound(http.NotFound)
 	return r
 }
 
