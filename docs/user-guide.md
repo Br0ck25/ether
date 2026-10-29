@@ -166,7 +166,11 @@ Jellyfin.
    Ether can check, so each viewer signs in to these apps with their Plex user
    name and this code. The code is shown once and only a scrambled copy is
    kept. Setting a new code, or removing it, signs that viewer out everywhere.
-3. In the app, add the server `http://<ether address>:8096` and sign in.
+3. In the app, add the server `http://<ether address>:8096` and sign in. The
+   official Jellyfin mobile apps load Jellyfin's web client from the server, so
+   the Docker image bundles it and serves it at `/web`; opening
+   `http://<ether address>:8096` in a browser works too. Outside Docker, set
+   `ETHER_JELLYFIN_WEB_DIR` to a folder holding the client.
 
 What works: Movies, TV Shows and Collections libraries, search, genres, seasons
 and episodes, Continue Watching, Next Up, Latest, artwork, favourites (kept in
@@ -176,8 +180,8 @@ transcoding with the same transcoder, HDR tone mapping and failover as Plex.
 Five wrong sign-ins from one address lock it for ten minutes.
 
 What does not: Live TV, music and books, SyncPlay, remote control of an app
-from another, Quick Connect, and the Jellyfin web client (Ether serves the
-API only). Text subtitles stored inside a video play on direct play, but are
+from another, Quick Connect, and Jellyfin's administration pages (manage
+Ether from its own admin UI). Text subtitles stored inside a video play on direct play, but are
 not available while transcoding, because extracting them would mean reading
 the whole remote file. Picture subtitles (PGS, VobSub) are burned in.
 

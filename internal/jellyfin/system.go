@@ -41,8 +41,8 @@ func (s *Server) handlePublicInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
-// handleLanding is what a browser sees: Ether has no Jellyfin web client,
-// only the API the Jellyfin and Emby apps use.
+// handleLanding is what a browser sees when no Jellyfin web client is
+// installed (see Deps.WebDir): only the API the Jellyfin and Emby apps use.
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">

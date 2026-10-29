@@ -31,6 +31,20 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
         -X github.com/braedonsaunders/ether/internal/tmdb.BundledAPIKey=${ETHER_TMDB_KEY}" \
       -o /out/ether ./cmd/ether
 
+# ---- Jellyfin web client ----------------------------------------------------
+# The official Jellyfin mobile apps are wrappers that load the web client from
+# the server, so Ether serves it (GPL-2.0, https://github.com/jellyfin/jellyfin-web)
+# next to its API. 10.10.7 matches the server version Ether reports. Fetched
+# at build time and checked against a pinned hash, not kept in git.
+FROM debian:bookworm-slim AS jfweb
+ARG JELLYFIN_WEB_VERSION=10.10.7
+ARG JELLYFIN_WEB_SHA256=303bf4bf0892a422b75627c158f6177464ab216d0a431225277ce3fbffbbb08d
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+ && curl -fsSL -o /web.deb "https://repo.jellyfin.org/archive/server/debian/stable/v${JELLYFIN_WEB_VERSION}/amd64/jellyfin-web_${JELLYFIN_WEB_VERSION}%2Bdeb12_all.deb" \
+ && echo "${JELLYFIN_WEB_SHA256}  /web.deb" | sha256sum -c - \
+ && dpkg-deb -x /web.deb /out \
+ && mkdir -p /web && mv /out/usr/share/jellyfin/web/* /web/
+
 # ---- runtime ----------------------------------------------------------------
 # Debian (not Alpine): the jellyfin-ffmpeg portable build and VAAPI/QSV
 # userspace drivers are glibc-based.
@@ -66,6 +80,7 @@ COPY --from=build /out/ether /usr/lib/ether/ether
 # Requires scripts/fetch-ffmpeg.sh to have staged dist/ffmpeg/ (build fails
 # loudly otherwise — never ship an image that cannot transcode silently).
 COPY dist/ffmpeg/linux-${TARGETARCH}/ /usr/lib/ether/
+COPY --from=jfweb /web/ /usr/share/ether/jellyfin-web/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/ether/
 COPY packaging/docker/entrypoint.sh /usr/lib/ether/entrypoint
 
