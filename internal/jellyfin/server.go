@@ -126,7 +126,9 @@ func NewServer(d Deps) *Server {
 // case-insensitively. Item ids, which are the only case-sensitive part, are
 // lower-case hex or decimal.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w = &statusLogger{ResponseWriter: w, r: r, log: s.log}
+	sl := &statusLogger{ResponseWriter: w, r: r, log: s.log, start: time.Now()}
+	w = sl
+	defer sl.finish()
 	h := w.Header()
 	h.Set("Access-Control-Allow-Origin", "*")
 	h.Set("Access-Control-Allow-Headers", "*, Authorization, Content-Type, X-Emby-Authorization, X-Emby-Token, X-MediaBrowser-Token")

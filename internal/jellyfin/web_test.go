@@ -1,9 +1,11 @@
 package jellyfin
 
 import (
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +61,22 @@ func TestTitlesAreNotVirtual(t *testing.T) {
 	}
 	if got := decode[map[string]any](t, w)["LocationType"]; got != "FileSystem" {
 		t.Fatalf("LocationType = %v", got)
+	}
+}
+
+// Playback requests are logged with their outcome, without the token.
+func TestPlaybackRequestsAreLogged(t *testing.T) {
+	f := newFixture(t)
+	var buf strings.Builder
+	f.srv.log = slog.New(slog.NewTextHandler(&buf, nil))
+	tok := f.login(ownerUser)
+	f.call("POST", "/Items/"+itemID(fightClub.Key)+"/PlaybackInfo?api_key="+tok, tok, map[string]any{"DeviceProfile": webProfile()})
+	f.call("GET", "/Items", tok, nil) // not playback
+	out := buf.String()
+	if !strings.Contains(out, "jellyfin: playback request") || !strings.Contains(out, "status=200") || !strings.Contains(out, "PlaybackInfo") {
+		t.Fatalf("playback request not logged: %q", out)
+	}
+	if strings.Contains(out, tok) || strings.Count(out, "playback request") != 1 {
+		t.Fatalf("token leaked or extra lines: %q", out)
 	}
 }
