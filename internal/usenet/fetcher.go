@@ -206,7 +206,7 @@ func New(providers []config.UsenetProvider, opts Options) *Fetcher {
 	f := &Fetcher{
 		o:      opts,
 		log:    opts.Logger,
-		misses: newMissCache(opts.MissTTL, opts.MissCacheSize),
+		misses: newMissCache(opts.MissTTL, opts.MissCacheSize, time.Now),
 	}
 	f.minIdle.Store(int32(opts.MinIdle))
 	f.Update(providers)
@@ -713,6 +713,12 @@ func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(context
 	var (
 		answered, missing int
 		lastErr, corrupt  error
+		// lastMissing is the last provider's "no such article" reply, kept
+		// so the final missing error preserves the original NNTP code
+		// (430 vs the 451 takedown some providers answer): both map to
+		// ErrNoSuchArticle for the retry/failover decision, but the code
+		// must stay observable in errors/logs/health reasons.
+		lastMissing error
 	)
 	for _, p := range pools {
 		if slices.Contains(known, p.key) {
@@ -742,6 +748,7 @@ func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(context
 				return err
 			case errors.Is(err, ErrNoSuchArticle):
 				missing++
+				lastMissing = err
 				f.misses.add(id, p.key)
 				break attempts
 			case errors.Is(err, ErrInvalidMessageID):
@@ -773,6 +780,12 @@ func (f *Fetcher) eachOnce(ctx context.Context, id, kind string, op func(context
 	}
 	switch {
 	case answered > 0 && missing == answered:
+		if lastMissing != nil {
+			// Decision unchanged (still ErrArticleMissing); the wrapped
+			// reply keeps its NNTP code reachable via errors.As
+			// (*ProtocolError) and visible in the error string.
+			return fmt.Errorf("%s: %w: %w", id, core.ErrArticleMissing, lastMissing)
+		}
 		return fmt.Errorf("%s: %w", id, core.ErrArticleMissing)
 	case answered == 0:
 		return fmt.Errorf("%w: %w", ErrNoProviders, lastErr)

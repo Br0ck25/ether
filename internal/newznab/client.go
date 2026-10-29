@@ -101,7 +101,45 @@ type Client struct {
 	capsEP     string    // capsEndpoint the cached caps came from
 	capsFailAt time.Time // last failed caps request; searches skip caps for capsRetry
 
+	// nzbSave serializes saveNZB per release id: concurrent FetchNZB calls
+	// for the same release must not write/rename the same temp file.
+	nzbSaveMu    sync.Mutex
+	nzbSaveLocks map[string]*nzbSaveLock
+
 	cfgMu sync.RWMutex
+}
+
+// nzbSaveLock is a refcounted per-key mutex (see lockNZB).
+type nzbSaveLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// lockNZB takes the save lock for key and returns its release func. The
+// entry is dropped once the last holder/waiter releases, so the map does
+// not grow with the number of releases ever saved.
+func (c *Client) lockNZB(key string) func() {
+	c.nzbSaveMu.Lock()
+	if c.nzbSaveLocks == nil {
+		c.nzbSaveLocks = map[string]*nzbSaveLock{}
+	}
+	l, ok := c.nzbSaveLocks[key]
+	if !ok {
+		l = &nzbSaveLock{}
+		c.nzbSaveLocks[key] = l
+	}
+	l.refs++
+	c.nzbSaveMu.Unlock()
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		c.nzbSaveMu.Lock()
+		l.refs--
+		if l.refs == 0 {
+			delete(c.nzbSaveLocks, key)
+		}
+		c.nzbSaveMu.Unlock()
+	}
 }
 
 var _ core.Indexer = (*Client)(nil)
@@ -1032,15 +1070,39 @@ func (c *Client) FetchNZB(ctx context.Context, r core.Release) ([]byte, error) {
 	return body, nil
 }
 
-// saveNZB keeps a fetched NZB on disk so later plays need no grab.
+// saveNZB keeps a fetched NZB on disk so later plays need no grab. Saves
+// for the same release are serialized and each writes its own temp file,
+// so concurrent fetches cannot truncate each other's temp or race the
+// rename; the rename onto the final path stays atomic.
 func (c *Client) saveNZB(releaseID string, body []byte) {
-	if path := c.nzbDiskPath(releaseID); path != "" {
-		if err := os.MkdirAll(c.nzbDir, 0o755); err == nil {
-			tmp := path + ".tmp"
-			if os.WriteFile(tmp, body, 0o644) == nil {
-				_ = os.Rename(tmp, path)
-			}
-		}
+	path := c.nzbDiskPath(releaseID)
+	if path == "" {
+		return
+	}
+	unlock := c.lockNZB(path)
+	defer unlock()
+	if err := os.MkdirAll(c.nzbDir, 0o755); err != nil {
+		return
+	}
+	f, err := os.CreateTemp(c.nzbDir, ".nzb-*.tmp")
+	if err != nil {
+		return
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once renamed
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		return
+	}
+	if err := f.Chmod(0o644); err != nil {
+		f.Close()
+		return
+	}
+	if err := f.Close(); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		c.log.Debug("newznab save NZB failed", "indexer", c.Name(), "err", err)
 	}
 }
 

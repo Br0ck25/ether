@@ -14,6 +14,7 @@ type missCache struct {
 	mu    sync.Mutex
 	ttl   time.Duration
 	max   int
+	now   func() time.Time         // injected clock, as in breaker (tests)
 	items map[string]*list.Element // message-id -> *missEntry
 	order list.List                // oldest first
 }
@@ -24,8 +25,11 @@ type missEntry struct {
 	expires   time.Time
 }
 
-func newMissCache(ttl time.Duration, max int) *missCache {
-	return &missCache{ttl: ttl, max: max, items: make(map[string]*list.Element)}
+func newMissCache(ttl time.Duration, max int, now func() time.Time) *missCache {
+	if now == nil {
+		now = time.Now
+	}
+	return &missCache{ttl: ttl, max: max, now: now, items: make(map[string]*list.Element)}
 }
 
 // get returns the pool keys known to be missing id.
@@ -40,7 +44,7 @@ func (m *missCache) get(id string) []string {
 		return nil
 	}
 	e := el.Value.(*missEntry)
-	if time.Now().After(e.expires) {
+	if m.now().After(e.expires) {
 		m.order.Remove(el)
 		delete(m.items, id)
 		return nil
@@ -53,7 +57,7 @@ func (m *missCache) add(id, key string) {
 	if m.ttl <= 0 {
 		return
 	}
-	now := time.Now()
+	now := m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if el, ok := m.items[id]; ok {

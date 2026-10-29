@@ -489,6 +489,12 @@ func (e *Engine) statSample(parent context.Context, files []*postedFile, repairs
 				}
 				if ev.id == "" {
 					out.reason = "segment absent from NZB"
+				} else if ev.err != nil {
+					// Keep the underlying reply in the reason: a 451
+					// takedown and a plain 430 both read as "missing"
+					// for the verdict, but the NNTP code in the error
+					// is the only place they remain distinguishable.
+					out.reason = fmt.Sprintf("%s missing on %s: %v", kind, ev.id, ev.err)
 				} else {
 					out.reason = fmt.Sprintf("%s missing on %s", kind, ev.id)
 				}
