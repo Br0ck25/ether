@@ -427,6 +427,14 @@ var maskToken = regexp.MustCompile(`(?i)(token|api_key)="[^"]*"`)
 
 // refusal says why a request has no signed-in viewer, for the log: which
 // credentials it carried (never their values) and what became of them.
+// tokenHint is enough of a token to tell two apart in the log, not to use.
+func tokenHint(t string) string {
+	if len(t) < 8 {
+		return "…"
+	}
+	return t[:4] + "…(" + strconv.Itoa(len(t)) + ")"
+}
+
 func (s *Server) refusal(r *http.Request) string {
 	p := queryParams(r)
 	a := parseAuth(r, p)
@@ -451,6 +459,6 @@ func (s *Server) refusal(r *http.Request) string {
 			_ = s.d.Store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM jellyfin_tokens WHERE device_id=?`, a.DeviceID).Scan(&n)
 			why += "; this device has " + strconv.Itoa(n) + " other token(s) on file"
 		}
-		return why + " (len " + strconv.Itoa(len(a.Token)) + "); carried: " + strings.Join(carried, ", ")
+		return why + " (token " + tokenHint(a.Token) + "); carried: " + strings.Join(carried, ", ")
 	}
 }

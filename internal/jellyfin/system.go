@@ -246,6 +246,7 @@ func (s *Server) handleAuthByName(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, err)
 		return
 	}
+	s.log.Info("jellyfin: signed in", "user", user.ID, "client", a.Client, "device", a.Device, "deviceId", a.DeviceID, "token", tokenHint(token))
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"User": s.userDTO(user), "AccessToken": token, "ServerId": s.serverID,
