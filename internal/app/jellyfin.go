@@ -16,7 +16,7 @@ import (
 	"github.com/braedonsaunders/ether/internal/jellyfin"
 )
 
-// jellyfinFront runs the Jellyfin and Emby API on its own port beside the
+// jellyfinFront runs the Jellyfin API on its own port beside the
 // Plex one. It follows the settings: switching it on, off or to another
 // port takes effect at once, without a restart.
 type jellyfinFront struct {
@@ -116,7 +116,7 @@ func (j *jellyfinFront) apply(cfg config.Config) {
 		port = config.DefaultJellyfinPort
 	}
 	if want && port == cfg.Server.Port {
-		j.log.Warn("the Jellyfin and Emby port must differ from the Plex port; not listening", "port", port)
+		j.log.Warn("the Jellyfin port must differ from the Plex port; not listening", "port", port)
 		want = false
 	}
 	bind := cfg.Server.BindAddress
@@ -139,7 +139,7 @@ func (j *jellyfinFront) startLocked(port int, bind string, cfg config.Config) {
 	addr := net.JoinHostPort(bind, strconv.Itoa(port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		j.log.Warn("Jellyfin and Emby front end could not listen", "addr", addr, "err", err)
+		j.log.Warn("Jellyfin front end could not listen", "addr", addr, "err", err)
 		return
 	}
 	srv := &http.Server{
@@ -153,10 +153,10 @@ func (j *jellyfinFront) startLocked(port int, bind string, cfg config.Config) {
 	go func() {
 		defer j.wg.Done()
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			j.log.Warn("Jellyfin and Emby front end stopped", "err", err)
+			j.log.Warn("Jellyfin front end stopped", "err", err)
 		}
 	}()
-	j.log.Info("Jellyfin and Emby apps can connect", "addr", addr)
+	j.log.Info("Jellyfin apps can connect", "addr", addr)
 }
 
 func (j *jellyfinFront) startDiscoveryLocked(bind string, port int, cfg config.Config) {
@@ -166,7 +166,7 @@ func (j *jellyfinFront) startDiscoveryLocked(bind string, port int, cfg config.C
 	go func() {
 		defer j.wg.Done()
 		if err := jellyfin.ServeDiscovery(ctx, bind, port, cfg.Server.MachineIdentifier, cfg.Server.FriendlyName); err != nil {
-			j.log.Warn("Jellyfin and Emby LAN discovery unavailable", "err", err)
+			j.log.Warn("Jellyfin LAN discovery unavailable", "err", err)
 		}
 	}()
 }

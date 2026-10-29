@@ -165,7 +165,6 @@ type playRequest struct {
 	allowDirect   bool
 	allowStream   bool
 	allowTrans    bool
-	emby          bool // the app is Emby's: it reads DirectStreamUrl, Jellyfin's builds its own
 }
 
 // prepare resolves the title and decides how to deliver it.
@@ -342,7 +341,7 @@ func (s *Server) handlePlaybackInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	pr := playRequest{caps: caps, offset: fromTicks(body.StartTimeTicks), audioIndex: -1, subtitleIndex: -2,
 		allowDirect: boolOr(body.EnableDirectPlay, true), allowStream: boolOr(body.EnableDirectStream, true),
-		allowTrans: boolOr(body.EnableTranscoding, true), emby: isEmby(ctx)}
+		allowTrans: boolOr(body.EnableTranscoding, true)}
 	if body.AudioStreamIndex != nil {
 		pr.audioIndex = *body.AudioStreamIndex
 	}
@@ -415,10 +414,6 @@ func (s *Server) sourceFor(sess *session, t *core.Title, info core.MediaInfo, de
 		src.SupportsDirectPlay, src.SupportsDirectStream = true, true
 	case dec.Kind == core.DecisionDirectPlay:
 		src.SupportsDirectPlay, src.SupportsDirectStream = true, true
-		if pr.emby {
-			src.DirectStreamURL = withQuery("/videos/"+id+"/stream", "static", "true", "mediaSourceId", id,
-				"playSessionId", pl.id, "deviceId", sess.DeviceID, "api_key", sess.Token)
-		}
 	default:
 		src.SupportsTranscoding = true
 		container := "ts"

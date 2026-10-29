@@ -26,7 +26,7 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-// The Jellyfin/Emby front end follows the settings: it listens when switched
+// The Jellyfin front end follows the settings: it listens when switched
 // on, moves when the port changes, stops when switched off, and refuses the
 // Plex port.
 func TestJellyfinFrontFollowsSettings(t *testing.T) {
@@ -82,17 +82,6 @@ func TestJellyfinFrontFollowsSettings(t *testing.T) {
 	resp.Body.Close()
 	if info["ServerName"] != "Ether" || info["Id"] != a.cfg.Get().Server.MachineIdentifier || info["ProductName"] != "Jellyfin Server" {
 		t.Fatalf("server identity: %v", info)
-	}
-	// The same port answers as Emby under /emby.
-	resp, err = get(p1, "/emby/System/Info/Public")
-	if err != nil {
-		t.Fatal(err)
-	}
-	info = nil
-	_ = json.NewDecoder(resp.Body).Decode(&info)
-	resp.Body.Close()
-	if info["Version"] != "4.8.10.0" || info["ProductName"] != nil {
-		t.Fatalf("emby identity: %v", info)
 	}
 	// Nothing is served without signing in.
 	if resp, err = get(p1, "/Items"); err != nil || resp.StatusCode != http.StatusUnauthorized {
