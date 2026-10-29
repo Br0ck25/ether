@@ -193,9 +193,14 @@ func (s *Store) issue(ctx context.Context, userID int64, sess *session) (string,
 	}
 	token := hex.EncodeToString(raw)
 	now := s.now().Unix()
-	// One token per device: signing in again replaces the old one.
+	// A device may hold a few tokens: the Jellyfin Android app's web view and
+	// its native player share one device id and can each sign in, so replacing
+	// the old token on every sign-in leaves one of them holding a dead token.
+	// Only the newest few are kept.
 	if sess.DeviceID != "" {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM jellyfin_tokens WHERE user_id=? AND device_id=?`, userID, sess.DeviceID); err != nil {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM jellyfin_tokens WHERE user_id=? AND device_id=? AND token_hash NOT IN
+			(SELECT token_hash FROM jellyfin_tokens WHERE user_id=? AND device_id=? ORDER BY created_at DESC LIMIT ?)`,
+			userID, sess.DeviceID, userID, sess.DeviceID, tokensPerDevice-1); err != nil {
 			return "", err
 		}
 	}
@@ -203,6 +208,9 @@ func (s *Store) issue(ctx context.Context, userID int64, sess *session) (string,
 		VALUES(?,?,?,?,?,?,?,?)`, tokenHash(token), userID, sess.DeviceID, sess.Device, sess.Client, sess.Version, now, now)
 	return token, err
 }
+
+// tokensPerDevice is how many sign-ins one device keeps valid.
+const tokensPerDevice = 5
 
 const tokenCacheTTL = time.Minute
 
@@ -438,6 +446,10 @@ func (s *Server) refusal(r *http.Request) string {
 		why := "token not recognised"
 		if row, ok := s.d.Store.lookup(r.Context(), a.Token); ok {
 			why = "token known but viewer not active (user " + strconv.FormatInt(row.UserID, 10) + ")"
+		} else if a.DeviceID != "" {
+			var n int
+			_ = s.d.Store.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM jellyfin_tokens WHERE device_id=?`, a.DeviceID).Scan(&n)
+			why += "; this device has " + strconv.Itoa(n) + " other token(s) on file"
 		}
 		return why + " (len " + strconv.Itoa(len(a.Token)) + "); carried: " + strings.Join(carried, ", ")
 	}

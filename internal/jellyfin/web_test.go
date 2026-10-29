@@ -1,6 +1,7 @@
 package jellyfin
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWebClient(t *testing.T) {
@@ -105,5 +107,48 @@ func TestRefusalsAreLogged(t *testing.T) {
 	}
 	if strings.Contains(out, "secret-token-value") {
 		t.Fatalf("token leaked: %q", out)
+	}
+}
+
+// An app that signs in twice from one device (the Android app's web view and
+// native player share a device id) keeps both tokens working.
+func TestSecondSignInFromADeviceKeepsTheFirstToken(t *testing.T) {
+	f := newFixture(t)
+	if err := f.store.SetAccessCode(context.Background(), ownerUser.ID, "sesame-1"); err != nil {
+		t.Fatal(err)
+	}
+	signIn := func() string {
+		r := httptest.NewRequest("POST", "/Users/AuthenticateByName", strings.NewReader(`{"Username":"owner","Pw":"sesame-1"}`))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", `MediaBrowser Client="App", Device="Phone", DeviceId="same-device", Version="1"`)
+		r.RemoteAddr = "192.168.1.20:5555"
+		w := httptest.NewRecorder()
+		f.srv.ServeHTTP(w, r)
+		return decode[struct{ AccessToken string }](t, w).AccessToken
+	}
+	works := func(tok string) bool { return f.call("GET", "/Users/Me", tok, nil).Code == http.StatusOK }
+	first := signIn()
+	f.now = f.now.Add(time.Second)
+	second := signIn()
+	if !works(first) || !works(second) {
+		t.Fatalf("first works=%v second works=%v", works(first), works(second))
+	}
+	// Only the newest few survive.
+	toks := []string{first, second}
+	for i := 0; i < tokensPerDevice; i++ {
+		f.now = f.now.Add(time.Second)
+		toks = append(toks, signIn())
+	}
+	live := 0
+	for _, tok := range toks {
+		f.store.mu.Lock()
+		f.store.cache = map[string]cachedToken{}
+		f.store.mu.Unlock()
+		if works(tok) {
+			live++
+		}
+	}
+	if live != tokensPerDevice || works(first) {
+		t.Fatalf("%d tokens work, want %d, and the oldest should be gone", live, tokensPerDevice)
 	}
 }
