@@ -307,6 +307,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(withSession(r.Context(), sess)))
 			return
 		}
+		s.log.Info("jellyfin: request refused", "method", r.Method, "path", r.URL.Path, "why", s.refusal(r), "agent", r.UserAgent())
 		w.Header().Set("X-Application-Error-Code", "Unauthorized")
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"Message": "Invalid token"})
 	})

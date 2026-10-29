@@ -3,6 +3,7 @@ package jellyfin
 import (
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,5 +79,31 @@ func TestPlaybackRequestsAreLogged(t *testing.T) {
 	}
 	if strings.Contains(out, tok) || strings.Count(out, "playback request") != 1 {
 		t.Fatalf("token leaked or extra lines: %q", out)
+	}
+}
+
+// A refused request is logged with why, and never with the token it sent.
+func TestRefusalsAreLogged(t *testing.T) {
+	f := newFixture(t)
+	var buf strings.Builder
+	f.srv.log = slog.New(slog.NewTextHandler(&buf, nil))
+	for _, tok := range []string{"", "secret-token-value"} {
+		r := httptest.NewRequest("POST", "/Items/"+itemID(fightClub.Key)+"/PlaybackInfo", nil)
+		r.RemoteAddr = "192.168.1.20:5555"
+		if tok != "" {
+			r.Header.Set("Authorization", `MediaBrowser Client="App", DeviceId="d", Token="`+tok+`"`)
+		}
+		w := httptest.NewRecorder()
+		f.srv.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("token %q: %d", tok, w.Code)
+		}
+	}
+	out := buf.String()
+	if !strings.Contains(out, "no token found") || !strings.Contains(out, "token not recognised") {
+		t.Fatalf("reasons not logged: %q", out)
+	}
+	if strings.Contains(out, "secret-token-value") {
+		t.Fatalf("token leaked: %q", out)
 	}
 }

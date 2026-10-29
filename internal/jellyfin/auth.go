@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -412,4 +413,32 @@ func isLocal(ip netip.Addr) bool {
 func addrOf(u *net.UDPAddr) netip.Addr {
 	a, _ := netip.AddrFromSlice(u.IP)
 	return a.Unmap()
+}
+
+var maskToken = regexp.MustCompile(`(?i)(token|api_key)="[^"]*"`)
+
+// refusal says why a request has no signed-in viewer, for the log: which
+// credentials it carried (never their values) and what became of them.
+func (s *Server) refusal(r *http.Request) string {
+	p := queryParams(r)
+	a := parseAuth(r, p)
+	var carried []string
+	for _, h := range []string{"Authorization", "X-Emby-Authorization", "X-MediaBrowser-Authorization", "X-Emby-Token", "X-MediaBrowser-Token"} {
+		if v := r.Header.Get(h); v != "" {
+			carried = append(carried, h+"="+maskToken.ReplaceAllString(v, `$1="…"`))
+		}
+	}
+	if p.get("api_key") != "" || p.get("apikey") != "" {
+		carried = append(carried, "api_key in the URL")
+	}
+	switch {
+	case a.Token == "":
+		return "no token found; carried: " + strings.Join(append(carried, "nothing"), ", ")
+	default:
+		why := "token not recognised"
+		if row, ok := s.d.Store.lookup(r.Context(), a.Token); ok {
+			why = "token known but viewer not active (user " + strconv.FormatInt(row.UserID, 10) + ")"
+		}
+		return why + " (len " + strconv.Itoa(len(a.Token)) + "); carried: " + strings.Join(carried, ", ")
+	}
 }
